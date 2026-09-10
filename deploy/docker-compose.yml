@@ -1,0 +1,88 @@
+services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: omni_butler
+      POSTGRES_USER: omni_butler
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_wal_senders=10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/10-powersync.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omni_butler -d omni_butler"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: ../apps/server
+    restart: unless-stopped
+    env_file: ${OMNI_ENV_FILE:-.env}
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://omni_butler:${POSTGRES_PASSWORD}@postgres:5432/omni_butler?schema=public
+      POWERSYNC_URL: ${POWERSYNC_PUBLIC_URL}
+      JWT_PRIVATE_KEY_BASE64: ${JWT_PRIVATE_KEY_BASE64}
+      JWT_PUBLIC_KEY_BASE64: ${JWT_PUBLIC_KEY_BASE64}
+      SYNC_SECRET: ${SYNC_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "3000:3000"
+
+  powersync:
+    image: journeyapps/powersync-service@sha256:bf46f66e5dcc8f6a084de02ab51155dfa655bc610aa95009fff1c36f949c0acf
+    restart: unless-stopped
+    command: ["start", "-r", "unified"]
+    depends_on:
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file: ${OMNI_ENV_FILE:-.env}
+    environment:
+      POWERSYNC_CONFIG_PATH: /config/service.yaml
+      NODE_OPTIONS: --max-old-space-size=768
+      PS_DATA_SOURCE_URI: postgresql://omni_butler:${POSTGRES_PASSWORD}@postgres:5432/omni_butler
+      PS_STORAGE_URI: postgresql://omni_butler:${POSTGRES_PASSWORD}@postgres:5432/powersync_storage
+      PS_POWERSYNC_AUDIENCE: ${POWERSYNC_AUDIENCE}
+    volumes:
+      - ./powersync:/config:ro
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/probes/liveness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+volumes:
+  postgres-data:

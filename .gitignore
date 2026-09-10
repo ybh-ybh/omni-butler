@@ -1,0 +1,51 @@
+# === IDE / Editor ===
+.idea/
+*.iml
+.vscode/
+
+# === OS generated ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Node / NestJS (apps/server) ===
+node_modules/
+dist/
+coverage/
+
+# === Flutter / Dart (apps/client) ===
+.dart_tool/
+build/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+app.*.symbols
+app.*.map.json
+android/.gradle/
+android/app/debug/
+android/app/profile/
+android/app/release/
+windows/flutter/ephemeral/
+
+# === Environment / secrets ===
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# === Playwright tool artifacts ===
+.playwright-cli/
+
+# === Agent working memory ===
+agent_memory/
+
+# === Generated output ===
+output/
+design/
+
+# === Root-level Markdown docs (keep README) ===
+/*.md
+!/README.md
+
+# === Logs ===
+*.log

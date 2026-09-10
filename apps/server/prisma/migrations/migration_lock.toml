@@ -1,0 +1,2 @@
+# Prisma Migrate 使用的数据库提供方，请勿手工切换。
+provider = "postgresql"

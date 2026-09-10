@@ -1,0 +1,333 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                   String                @id @default(uuid()) @db.Uuid
+  email                String                @unique @db.VarChar(320)
+  passwordHash         String                @map("password_hash")
+  role                 String                @default("USER") @db.VarChar(16)
+  tokenVersion         Int                   @default(0) @map("token_version")
+  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  refreshTokens        RefreshToken[]
+  todoItems            TodoItem[]
+  quotes               Quote[]
+  dailyQuoteSelections DailyQuoteSelection[]
+  bannerSettings       BannerSetting[]
+  attachments          Attachment[]
+  taxonomyEntries      TaxonomyEntry[]
+  recordTaxonomyLinks  RecordTaxonomyLink[]
+  events               Event[]
+  eventCompletions     EventCompletion[]
+  inventoryItems       InventoryItem[]
+  timeEntries          TimeEntry[]
+  memberships          Membership[]
+  membershipPayments   MembershipPayment[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  tokenHash    String    @map("token_hash")
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
+  replacedById String?   @map("replaced_by_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("refresh_tokens")
+}
+
+model TodoItem {
+  id             String    @id @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  title          String    @db.VarChar(200)
+  description    String?
+  scheduledDate  DateTime  @map("scheduled_date") @db.Date
+  dueAt          DateTime? @map("due_at") @db.Timestamptz(3)
+  priorityQuadrant Int       @default(2) @map("priority_quadrant")
+  isCompleted    Boolean   @default(false) @map("is_completed")
+  completedAt    DateTime? @map("completed_at") @db.Timestamptz(3)
+  reminderAt     DateTime? @map("reminder_at") @db.Timestamptz(3)
+  repeatRule     String?   @map("repeat_rule") @db.VarChar(16)
+  repeatSeriesId String?   @map("repeat_series_id") @db.Uuid
+  sortOrder      Int       @default(0) @map("sort_order")
+  notes          String?
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(3)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, scheduledDate])
+  @@index([userId, updatedAt])
+  @@map("todo_items")
+}
+
+model Quote {
+  id              String                @id @db.Uuid
+  userId          String                @map("user_id") @db.Uuid
+  content         String
+  source          String?
+  isEnabled       Boolean               @default(true) @map("is_enabled")
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt       DateTime?             @map("deleted_at") @db.Timestamptz(3)
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dailySelections DailyQuoteSelection[]
+
+  @@unique([userId, id])
+  @@index([userId, updatedAt])
+  @@map("quotes")
+}
+
+model DailyQuoteSelection {
+  id        String   @id @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  dayKey    String   @map("day_key") @db.VarChar(10)
+  quoteId   String   @map("quote_id") @db.Uuid
+  isManual  Boolean  @default(false) @map("is_manual")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quote     Quote    @relation(fields: [userId, quoteId], references: [userId, id], onDelete: Cascade)
+
+  @@unique([userId, dayKey])
+  @@index([userId, updatedAt])
+  @@map("daily_quote_selections")
+}
+
+model BannerSetting {
+  id              String   @id @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  key             String   @db.VarChar(64)
+  attachmentId    String?  @map("attachment_id") @db.Uuid
+  overlayStrength Float    @default(0.45) @map("overlay_strength")
+  textColorValue  Int?     @map("text_color_value")
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@map("banner_settings")
+}
+
+model Attachment {
+  id           String    @id @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  businessType String    @map("business_type") @db.VarChar(32)
+  businessId   String    @map("business_id") @db.Uuid
+  objectKey    String?   @map("object_key")
+  mimeType     String?   @map("mime_type") @db.VarChar(128)
+  sizeBytes    Int?      @map("size_bytes")
+  sha256       String?   @db.VarChar(64)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(3)
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, businessType, businessId])
+  @@index([userId, updatedAt])
+  @@map("attachments")
+}
+
+model TaxonomyEntry {
+  id             String               @id @db.Uuid
+  userId         String               @map("user_id") @db.Uuid
+  module         String               @db.VarChar(24)
+  kind           String               @db.VarChar(16)
+  name           String               @db.VarChar(80)
+  normalizedName String               @map("normalized_name") @db.VarChar(80)
+  colorValue     Int?                 @map("color_value")
+  iconCodePoint  Int?                 @map("icon_code_point")
+  sortOrder      Int                  @default(0) @map("sort_order")
+  isEnabled      Boolean              @default(true) @map("is_enabled")
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt      DateTime?            @map("deleted_at") @db.Timestamptz(3)
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recordLinks    RecordTaxonomyLink[]
+
+  @@unique([userId, id])
+  @@index([userId, module, kind, normalizedName])
+  @@index([userId, updatedAt])
+  @@map("taxonomy_entries")
+}
+
+model RecordTaxonomyLink {
+  id         String        @id @db.Uuid
+  userId     String        @map("user_id") @db.Uuid
+  module     String        @db.VarChar(24)
+  recordId   String        @map("record_id") @db.Uuid
+  taxonomyId String        @map("taxonomy_id") @db.Uuid
+  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt  DateTime?     @map("deleted_at") @db.Timestamptz(3)
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taxonomy   TaxonomyEntry @relation(fields: [userId, taxonomyId], references: [userId, id], onDelete: Cascade)
+
+  @@index([userId, module, recordId])
+  @@index([taxonomyId])
+  @@map("record_taxonomy_links")
+}
+
+model Event {
+  id                  String            @id @db.Uuid
+  userId              String            @map("user_id") @db.Uuid
+  name                String            @db.VarChar(200)
+  category            String?
+  description         String?
+  intervalValue       Int               @default(1) @map("interval_value")
+  intervalUnit        String            @default("month") @map("interval_unit") @db.VarChar(16)
+  lastCompletedAt     DateTime?         @map("last_completed_at") @db.Timestamptz(3)
+  reminderEnabled     Boolean           @default(false) @map("reminder_enabled")
+  reminderDaysBefore  Int               @default(0) @map("reminder_days_before")
+  reminderTimeMinutes Int               @default(540) @map("reminder_time_minutes")
+  isArchived          Boolean           @default(false) @map("is_archived")
+  archivedAt          DateTime?         @map("archived_at") @db.Timestamptz(3)
+  notes               String?
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt           DateTime?         @map("deleted_at") @db.Timestamptz(3)
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completions         EventCompletion[]
+
+  @@unique([userId, id])
+  @@index([userId, updatedAt])
+  @@map("events")
+}
+
+model EventCompletion {
+  id          String    @id @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  eventId     String    @map("event_id") @db.Uuid
+  completedAt DateTime  @map("completed_at") @db.Timestamptz(3)
+  notes       String?
+  source      String    @default("manual") @db.VarChar(24)
+  isRevoked   Boolean   @default(false) @map("is_revoked")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event       Event     @relation(fields: [userId, eventId], references: [userId, id], onDelete: Cascade)
+
+  @@index([userId, eventId, completedAt])
+  @@map("event_completions")
+}
+
+model InventoryItem {
+  id                 String          @id @db.Uuid
+  userId             String          @map("user_id") @db.Uuid
+  name               String          @db.VarChar(200)
+  category           String?
+  quantity           Int             @default(1)
+  purchasePriceCents Int?            @map("purchase_price_cents")
+  purchaseDate       DateTime?       @map("purchase_date") @db.Date
+  location           String?
+  purchaseUrl        String?         @map("purchase_url")
+  purchasePlatform   String?         @map("purchase_platform")
+  status             String          @default("inUse") @db.VarChar(24)
+  warrantyExpiration DateTime?       @map("warranty_expiration") @db.Date
+  tags               String?
+  parentItemId       String?         @map("parent_item_id") @db.Uuid
+  notes              String?
+  imageAttachmentId  String?         @map("image_attachment_id") @db.Uuid
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt          DateTime?       @map("deleted_at") @db.Timestamptz(3)
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent             InventoryItem?  @relation("InventoryAccessories", fields: [userId, parentItemId], references: [userId, id], onDelete: Cascade)
+  accessories        InventoryItem[] @relation("InventoryAccessories")
+
+  @@unique([userId, id])
+  @@index([userId, parentItemId])
+  @@index([userId, updatedAt])
+  @@map("inventory_items")
+}
+
+model TimeEntry {
+  id          String    @id @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  entryDate   DateTime  @map("entry_date") @db.Date
+  startMinute Int       @map("start_minute")
+  endMinute   Int       @map("end_minute")
+  startedAt   DateTime  @map("started_at") @db.Timestamptz(3)
+  endedAt     DateTime? @map("ended_at") @db.Timestamptz(3)
+  activity    String?   @db.VarChar(200)
+  category    String?
+  notes       String?
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, entryDate])
+  @@index([userId, startedAt])
+  @@index([userId, updatedAt])
+  @@map("time_entries")
+}
+
+model Membership {
+  id                        String              @id @db.Uuid
+  userId                    String              @map("user_id") @db.Uuid
+  name                      String              @db.VarChar(200)
+  provider                  String?
+  category                  String?
+  description               String?
+  websiteUrl                String?             @map("website_url")
+  purchasePlatform          String?             @map("purchase_platform")
+  paymentMethod             String?             @map("payment_method")
+  priceCents                Int                 @default(0) @map("price_cents")
+  billingCycle              String              @default("year") @map("billing_cycle") @db.VarChar(24)
+  baseStatus                String              @default("active") @map("base_status") @db.VarChar(24)
+  purchaseDate              DateTime            @map("purchase_date") @db.Date
+  expirationDate            DateTime?           @map("expiration_date") @db.Date
+  isPermanent               Boolean             @default(false) @map("is_permanent")
+  autoRenew                 Boolean             @default(false) @map("auto_renew")
+  renewalDate               DateTime?           @map("renewal_date") @db.Date
+  isFavorite                Boolean             @default(false) @map("is_favorite")
+  needsRenewal              Boolean             @default(false) @map("needs_renewal")
+  expirationReminderEnabled Boolean             @default(false) @map("expiration_reminder_enabled")
+  expirationReminderDays    Int                 @default(30) @map("expiration_reminder_days")
+  renewalReminderEnabled    Boolean             @default(false) @map("renewal_reminder_enabled")
+  renewalReminderDays       Int                 @default(7) @map("renewal_reminder_days")
+  reminderTimeMinutes       Int                 @default(540) @map("reminder_time_minutes")
+  cancelGuide               String?             @map("cancel_guide")
+  notes                     String?
+  imageAttachmentId         String?             @map("image_attachment_id") @db.Uuid
+  createdAt                 DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt                 DateTime?           @map("deleted_at") @db.Timestamptz(3)
+  user                      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments                  MembershipPayment[]
+
+  @@unique([userId, id])
+  @@index([userId, expirationDate])
+  @@index([userId, updatedAt])
+  @@map("memberships")
+}
+
+model MembershipPayment {
+  id           String     @id @db.Uuid
+  userId       String     @map("user_id") @db.Uuid
+  membershipId String     @map("membership_id") @db.Uuid
+  amountCents  Int        @map("amount_cents")
+  billingCycle String?    @map("billing_cycle") @db.VarChar(24)
+  paidAt       DateTime   @map("paid_at") @db.Timestamptz(3)
+  validFrom    DateTime?  @map("valid_from") @db.Date
+  validUntil   DateTime?  @map("valid_until") @db.Date
+  notes        String?
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt    DateTime?  @map("deleted_at") @db.Timestamptz(3)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  membership   Membership @relation(fields: [userId, membershipId], references: [userId, id], onDelete: Cascade)
+
+  @@index([userId, membershipId, paidAt])
+  @@map("membership_payments")
+}

@@ -1,0 +1,78 @@
+import 'package:drift/native.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:omni_butler/app/omni_butler_app.dart';
+import 'package:omni_butler/app/router/app_router.dart';
+import 'package:omni_butler/app/theme/theme_controller.dart';
+import 'package:omni_butler/core/database/app_database.dart';
+import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// 生成并校验每日待办四象限的关键视口视觉基线。
+void main() {
+  testWidgets('每日待办桌面四象限视觉基线', (WidgetTester tester) async {
+    await _verifyTodoGolden(
+      tester,
+      viewport: const Size(1440, 900),
+      platform: TargetPlatform.windows,
+      goldenPath: 'goldens/todos_quadrants_light_1440x900.png',
+    );
+  });
+
+  testWidgets('每日待办移动端纵向象限视觉基线', (WidgetTester tester) async {
+    await _verifyTodoGolden(
+      tester,
+      viewport: const Size(390, 844),
+      platform: TargetPlatform.android,
+      goldenPath: 'goldens/todos_quadrants_light_390x844.png',
+    );
+  });
+}
+
+/// 在指定视口打开每日待办页并比对视觉基线。
+Future<void> _verifyTodoGolden(
+  WidgetTester tester, {
+  required Size viewport,
+  required TargetPlatform platform,
+  required String goldenPath,
+}) async {
+  tester.view.physicalSize = viewport;
+  tester.view.devicePixelRatio = 1;
+  debugDefaultTargetPlatformOverride = platform;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  SharedPreferences.setMockInitialValues(<String, Object>{
+    'appearance.theme_mode': 'light',
+  });
+  // 测试用主题偏好存储。
+  final SharedPreferences preferences = await SharedPreferences.getInstance();
+  // 测试用内存数据库。
+  final AppDatabase database = AppDatabase.forTesting(NativeDatabase.memory());
+
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(preferences),
+        appDatabaseProvider.overrideWithValue(database),
+        nowProvider.overrideWithValue(DateTime(2026, 9, 6, 10)),
+      ],
+      child: const OmniButlerApp(),
+    ),
+  );
+  // 根组件下的 Provider 容器。
+  final ProviderContainer container = ProviderScope.containerOf(
+    tester.element(find.byType(OmniButlerApp)),
+  );
+  container.read(appRouterProvider).go('/todos');
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 600));
+
+  await expectLater(find.byType(OmniButlerApp), matchesGoldenFile(goldenPath));
+
+  await tester.pumpWidget(const SizedBox.shrink());
+  await tester.pump(const Duration(milliseconds: 1));
+  await database.close();
+  debugDefaultTargetPlatformOverride = null;
+}
