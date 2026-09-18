@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Omni Butler 知序应用图标</title>
+  <desc id="desc">由青色、蓝色和紫色折叠轨道组成的抽象 S，象征把零散事务整理成清晰秩序。</desc>
+  <defs>
+    <clipPath id="icon-clip">
+      <rect width="64" height="64" rx="16"/>
+    </clipPath>
+    <linearGradient id="canvas" x1="8" y1="6" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EEF4FF"/>
+    </linearGradient>
+    <linearGradient id="track" x1="19" y1="16" x2="47" y2="54" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#16C7D9"/>
+      <stop offset="0.43" stop-color="#3370FF"/>
+      <stop offset="1" stop-color="#6957E8"/>
+    </linearGradient>
+    <filter id="shadow" x="7" y="8" width="51" height="55" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#245BDB" flood-opacity="0.2"/>
+    </filter>
+  </defs>
+
+  <rect width="64" height="64" rx="16" fill="url(#canvas)"/>
+
+  <g clip-path="url(#icon-clip)" filter="url(#shadow)">
+    <path
+      d="M18 16.5H39.5C44.7 16.5 48.5 20.1 48.5 24.5C48.5 28 46.4 30.4 42.8 32.1L21.2 42.3C17.6 44 15.5 46.4 15.5 49.5C15.5 53.2 18.8 55.5 23.5 55.5H46"
+      fill="none"
+      stroke="url(#track)"
+      stroke-width="9"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M18 16.5H30"
+      fill="none"
+      stroke="#45D8E6"
+      stroke-width="9"
+      stroke-linecap="round"
+    />
+    <path
+      d="M36 55.5H46"
+      fill="none"
+      stroke="#7B67EE"
+      stroke-width="9"
+      stroke-linecap="round"
+    />
+    <rect x="39.8" y="29.1" width="5.8" height="5.8" rx="1.7" fill="#FFFFFF" transform="rotate(45 42.7 32)"/>
+  </g>
+</svg>

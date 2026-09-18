@@ -226,8 +226,39 @@ void main() {
       expect(find.text(quadrant.label), findsOneWidget);
       expect(find.text(quadrant.actionLabel), findsOneWidget);
     }
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-grid')),
+      findsOneWidget,
+    );
+    for (final TodoPriorityQuadrant quadrant
+        in todoPriorityQuadrantMatrixOrder) {
+      expect(
+        find.byKey(ValueKey<String>('todo-quadrant-card-${quadrant.value}')),
+        findsOneWidget,
+      );
+    }
+    expect(find.text('重要'), findsNothing);
+    expect(find.text('不重要'), findsNothing);
+    expect(find.text('紧\n急'), findsNothing);
+    expect(find.text('不\n紧\n急'), findsNothing);
 
-    await tester.tap(find.text('新增待办'));
+    await tester.tap(
+      find.byKey(const ValueKey<String>('todo-quadrant-heading-3')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-grid')),
+      findsNothing,
+    );
+    expect(find.text('返回四象限'), findsOneWidget);
+    await tester.tap(find.text('返回四象限'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-grid')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey<String>('todo-primary-create')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('优先象限'), findsOneWidget);
@@ -239,6 +270,166 @@ void main() {
     await tester.tap(find.text('取消'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+    await database.close();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('每日待办完成任务后淡出并提供页面内撤销', (WidgetTester tester) async {
+    // 桌面测试视口。
+    const Size viewport = Size(1440, 900);
+    tester.view.physicalSize = viewport;
+    tester.view.devicePixelRatio = 1;
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'appearance.theme_mode': 'light',
+    });
+    // 测试用主题偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 测试用待办仓储。
+    final TodoRepository repository = TodoRepository(database);
+    // 测试使用的固定自然日。
+    final DateTime today = DateTime(2026, 9, 6);
+    await repository.save(
+      TodoDraft(
+        title: '完成反馈任务',
+        scheduledDate: today,
+        priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(preferences),
+          appDatabaseProvider.overrideWithValue(database),
+          nowProvider.overrideWithValue(DateTime(2026, 9, 6, 10)),
+        ],
+        child: const OmniButlerApp(),
+      ),
+    );
+    // 根组件下的 Provider 容器。
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(OmniButlerApp)),
+    );
+    container.read(appRouterProvider).go('/todos');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(find.text('完成反馈任务'), findsOneWidget);
+    expect(find.text('已保存到本机'), findsNothing);
+    await tester.tap(find.byType(Checkbox).first);
+    await tester.pump();
+    // 正在淡出的任务行。
+    final Finder fadingRowFinder = find.ancestor(
+      of: find.text('完成反馈任务'),
+      matching: find.byType(AnimatedOpacity),
+    );
+    // 正在淡出的任务行动画。
+    final AnimatedOpacity fadingRow = tester.widget<AnimatedOpacity>(
+      fadingRowFinder,
+    );
+    expect(fadingRow.opacity, 0);
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump();
+    expect(find.text('完成反馈任务'), findsNothing);
+    expect(
+      find.byKey(const ValueKey<String>('todo-undo-banner')),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.tap(find.text('撤销'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('完成反馈任务'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('todo-undo-banner')),
+      findsNothing,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+    await database.close();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('每日待办移动端可从纵向四象限聚焦单个象限', (WidgetTester tester) async {
+    // 移动端测试视口。
+    const Size viewport = Size(390, 844);
+    tester.view.physicalSize = viewport;
+    tester.view.devicePixelRatio = 1;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'appearance.theme_mode': 'light',
+    });
+    // 测试用主题偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(preferences),
+          appDatabaseProvider.overrideWithValue(database),
+          nowProvider.overrideWithValue(DateTime(2026, 9, 6, 10)),
+        ],
+        child: const OmniButlerApp(),
+      ),
+    );
+    // 根组件下的 Provider 容器。
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(OmniButlerApp)),
+    );
+    container.read(appRouterProvider).go('/todos');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-filter-all')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-create')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('todo-primary-create')),
+      findsNothing,
+    );
+    for (final TodoPriorityQuadrant quadrant
+        in todoPriorityQuadrantMatrixOrder) {
+      expect(
+        find.byKey(
+          ValueKey<String>('todo-mobile-section-${quadrant.value}-all'),
+        ),
+        findsOneWidget,
+      );
+    }
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('todo-mobile-filter-2')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-section-2-focused')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-section-3-all')),
+      findsNothing,
+    );
+
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 1));
     await database.close();
