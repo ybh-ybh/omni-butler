@@ -13,6 +13,7 @@ import 'package:omni_butler/core/notifications/notification_providers.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/sync/sync_preferences.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
+import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
 import 'package:omni_butler/features/settings/presentation/sync_connection_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
@@ -27,60 +28,365 @@ enum _DisconnectChoice {
   delete,
 }
 
-/// 更多与设置页面。
-class SettingsPage extends ConsumerWidget {
-  /// 创建更多与设置页面。
+/// 设置页一级分类。
+enum _SettingsCategory {
+  /// 功能开关。
+  features,
+
+  /// 外观主题。
+  appearance,
+
+  /// 通知提醒。
+  notifications,
+
+  /// 数据同步。
+  sync,
+
+  /// 数据与存储。
+  storage,
+}
+
+/// 设置页一级分类展示信息。
+extension _SettingsCategoryPresentation on _SettingsCategory {
+  /// 一级分类名称。
+  String get label => switch (this) {
+    _SettingsCategory.features => '功能管理',
+    _SettingsCategory.appearance => '外观与主题',
+    _SettingsCategory.notifications => '通知提醒',
+    _SettingsCategory.sync => '数据同步',
+    _SettingsCategory.storage => '数据与存储',
+  };
+
+  /// 一级分类说明。
+  String get description => switch (this) {
+    _SettingsCategory.features => '只保留你真正使用的功能，关闭后数据仍会安全保留。',
+    _SettingsCategory.appearance => '调整当前设备的显示模式与视觉体验。',
+    _SettingsCategory.notifications => '管理当前设备上的系统提醒。',
+    _SettingsCategory.sync => '连接自托管服务，在多个设备之间同步数据。',
+    _SettingsCategory.storage => '查看并处理已删除的数据。',
+  };
+
+  /// 一级分类图标。
+  IconData get icon => switch (this) {
+    _SettingsCategory.features => Icons.widgets_outlined,
+    _SettingsCategory.appearance => Icons.palette_outlined,
+    _SettingsCategory.notifications => Icons.notifications_outlined,
+    _SettingsCategory.sync => Icons.cloud_sync_outlined,
+    _SettingsCategory.storage => Icons.storage_outlined,
+  };
+}
+
+/// 设置页面。
+class SettingsPage extends ConsumerStatefulWidget {
+  /// 创建设置页面。
   const SettingsPage({super.key});
 
-  /// 构建主题、同步状态和回收站设置。
+  /// 创建设置页面状态。
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SettingsPage> createState() => _SettingsPageState();
+}
+
+/// 设置页面状态。
+class _SettingsPageState extends ConsumerState<SettingsPage> {
+  /// 当前选中的一级分类。
+  _SettingsCategory _selectedCategory = _SettingsCategory.features;
+
+  /// 构建桌面双栏或窄窗口单栏设置布局。
+  @override
+  Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    // 当前主题偏好。
-    final ThemePreference preference = ref.watch(themeControllerProvider);
-    // 统一回收站异步状态。
-    final AsyncValue<List<RecycleBinItem>> recycleBinItems = ref.watch(
-      recycleBinItemsProvider,
-    );
 
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        // 当前页面是否采用紧凑边距。
-        final bool compact = OmniBreakpoint.isCompact(constraints.maxWidth);
-        return SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(
-            compact ? OmniSpacing.md : OmniSpacing.xl,
-            OmniSpacing.lg,
-            compact ? OmniSpacing.md : OmniSpacing.xl,
-            OmniSpacing.xxl,
-          ),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 880),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  const OmniPageHeader(
-                    title: '更多与设置',
-                    description: '管理当前设备的外观、通知、数据同步和低频入口。',
-                  ),
-                  const SizedBox(height: OmniSpacing.lg),
-                  _ModuleGateways(colors: colors),
-                  const SizedBox(height: OmniSpacing.md),
-                  _AppearanceCard(preference: preference),
-                  const SizedBox(height: OmniSpacing.md),
-                  const _NotificationCard(),
-                  const SizedBox(height: OmniSpacing.md),
-                  _SyncSettingsCard(colors: colors),
-                  const SizedBox(height: OmniSpacing.md),
-                  _RecycleBinCard(items: recycleBinItems),
-                ],
+        // 当前是否展示 Windows 风格的左侧一级分类栏。
+        final bool showSidebar = constraints.maxWidth >= 760;
+        // 当前分类对应的右侧内容。
+        final Widget content = _SettingsCategoryContent(
+          category: _selectedCategory,
+          colors: colors,
+        );
+
+        if (showSidebar) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              SizedBox(
+                width: 228,
+                child: _SettingsSidebar(
+                  selectedCategory: _selectedCategory,
+                  onSelected: _selectCategory,
+                ),
               ),
+              VerticalDivider(width: 1, color: colors.line),
+              Expanded(child: content),
+            ],
+          );
+        }
+
+        return Column(
+          children: <Widget>[
+            _CompactSettingsNavigation(
+              selectedCategory: _selectedCategory,
+              onSelected: _selectCategory,
             ),
-          ),
+            Divider(height: 1, color: colors.line),
+            Expanded(child: content),
+          ],
         );
       },
+    );
+  }
+
+  /// 切换当前设置一级分类。
+  void _selectCategory(_SettingsCategory category) {
+    setState(() => _selectedCategory = category);
+  }
+}
+
+/// Windows 设置页左侧一级分类栏。
+class _SettingsSidebar extends StatelessWidget {
+  /// 当前选中的一级分类。
+  final _SettingsCategory selectedCategory;
+
+  /// 分类选择回调。
+  final ValueChanged<_SettingsCategory> onSelected;
+
+  /// 创建设置一级分类栏。
+  const _SettingsSidebar({
+    required this.selectedCategory,
+    required this.onSelected,
+  });
+
+  /// 构建带标题和选中反馈的一级分类栏。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    return ColoredBox(
+      color: colors.paper,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            OmniSpacing.md,
+            OmniSpacing.lg,
+            OmniSpacing.md,
+            OmniSpacing.md,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+                child: Text(
+                  '设置',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+              ),
+              const SizedBox(height: OmniSpacing.xxs),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+                child: Text(
+                  '当前设备',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              const SizedBox(height: OmniSpacing.lg),
+              for (final _SettingsCategory category
+                  in _SettingsCategory.values) ...<Widget>[
+                _SettingsNavigationItem(
+                  category: category,
+                  selected: category == selectedCategory,
+                  onTap: () => onSelected(category),
+                ),
+                const SizedBox(height: OmniSpacing.xxs),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 设置页单个一级分类项。
+class _SettingsNavigationItem extends StatelessWidget {
+  /// 当前分类。
+  final _SettingsCategory category;
+
+  /// 是否为选中态。
+  final bool selected;
+
+  /// 点击回调。
+  final VoidCallback onTap;
+
+  /// 创建一级分类项。
+  const _SettingsNavigationItem({
+    required this.category,
+    required this.selected,
+    required this.onTap,
+  });
+
+  /// 构建带图标的分类入口。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    return Material(
+      key: ValueKey<String>('settings-category-${category.name}'),
+      color: selected ? colors.brandSoft : Colors.transparent,
+      borderRadius: BorderRadius.circular(OmniRadius.panel),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(OmniRadius.panel),
+        child: SizedBox(
+          height: 48,
+          child: Row(
+            children: <Widget>[
+              AnimatedContainer(
+                duration: OmniMotion.fast,
+                width: 3,
+                height: selected ? 24 : 0,
+                decoration: BoxDecoration(
+                  color: colors.brand,
+                  borderRadius: BorderRadius.circular(OmniRadius.pill),
+                ),
+              ),
+              const SizedBox(width: OmniSpacing.sm),
+              Icon(
+                category.icon,
+                size: OmniSize.navigationIcon,
+                color: selected ? colors.brand : colors.muted,
+              ),
+              const SizedBox(width: OmniSpacing.sm),
+              Expanded(
+                child: Text(
+                  category.label,
+                  style: TextStyle(
+                    color: selected ? colors.brandStrong : colors.ink,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 窄窗口顶部一级分类导航。
+class _CompactSettingsNavigation extends StatelessWidget {
+  /// 当前选中的一级分类。
+  final _SettingsCategory selectedCategory;
+
+  /// 分类选择回调。
+  final ValueChanged<_SettingsCategory> onSelected;
+
+  /// 创建窄窗口分类导航。
+  const _CompactSettingsNavigation({
+    required this.selectedCategory,
+    required this.onSelected,
+  });
+
+  /// 构建可横向滚动的分类入口。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    return ColoredBox(
+      color: colors.paper,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.all(OmniSpacing.sm),
+        child: Row(
+          children: <Widget>[
+            for (final _SettingsCategory category
+                in _SettingsCategory.values) ...<Widget>[
+              ChoiceChip(
+                label: Text(category.label),
+                avatar: Icon(category.icon, size: OmniSize.icon),
+                selected: category == selectedCategory,
+                onSelected: (bool selected) {
+                  if (selected) {
+                    onSelected(category);
+                  }
+                },
+              ),
+              const SizedBox(width: OmniSpacing.xs),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 设置页当前一级分类内容。
+class _SettingsCategoryContent extends ConsumerWidget {
+  /// 当前一级分类。
+  final _SettingsCategory category;
+
+  /// 当前主题语义色。
+  final OmniColors colors;
+
+  /// 创建一级分类内容。
+  const _SettingsCategoryContent({
+    required this.category,
+    required this.colors,
+  });
+
+  /// 构建带分类标题的可滚动内容区。
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // 当前页面是否采用紧凑边距。
+    final bool compact = MediaQuery.sizeOf(context).width < 720;
+    // 当前分类的设置主体。
+    final Widget categoryBody = switch (category) {
+      _SettingsCategory.features => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _ModuleGateways(colors: colors),
+          const _FeatureManagementCard(),
+        ],
+      ),
+      _SettingsCategory.appearance => _AppearanceCard(
+        preference: ref.watch(themeControllerProvider),
+      ),
+      _SettingsCategory.notifications => const _NotificationCard(),
+      _SettingsCategory.sync => _SyncSettingsCard(colors: colors),
+      _SettingsCategory.storage => _RecycleBinCard(
+        items: ref.watch(recycleBinItemsProvider),
+      ),
+    };
+
+    return SingleChildScrollView(
+      key: ValueKey<String>('settings-content-${category.name}'),
+      padding: EdgeInsets.fromLTRB(
+        compact ? OmniSpacing.md : OmniSpacing.xxl,
+        OmniSpacing.xl,
+        compact ? OmniSpacing.md : OmniSpacing.xxl,
+        OmniSpacing.xxl,
+      ),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 860),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              OmniPageHeader(
+                title: category.label,
+                description: category.description,
+              ),
+              const SizedBox(height: OmniSpacing.xl),
+              categoryBody,
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -105,6 +411,10 @@ class _NotificationCardState extends ConsumerState<_NotificationCard> {
     // 当前设备通知偏好。
     final NotificationPreference preference = ref.watch(
       notificationPreferenceProvider,
+    );
+    // 当前设备功能偏好。
+    final FeaturePreference featurePreference = ref.watch(
+      featurePreferenceProvider,
     );
     // 当前平台通知服务。
     final LocalNotificationService service = ref.watch(
@@ -142,9 +452,14 @@ class _NotificationCardState extends ConsumerState<_NotificationCard> {
         ),
         OmniListRow(
           title: const Text('每日待办'),
+          subtitle: featurePreference.isEnabled(AppFeature.todos)
+              ? null
+              : const Text('每日待办功能已关闭'),
           trailing: OmniSwitch(
             value: preference.todoEnabled,
-            onChanged: preference.enabled
+            onChanged:
+                preference.enabled &&
+                    featurePreference.isEnabled(AppFeature.todos)
                 ? (bool value) => ref
                       .read(notificationPreferenceProvider.notifier)
                       .setTodoEnabled(value)
@@ -153,9 +468,14 @@ class _NotificationCardState extends ConsumerState<_NotificationCard> {
         ),
         OmniListRow(
           title: const Text('周期事件'),
+          subtitle: featurePreference.isEnabled(AppFeature.events)
+              ? null
+              : const Text('事件管理功能已关闭'),
           trailing: OmniSwitch(
             value: preference.eventEnabled,
-            onChanged: preference.enabled
+            onChanged:
+                preference.enabled &&
+                    featurePreference.isEnabled(AppFeature.events)
                 ? (bool value) => ref
                       .read(notificationPreferenceProvider.notifier)
                       .setEventEnabled(value)
@@ -164,9 +484,14 @@ class _NotificationCardState extends ConsumerState<_NotificationCard> {
         ),
         OmniListRow(
           title: const Text('会员到期与续费'),
+          subtitle: featurePreference.isEnabled(AppFeature.memberships)
+              ? null
+              : const Text('会员管理功能已关闭'),
           trailing: OmniSwitch(
             value: preference.membershipEnabled,
-            onChanged: preference.enabled
+            onChanged:
+                preference.enabled &&
+                    featurePreference.isEnabled(AppFeature.memberships)
                 ? (bool value) => ref
                       .read(notificationPreferenceProvider.notifier)
                       .setMembershipEnabled(value)
@@ -207,8 +532,126 @@ class _NotificationCardState extends ConsumerState<_NotificationCard> {
   }
 }
 
+/// 可开关业务功能的展示信息。
+extension _AppFeaturePresentation on AppFeature {
+  /// 功能名称。
+  String get label => switch (this) {
+    AppFeature.todos => '每日待办',
+    AppFeature.timeline => '时间管理',
+    AppFeature.events => '事件管理',
+    AppFeature.inventory => '物品管理',
+    AppFeature.memberships => '会员管理',
+  };
+
+  /// 功能用途说明。
+  String get description => switch (this) {
+    AppFeature.todos => '安排每日任务与优先级',
+    AppFeature.timeline => '记录时间投入并回顾一天',
+    AppFeature.events => '跟踪周期事件与完成记录',
+    AppFeature.inventory => '管理物品、位置与配套关系',
+    AppFeature.memberships => '管理会员、续费与到期提醒',
+  };
+
+  /// 功能图标。
+  IconData get icon => switch (this) {
+    AppFeature.todos => Icons.check_box_outlined,
+    AppFeature.timeline => Icons.access_time_outlined,
+    AppFeature.events => Icons.calendar_today_outlined,
+    AppFeature.inventory => Icons.inventory_2_outlined,
+    AppFeature.memberships => Icons.credit_card_outlined,
+  };
+}
+
+/// 功能开关设置卡。
+class _FeatureManagementCard extends ConsumerWidget {
+  /// 创建功能开关设置卡。
+  const _FeatureManagementCard();
+
+  /// 构建首页固定状态与全部业务功能开关。
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 当前设备功能偏好。
+    final FeaturePreference preference = ref.watch(featurePreferenceProvider);
+
+    return _SettingsSection(
+      title: '可用功能',
+      description: '关闭后会隐藏导航并阻止打开该功能；已有数据不会删除。',
+      icon: Icons.tune_rounded,
+      children: <Widget>[
+        OmniListRow(
+          leading: _FeatureIcon(
+            icon: Icons.home_outlined,
+            enabled: true,
+            colors: colors,
+          ),
+          title: const Text('首页'),
+          subtitle: const Text('应用的起点，始终保持开启'),
+          trailing: OmniTag(label: '始终开启', color: colors.success),
+        ),
+        for (final AppFeature feature in AppFeature.values)
+          OmniListRow(
+            leading: _FeatureIcon(
+              icon: feature.icon,
+              enabled: preference.isEnabled(feature),
+              colors: colors,
+            ),
+            title: Text(feature.label),
+            subtitle: Text(feature.description),
+            trailing: OmniSwitch(
+              key: ValueKey<String>('feature-toggle-${feature.name}'),
+              value: preference.isEnabled(feature),
+              onChanged: (bool enabled) => ref
+                  .read(featurePreferenceProvider.notifier)
+                  .setFeatureEnabled(feature, enabled),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// 功能列表行图标。
+class _FeatureIcon extends StatelessWidget {
+  /// 功能图标。
+  final IconData icon;
+
+  /// 功能是否启用。
+  final bool enabled;
+
+  /// 当前主题语义色。
+  final OmniColors colors;
+
+  /// 创建功能列表行图标。
+  const _FeatureIcon({
+    required this.icon,
+    required this.enabled,
+    required this.colors,
+  });
+
+  /// 构建随开关状态变化的图标底座。
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: OmniMotion.normal,
+      width: OmniSize.touch,
+      height: OmniSize.touch,
+      decoration: BoxDecoration(
+        color: enabled ? colors.brandSoft : colors.paperSubtle,
+        borderRadius: BorderRadius.circular(OmniRadius.control),
+      ),
+      child: Icon(
+        icon,
+        size: OmniSize.navigationIcon,
+        color: enabled ? colors.brand : colors.muted,
+      ),
+    );
+  }
+}
+
 /// 紧凑布局的低频模块入口。
-class _ModuleGateways extends StatelessWidget {
+class _ModuleGateways extends ConsumerWidget {
   /// 当前主题语义色。
   final OmniColors colors;
 
@@ -217,7 +660,9 @@ class _ModuleGateways extends StatelessWidget {
 
   /// 构建事件与会员入口。
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // 当前设备功能偏好。
+    final FeaturePreference preference = ref.watch(featurePreferenceProvider);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // 当前是否运行在桌面端。
@@ -227,21 +672,29 @@ class _ModuleGateways extends StatelessWidget {
         if (isDesktopPlatform || constraints.maxWidth >= 720) {
           return const SizedBox.shrink();
         }
-        return OmniListPanel(
-          children: <Widget>[
+        // 当前可展示的低频功能入口。
+        final List<Widget> gateways = <Widget>[
+          if (preference.isEnabled(AppFeature.events))
             _GatewayTile(
               icon: Icons.event_repeat_rounded,
               color: colors.event,
               title: '事件记录',
               onTap: () => context.go('/events'),
             ),
+          if (preference.isEnabled(AppFeature.memberships))
             _GatewayTile(
               icon: Icons.loyalty_rounded,
               color: colors.member,
               title: '会员管理',
               onTap: () => context.go('/memberships'),
             ),
-          ],
+        ];
+        if (gateways.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return Padding(
+          padding: const EdgeInsets.only(bottom: OmniSpacing.md),
+          child: OmniListPanel(children: gateways),
         );
       },
     );

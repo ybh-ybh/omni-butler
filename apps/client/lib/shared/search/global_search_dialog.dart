@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/shared/search/global_search_repository.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
@@ -58,6 +59,10 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
   Widget build(BuildContext context) {
     // 当前搜索任务。
     final Future<List<GlobalSearchResult>>? results = _results;
+    // 当前设备功能偏好。
+    final FeaturePreference featurePreference = ref.watch(
+      featurePreferenceProvider,
+    );
     return OmniDialogScaffold(
       title: '搜索全部内容',
       width: 640,
@@ -98,7 +103,15 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
                           }
                           // 当前搜索结果。
                           final List<GlobalSearchResult> items =
-                              snapshot.data ?? const <GlobalSearchResult>[];
+                              (snapshot.data ?? const <GlobalSearchResult>[])
+                                  .where(
+                                    (GlobalSearchResult item) =>
+                                        _isResultEnabled(
+                                          item.type,
+                                          featurePreference,
+                                        ),
+                                  )
+                                  .toList(growable: false);
                           if (items.isEmpty) {
                             return const Center(child: Text('没有找到匹配内容'));
                           }
@@ -140,6 +153,20 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
         ],
       ),
     );
+  }
+
+  /// 判断搜索结果所属功能当前是否启用。
+  bool _isResultEnabled(GlobalSearchType type, FeaturePreference preference) {
+    return switch (type) {
+      GlobalSearchType.todo => preference.isEnabled(AppFeature.todos),
+      GlobalSearchType.event => preference.isEnabled(AppFeature.events),
+      GlobalSearchType.inventory => preference.isEnabled(AppFeature.inventory),
+      GlobalSearchType.timeEntry => preference.isEnabled(AppFeature.timeline),
+      GlobalSearchType.membership => preference.isEnabled(
+        AppFeature.memberships,
+      ),
+      GlobalSearchType.quote => true,
+    };
   }
 
   /// 返回搜索结果类型图标。

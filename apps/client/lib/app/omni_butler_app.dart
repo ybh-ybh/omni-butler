@@ -9,6 +9,7 @@ import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/notifications/local_notification_service.dart';
 import 'package:omni_butler/core/notifications/notification_providers.dart';
 import 'package:omni_butler/features/memberships/data/membership_repository.dart';
+import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
 
 /// Omni Butler 根应用。
@@ -57,7 +58,12 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
 
   /// 执行一次已到期会员的自动续费处理。
   Future<void> _processAutoRenewals() async {
-    if (_autoRenewalRunning) {
+    // 当前设备功能偏好。
+    final FeaturePreference featurePreference = ref.read(
+      featurePreferenceProvider,
+    );
+    if (_autoRenewalRunning ||
+        !featurePreference.isEnabled(AppFeature.memberships)) {
       return;
     }
     _autoRenewalRunning = true;

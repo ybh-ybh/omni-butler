@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
+import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/shared/search/global_search_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
@@ -23,12 +24,16 @@ class _AppDestination {
   /// 选中态图标。
   final IconData selectedIcon;
 
+  /// 可选的业务功能标识；首页与设置不受功能开关控制。
+  final AppFeature? feature;
+
   /// 创建应用导航目的地。
   const _AppDestination({
     required this.path,
     required this.label,
     required this.icon,
     required this.selectedIcon,
+    this.feature,
   });
 }
 
@@ -45,30 +50,35 @@ const List<_AppDestination> _desktopDestinations = <_AppDestination>[
     label: '每日待办',
     icon: Icons.check_box_outlined,
     selectedIcon: Icons.check_box_rounded,
+    feature: AppFeature.todos,
   ),
   _AppDestination(
     path: '/timeline',
     label: '时间管理',
     icon: Icons.access_time_outlined,
     selectedIcon: Icons.access_time_filled,
+    feature: AppFeature.timeline,
   ),
   _AppDestination(
     path: '/events',
     label: '事件管理',
     icon: Icons.calendar_today_outlined,
     selectedIcon: Icons.calendar_today_rounded,
+    feature: AppFeature.events,
   ),
   _AppDestination(
     path: '/inventory',
     label: '物品管理',
     icon: Icons.inventory_2_outlined,
     selectedIcon: Icons.inventory_2_rounded,
+    feature: AppFeature.inventory,
   ),
   _AppDestination(
     path: '/memberships',
     label: '会员管理',
     icon: Icons.credit_card_outlined,
     selectedIcon: Icons.credit_card_rounded,
+    feature: AppFeature.memberships,
   ),
 ];
 
@@ -93,18 +103,21 @@ const List<_AppDestination> _compactDestinations = <_AppDestination>[
     label: '待办',
     icon: Icons.check_box_outlined,
     selectedIcon: Icons.check_box_rounded,
+    feature: AppFeature.todos,
   ),
   _AppDestination(
     path: '/timeline',
     label: '时间',
     icon: Icons.access_time_outlined,
     selectedIcon: Icons.access_time_filled,
+    feature: AppFeature.timeline,
   ),
   _AppDestination(
     path: '/inventory',
     label: '物品',
     icon: Icons.inventory_2_outlined,
     selectedIcon: Icons.inventory_2_rounded,
+    feature: AppFeature.inventory,
   ),
   _AppDestination(
     path: '/settings',
@@ -146,6 +159,26 @@ class ResponsiveShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
+    // 当前设备功能偏好。
+    final FeaturePreference featurePreference = ref.watch(
+      featurePreferenceProvider,
+    );
+    // 当前可见的桌面导航项。
+    final List<_AppDestination> desktopDestinations = _desktopDestinations
+        .where(
+          (_AppDestination destination) =>
+              destination.feature == null ||
+              featurePreference.isEnabled(destination.feature!),
+        )
+        .toList(growable: false);
+    // 当前可见的紧凑导航项。
+    final List<_AppDestination> compactDestinations = _compactDestinations
+        .where(
+          (_AppDestination destination) =>
+              destination.feature == null ||
+              featurePreference.isEnabled(destination.feature!),
+        )
+        .toList(growable: false);
 
     return Shortcuts(
       shortcuts: const <ShortcutActivator, Intent>{
@@ -156,7 +189,9 @@ class ResponsiveShell extends ConsumerWidget {
         actions: <Type, Action<Intent>>{
           _CreateTodoIntent: CallbackAction<_CreateTodoIntent>(
             onInvoke: (_CreateTodoIntent intent) {
-              TodoEditorDialog.show(context);
+              if (featurePreference.isEnabled(AppFeature.todos)) {
+                TodoEditorDialog.show(context);
+              }
               return null;
             },
           ),
@@ -190,6 +225,7 @@ class ResponsiveShell extends ConsumerWidget {
                   body: SafeArea(child: child),
                   bottomNavigationBar: _CompactNavigation(
                     location: location,
+                    destinations: compactDestinations,
                     onSelected: (String path) => context.go(path),
                   ),
                 );
@@ -202,11 +238,13 @@ class ResponsiveShell extends ConsumerWidget {
                     if (isExpanded)
                       _ExpandedSidebar(
                         location: location,
+                        destinations: desktopDestinations,
                         onSelected: (String path) => context.go(path),
                       )
                     else
                       _MediumNavigation(
                         location: location,
+                        destinations: desktopDestinations,
                         onSelected: (String path) => context.go(path),
                       ),
                     Expanded(
@@ -238,11 +276,18 @@ class _ExpandedSidebar extends StatelessWidget {
   /// 当前路由路径。
   final String location;
 
+  /// 当前可见的业务导航项。
+  final List<_AppDestination> destinations;
+
   /// 选择回调。
   final ValueChanged<String> onSelected;
 
   /// 创建展开桌面侧栏。
-  const _ExpandedSidebar({required this.location, required this.onSelected});
+  const _ExpandedSidebar({
+    required this.location,
+    required this.destinations,
+    required this.onSelected,
+  });
 
   /// 构建带品牌标识的侧栏。
   @override
@@ -265,7 +310,7 @@ class _ExpandedSidebar extends StatelessWidget {
             children: <Widget>[
               _BrandMark(colors: colors),
               const SizedBox(height: 28),
-              for (final _AppDestination destination in _desktopDestinations)
+              for (final _AppDestination destination in destinations)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 4),
                   child: _SidebarDestination(
@@ -295,11 +340,18 @@ class _MediumNavigation extends StatelessWidget {
   /// 当前路由路径。
   final String location;
 
+  /// 当前可见的业务导航项。
+  final List<_AppDestination> destinations;
+
   /// 选择回调。
   final ValueChanged<String> onSelected;
 
   /// 创建中等宽度导航轨。
-  const _MediumNavigation({required this.location, required this.onSelected});
+  const _MediumNavigation({
+    required this.location,
+    required this.destinations,
+    required this.onSelected,
+  });
 
   /// 构建飞书式紧凑导航轨。
   @override
@@ -320,7 +372,7 @@ class _MediumNavigation extends StatelessWidget {
             const SizedBox(height: OmniSpacing.sm),
             _CompactBrandMark(colors: colors),
             const SizedBox(height: OmniSpacing.lg),
-            for (final _AppDestination destination in _desktopDestinations)
+            for (final _AppDestination destination in destinations)
               Padding(
                 padding: const EdgeInsets.only(bottom: OmniSpacing.xxs),
                 child: _RailDestination(
@@ -371,6 +423,7 @@ class _RailDestination extends StatelessWidget {
     return Tooltip(
       message: destination.label,
       child: Material(
+        key: ValueKey<String>('navigation-${destination.path}'),
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
@@ -406,11 +459,18 @@ class _CompactNavigation extends StatelessWidget {
   /// 当前路由路径。
   final String location;
 
+  /// 当前可见的业务导航项。
+  final List<_AppDestination> destinations;
+
   /// 选择回调。
   final ValueChanged<String> onSelected;
 
   /// 创建紧凑底部导航。
-  const _CompactNavigation({required this.location, required this.onSelected});
+  const _CompactNavigation({
+    required this.location,
+    required this.destinations,
+    required this.onSelected,
+  });
 
   /// 构建飞书式五入口底部导航。
   @override
@@ -428,7 +488,7 @@ class _CompactNavigation extends StatelessWidget {
         ),
         child: Row(
           children: <Widget>[
-            for (final _AppDestination destination in _compactDestinations)
+            for (final _AppDestination destination in destinations)
               Expanded(
                 child: _CompactDestination(
                   destination: destination,
@@ -467,6 +527,7 @@ class _CompactDestination extends StatelessWidget {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     return Material(
+      key: ValueKey<String>('navigation-${destination.path}'),
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
@@ -739,6 +800,7 @@ class _SidebarDestination extends StatelessWidget {
     final OmniColors colors = OmniColors.of(context);
 
     return Material(
+      key: ValueKey<String>('navigation-${destination.path}'),
       color: selected ? colors.brandSoft : Colors.transparent,
       borderRadius: BorderRadius.circular(OmniRadius.control),
       child: InkWell(

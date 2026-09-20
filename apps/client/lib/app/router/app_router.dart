@@ -5,6 +5,7 @@ import 'package:omni_butler/features/events/presentation/events_page.dart';
 import 'package:omni_butler/features/home/presentation/home_page.dart';
 import 'package:omni_butler/features/inventory/presentation/inventory_page.dart';
 import 'package:omni_butler/features/memberships/presentation/memberships_page.dart';
+import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/presentation/settings_page.dart';
 import 'package:omni_butler/features/timeline/presentation/timeline_page.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
@@ -28,6 +29,8 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
           ),
           GoRoute(
             path: '/todos',
+            redirect: (context, state) =>
+                _redirectDisabledFeature(ref, AppFeature.todos),
             builder: (context, state) {
               // 路由中可选的象限存储值。
               final int? quadrantValue = int.tryParse(
@@ -49,21 +52,29 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
           ),
           GoRoute(
             path: '/events',
+            redirect: (context, state) =>
+                _redirectDisabledFeature(ref, AppFeature.events),
             builder: (context, state) =>
                 _PrimaryRouteSurface(child: const EventsPage()),
           ),
           GoRoute(
             path: '/inventory',
+            redirect: (context, state) =>
+                _redirectDisabledFeature(ref, AppFeature.inventory),
             builder: (context, state) =>
                 _PrimaryRouteSurface(child: const InventoryPage()),
           ),
           GoRoute(
             path: '/timeline',
+            redirect: (context, state) =>
+                _redirectDisabledFeature(ref, AppFeature.timeline),
             builder: (context, state) =>
                 _PrimaryRouteSurface(child: const TimelinePage()),
           ),
           GoRoute(
             path: '/memberships',
+            redirect: (context, state) =>
+                _redirectDisabledFeature(ref, AppFeature.memberships),
             builder: (context, state) =>
                 _PrimaryRouteSurface(child: const MembershipsPage()),
           ),
@@ -77,6 +88,13 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
     ],
   );
 });
+
+/// 已关闭的业务功能统一返回首页。
+String? _redirectDisabledFeature(Ref ref, AppFeature feature) {
+  // 当前设备功能偏好。
+  final FeaturePreference preference = ref.read(featurePreferenceProvider);
+  return preference.isEnabled(feature) ? null : '/home';
+}
 
 /// 一级页面的完整命中表面。
 class _PrimaryRouteSurface extends StatelessWidget {

@@ -472,6 +472,17 @@ abstract final class AppTheme {
       switchTheme: SwitchThemeData(
         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
         padding: EdgeInsets.zero,
+        overlayColor: WidgetStateProperty.resolveWith<Color?>((
+          Set<WidgetState> states,
+        ) {
+          if (states.contains(WidgetState.hovered)) {
+            return Colors.transparent;
+          }
+          if (states.contains(WidgetState.focused)) {
+            return colors.brand.withValues(alpha: 0.12);
+          }
+          return Colors.transparent;
+        }),
         trackColor: WidgetStateProperty.resolveWith<Color?>((
           Set<WidgetState> states,
         ) {

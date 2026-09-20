@@ -32,7 +32,7 @@ void main() {
     expect(find.text('侧栏内容'), findsNothing);
   });
 
-  testWidgets('统一开关缩小视觉尺寸并保留触控区域', (WidgetTester tester) async {
+  testWidgets('统一开关使用立体样式并保留完整交互能力', (WidgetTester tester) async {
     // 开关当前值。
     bool value = false;
     // 开关回调次数。
@@ -58,16 +58,80 @@ void main() {
 
     expect(
       tester.getSize(find.byType(OmniSwitch)),
-      const Size(OmniSize.touch, OmniSize.controlLarge),
+      const Size(OmniSize.switchTapWidth, OmniSize.controlLarge),
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey<String>('omni-switch-track'))),
+      const Size(OmniSize.switchTrackWidth, OmniSize.switchTrackHeight),
+    );
+    // 浅色主题轨道容器。
+    final Container track = tester.widget<Container>(
+      find.byKey(const ValueKey<String>('omni-switch-track')),
+    );
+    // 浅色主题轨道装饰。
+    final BoxDecoration trackDecoration = track.decoration! as BoxDecoration;
+    // 浅色主题轨道渐变。
+    final LinearGradient trackGradient =
+        trackDecoration.gradient! as LinearGradient;
+    expect(trackGradient.colors.first, const Color(0xFFC3CBD6));
+    expect(trackDecoration.border, isNotNull);
+    // 当前开关交互层。
+    final InkWell interaction = tester.widget<InkWell>(
+      find.byKey(const ValueKey<String>('omni-switch-interaction')),
+    );
+    expect(
+      interaction.overlayColor?.resolve(<WidgetState>{WidgetState.hovered}),
+      Colors.transparent,
+    );
+    expect(
+      interaction.overlayColor?.resolve(<WidgetState>{WidgetState.focused}),
+      isNot(Colors.transparent),
+    );
+    // 关闭状态滑块位置。
+    AnimatedAlign thumbPosition = tester.widget<AnimatedAlign>(
+      find.byKey(const ValueKey<String>('omni-switch-thumb-position')),
+    );
+    expect(thumbPosition.alignment, Alignment.centerLeft);
+    expect(thumbPosition.duration, const Duration(milliseconds: 210));
+    expect(thumbPosition.curve, Curves.easeIn);
+    // 关闭状态环位置。
+    final AnimatedAlign indicatorPosition = tester.widget<AnimatedAlign>(
+      find.byKey(const ValueKey<String>('omni-switch-indicator-position')),
+    );
+    expect(indicatorPosition.duration, const Duration(milliseconds: 700));
+    // 状态环左右内收间距。
+    final Padding indicatorInset = tester.widget<Padding>(
+      find.byKey(const ValueKey<String>('omni-switch-indicator-inset')),
+    );
+    expect(
+      indicatorInset.padding,
+      const EdgeInsets.symmetric(horizontal: OmniSize.switchIndicatorInset),
     );
     // 轻点视觉开关外、触控区域内的边缘。
     final Offset switchTopLeft = tester.getTopLeft(find.byType(OmniSwitch));
     await tester.tapAt(switchTopLeft + const Offset(2, 20));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 210));
     expect(value, isTrue);
     expect(changeCount, 1);
+    // 运行到 CSS 30% 关键帧时的状态环淡出值。
+    FadeTransition indicatorFade = tester.widget<FadeTransition>(
+      find.byKey(const ValueKey<String>('omni-switch-indicator-fade')),
+    );
+    expect(indicatorFade.opacity.value, closeTo(0, 0.01));
+    thumbPosition = tester.widget<AnimatedAlign>(
+      find.byKey(const ValueKey<String>('omni-switch-thumb-position')),
+    );
+    expect(thumbPosition.alignment, Alignment.centerRight);
+    await tester.pump(const Duration(milliseconds: 490));
+    indicatorFade = tester.widget<FadeTransition>(
+      find.byKey(const ValueKey<String>('omni-switch-indicator-fade')),
+    );
+    expect(indicatorFade.opacity.value, closeTo(1, 0.01));
 
-    await tester.tap(find.byType(Switch));
+    await tester.tap(
+      find.byKey(const ValueKey<String>('omni-switch-interaction')),
+    );
     await tester.pumpAndSettle();
     expect(value, isFalse);
     expect(changeCount, 2);

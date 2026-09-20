@@ -59,6 +59,24 @@ abstract final class OmniSize {
   /// 开关视觉相对原生控件的缩放比例。
   static const double switchVisualScale = 0.76;
 
+  /// 立体开关的完整点击宽度。
+  static const double switchTapWidth = 60;
+
+  /// 立体开关轨道宽度。
+  static const double switchTrackWidth = 56;
+
+  /// 立体开关轨道高度。
+  static const double switchTrackHeight = 28;
+
+  /// 立体开关滑块直径。
+  static const double switchThumb = 20;
+
+  /// 立体开关状态环直径。
+  static const double switchIndicator = 12;
+
+  /// 立体开关状态环与左右边缘的额外间距。
+  static const double switchIndicatorInset = 4;
+
   /// 桌面顶栏高度。
   static const double topBar = 48;
 
@@ -88,6 +106,12 @@ abstract final class OmniMotion {
 
   /// 面板进入与退出时长。
   static const Duration panel = Duration(milliseconds: 220);
+
+  /// 立体开关滑块移动时长，在参考 CSS 基础上加快 30%。
+  static const Duration switchThumb = Duration(milliseconds: 210);
+
+  /// 立体开关状态环动画时长，在参考 CSS 基础上加快 30%。
+  static const Duration switchIndicator = Duration(milliseconds: 700);
 
   /// 常规缓动曲线。
   static const Curve standardCurve = Curves.easeOutCubic;
