@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/router/app_router.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
@@ -635,6 +636,149 @@ void main() {
       movedChild.priorityQuadrant,
       TodoPriorityQuadrant.urgentNotImportant.value,
     );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+    await database.close();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('每日待办回收站弹窗使用一致的边框揭示按钮', (WidgetTester tester) async {
+    // 桌面测试视口。
+    const Size viewport = Size(1440, 900);
+    tester.view.physicalSize = viewport;
+    tester.view.devicePixelRatio = 1;
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'appearance.theme_mode': 'light',
+    });
+    // 测试用主题偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 测试用待办仓储。
+    final TodoRepository repository = TodoRepository(database);
+    // 当前测试自然日。
+    final DateTime today = DateTime(2026, 9, 21);
+    await repository.save(
+      TodoDraft(
+        title: '待回收任务',
+        scheduledDate: today,
+        priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(preferences),
+          appDatabaseProvider.overrideWithValue(database),
+          nowProvider.overrideWithValue(today.add(const Duration(hours: 10))),
+        ],
+        child: const OmniButlerApp(),
+      ),
+    );
+    // 根组件下的 Provider 容器。
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(OmniButlerApp)),
+    );
+    container.read(appRouterProvider).go('/todos');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    await tester.tap(find.byTooltip('更多操作'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('移入回收站'));
+    await tester.pumpAndSettle();
+
+    // 取消边框揭示按钮。
+    final Finder cancelButton = find.byKey(
+      const ValueKey<String>('todo-recycle-cancel-button'),
+    );
+    // 确认边框揭示按钮。
+    final Finder confirmButton = find.byKey(
+      const ValueKey<String>('todo-recycle-confirm-button'),
+    );
+    expect(find.text('移入回收站？'), findsOneWidget);
+    expect(cancelButton, findsOneWidget);
+    expect(confirmButton, findsOneWidget);
+    // 取消按钮的自定义边框绘制区。
+    final Finder cancelPaint = find.byKey(
+      const ValueKey<String>('todo-recycle-cancel-border'),
+    );
+    // 确认按钮的自定义边框绘制区。
+    final Finder confirmPaint = find.byKey(
+      const ValueKey<String>('todo-recycle-confirm-border'),
+    );
+    // 取消按钮的原生点击区域。
+    final Finder cancelAction = find.byKey(
+      const ValueKey<String>('todo-recycle-cancel-action'),
+    );
+    // 确认按钮的原生点击区域。
+    final Finder confirmAction = find.byKey(
+      const ValueKey<String>('todo-recycle-confirm-action'),
+    );
+    expect(cancelPaint, findsOneWidget);
+    expect(confirmPaint, findsOneWidget);
+    expect(tester.getSize(cancelAction), const Size(48, 24));
+    expect(tester.getSize(confirmAction), const Size(102, 24));
+    expect(tester.getSize(cancelPaint).height, 24);
+    expect(tester.getSize(confirmPaint).height, 24);
+    // 取消按钮保留原 TextButton 的水平内边距。
+    final Padding cancelPadding = tester.widget<Padding>(
+      find.byKey(const ValueKey<String>('todo-recycle-cancel-padding')),
+    );
+    // 确认按钮保留原 FilledButton 的水平内边距。
+    final Padding confirmPadding = tester.widget<Padding>(
+      find.byKey(const ValueKey<String>('todo-recycle-confirm-padding')),
+    );
+    expect(cancelPadding.padding, const EdgeInsets.symmetric(horizontal: 10));
+    expect(confirmPadding.padding, const EdgeInsets.symmetric(horizontal: 16));
+    // 取消按钮的原生交互层。
+    final TextButton cancelTextButton = tester.widget<TextButton>(cancelAction);
+    // 确认按钮的原生交互层。
+    final TextButton confirmTextButton = tester.widget<TextButton>(
+      confirmAction,
+    );
+    // 取消按钮恢复后的交互形状。
+    final RoundedRectangleBorder cancelShape =
+        cancelTextButton.style!.shape!.resolve(<WidgetState>{})!
+            as RoundedRectangleBorder;
+    // 确认按钮恢复后的交互形状。
+    final RoundedRectangleBorder confirmShape =
+        confirmTextButton.style!.shape!.resolve(<WidgetState>{})!
+            as RoundedRectangleBorder;
+    expect(cancelShape.borderRadius, BorderRadius.circular(OmniRadius.control));
+    expect(
+      confirmShape.borderRadius,
+      BorderRadius.circular(OmniRadius.control),
+    );
+    cancelTextButton.onHover?.call(true);
+    confirmTextButton.onHover?.call(true);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 150));
+    // 取消按钮动画中点的绘制器。
+    final dynamic cancelPainter = tester
+        .widget<CustomPaint>(cancelPaint)
+        .painter;
+    // 确认按钮动画中点的绘制器。
+    final dynamic confirmPainter = tester
+        .widget<CustomPaint>(confirmPaint)
+        .painter;
+    expect(cancelPainter.progress as double, closeTo(0.5, 0.02));
+    expect(confirmPainter.progress as double, closeTo(0.5, 0.02));
+    cancelTextButton.onHover?.call(false);
+    confirmTextButton.onHover?.call(false);
+    await tester.pumpAndSettle();
+
+    await tester.tap(cancelButton);
+    await tester.pumpAndSettle();
+    expect(find.text('移入回收站？'), findsNothing);
+    expect(find.text('待回收任务'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 1));

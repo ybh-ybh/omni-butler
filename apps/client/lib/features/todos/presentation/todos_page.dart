@@ -640,23 +640,27 @@ class _TodosPageState extends ConsumerState<TodosPage> {
               : '“${todo.title}”会进入回收站。',
         ),
         actions: <Widget>[
-          TextButton(
+          _TodoRecycleActionButton(
+            key: const ValueKey<String>('todo-recycle-cancel-button'),
+            label: '取消',
+            tone: _TodoRecycleActionTone.cancel,
             onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
           ),
           if (todo.repeatSeriesId != null)
             TextButton(
               onPressed: () => Navigator.pop(context, TodoSeriesScope.single),
               child: const Text('仅本次'),
             ),
-          FilledButton(
+          _TodoRecycleActionButton(
+            key: const ValueKey<String>('todo-recycle-confirm-button'),
+            label: todo.repeatSeriesId == null ? '移入回收站' : '本次及以后',
+            tone: _TodoRecycleActionTone.danger,
             onPressed: () => Navigator.pop(
               context,
               todo.repeatSeriesId == null
                   ? TodoSeriesScope.single
                   : TodoSeriesScope.future,
             ),
-            child: Text(todo.repeatSeriesId == null ? '移入回收站' : '本次及以后'),
           ),
         ],
       ),
@@ -673,6 +677,287 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         tone: OmniMessageTone.success,
       );
     }
+  }
+}
+
+/// 回收站弹窗按钮的语义色类型。
+enum _TodoRecycleActionTone {
+  /// 取消操作使用品牌色。
+  cancel,
+
+  /// 移入回收站操作使用危险色。
+  danger,
+}
+
+/// 每日待办回收站弹窗的边框揭示按钮。
+class _TodoRecycleActionButton extends StatefulWidget {
+  /// 按钮文字。
+  final String label;
+
+  /// 点击回调。
+  final VoidCallback onPressed;
+
+  /// 按钮语义色类型。
+  final _TodoRecycleActionTone tone;
+
+  /// 创建回收站弹窗按钮。
+  const _TodoRecycleActionButton({
+    required this.label,
+    required this.onPressed,
+    required this.tone,
+    super.key,
+  });
+
+  /// 创建边框揭示动画状态。
+  @override
+  State<_TodoRecycleActionButton> createState() =>
+      _TodoRecycleActionButtonState();
+}
+
+/// 回收站弹窗按钮的交互与动画状态。
+class _TodoRecycleActionButtonState extends State<_TodoRecycleActionButton>
+    with SingleTickerProviderStateMixin {
+  /// 参考样式使用的完整动画时长。
+  static const Duration _revealDuration = Duration(milliseconds: 300);
+
+  /// 驱动两层遮罩依次退场的动画控制器。
+  late final AnimationController _controller;
+
+  /// 鼠标当前是否悬停在按钮上。
+  bool _hovered = false;
+
+  /// 键盘焦点当前是否位于按钮上。
+  bool _focused = false;
+
+  /// 初始化边框揭示动画。
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(duration: _revealDuration, vsync: this);
+  }
+
+  /// 根据无障碍设置切换正常动画或即时反馈。
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 当前是否关闭非必要动画。
+    final bool disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    _controller.duration = disableAnimations ? Duration.zero : _revealDuration;
+  }
+
+  /// 释放动画资源。
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// 更新悬停状态并同步边框动画。
+  void _handleHover(bool value) {
+    _hovered = value;
+    _syncRevealAnimation();
+  }
+
+  /// 更新键盘焦点状态并同步边框动画。
+  void _handleFocus(bool value) {
+    _focused = value;
+    _syncRevealAnimation();
+  }
+
+  /// 让悬停与键盘焦点共用同一套揭示反馈。
+  void _syncRevealAnimation() {
+    // 当前是否需要显示完整边框。
+    final bool reveal = _hovered || _focused;
+    if (reveal) {
+      _controller.forward();
+    } else {
+      _controller.reverse();
+    }
+  }
+
+  /// 构建主题自适应的按钮外观。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 当前按钮强调色。
+    final Color toneColor = switch (widget.tone) {
+      _TodoRecycleActionTone.cancel => colors.brandStrong,
+      _TodoRecycleActionTone.danger => colors.danger,
+    };
+    // 按照原按钮类型保留水平内边距。
+    final double horizontalPadding = switch (widget.tone) {
+      _TodoRecycleActionTone.cancel => 10,
+      _TodoRecycleActionTone.danger => 16,
+    };
+    // 当前按钮边框绘制区的测试标识。
+    final String borderKey = switch (widget.tone) {
+      _TodoRecycleActionTone.cancel => 'todo-recycle-cancel-border',
+      _TodoRecycleActionTone.danger => 'todo-recycle-confirm-border',
+    };
+    // 当前按钮内容内边距的测试标识。
+    final String paddingKey = switch (widget.tone) {
+      _TodoRecycleActionTone.cancel => 'todo-recycle-cancel-padding',
+      _TodoRecycleActionTone.danger => 'todo-recycle-confirm-padding',
+    };
+    // 当前按钮原生点击区域的测试标识。
+    final String actionKey = switch (widget.tone) {
+      _TodoRecycleActionTone.cancel => 'todo-recycle-cancel-action',
+      _TodoRecycleActionTone.danger => 'todo-recycle-confirm-action',
+    };
+    // 当前主题紧凑密度对按钮视觉区域的尺寸调整。
+    final Offset densityAdjustment = Theme.of(context)
+        .visualDensity
+        .baseSizeAdjustment;
+    // 修改前 TextButton 与 FilledButton 的实际视觉高度。
+    final double visualHeight = OmniSize.control + densityAdjustment.dy;
+
+    return TextButton(
+      key: ValueKey<String>(actionKey),
+      onPressed: widget.onPressed,
+      onHover: _handleHover,
+      onFocusChange: _handleFocus,
+      style: const ButtonStyle(
+        padding: WidgetStatePropertyAll<EdgeInsetsGeometry>(EdgeInsets.zero),
+        backgroundColor: WidgetStatePropertyAll<Color>(Colors.transparent),
+        overlayColor: WidgetStatePropertyAll<Color>(Colors.transparent),
+        shape: WidgetStatePropertyAll<OutlinedBorder>(
+          RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(OmniRadius.control)),
+          ),
+        ),
+      ),
+      child: SizedBox(
+        height: visualHeight,
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (BuildContext context, Widget? child) {
+            return CustomPaint(
+              key: ValueKey<String>(borderKey),
+              painter: _TodoRecycleActionBorderPainter(
+                progress: _controller.value,
+                toneColor: toneColor,
+                surfaceColor: colors.paper,
+              ),
+              child: child,
+            );
+          },
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Padding(
+                key: ValueKey<String>(paddingKey),
+                padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+                child: Text(
+                  widget.label,
+                  style: TextStyle(
+                    color: toneColor,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 绘制参考样式中的边框和两层表面色遮罩。
+class _TodoRecycleActionBorderPainter extends CustomPainter {
+  /// 当前揭示进度。
+  final double progress;
+
+  /// 按钮边框语义色。
+  final Color toneColor;
+
+  /// 用于遮挡边框的弹窗表面色。
+  final Color surfaceColor;
+
+  /// 创建回收站按钮边框绘制器。
+  const _TodoRecycleActionBorderPainter({
+    required this.progress,
+    required this.toneColor,
+    required this.surfaceColor,
+  });
+
+  /// 绘制逐步露出的边框与延迟收起的顶部遮罩。
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 第一层遮罩沿用参考样式的缓出曲线。
+    final double easedProgress = Curves.easeOut.transform(progress);
+    // 按钮背景画笔。
+    final Paint surfacePaint = Paint()..color = surfaceColor;
+    // 按钮边框画笔。
+    final Paint borderPaint = Paint()
+      ..color = toneColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    // 按钮圆角矩形。
+    final RRect buttonRect = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      const Radius.circular(OmniRadius.control),
+    );
+    canvas.drawRRect(buttonRect, surfacePaint);
+    canvas.drawRRect(buttonRect.deflate(1), borderPaint);
+
+    // 第一层遮罩的最大高度，为常驻底边预留两个像素。
+    final double primaryCoverMaxHeight = size.height - 2;
+    // 第一层遮罩随动画向上移动并收缩高度。
+    final double primaryCoverHeight =
+        primaryCoverMaxHeight * (1 - easedProgress);
+    // 第一层遮罩向上的位移量。
+    final double primaryCoverTop = -2 - (25 * easedProgress);
+    if (primaryCoverHeight > 0) {
+      canvas.drawRect(
+        Rect.fromLTWH(
+          -2,
+          primaryCoverTop,
+          size.width + 6,
+          primaryCoverHeight + 2,
+        ),
+        surfacePaint,
+      );
+    }
+
+    // 第二层遮罩在动画后半段开始横向收缩。
+    final double delayedLinearProgress = ((progress - 0.5) * 2).clamp(0, 1);
+    // 第二层遮罩独立使用缓出曲线，保留 150 毫秒延迟。
+    final double delayedProgress = Curves.easeOut.transform(
+      delayedLinearProgress,
+    );
+    // 第二层遮罩的完整宽度。
+    final double secondaryCoverFullWidth = size.width + 4;
+    // 第二层遮罩当前宽度。
+    final double secondaryCoverWidth =
+        secondaryCoverFullWidth * (1 - delayedProgress);
+    // 第二层遮罩的左右居中偏移。
+    final double secondaryCoverLeft =
+        -2 + ((secondaryCoverFullWidth - secondaryCoverWidth) / 2);
+    // 第二层遮罩按控件高度保持与参考样式相同的窄条比例。
+    final double secondaryCoverHeight = size.height * 0.18;
+    if (secondaryCoverWidth > 0) {
+      canvas.drawRect(
+        Rect.fromLTWH(
+          secondaryCoverLeft,
+          -2,
+          secondaryCoverWidth,
+          secondaryCoverHeight,
+        ),
+        surfacePaint,
+      );
+    }
+  }
+
+  /// 仅在动画进度或主题色变化时重新绘制。
+  @override
+  bool shouldRepaint(covariant _TodoRecycleActionBorderPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.toneColor != toneColor ||
+        oldDelegate.surfaceColor != surfaceColor;
   }
 }
 
