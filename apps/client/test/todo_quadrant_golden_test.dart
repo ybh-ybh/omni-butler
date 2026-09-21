@@ -186,11 +186,13 @@ Future<void> _verifyTodoGolden(
     // 目标任务行内的完成复选框。
     final Finder completionCheckbox = find.descendant(
       of: find.byKey(ValueKey<String>('todo-row-${popupTodo.id}')),
-      matching: find.byType(Checkbox),
+      matching: find.byKey(
+        const ValueKey<String>('todo-completion-interaction'),
+      ),
     );
     await tester.tap(completionCheckbox);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump(const Duration(milliseconds: 580));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
   }

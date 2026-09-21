@@ -9,6 +9,7 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
+import 'package:omni_butler/features/todos/presentation/todo_completion_checkbox.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/features/todos/presentation/todo_priority_quadrant_style.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
@@ -504,7 +505,9 @@ class _TodosPageState extends ConsumerState<TodosPage> {
           ];
     setState(() => _completingTodoIds.addAll(changedIds));
     await Future<void>.delayed(
-      disableAnimations ? Duration.zero : OmniMotion.normal,
+      disableAnimations
+          ? Duration.zero
+          : TodoCompletionCheckbox.animationDuration + OmniMotion.normal,
     );
     await repository.setCompleted(todo.id, true);
     if (!mounted) {
@@ -1471,9 +1474,29 @@ class _TodoTaskRow extends StatelessWidget {
     // 当前是否关闭非必要动画。
     final bool disableAnimations =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
-    return AnimatedOpacity(
-      opacity: completing ? 0 : 1,
-      duration: disableAnimations ? Duration.zero : OmniMotion.normal,
+    return TweenAnimationBuilder<double>(
+      key: ValueKey<String>('todo-completion-transition-${todo.id}'),
+      tween: Tween<double>(end: completing ? 1 : 0),
+      duration: disableAnimations
+          ? Duration.zero
+          : TodoCompletionCheckbox.animationDuration + OmniMotion.normal,
+      builder: (BuildContext context, double progress, Widget? child) {
+        // 勾选动画完成后才开始淡出任务行。
+        final double fadeStart =
+            TodoCompletionCheckbox.animationDuration.inMilliseconds /
+            (TodoCompletionCheckbox.animationDuration + OmniMotion.normal)
+                .inMilliseconds;
+        // 淡出阶段使用页面统一的缓出曲线。
+        final double fadeProgress = progress <= fadeStart
+            ? 0
+            : ((progress - fadeStart) / (1 - fadeStart)).clamp(0, 1);
+        return Opacity(
+          opacity: completing
+              ? 1 - OmniMotion.standardCurve.transform(fadeProgress)
+              : 1,
+          child: child,
+        );
+      },
       child: AbsorbPointer(
         absorbing: completing,
         child: OmniListRow(
@@ -1482,6 +1505,7 @@ class _TodoTaskRow extends StatelessWidget {
             horizontal: OmniSpacing.sm,
             vertical: OmniSpacing.xs,
           ),
+          leadingGap: 0,
           leading: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
@@ -1489,11 +1513,10 @@ class _TodoTaskRow extends StatelessWidget {
                 dragHandle!,
                 const SizedBox(width: OmniSpacing.xxs),
               ],
-              Checkbox(
+              TodoCompletionCheckbox(
+                key: ValueKey<String>('todo-completion-checkbox-${todo.id}'),
                 value: todo.isCompleted || completing,
-                onChanged: completing
-                    ? null
-                    : (bool? value) => onCompletedChanged(value ?? false),
+                onChanged: completing ? null : onCompletedChanged,
               ),
             ],
           ),
@@ -1618,10 +1641,14 @@ class _CompletedTodoHistory extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Checkbox(
+              TodoCompletionCheckbox(
+                key: ValueKey<String>(
+                  'todo-history-completion-checkbox-${entry.todo.id}',
+                ),
                 value: true,
-                onChanged: (bool? value) {
-                  if (value == false) {
+                semanticLabel: '重新打开任务',
+                onChanged: (bool value) {
+                  if (!value) {
                     onReopen(entry.todo);
                   }
                 },

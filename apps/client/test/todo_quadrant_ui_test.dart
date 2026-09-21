@@ -324,6 +324,10 @@ void main() {
         priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
       ),
     );
+    // 刚创建的目标任务。
+    final TodoRecord completionTodo = await database
+        .select(database.todoItems)
+        .getSingle();
 
     await tester.pumpWidget(
       ProviderScope(
@@ -345,19 +349,23 @@ void main() {
 
     expect(find.text('完成反馈任务'), findsOneWidget);
     expect(find.text('已保存到本机'), findsNothing);
-    await tester.tap(find.byType(Checkbox).first);
+    // 当前任务的自定义完成复选框。
+    final Finder completionCheckbox = find.byKey(
+      ValueKey<String>('todo-completion-checkbox-${completionTodo.id}'),
+    );
+    // 当前复选框视觉方框。
+    final Finder completionBox = find.descendant(
+      of: completionCheckbox,
+      matching: find.byKey(const ValueKey<String>('todo-completion-box')),
+    );
+    expect(completionCheckbox, findsOneWidget);
+    expect(tester.getSize(completionCheckbox), const Size.square(32));
+    expect(tester.getSize(completionBox), const Size.square(16));
+    await tester.tap(completionCheckbox);
     await tester.pump();
-    // 正在淡出的任务行。
-    final Finder fadingRowFinder = find.ancestor(
-      of: find.text('完成反馈任务'),
-      matching: find.byType(AnimatedOpacity),
-    );
-    // 正在淡出的任务行动画。
-    final AnimatedOpacity fadingRow = tester.widget<AnimatedOpacity>(
-      fadingRowFinder,
-    );
-    expect(fadingRow.opacity, 0);
-    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump(const Duration(milliseconds: 399));
+    expect(find.text('完成反馈任务'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 181));
     await tester.pump();
     expect(find.text('完成反馈任务'), findsNothing);
     expect(

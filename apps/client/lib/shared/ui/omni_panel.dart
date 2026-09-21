@@ -104,6 +104,9 @@ class OmniListRow extends StatelessWidget {
   /// 行内边距。
   final EdgeInsetsGeometry padding;
 
+  /// 前置区域与主内容之间的间距。
+  final double leadingGap;
+
   /// 创建紧凑列表行。
   const OmniListRow({
     required this.title,
@@ -115,6 +118,7 @@ class OmniListRow extends StatelessWidget {
       horizontal: OmniSpacing.md,
       vertical: OmniSpacing.sm,
     ),
+    this.leadingGap = OmniSpacing.sm,
     super.key,
   });
 
@@ -131,7 +135,7 @@ class OmniListRow extends StatelessWidget {
         children: <Widget>[
           if (leading != null) ...<Widget>[
             leading!,
-            const SizedBox(width: OmniSpacing.sm),
+            SizedBox(width: leadingGap),
           ],
           Expanded(
             child: Column(
