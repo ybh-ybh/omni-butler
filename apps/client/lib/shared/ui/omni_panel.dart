@@ -140,7 +140,7 @@ class OmniListRow extends StatelessWidget {
               children: <Widget>[
                 DefaultTextStyle.merge(
                   style: Theme.of(context).textTheme.bodyMedium
-                      ?.copyWith(fontWeight: FontWeight.w500),
+                      ?.copyWith(fontWeight: FontWeight.w400),
                   child: title,
                 ),
                 if (subtitle != null) ...<Widget>[

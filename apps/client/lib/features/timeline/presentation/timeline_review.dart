@@ -285,7 +285,7 @@ class _TimelineInsightBanner extends StatelessWidget {
                   text,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: hasRecords ? colors.brandStrong : colors.muted,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ),

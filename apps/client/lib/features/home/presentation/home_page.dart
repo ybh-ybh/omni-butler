@@ -1043,7 +1043,7 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                               curve: OmniMotion.standardCurve,
                               style: TextStyle(
                                 color: _checked ? colors.muted : colors.ink,
-                                fontWeight: FontWeight.w500,
+                                fontWeight: FontWeight.w400,
                                 decoration: _checked
                                     ? TextDecoration.lineThrough
                                     : TextDecoration.none,

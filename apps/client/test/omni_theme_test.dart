@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -5,6 +6,19 @@ import 'package:omni_butler/app/theme/app_tokens.dart';
 
 /// 验证统一品牌主题的关键 Token 与组件轮廓。
 void main() {
+  test('Windows 主题明确使用微软雅黑 UI', () {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    // Windows 浅色应用主题。
+    final ThemeData theme = AppTheme.build(brightness: Brightness.light);
+
+    expect(theme.textTheme.bodyMedium?.fontFamily, 'Microsoft YaHei UI');
+    expect(
+      theme.textTheme.bodyMedium?.fontFamilyFallback,
+      contains('Microsoft YaHei'),
+    );
+  });
+
   test('浅色主题使用统一飞书蓝与中性画布', () {
     // 浅色应用主题。
     final ThemeData theme = AppTheme.build(brightness: Brightness.light);

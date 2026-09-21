@@ -148,7 +148,7 @@ class OmniButton extends StatelessWidget {
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           animationDuration: OmniMotion.fast,
           textStyle: const WidgetStatePropertyAll<TextStyle>(
-            TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
           ),
         ),
         child: content,

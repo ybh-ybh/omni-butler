@@ -44,7 +44,7 @@ class OmniTag extends StatelessWidget {
               color: effectiveColor,
               fontSize: 12,
               height: 1.5,
-              fontWeight: FontWeight.w500,
+              fontWeight: FontWeight.w400,
             ),
           ),
         ],

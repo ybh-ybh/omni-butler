@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
@@ -251,16 +252,20 @@ abstract final class AppTheme {
       colorScheme: scheme,
       scaffoldBackgroundColor: colors.canvas,
       canvasColor: colors.canvas,
-      fontFamily: 'Inter',
-      fontFamilyFallback: const <String>[
-        'Segoe UI',
-        'PingFang SC',
-        'Microsoft YaHei UI',
-        'Microsoft YaHei',
-        'Noto Sans CJK SC',
-        'Segoe UI Emoji',
-        'sans-serif',
-      ],
+      fontFamily: defaultTargetPlatform == TargetPlatform.windows
+          ? 'Microsoft YaHei UI'
+          : 'Inter',
+      fontFamilyFallback: defaultTargetPlatform == TargetPlatform.windows
+          ? const <String>['Microsoft YaHei', 'Segoe UI Emoji', 'sans-serif']
+          : const <String>[
+              'Segoe UI',
+              'PingFang SC',
+              'Microsoft YaHei UI',
+              'Microsoft YaHei',
+              'Noto Sans CJK SC',
+              'Segoe UI Emoji',
+              'sans-serif',
+            ],
       extensions: <ThemeExtension<dynamic>>[colors],
       textTheme: _textTheme(colors),
       dividerColor: colors.line,
@@ -350,7 +355,7 @@ abstract final class AppTheme {
                 : colors.accentInk,
           ),
           textStyle: const WidgetStatePropertyAll<TextStyle>(
-            TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
           ),
           shape: WidgetStatePropertyAll<OutlinedBorder>(controlShape),
           elevation: const WidgetStatePropertyAll<double>(0),
@@ -388,7 +393,7 @@ abstract final class AppTheme {
             ),
           ),
           textStyle: const WidgetStatePropertyAll<TextStyle>(
-            TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
           ),
           shape: WidgetStatePropertyAll<OutlinedBorder>(controlShape),
           elevation: const WidgetStatePropertyAll<double>(0),
@@ -414,7 +419,7 @@ abstract final class AppTheme {
           ),
           shape: WidgetStatePropertyAll<OutlinedBorder>(controlShape),
           textStyle: const WidgetStatePropertyAll<TextStyle>(
-            TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
           ),
         ),
       ),
@@ -519,7 +524,7 @@ abstract final class AppTheme {
         titleTextStyle: TextStyle(
           color: colors.ink,
           fontSize: 14,
-          fontWeight: FontWeight.w500,
+          fontWeight: FontWeight.w400,
         ),
         subtitleTextStyle: TextStyle(
           color: colors.muted,
@@ -553,7 +558,7 @@ abstract final class AppTheme {
           ),
           shape: WidgetStatePropertyAll<OutlinedBorder>(controlShape),
           textStyle: const WidgetStatePropertyAll<TextStyle>(
-            TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+            TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
           ),
         ),
       ),
@@ -772,12 +777,12 @@ abstract final class AppTheme {
       labelLarge: TextStyle(
         color: colors.ink,
         fontSize: 14,
-        fontWeight: FontWeight.w500,
+        fontWeight: FontWeight.w400,
       ),
       labelMedium: TextStyle(
         color: colors.ink,
         fontSize: 12,
-        fontWeight: FontWeight.w500,
+        fontWeight: FontWeight.w400,
       ),
       labelSmall: TextStyle(color: colors.muted, fontSize: 11),
     );

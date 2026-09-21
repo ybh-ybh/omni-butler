@@ -623,7 +623,7 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
                       child: Text(
                         entry.name,
                         style: Theme.of(context).textTheme.bodyMedium
-                            ?.copyWith(fontWeight: FontWeight.w500),
+                            ?.copyWith(fontWeight: FontWeight.w400),
                       ),
                     ),
                   ),

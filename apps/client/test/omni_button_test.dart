@@ -28,6 +28,10 @@ void main() {
     final FilledButton button = tester.widget<FilledButton>(
       find.byType(FilledButton),
     );
+    // 页面主操作的默认文字样式。
+    final TextStyle? defaultTextStyle = button.style?.textStyle?.resolve(
+      const <WidgetState>{},
+    );
     // 页面主操作的默认背景色。
     final Color? defaultBackground = button.style?.backgroundColor?.resolve(
       const <WidgetState>{},
@@ -60,6 +64,7 @@ void main() {
     expect(pressedBackground, isNot(hoveredBackground));
     expect(focusedSide?.width, 2);
     expect(focusedSide?.color, const Color(0xFF3370FF).withValues(alpha: 0.30));
+    expect(defaultTextStyle?.fontWeight, FontWeight.w400);
     expect(
       tester.getSize(
         find.byKey(const ValueKey<String>('omni-page-primary-icon')),

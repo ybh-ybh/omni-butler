@@ -1080,7 +1080,7 @@ class _InventoryFilterRow extends StatelessWidget {
                   ),
                   labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
                     color: isSelected ? colors.item : colors.muted,
-                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
                   ),
                 );
               },
@@ -2540,7 +2540,7 @@ class _InventoryDetailField extends StatelessWidget {
           value,
           style: theme.textTheme.bodyLarge?.copyWith(
             fontSize: 16,
-            fontWeight: FontWeight.w500,
+            fontWeight: FontWeight.w400,
             height: 1.4,
           ),
         ),

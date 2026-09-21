@@ -137,7 +137,7 @@ class _PriorityQuadrantOption extends StatelessWidget {
                     quadrant.actionLabel,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: accentColor,
-                      fontWeight: FontWeight.w500,
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
                   const SizedBox(height: OmniSpacing.xxs),

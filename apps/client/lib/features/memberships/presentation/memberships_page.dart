@@ -1065,7 +1065,7 @@ class _MembershipQuickFilters extends StatelessWidget {
                                     : scheme.onSurfaceVariant,
                                 fontWeight: option == selected
                                     ? FontWeight.w600
-                                    : FontWeight.w500,
+                                    : FontWeight.w400,
                               ),
                         ),
                       ),
@@ -1166,7 +1166,7 @@ class _MembershipCategoryFilters extends StatelessWidget {
                   ),
                   labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
                     color: selected ? colors.member : colors.muted,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                   ),
                 );
               },
@@ -1745,7 +1745,7 @@ class _MembershipExpirationTimeline extends StatelessWidget {
                 remainingLabel,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.labelSmall
-                    ?.copyWith(color: statusColor, fontWeight: FontWeight.w500),
+                    ?.copyWith(color: statusColor, fontWeight: FontWeight.w400),
               ),
             ),
             Expanded(

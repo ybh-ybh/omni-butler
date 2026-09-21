@@ -854,7 +854,7 @@ class _TodoRecycleActionButtonState extends State<_TodoRecycleActionButton>
                   style: TextStyle(
                     color: toneColor,
                     fontSize: 14,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ),
