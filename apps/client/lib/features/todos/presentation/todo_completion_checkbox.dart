@@ -53,6 +53,17 @@ class TodoCompletionCheckbox extends StatefulWidget {
         : kMinInteractiveDimension;
     return Size.square(baseSize) + density.baseSizeAdjustment;
   }
+
+  /// 返回未选中边框色，供同层级的树状引导线复用。
+  static Color idleBorderColorOf(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 深色模式需要略高的品牌色占比以维持可见度。
+    final double brandWeight = Theme.of(context).brightness == Brightness.dark
+        ? 0.88
+        : 0.78;
+    return Color.lerp(colors.paper, colors.brand, brandWeight)!;
+  }
 }
 
 /// 管理复选框选择、悬停、按压与焦点状态。
@@ -143,11 +154,7 @@ class _TodoCompletionCheckboxState extends State<TodoCompletionCheckbox>
     // 与替换前原生 Checkbox 完全相同的点击区域尺寸。
     final Size tapSize = TodoCompletionCheckbox.tapSizeOf(context);
     // 未选中边框使用更清晰的品牌同色阶。
-    final Color idleBorder = Color.lerp(
-      colors.paper,
-      colors.brand,
-      Theme.of(context).brightness == Brightness.dark ? 0.88 : 0.78,
-    )!;
+    final Color idleBorder = TodoCompletionCheckbox.idleBorderColorOf(context);
     // 悬停或按压对应的外层缩放比例。
     final double interactionScale = _pressed
         ? 0.95
@@ -294,8 +301,8 @@ class _TodoCompletionCheckboxPainter extends CustomPainter {
     final Paint borderPaint = Paint()
       ..color = Color.lerp(idleBorderColor, activeColor, fillProgress)!
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-    canvas.drawRRect(box.deflate(1), borderPaint);
+      ..strokeWidth = 1.5;
+    canvas.drawRRect(box.deflate(0.75), borderPaint);
     if (fillProgress == 0 || pathProgress == 0) {
       return;
     }

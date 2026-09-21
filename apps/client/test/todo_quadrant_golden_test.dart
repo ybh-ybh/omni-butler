@@ -192,7 +192,7 @@ Future<void> _verifyTodoGolden(
     );
     await tester.tap(completionCheckbox);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 580));
+    await tester.pump(const Duration(milliseconds: 620));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
   }

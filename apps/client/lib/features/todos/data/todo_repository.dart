@@ -97,11 +97,14 @@ class TodoHistoryEntry {
   /// 已完成待办记录。
   final TodoRecord todo;
 
+  /// 可选父任务完整记录。
+  final TodoRecord? parent;
+
   /// 可选父任务标题。
-  final String? parentTitle;
+  String? get parentTitle => parent?.title;
 
   /// 创建完成历史条目。
-  const TodoHistoryEntry({required this.todo, this.parentTitle});
+  const TodoHistoryEntry({required this.todo, this.parent});
 }
 
 /// 待办本地优先仓储。
@@ -159,9 +162,9 @@ class TodoRepository {
           .map(
             (TodoRecord record) => TodoHistoryEntry(
               todo: record,
-              parentTitle: record.parentId == null
+              parent: record.parentId == null
                   ? null
-                  : recordsById[record.parentId!]?.title,
+                  : recordsById[record.parentId!],
             ),
           )
           .toList(growable: false);
@@ -358,6 +361,22 @@ class TodoRepository {
         return;
       }
       await _writeCompletion(target.id, completed: completed, now: now);
+      if (completed && target.parentId != null) {
+        // 完成子任务后读取整棵任务树，判断它是否为最后一个未完成子任务。
+        final List<TodoRecord> tree = await _treeRecords(target.parentId!);
+        // 当前主任务。
+        final TodoRecord? root = tree.isEmpty ? null : tree.first;
+        // 当前主任务的全部直属子任务。
+        final List<TodoRecord> children = tree.skip(1).toList(growable: false);
+        // 是否已经完成全部直属子任务。
+        final bool allChildrenCompleted =
+            children.isNotEmpty &&
+            children.every((TodoRecord child) => child.isCompleted);
+        if (root != null && !root.isCompleted && allChildrenCompleted) {
+          // 最后一个子任务完成时同步完成主任务，保持任务树整体状态一致。
+          await _writeCompletion(root.id, completed: true, now: now);
+        }
+      }
       if (!completed && target.parentId != null) {
         // 子任务重新打开时同步重新打开主任务，保持树状态一致。
         await _writeCompletion(target.parentId!, completed: false, now: now);

@@ -193,6 +193,9 @@ class _TodosPageState extends ConsumerState<TodosPage> {
           )
         : historyAsync.when(
             data: (List<TodoHistoryEntry> records) => _CompletedTodoHistory(
+              key: ValueKey<String>(
+                'todo-history-${DateUtils.dateOnly(_selectedDay).toIso8601String()}',
+              ),
               entries: records,
               onReopen: (TodoRecord todo) => _setTodoCompleted(todo, false),
               onEdit: (TodoRecord todo) =>
@@ -318,33 +321,49 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         ],
       );
     }
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        // 两列象限卡片宽度。
-        final double width = (constraints.maxWidth - OmniSpacing.xs) / 2;
-        return SingleChildScrollView(
-          key: const ValueKey<String>('todo-quadrant-grid'),
-          child: Wrap(
-            spacing: OmniSpacing.xs,
-            runSpacing: OmniSpacing.xs,
-            children: <Widget>[
-              for (final TodoPriorityQuadrant quadrant
-                  in todoPriorityQuadrantMatrixOrder)
-                SizedBox(
-                  width: width,
-                  child: _buildQuadrant(
-                    context,
-                    quadrant,
-                    grouped[quadrant]!,
-                    now: now,
-                    allowFocus: true,
-                    allowDrag: true,
+    // 桌面端四象限按两行两列排列。
+    final List<TodoPriorityQuadrant> quadrants =
+        todoPriorityQuadrantMatrixOrder;
+    return SingleChildScrollView(
+      key: const ValueKey<String>('todo-quadrant-grid'),
+      child: Column(
+        children: <Widget>[
+          for (int index = 0; index < quadrants.length; index += 2) ...<Widget>[
+            if (index > 0) const SizedBox(height: OmniSpacing.xs),
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Expanded(
+                    child: _buildQuadrant(
+                      context,
+                      quadrants[index],
+                      grouped[quadrants[index]]!,
+                      now: now,
+                      allowFocus: true,
+                      allowDrag: true,
+                    ),
                   ),
-                ),
-            ],
-          ),
-        );
-      },
+                  const SizedBox(width: OmniSpacing.xs),
+                  if (index + 1 < quadrants.length)
+                    Expanded(
+                      child: _buildQuadrant(
+                        context,
+                        quadrants[index + 1],
+                        grouped[quadrants[index + 1]]!,
+                        now: now,
+                        allowFocus: true,
+                        allowDrag: true,
+                      ),
+                    )
+                  else
+                    const Spacer(),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -460,54 +479,35 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     // 当前是否关闭非必要动画。
     final bool disableAnimations =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
-    // 当前任务树。
+    // 当前任务所属的任务树。
     TodoTreeNode? tree;
-    if (todo.parentId == null) {
-      for (final TodoTreeNode candidate in _latestTrees) {
-        if (candidate.root.id == todo.id) {
-          tree = candidate;
-          break;
-        }
+    for (final TodoTreeNode candidate in _latestTrees) {
+      if (candidate.root.id == (todo.parentId ?? todo.id)) {
+        tree = candidate;
+        break;
       }
     }
-    if (tree != null && tree.pendingChildrenCount > 0) {
-      // 用户是否确认同时完成未完成子任务。
-      final bool confirmed =
-          await showDialog<bool>(
-            context: context,
-            builder: (BuildContext context) => AlertDialog(
-              title: const Text('完成整个任务？'),
-              content: Text('将同时完成 ${tree!.pendingChildrenCount} 个未完成子任务。'),
-              actions: <Widget>[
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('取消'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('全部完成'),
-                ),
-              ],
-            ),
-          ) ??
-          false;
-      if (!confirmed) {
-        return;
-      }
+    // 当前子任务是否为所属主任务的最后一个未完成子任务。
+    final bool completesTree =
+        todo.parentId != null && tree?.pendingChildrenCount == 1;
+    // 本次会改变状态并需要播放离场动画的任务标识。
+    final List<String> changedIds;
+    if (todo.parentId == null && tree != null) {
+      changedIds = <String>[
+        if (!tree.root.isCompleted) tree.root.id,
+        for (final TodoRecord child in tree.children)
+          if (!child.isCompleted) child.id,
+      ];
+    } else if (completesTree) {
+      changedIds = <String>[tree!.root.id, todo.id];
+    } else {
+      changedIds = <String>[todo.id];
     }
-    // 本次会改变状态的任务标识。
-    final List<String> changedIds = tree == null
-        ? <String>[todo.id]
-        : <String>[
-            if (!tree.root.isCompleted) tree.root.id,
-            for (final TodoRecord child in tree.children)
-              if (!child.isCompleted) child.id,
-          ];
     setState(() => _completingTodoIds.addAll(changedIds));
     await Future<void>.delayed(
       disableAnimations
           ? Duration.zero
-          : TodoCompletionCheckbox.animationDuration + OmniMotion.normal,
+          : TodoCompletionCheckbox.animationDuration + OmniMotion.panel,
     );
     await repository.setCompleted(todo.id, true);
     if (!mounted) {
@@ -1228,6 +1228,9 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                           onDrop: onDrop,
                         ),
                       _TodoTreeCard(
+                        key: ValueKey<String>(
+                          'todo-tree-card-${trees[index].root.id}',
+                        ),
                         tree: trees[index],
                         now: now,
                         completingTodoIds: completingTodoIds,
@@ -1296,7 +1299,7 @@ class _TodoInsertTarget extends StatelessWidget {
 }
 
 /// 单棵两层任务树。
-class _TodoTreeCard extends StatelessWidget {
+class _TodoTreeCard extends StatefulWidget {
   /// 当前任务树。
   final TodoTreeNode tree;
 
@@ -1339,77 +1342,240 @@ class _TodoTreeCard extends StatelessWidget {
     required this.onAddChild,
     required this.onMove,
     required this.onDelete,
+    super.key,
   });
+
+  /// 创建任务树展开状态。
+  @override
+  State<_TodoTreeCard> createState() => _TodoTreeCardState();
+}
+
+/// 管理父任务的子任务展开状态与拖拽控制。
+class _TodoTreeCardState extends State<_TodoTreeCard> {
+  /// 展开控制与拖拽热区尺寸。
+  static const double _treeControlSize = 32;
+
+  /// 子任务当前是否展开。
+  bool _expanded = true;
+
+  /// 切换当前父任务的子任务展开状态。
+  void _toggleChildren() {
+    setState(() => _expanded = !_expanded);
+  }
+
+  /// 构建可单击展开并可拖动整棵任务树的双用途控制。
+  Widget _buildTreeControl(TodoTreeNode tree) {
+    // 当前任务树是否包含子任务。
+    final bool hasChildren = tree.children.isNotEmpty;
+    // 展开控制或纯拖拽手柄。
+    final Widget control = SizedBox.square(
+      key: hasChildren
+          ? ValueKey<String>('todo-tree-toggle-${tree.root.id}')
+          : null,
+      dimension: _treeControlSize,
+      child: IconButton(
+        tooltip: hasChildren
+            ? _expanded
+                  ? '收起子任务'
+                  : '展开子任务'
+            : '拖动任务',
+        onPressed: hasChildren ? _toggleChildren : null,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints.tightFor(
+          width: _treeControlSize,
+          height: _treeControlSize,
+        ),
+        icon: Icon(
+          key: ValueKey<String>('todo-drag-handle-${tree.root.id}'),
+          hasChildren
+              ? _expanded
+                    ? Icons.expand_more_rounded
+                    : Icons.chevron_right_rounded
+              : Icons.drag_indicator_rounded,
+          size: 18,
+        ),
+      ),
+    );
+    if (!widget.allowDrag) {
+      return control;
+    }
+    return Draggable<_TodoDragPayload>(
+      data: _TodoDragPayload(
+        rootId: tree.root.id,
+        sourceQuadrant: widget.quadrant,
+      ),
+      feedback: ExcludeSemantics(
+        child: Material(
+          elevation: 6,
+          borderRadius: BorderRadius.circular(OmniRadius.control),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 320),
+            child: Padding(
+              padding: const EdgeInsets.all(OmniSpacing.sm),
+              child: Text(tree.root.title),
+            ),
+          ),
+        ),
+      ),
+      childWhenDragging: const SizedBox.square(dimension: _treeControlSize),
+      child: control,
+    );
+  }
 
   /// 构建主任务、进度与子任务列表。
   @override
   Widget build(BuildContext context) {
+    // 当前任务树。
+    final TodoTreeNode tree = widget.tree;
+    // 当前仍在进行中并需要展示的直属子任务。
+    final List<TodoRecord> pendingChildren = tree.children
+        .where((TodoRecord child) => !child.isCompleted)
+        .toList(growable: false);
+    // 当前是否需要显示展开或拖拽控制。
+    final bool showsTreeControl = tree.children.isNotEmpty || widget.allowDrag;
+    // 父任务左侧的双用途控制。
+    final Widget? treeControl = showsTreeControl
+        ? _buildTreeControl(tree)
+        : null;
+    // 当前平台下复选框的完整点击区域尺寸。
+    final Size checkboxTapSize = TodoCompletionCheckbox.tapSizeOf(context);
+    // 父任务复选框中心轴，同时计入展开或拖拽控制宽度。
+    final double treeTrunkX =
+        OmniSpacing.sm +
+        (treeControl == null ? 0 : _treeControlSize + OmniSpacing.xxs) +
+        checkboxTapSize.width / 2;
+    // 子任务相对父任务的水平缩进。
+    final double childIndent = treeTrunkX + OmniSpacing.xxs;
+    // 支线末端停在子任务视觉勾选框之前。
+    final double branchEndX =
+        childIndent +
+        OmniSpacing.sm +
+        (checkboxTapSize.width - TodoCompletionCheckbox.visualSize) / 2 -
+        OmniSpacing.xxs;
+    // 与未选中勾选框完全一致的树线颜色。
+    final Color treeLineColor = TodoCompletionCheckbox.idleBorderColorOf(
+      context,
+    );
     // 主任务行。
     final Widget rootRow = _TodoTaskRow(
       key: ValueKey<String>('todo-tree-root-${tree.root.id}'),
       todo: tree.root,
-      now: now,
-      completing: completingTodoIds.contains(tree.root.id),
-      dragHandle: allowDrag
-          ? Draggable<_TodoDragPayload>(
-              data: _TodoDragPayload(
-                rootId: tree.root.id,
-                sourceQuadrant: quadrant,
-              ),
-              feedback: ExcludeSemantics(
-                child: Material(
-                  elevation: 6,
-                  borderRadius: BorderRadius.circular(OmniRadius.control),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 320),
-                    child: Padding(
-                      padding: const EdgeInsets.all(OmniSpacing.sm),
-                      child: Text(tree.root.title),
-                    ),
-                  ),
-                ),
-              ),
-              childWhenDragging: const Icon(
-                Icons.drag_indicator_rounded,
-                color: Colors.transparent,
-              ),
-              child: Icon(
-                key: ValueKey<String>('todo-drag-handle-${tree.root.id}'),
-                Icons.drag_indicator_rounded,
-                size: 18,
-              ),
-            )
-          : null,
-      progressLabel: tree.children.isEmpty
-          ? null
-          : '${tree.completedChildrenCount}/${tree.children.length}',
-      onCompletedChanged: (bool value) => onCompletedChanged(tree.root, value),
-      onEdit: () => onEdit(tree.root),
-      onAddChild: () => onAddChild(tree.root),
-      onMove: () => onMove(tree.root),
-      onDelete: () => onDelete(tree.root),
+      now: widget.now,
+      completing: widget.completingTodoIds.contains(tree.root.id),
+      treeControl: treeControl,
+      progressLabel: tree.children.isEmpty ? null : '${tree.children.length}',
+      onCompletedChanged: (bool value) =>
+          widget.onCompletedChanged(tree.root, value),
+      onEdit: () => widget.onEdit(tree.root),
+      onAddChild: () => widget.onAddChild(tree.root),
+      onMove: () => widget.onMove(tree.root),
+      onDelete: () => widget.onDelete(tree.root),
     );
     return Column(
       key: ValueKey<String>('todo-row-${tree.root.id}'),
       children: <Widget>[
         rootRow,
-        for (final TodoRecord child in tree.children)
-          Padding(
-            key: ValueKey<String>('todo-child-${child.id}'),
-            padding: const EdgeInsets.only(left: 36),
-            child: _TodoTaskRow(
-              todo: child,
-              now: now,
-              completing: completingTodoIds.contains(child.id),
-              onCompletedChanged: (bool value) =>
-                  onCompletedChanged(child, value),
-              onEdit: () => onEdit(child),
-              onMove: null,
-              onDelete: () => onDelete(child),
+        for (
+          int index = 0;
+          _expanded && index < pendingChildren.length;
+          index += 1
+        )
+          CustomPaint(
+            key: ValueKey<String>(
+              'todo-tree-branch-${pendingChildren[index].id}',
+            ),
+            painter: _TodoTreeBranchPainter(
+              lineColor: treeLineColor,
+              trunkX: treeTrunkX,
+              branchEndX: branchEndX,
+              isLast: index == pendingChildren.length - 1,
+            ),
+            child: Padding(
+              key: ValueKey<String>('todo-child-${pendingChildren[index].id}'),
+              padding: EdgeInsets.only(left: childIndent),
+              child: _TodoTaskRow(
+                todo: pendingChildren[index],
+                now: widget.now,
+                completing: widget.completingTodoIds.contains(
+                  pendingChildren[index].id,
+                ),
+                onCompletedChanged: (bool value) =>
+                    widget.onCompletedChanged(pendingChildren[index], value),
+                onEdit: () => widget.onEdit(pendingChildren[index]),
+                onMove: null,
+                onDelete: () => widget.onDelete(pendingChildren[index]),
+              ),
             ),
           ),
       ],
     );
+  }
+}
+
+/// 绘制父子任务之间的竖向主干与圆角支线。
+class _TodoTreeBranchPainter extends CustomPainter {
+  /// 树线颜色。
+  final Color lineColor;
+
+  /// 父任务复选框中心对应的主干横坐标。
+  final double trunkX;
+
+  /// 子任务支线结束横坐标。
+  final double branchEndX;
+
+  /// 当前子任务是否为最后一项。
+  final bool isLast;
+
+  /// 创建任务树引导线绘制器。
+  const _TodoTreeBranchPainter({
+    required this.lineColor,
+    required this.trunkX,
+    required this.branchEndX,
+    required this.isLast,
+  });
+
+  /// 绘制连续主干；最后一个子任务以圆角弯折结束。
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 当前子任务行的垂直中心。
+    final double branchY = size.height / 2;
+    // 树线画笔。
+    final Paint linePaint = Paint()
+      ..color = lineColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.25
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    if (!isLast) {
+      canvas
+        ..drawLine(Offset(trunkX, 0), Offset(trunkX, size.height), linePaint)
+        ..drawLine(
+          Offset(trunkX, branchY),
+          Offset(branchEndX, branchY),
+          linePaint,
+        );
+      return;
+    }
+    // 最后一条支线使用的圆角半径。
+    final double cornerRadius = branchY < OmniSpacing.xs
+        ? branchY
+        : OmniSpacing.xs;
+    // 从主干自然弯向最后一个子任务的路径。
+    final Path branchPath = Path()
+      ..moveTo(trunkX, 0)
+      ..lineTo(trunkX, branchY - cornerRadius)
+      ..quadraticBezierTo(trunkX, branchY, trunkX + cornerRadius, branchY)
+      ..lineTo(branchEndX, branchY);
+    canvas.drawPath(branchPath, linePaint);
+  }
+
+  /// 仅在树线几何或颜色变化时重新绘制。
+  @override
+  bool shouldRepaint(covariant _TodoTreeBranchPainter oldDelegate) {
+    return lineColor != oldDelegate.lineColor ||
+        trunkX != oldDelegate.trunkX ||
+        branchEndX != oldDelegate.branchEndX ||
+        isLast != oldDelegate.isLast;
   }
 }
 
@@ -1424,8 +1590,8 @@ class _TodoTaskRow extends StatelessWidget {
   /// 是否正在播放完成反馈。
   final bool completing;
 
-  /// 可选拖动手柄。
-  final Widget? dragHandle;
+  /// 可选展开与拖拽控制。
+  final Widget? treeControl;
 
   /// 可选子任务进度。
   final String? progressLabel;
@@ -1453,7 +1619,7 @@ class _TodoTaskRow extends StatelessWidget {
     required this.onCompletedChanged,
     required this.onEdit,
     required this.onDelete,
-    this.dragHandle,
+    this.treeControl,
     this.progressLabel,
     this.onAddChild,
     this.onMove,
@@ -1465,12 +1631,8 @@ class _TodoTaskRow extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    // 当前是否存在辅助信息。
-    final bool hasDetails =
-        (todo.description?.trim().isNotEmpty ?? false) ||
-        todo.dueAt != null ||
-        todo.repeatRule != null ||
-        todo.syncState != 'localSaved';
+    // 当前是否存在需要换行展示的辅助信息。
+    final bool hasDetails = _TodoDetails.hasContent(todo);
     // 当前是否关闭非必要动画。
     final bool disableAnimations =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
@@ -1479,21 +1641,23 @@ class _TodoTaskRow extends StatelessWidget {
       tween: Tween<double>(end: completing ? 1 : 0),
       duration: disableAnimations
           ? Duration.zero
-          : TodoCompletionCheckbox.animationDuration + OmniMotion.normal,
+          : TodoCompletionCheckbox.animationDuration + OmniMotion.panel,
       builder: (BuildContext context, double progress, Widget? child) {
-        // 勾选动画完成后才开始淡出任务行。
-        final double fadeStart =
+        // 勾选动画完成后才开始向右滑出任务行。
+        final double slideStart =
             TodoCompletionCheckbox.animationDuration.inMilliseconds /
-            (TodoCompletionCheckbox.animationDuration + OmniMotion.normal)
+            (TodoCompletionCheckbox.animationDuration + OmniMotion.panel)
                 .inMilliseconds;
-        // 淡出阶段使用页面统一的缓出曲线。
-        final double fadeProgress = progress <= fadeStart
+        // 滑出阶段使用加速曲线，让任务明确离开当前列表。
+        final double slideProgress = progress <= slideStart
             ? 0
-            : ((progress - fadeStart) / (1 - fadeStart)).clamp(0, 1);
-        return Opacity(
-          opacity: completing
-              ? 1 - OmniMotion.standardCurve.transform(fadeProgress)
-              : 1,
+            : ((progress - slideStart) / (1 - slideStart)).clamp(0, 1);
+        return FractionalTranslation(
+          key: ValueKey<String>('todo-completion-slide-${todo.id}'),
+          translation: Offset(
+            completing ? Curves.easeInCubic.transform(slideProgress) : 0,
+            0,
+          ),
           child: child,
         );
       },
@@ -1509,8 +1673,8 @@ class _TodoTaskRow extends StatelessWidget {
           leading: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              if (dragHandle != null) ...<Widget>[
-                dragHandle!,
+              if (treeControl != null) ...<Widget>[
+                treeControl!,
                 const SizedBox(width: OmniSpacing.xxs),
               ],
               TodoCompletionCheckbox(
@@ -1523,16 +1687,9 @@ class _TodoTaskRow extends StatelessWidget {
           title: Row(
             children: <Widget>[
               Expanded(
-                child: Text(
-                  todo.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: todo.isCompleted ? colors.muted : colors.ink,
-                    decoration: todo.isCompleted
-                        ? TextDecoration.lineThrough
-                        : null,
-                  ),
+                child: _TodoInlineTitle(
+                  todo: todo,
+                  completed: todo.isCompleted,
                 ),
               ),
               if (progressLabel != null)
@@ -1547,43 +1704,47 @@ class _TodoTaskRow extends StatelessWidget {
             ],
           ),
           subtitle: hasDetails ? _TodoDetails(todo: todo, now: now) : null,
-          trailing: OmniPopupMenuButton<String>(
-            tooltip: '更多操作',
-            onSelected: (String value) {
-              if (value == 'edit') {
-                onEdit();
-              } else if (value == 'child') {
-                onAddChild?.call();
-              } else if (value == 'move') {
-                onMove?.call();
-              } else if (value == 'delete') {
-                onDelete();
-              }
-            },
-            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-              OmniPopupMenuItem<String>(
-                value: 'edit',
-                label: '编辑',
-                icon: Icons.edit_outlined,
-              ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
               if (onAddChild != null)
-                OmniPopupMenuItem<String>(
+                IconButton(
                   key: ValueKey<String>('todo-add-child-${todo.id}'),
-                  value: 'child',
-                  label: '添加子任务',
-                  icon: Icons.subdirectory_arrow_right_rounded,
+                  tooltip: '添加子任务',
+                  onPressed: onAddChild,
+                  style: IconButton.styleFrom(foregroundColor: colors.todo),
+                  icon: const Icon(Icons.playlist_add_rounded, size: 20),
                 ),
-              if (onMove != null)
-                OmniPopupMenuItem<String>(
-                  value: 'move',
-                  label: '移动象限',
-                  icon: Icons.drive_file_move_outline,
-                ),
-              OmniPopupMenuItem<String>(
-                value: 'delete',
-                label: '移入回收站',
-                icon: Icons.delete_outline_rounded,
-                danger: true,
+              OmniPopupMenuButton<String>(
+                tooltip: '更多操作',
+                onSelected: (String value) {
+                  if (value == 'edit') {
+                    onEdit();
+                  } else if (value == 'move') {
+                    onMove?.call();
+                  } else if (value == 'delete') {
+                    onDelete();
+                  }
+                },
+                itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                  OmniPopupMenuItem<String>(
+                    value: 'edit',
+                    label: '编辑',
+                    icon: Icons.edit_outlined,
+                  ),
+                  if (onMove != null)
+                    OmniPopupMenuItem<String>(
+                      value: 'move',
+                      label: '移动象限',
+                      icon: Icons.drive_file_move_outline,
+                    ),
+                  OmniPopupMenuItem<String>(
+                    value: 'delete',
+                    label: '移入回收站',
+                    icon: Icons.delete_outline_rounded,
+                    danger: true,
+                  ),
+                ],
               ),
             ],
           ),
@@ -1593,8 +1754,81 @@ class _TodoTaskRow extends StatelessWidget {
   }
 }
 
-/// 已完成任务历史列表。
-class _CompletedTodoHistory extends StatelessWidget {
+/// 同行展示任务名称与较弱描述文字。
+class _TodoInlineTitle extends StatelessWidget {
+  /// 当前任务。
+  final TodoRecord todo;
+
+  /// 是否使用完成态删除线。
+  final bool completed;
+
+  /// 创建任务名称与描述组合。
+  const _TodoInlineTitle({required this.todo, required this.completed});
+
+  /// 构建名称优先、描述随后且可省略的单行布局。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 清理后的可选描述。
+    final String? description = todo.description?.trim().isNotEmpty ?? false
+        ? todo.description!.trim()
+        : null;
+    // 任务名称样式。
+    final TextStyle? titleStyle = Theme.of(context).textTheme.bodyMedium
+        ?.copyWith(
+          color: completed ? colors.muted : colors.ink,
+          decoration: completed ? TextDecoration.lineThrough : null,
+        );
+    if (description == null) {
+      return Text(
+        todo.title,
+        key: ValueKey<String>('todo-title-${todo.id}'),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: titleStyle,
+      );
+    }
+    // 更弱且更小的任务描述样式。
+    final TextStyle? descriptionStyle = Theme.of(context).textTheme.bodySmall
+        ?.copyWith(
+          color: colors.muted,
+          decoration: completed ? TextDecoration.lineThrough : null,
+        );
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: <Widget>[
+        Flexible(
+          flex: 3,
+          fit: FlexFit.loose,
+          child: Text(
+            todo.title,
+            key: ValueKey<String>('todo-title-${todo.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: titleStyle,
+          ),
+        ),
+        const SizedBox(width: OmniSpacing.xs),
+        Flexible(
+          flex: 2,
+          fit: FlexFit.loose,
+          child: Text(
+            description,
+            key: ValueKey<String>('todo-description-${todo.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: descriptionStyle,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 已完成任务历史树列表。
+class _CompletedTodoHistory extends StatefulWidget {
   /// 当前日期完成记录。
   final List<TodoHistoryEntry> entries;
 
@@ -1609,94 +1843,410 @@ class _CompletedTodoHistory extends StatelessWidget {
     required this.entries,
     required this.onReopen,
     required this.onEdit,
+    super.key,
   });
 
-  /// 构建按完成时间倒序排列的历史。
+  /// 创建完成历史树状态。
+  @override
+  State<_CompletedTodoHistory> createState() => _CompletedTodoHistoryState();
+}
+
+/// 管理完成历史分组的展开与收起状态。
+class _CompletedTodoHistoryState extends State<_CompletedTodoHistory> {
+  /// 用户主动收起的父任务分组标识；默认空集合即全部展开。
+  final Set<String> _collapsedGroupIds = <String>{};
+
+  /// 构建按父任务聚类且默认展开的完成历史。
   @override
   Widget build(BuildContext context) {
-    if (entries.isEmpty) {
+    if (widget.entries.isEmpty) {
       return const Center(child: Text('这一天还没有完成任务'));
     }
+    // 按父任务整理后的历史分组。
+    final List<_TodoHistoryGroup> groups = _groupEntries(widget.entries);
     return ListView.separated(
       padding: EdgeInsets.zero,
-      itemCount: entries.length,
+      itemCount: groups.length,
       separatorBuilder: (BuildContext context, int index) =>
           const SizedBox(height: OmniSpacing.xs),
       itemBuilder: (BuildContext context, int index) {
-        // 当前历史条目。
-        final TodoHistoryEntry entry = entries[index];
-        // 当前完成时间。
-        final DateTime completedAt = entry.todo.completedAt!;
-        // 当前任务原有优先象限。
-        final TodoPriorityQuadrant quadrant = TodoPriorityQuadrant.fromValue(
-          entry.todo.priorityQuadrant,
+        // 当前父任务历史分组。
+        final _TodoHistoryGroup group = groups[index];
+        // 当前分组是否展开。
+        final bool expanded = !_collapsedGroupIds.contains(group.id);
+        // 历史行复选框的完整点击区域尺寸。
+        final Size checkboxTapSize = TodoCompletionCheckbox.tapSizeOf(context);
+        // 历史父任务复选框中心对应的树线主干。
+        final double treeTrunkX = OmniSpacing.sm + checkboxTapSize.width / 2;
+        // 历史子任务相对父任务的水平缩进。
+        final double childIndent = treeTrunkX + OmniSpacing.xxs;
+        // 历史支线末端停在子任务视觉勾选框之前。
+        final double branchEndX =
+            childIndent +
+            OmniSpacing.sm +
+            (checkboxTapSize.width - TodoCompletionCheckbox.visualSize) / 2 -
+            OmniSpacing.xxs;
+        // 与历史勾选框边框一致的树线颜色。
+        final Color treeLineColor = TodoCompletionCheckbox.idleBorderColorOf(
+          context,
         );
-        // 当前象限强调色。
-        final Color accent = quadrant.color(
-          Theme.of(context).extension<OmniColors>()!,
-        );
-        return OmniPanel(
-          key: ValueKey<String>('todo-history-row-${entry.todo.id}'),
-          padding: const EdgeInsets.all(OmniSpacing.md),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              TodoCompletionCheckbox(
-                key: ValueKey<String>(
-                  'todo-history-completion-checkbox-${entry.todo.id}',
-                ),
-                value: true,
-                semanticLabel: '重新打开任务',
-                onChanged: (bool value) {
-                  if (!value) {
-                    onReopen(entry.todo);
+        // 当前分组展开状态切换回调。
+        final VoidCallback? onToggle = group.children.isEmpty
+            ? null
+            : () {
+                setState(() {
+                  if (expanded) {
+                    _collapsedGroupIds.add(group.id);
+                  } else {
+                    _collapsedGroupIds.remove(group.id);
                   }
-                },
-              ),
-              const SizedBox(width: OmniSpacing.xs),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                });
+              };
+        return OmniPanel(
+          key: ValueKey<String>('todo-history-group-${group.id}'),
+          padding: EdgeInsets.zero,
+          child: Column(
+            children: <Widget>[
+              if (group.rootEntry != null)
+                _CompletedTodoHistoryRow(
+                  key: ValueKey<String>(
+                    'todo-history-row-${group.rootEntry!.todo.id}',
+                  ),
+                  entry: group.rootEntry!,
+                  expanded: expanded,
+                  onToggle: onToggle,
+                  onReopen: widget.onReopen,
+                  onEdit: widget.onEdit,
+                )
+              else
+                _TodoHistoryParentContextRow(
+                  parent: group.parent,
+                  childCount: group.children.length,
+                  expanded: expanded,
+                  onToggle: onToggle!,
+                  onEdit: widget.onEdit,
+                ),
+              if (expanded && group.children.isNotEmpty)
+                Column(
+                  key: ValueKey<String>('todo-history-children-${group.id}'),
                   children: <Widget>[
-                    Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: Text(
-                            entry.todo.title,
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(
-                                  decoration: TextDecoration.lineThrough,
-                                ),
+                    const Divider(indent: 36),
+                    for (
+                      int childIndex = 0;
+                      childIndex < group.children.length;
+                      childIndex += 1
+                    )
+                      CustomPaint(
+                        key: ValueKey<String>(
+                          'todo-history-branch-${group.children[childIndex].todo.id}',
+                        ),
+                        painter: _TodoTreeBranchPainter(
+                          lineColor: treeLineColor,
+                          trunkX: treeTrunkX,
+                          branchEndX: branchEndX,
+                          isLast: childIndex == group.children.length - 1,
+                        ),
+                        child: Padding(
+                          key: ValueKey<String>(
+                            'todo-history-child-${group.children[childIndex].todo.id}',
+                          ),
+                          padding: EdgeInsets.only(left: childIndent),
+                          child: _CompletedTodoHistoryRow(
+                            key: ValueKey<String>(
+                              'todo-history-row-${group.children[childIndex].todo.id}',
+                            ),
+                            entry: group.children[childIndex],
+                            expanded: true,
+                            onToggle: null,
+                            onReopen: widget.onReopen,
+                            onEdit: widget.onEdit,
                           ),
                         ),
-                        const SizedBox(width: OmniSpacing.xs),
-                        OmniTag(label: quadrant.actionLabel, color: accent),
-                      ],
-                    ),
-                    if (entry.parentTitle != null)
-                      Text(
-                        '所属主任务：${entry.parentTitle}',
-                        style: Theme.of(context).textTheme.bodySmall,
                       ),
-                    const SizedBox(height: OmniSpacing.xxs),
-                    Text(
-                      '创建 ${DateFormat('M月d日 HH:mm').format(entry.todo.createdAt)}  ·  '
-                      '完成 ${DateFormat('HH:mm').format(completedAt)}  ·  '
-                      '计划 ${DateFormat('M月d日').format(entry.todo.scheduledDate)}',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
                   ],
                 ),
-              ),
-              IconButton(
-                tooltip: '编辑',
-                onPressed: () => onEdit(entry.todo),
-                icon: const Icon(Icons.edit_outlined),
-              ),
             ],
           ),
         );
       },
+    );
+  }
+
+  /// 将扁平完成记录按根任务标识组装为两层历史树。
+  List<_TodoHistoryGroup> _groupEntries(List<TodoHistoryEntry> entries) {
+    // 当天完成的主任务记录索引。
+    final Map<String, TodoHistoryEntry> rootsById =
+        <String, TodoHistoryEntry>{};
+    // 按主任务标识聚合的已完成子任务。
+    final Map<String, List<TodoHistoryEntry>> childrenByRootId =
+        <String, List<TodoHistoryEntry>>{};
+    // 子任务携带的父任务上下文索引。
+    final Map<String, TodoRecord> parentsById = <String, TodoRecord>{};
+    for (final TodoHistoryEntry entry in entries) {
+      // 当前记录的父任务标识。
+      final String? parentId = entry.todo.parentId;
+      if (parentId == null) {
+        rootsById[entry.todo.id] = entry;
+      } else {
+        childrenByRootId
+            .putIfAbsent(parentId, () => <TodoHistoryEntry>[])
+            .add(entry);
+        if (entry.parent != null) {
+          parentsById[parentId] = entry.parent!;
+        }
+      }
+    }
+    // 当天历史涉及的全部根任务标识。
+    final Set<String> rootIds = <String>{
+      ...rootsById.keys,
+      ...childrenByRootId.keys,
+    };
+    // 组装完成的两层历史分组。
+    final List<_TodoHistoryGroup> groups = rootIds
+        .map((String rootId) {
+          // 当前分组的子任务，沿用任务树的用户顺序。
+          final List<TodoHistoryEntry> children =
+              childrenByRootId[rootId] ?? <TodoHistoryEntry>[];
+          children.sort((TodoHistoryEntry left, TodoHistoryEntry right) {
+            // 子任务用户排序比较结果。
+            final int order = left.todo.sortOrder.compareTo(
+              right.todo.sortOrder,
+            );
+            return order != 0
+                ? order
+                : left.todo.createdAt.compareTo(right.todo.createdAt);
+          });
+          return _TodoHistoryGroup(
+            id: rootId,
+            rootEntry: rootsById[rootId],
+            parent: parentsById[rootId],
+            children: List<TodoHistoryEntry>.unmodifiable(children),
+          );
+        })
+        .toList(growable: false);
+    groups.sort(
+      (_TodoHistoryGroup left, _TodoHistoryGroup right) =>
+          right.latestCompletedAt.compareTo(left.latestCompletedAt),
+    );
+    return groups;
+  }
+}
+
+/// 一个父任务及其当天完成子任务组成的历史分组。
+class _TodoHistoryGroup {
+  /// 根任务标识。
+  final String id;
+
+  /// 当天完成的父任务记录。
+  final TodoHistoryEntry? rootEntry;
+
+  /// 父任务上下文；父任务未在当天完成时用于分组标题。
+  final TodoRecord? parent;
+
+  /// 当天完成的直属子任务。
+  final List<TodoHistoryEntry> children;
+
+  /// 创建完成历史分组。
+  const _TodoHistoryGroup({
+    required this.id,
+    required this.rootEntry,
+    required this.parent,
+    required this.children,
+  });
+
+  /// 当前分组中最近的完成时间。
+  DateTime get latestCompletedAt {
+    // 当前分组全部完成时间。
+    final List<DateTime> completedTimes = <DateTime>[
+      if (rootEntry?.todo.completedAt != null) rootEntry!.todo.completedAt!,
+      for (final TodoHistoryEntry child in children) child.todo.completedAt!,
+    ];
+    completedTimes.sort();
+    return completedTimes.last;
+  }
+}
+
+/// 完成历史中的单条已完成任务行。
+class _CompletedTodoHistoryRow extends StatelessWidget {
+  /// 当前历史条目。
+  final TodoHistoryEntry entry;
+
+  /// 当前父任务分组是否展开。
+  final bool expanded;
+
+  /// 可选展开状态切换回调。
+  final VoidCallback? onToggle;
+
+  /// 重新打开任务回调。
+  final ValueChanged<TodoRecord> onReopen;
+
+  /// 编辑任务回调。
+  final ValueChanged<TodoRecord> onEdit;
+
+  /// 创建已完成任务行。
+  const _CompletedTodoHistoryRow({
+    required this.entry,
+    required this.expanded,
+    required this.onToggle,
+    required this.onReopen,
+    required this.onEdit,
+    super.key,
+  });
+
+  /// 构建与进行中任务一致的紧凑历史行。
+  @override
+  Widget build(BuildContext context) {
+    // 当前任务原有优先象限。
+    final TodoPriorityQuadrant quadrant = TodoPriorityQuadrant.fromValue(
+      entry.todo.priorityQuadrant,
+    );
+    // 当前象限强调色。
+    final Color accent = quadrant.color(OmniColors.of(context));
+    // 当前是否存在截止或非时间状态信息。
+    final bool hasDetails = _TodoDetails.hasContent(entry.todo);
+    return OmniListRow(
+      padding: const EdgeInsets.symmetric(
+        horizontal: OmniSpacing.sm,
+        vertical: OmniSpacing.xs,
+      ),
+      leadingGap: 0,
+      leading: TodoCompletionCheckbox(
+        key: ValueKey<String>(
+          'todo-history-completion-checkbox-${entry.todo.id}',
+        ),
+        value: true,
+        semanticLabel: '重新打开任务',
+        onChanged: (bool value) {
+          if (!value) {
+            onReopen(entry.todo);
+          }
+        },
+      ),
+      title: Row(
+        children: <Widget>[
+          Expanded(child: _TodoInlineTitle(todo: entry.todo, completed: true)),
+          const SizedBox(width: OmniSpacing.xs),
+          OmniTag(label: quadrant.actionLabel, color: accent),
+        ],
+      ),
+      subtitle: hasDetails
+          ? _TodoDetails(todo: entry.todo, now: entry.todo.completedAt!)
+          : null,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (onToggle != null)
+            IconButton(
+              key: ValueKey<String>('todo-history-toggle-${entry.todo.id}'),
+              tooltip: expanded ? '收起子任务' : '展开子任务',
+              onPressed: onToggle,
+              icon: Icon(
+                expanded
+                    ? Icons.expand_less_rounded
+                    : Icons.expand_more_rounded,
+              ),
+            ),
+          IconButton(
+            tooltip: '编辑',
+            onPressed: () => onEdit(entry.todo),
+            icon: const Icon(Icons.edit_outlined),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 父任务未在当天完成时使用的历史分组标题行。
+class _TodoHistoryParentContextRow extends StatelessWidget {
+  /// 父任务上下文。
+  final TodoRecord? parent;
+
+  /// 当天完成的子任务数量。
+  final int childCount;
+
+  /// 当前分组是否展开。
+  final bool expanded;
+
+  /// 展开状态切换回调。
+  final VoidCallback onToggle;
+
+  /// 编辑任务回调。
+  final ValueChanged<TodoRecord> onEdit;
+
+  /// 创建父任务上下文行。
+  const _TodoHistoryParentContextRow({
+    required this.parent,
+    required this.childCount,
+    required this.expanded,
+    required this.onToggle,
+    required this.onEdit,
+  });
+
+  /// 构建不会伪装成已完成任务的中性父级标题。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 父任务原有优先象限。
+    final TodoPriorityQuadrant? quadrant = parent == null
+        ? null
+        : TodoPriorityQuadrant.fromValue(parent!.priorityQuadrant);
+    // 当前象限强调色。
+    final Color accent = quadrant?.color(colors) ?? colors.muted;
+    // 父任务当前状态说明。
+    final String statusLabel = parent == null
+        ? '父任务信息不可用'
+        : parent!.isCompleted
+        ? '父任务已在其他日期完成'
+        : '父任务进行中';
+    // 与完成复选框保持一致的前置区域尺寸。
+    final Size leadingSize = TodoCompletionCheckbox.tapSizeOf(context);
+    return OmniListRow(
+      key: ValueKey<String>('todo-history-parent-${parent?.id ?? 'missing'}'),
+      padding: const EdgeInsets.symmetric(
+        horizontal: OmniSpacing.sm,
+        vertical: OmniSpacing.xs,
+      ),
+      leadingGap: 0,
+      leading: SizedBox(
+        width: leadingSize.width,
+        height: leadingSize.height,
+        child: Center(
+          child: Icon(Icons.account_tree_outlined, size: 16, color: accent),
+        ),
+      ),
+      title: Row(
+        children: <Widget>[
+          Expanded(child: Text(parent?.title ?? '未知父任务')),
+          if (quadrant != null) ...<Widget>[
+            const SizedBox(width: OmniSpacing.xs),
+            OmniTag(label: quadrant.actionLabel, color: accent),
+          ],
+        ],
+      ),
+      subtitle: Text('$statusLabel  ·  当天完成 $childCount 个子任务'),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          IconButton(
+            key: ValueKey<String>(
+              'todo-history-toggle-${parent?.id ?? 'missing'}',
+            ),
+            tooltip: expanded ? '收起子任务' : '展开子任务',
+            onPressed: onToggle,
+            icon: Icon(
+              expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+            ),
+          ),
+          if (parent != null)
+            IconButton(
+              tooltip: '编辑',
+              onPressed: () => onEdit(parent!),
+              icon: const Icon(Icons.edit_outlined),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -1758,7 +2308,7 @@ class _MobileQuadrantNavigation extends StatelessWidget {
   }
 }
 
-/// 任务描述、计划日期、截止与同步元数据。
+/// 任务截止时间与非时间状态元数据。
 class _TodoDetails extends StatelessWidget {
   /// 当前待办。
   final TodoRecord todo;
@@ -1769,6 +2319,13 @@ class _TodoDetails extends StatelessWidget {
   /// 创建任务辅助信息。
   const _TodoDetails({required this.todo, required this.now});
 
+  /// 判断任务行是否需要展示截止、重复或同步信息。
+  static bool hasContent(TodoRecord todo) {
+    return todo.dueAt != null ||
+        (todo.repeatRule != null && todo.repeatRule != 'stopped') ||
+        todo.syncState != 'localSaved';
+  }
+
   /// 构建紧凑元数据。
   @override
   Widget build(BuildContext context) {
@@ -1777,53 +2334,32 @@ class _TodoDetails extends StatelessWidget {
     // 是否已经逾期。
     final bool overdue =
         !todo.isCompleted && todo.dueAt != null && todo.dueAt!.isBefore(now);
-    // 清理后的描述。
-    final String? description = todo.description?.trim().isNotEmpty ?? false
-        ? todo.description!.trim()
-        : null;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Wrap(
+      spacing: OmniSpacing.sm,
+      runSpacing: OmniSpacing.xxs,
       children: <Widget>[
-        if (description != null)
-          Text(
-            description,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: colors.muted),
+        if (todo.dueAt != null)
+          _TodoMetadataItem(
+            icon: overdue
+                ? Icons.error_outline_rounded
+                : Icons.schedule_outlined,
+            label: overdue
+                ? '已逾期 ${DateFormat('M月d日 HH:mm').format(todo.dueAt!)}'
+                : '截止 ${DateFormat('M月d日 HH:mm').format(todo.dueAt!)}',
+            color: overdue ? colors.danger : colors.muted,
           ),
-        Wrap(
-          spacing: OmniSpacing.sm,
-          runSpacing: OmniSpacing.xxs,
-          children: <Widget>[
-            _TodoMetadataItem(
-              icon: Icons.event_outlined,
-              label: '计划 ${DateFormat('M月d日').format(todo.scheduledDate)}',
-              color: colors.muted,
-            ),
-            if (todo.dueAt != null)
-              _TodoMetadataItem(
-                icon: overdue
-                    ? Icons.error_outline_rounded
-                    : Icons.schedule_outlined,
-                label: overdue
-                    ? '已逾期 ${DateFormat('M月d日 HH:mm').format(todo.dueAt!)}'
-                    : '截止 ${DateFormat('M月d日 HH:mm').format(todo.dueAt!)}',
-                color: overdue ? colors.danger : colors.muted,
-              ),
-            if (todo.repeatRule != null && todo.repeatRule != 'stopped')
-              _TodoMetadataItem(
-                icon: Icons.repeat_rounded,
-                label: _repeatLabel(todo.repeatRule!),
-                color: colors.muted,
-              ),
-            if (todo.syncState != 'localSaved')
-              _TodoMetadataItem(
-                icon: Icons.cloud_sync_outlined,
-                label: '等待同步',
-                color: colors.warning,
-              ),
-          ],
-        ),
+        if (todo.repeatRule != null && todo.repeatRule != 'stopped')
+          _TodoMetadataItem(
+            icon: Icons.repeat_rounded,
+            label: _repeatLabel(todo.repeatRule!),
+            color: colors.muted,
+          ),
+        if (todo.syncState != 'localSaved')
+          _TodoMetadataItem(
+            icon: Icons.cloud_sync_outlined,
+            label: '等待同步',
+            color: colors.warning,
+          ),
       ],
     );
   }
@@ -1865,9 +2401,14 @@ class _TodoMetadataItem extends StatelessWidget {
       children: <Widget>[
         Icon(icon, size: 13, color: color),
         const SizedBox(width: 3),
-        Text(
-          label,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: color),
+        Flexible(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: color),
+          ),
         ),
       ],
     );

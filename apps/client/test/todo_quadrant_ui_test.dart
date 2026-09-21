@@ -296,7 +296,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('每日待办完成任务后淡出并提供浮动撤销消息', (WidgetTester tester) async {
+  testWidgets('每日待办完成任务后右滑并提供浮动撤销消息', (WidgetTester tester) async {
     // 桌面测试视口。
     const Size viewport = Size(1440, 900);
     tester.view.physicalSize = viewport;
@@ -365,7 +365,15 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 399));
     expect(find.text('完成反馈任务'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 181));
+    await tester.pump(const Duration(milliseconds: 111));
+    // 正在向右滑出的任务行。
+    final FractionalTranslation slidingTask = tester.widget(
+      find.byKey(
+        ValueKey<String>('todo-completion-slide-${completionTodo.id}'),
+      ),
+    );
+    expect(slidingTask.translation.dx, greaterThan(0));
+    await tester.pump(const Duration(milliseconds: 111));
     await tester.pump();
     expect(find.text('完成反馈任务'), findsNothing);
     expect(
@@ -388,6 +396,226 @@ void main() {
     expect(
       find.byKey(const ValueKey<String>('omni-message-popup')),
       findsNothing,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+    await database.close();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('每日待办按剩余子任务决定单行或整树右滑', (WidgetTester tester) async {
+    // 桌面测试视口。
+    const Size viewport = Size(1440, 900);
+    tester.view.physicalSize = viewport;
+    tester.view.devicePixelRatio = 1;
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'appearance.theme_mode': 'light',
+    });
+    // 测试用主题偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 测试用待办仓储。
+    final TodoRepository repository = TodoRepository(database);
+    // 测试使用的固定自然日。
+    final DateTime today = DateTime(2026, 9, 6);
+    await repository.save(
+      TodoDraft(
+        title: '发布版本',
+        scheduledDate: today,
+        priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
+      ),
+    );
+    // 新增后的父任务。
+    final TodoRecord root = await database
+        .select(database.todoItems)
+        .getSingle();
+    await repository.save(
+      TodoDraft(title: '整理说明', parentId: root.id, scheduledDate: today),
+    );
+    await repository.save(
+      TodoDraft(title: '检查构建', parentId: root.id, scheduledDate: today),
+    );
+    // 按创建顺序排列的两个子任务。
+    final List<TodoRecord> children = await (database.select(
+      database.todoItems,
+    )..where((TodoItems table) => table.parentId.equals(root.id))).get();
+    children.sort(
+      (TodoRecord left, TodoRecord right) =>
+          left.sortOrder.compareTo(right.sortOrder),
+    );
+    // 第一个完成的子任务。
+    final TodoRecord firstChild = children.first;
+    // 最后完成的子任务。
+    final TodoRecord lastChild = children.last;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(preferences),
+          appDatabaseProvider.overrideWithValue(database),
+          nowProvider.overrideWithValue(DateTime(2026, 9, 6, 10)),
+        ],
+        child: const OmniButlerApp(),
+      ),
+    );
+    // 根组件下的 Provider 容器。
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(OmniButlerApp)),
+    );
+    container.read(appRouterProvider).go('/todos');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    await tester.tap(
+      find.byKey(ValueKey<String>('todo-completion-checkbox-${firstChild.id}')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 510));
+    // 第一个子任务的右滑动画。
+    final FractionalTranslation firstChildSlide = tester.widget(
+      find.byKey(ValueKey<String>('todo-completion-slide-${firstChild.id}')),
+    );
+    // 父任务保持原位。
+    final FractionalTranslation stationaryRoot = tester.widget(
+      find.byKey(ValueKey<String>('todo-completion-slide-${root.id}')),
+    );
+    expect(firstChildSlide.translation.dx, greaterThan(0));
+    expect(stationaryRoot.translation.dx, 0);
+    await tester.pump(const Duration(milliseconds: 111));
+    await tester.pump();
+    expect(find.text(firstChild.title), findsNothing);
+    expect(find.text(lastChild.title), findsOneWidget);
+    expect(find.text(root.title), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
+    // 完成一个子任务后父任务仍保持未完成。
+    final TodoRecord pendingRoot = await (database.select(
+      database.todoItems,
+    )..where((TodoItems table) => table.id.equals(root.id))).getSingle();
+    expect(pendingRoot.isCompleted, isFalse);
+
+    await tester.tap(
+      find.byKey(ValueKey<String>('todo-completion-checkbox-${lastChild.id}')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 510));
+    // 最后一个子任务的右滑动画。
+    final FractionalTranslation lastChildSlide = tester.widget(
+      find.byKey(ValueKey<String>('todo-completion-slide-${lastChild.id}')),
+    );
+    // 与最后一个子任务同步右滑的父任务动画。
+    final FractionalTranslation rootSlide = tester.widget(
+      find.byKey(ValueKey<String>('todo-completion-slide-${root.id}')),
+    );
+    expect(lastChildSlide.translation.dx, greaterThan(0));
+    expect(rootSlide.translation.dx, greaterThan(0));
+    await tester.pump(const Duration(milliseconds: 111));
+    await tester.pump();
+    expect(find.text(lastChild.title), findsNothing);
+    expect(find.text(root.title), findsNothing);
+    // 最后一个子任务完成后自动完成的父任务。
+    final TodoRecord completedRoot = await (database.select(
+      database.todoItems,
+    )..where((TodoItems table) => table.id.equals(root.id))).getSingle();
+    expect(completedRoot.isCompleted, isTrue);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+    await database.close();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('每日待办勾选父任务时无需确认并直接完成整树', (WidgetTester tester) async {
+    // 桌面测试视口。
+    const Size viewport = Size(1440, 900);
+    tester.view.physicalSize = viewport;
+    tester.view.devicePixelRatio = 1;
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'appearance.theme_mode': 'light',
+    });
+    // 测试用主题偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 测试用待办仓储。
+    final TodoRepository repository = TodoRepository(database);
+    // 测试使用的固定自然日。
+    final DateTime today = DateTime(2026, 9, 6);
+    await repository.save(
+      TodoDraft(
+        title: '直接完成父任务',
+        scheduledDate: today,
+        priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
+      ),
+    );
+    // 新增后的父任务。
+    final TodoRecord root = await database
+        .select(database.todoItems)
+        .getSingle();
+    await repository.save(
+      TodoDraft(title: '随父任务完成', parentId: root.id, scheduledDate: today),
+    );
+    // 新增后的子任务。
+    final TodoRecord child = await (database.select(
+      database.todoItems,
+    )..where((TodoItems table) => table.parentId.equals(root.id))).getSingle();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(preferences),
+          appDatabaseProvider.overrideWithValue(database),
+          nowProvider.overrideWithValue(DateTime(2026, 9, 6, 10)),
+        ],
+        child: const OmniButlerApp(),
+      ),
+    );
+    // 根组件下的 Provider 容器。
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(OmniButlerApp)),
+    );
+    container.read(appRouterProvider).go('/todos');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    await tester.tap(
+      find.byKey(ValueKey<String>('todo-completion-checkbox-${root.id}')),
+    );
+    await tester.pump();
+    expect(find.text('完成整个任务？'), findsNothing);
+    expect(find.text('全部完成'), findsNothing);
+    await tester.pump(const Duration(milliseconds: 510));
+    // 正在一起向右滑出的父任务。
+    final FractionalTranslation rootSlide = tester.widget(
+      find.byKey(ValueKey<String>('todo-completion-slide-${root.id}')),
+    );
+    // 正在一起向右滑出的子任务。
+    final FractionalTranslation childSlide = tester.widget(
+      find.byKey(ValueKey<String>('todo-completion-slide-${child.id}')),
+    );
+    expect(rootSlide.translation.dx, greaterThan(0));
+    expect(childSlide.translation.dx, greaterThan(0));
+    await tester.pump(const Duration(milliseconds: 111));
+    await tester.pump();
+    // 完成后的整棵任务树数据库记录。
+    final List<TodoRecord> completedTree = await database
+        .select(database.todoItems)
+        .get();
+    expect(completedTree, hasLength(2));
+    expect(
+      completedTree.every((TodoRecord record) => record.isCompleted),
+      isTrue,
     );
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -550,6 +778,97 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('每日待办完成历史按父任务聚类并默认展开', (WidgetTester tester) async {
+    // 桌面测试视口。
+    const Size viewport = Size(1440, 900);
+    tester.view.physicalSize = viewport;
+    tester.view.devicePixelRatio = 1;
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'appearance.theme_mode': 'light',
+    });
+    // 测试用主题偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 测试用待办仓储。
+    final TodoRepository repository = TodoRepository(database);
+    // 与仓储完成时间一致的当前自然日。
+    final DateTime today = DateUtils.dateOnly(DateTime.now());
+    await repository.save(
+      TodoDraft(
+        title: '发布父任务',
+        scheduledDate: today,
+        priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
+      ),
+    );
+    // 新增后的父任务。
+    final TodoRecord root = await database
+        .select(database.todoItems)
+        .getSingle();
+    await repository.save(
+      TodoDraft(title: '准备说明', parentId: root.id, scheduledDate: today),
+    );
+    await repository.save(
+      TodoDraft(title: '检查构建', parentId: root.id, scheduledDate: today),
+    );
+    await repository.setCompleted(root.id, true);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(preferences),
+          appDatabaseProvider.overrideWithValue(database),
+          nowProvider.overrideWithValue(today.add(const Duration(hours: 10))),
+        ],
+        child: const OmniButlerApp(),
+      ),
+    );
+    // 根组件下的 Provider 容器。
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(OmniButlerApp)),
+    );
+    container.read(appRouterProvider).go('/todos');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.tap(find.text('完成历史'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(
+      find.byKey(ValueKey<String>('todo-history-group-${root.id}')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(ValueKey<String>('todo-history-children-${root.id}')),
+      findsOneWidget,
+    );
+    expect(find.text('发布父任务'), findsOneWidget);
+    expect(find.text('准备说明'), findsOneWidget);
+    expect(find.text('检查构建'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(ValueKey<String>('todo-history-toggle-${root.id}')),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(ValueKey<String>('todo-history-children-${root.id}')),
+      findsNothing,
+    );
+    expect(find.text('发布父任务'), findsOneWidget);
+    expect(find.text('准备说明'), findsNothing);
+    expect(find.text('检查构建'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+    await database.close();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('每日待办展示子任务进度并可拖动整树跨象限', (WidgetTester tester) async {
     // 桌面测试视口。
     const Size viewport = Size(1440, 900);
@@ -574,7 +893,9 @@ void main() {
     await repository.save(
       TodoDraft(
         title: '发布主任务',
+        description: '核对发布清单',
         scheduledDate: today,
+        dueAt: DateTime(2026, 9, 21, 18),
         priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
       ),
     );
@@ -585,6 +906,10 @@ void main() {
     await repository.save(
       TodoDraft(title: '发布子任务', parentId: root.id, scheduledDate: today),
     );
+    // 主任务下的子任务记录。
+    final TodoRecord child = await (database.select(
+      database.todoItems,
+    )..where((TodoItems table) => table.parentId.equals(root.id))).getSingle();
 
     await tester.pumpWidget(
       ProviderScope(
@@ -605,10 +930,104 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
 
     expect(find.text('发布主任务'), findsOneWidget);
+    expect(find.text('核对发布清单'), findsOneWidget);
+    expect(find.text('发布子任务'), findsOneWidget);
+    // 只显示子任务总数的数量标签。
+    final Finder childCountTag = find.byKey(
+      ValueKey<String>('todo-tree-progress-${root.id}'),
+    );
+    expect(childCountTag, findsOneWidget);
+    expect(
+      find.descendant(of: childCountTag, matching: find.text('1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(ValueKey<String>('todo-tree-branch-${child.id}')),
+      findsOneWidget,
+    );
+    expect(find.text('截止 9月21日 18:00'), findsOneWidget);
+    expect(find.text('计划 9月21日'), findsNothing);
+    // 同行展示的任务名称与描述。
+    final Finder rootTitle = find.byKey(
+      ValueKey<String>('todo-title-${root.id}'),
+    );
+    final Finder rootDescription = find.byKey(
+      ValueKey<String>('todo-description-${root.id}'),
+    );
+    // 名称与描述文字组件。
+    final Text rootTitleText = tester.widget(rootTitle);
+    final Text rootDescriptionText = tester.widget(rootDescription);
+    expect(
+      tester.getTopLeft(rootDescription).dx,
+      greaterThan(tester.getTopRight(rootTitle).dx),
+    );
+    expect(
+      rootDescriptionText.style!.fontSize,
+      lessThan(rootTitleText.style!.fontSize!),
+    );
+    // 父任务左侧同时支持单击折叠与拖拽。
+    final Finder treeToggle = find.byKey(
+      ValueKey<String>('todo-tree-toggle-${root.id}'),
+    );
+    expect(treeToggle, findsOneWidget);
+    expect(find.byTooltip('收起子任务'), findsOneWidget);
+    await tester.tap(treeToggle);
+    await tester.pump();
+    expect(find.text('发布子任务'), findsNothing);
+    expect(
+      find.byKey(ValueKey<String>('todo-tree-branch-${child.id}')),
+      findsNothing,
+    );
+    expect(find.byTooltip('展开子任务'), findsOneWidget);
+    await tester.tap(treeToggle);
+    await tester.pump();
     expect(find.text('发布子任务'), findsOneWidget);
     expect(
-      find.byKey(ValueKey<String>('todo-tree-progress-${root.id}')),
+      find.byKey(ValueKey<String>('todo-tree-branch-${child.id}')),
       findsOneWidget,
+    );
+    // 父任务行上直接展示的添加子任务按钮。
+    final Finder addChildButton = find.byKey(
+      ValueKey<String>('todo-add-child-${root.id}'),
+    );
+    expect(addChildButton, findsOneWidget);
+    expect(find.byTooltip('添加子任务'), findsOneWidget);
+    await tester.tap(addChildButton);
+    await tester.pumpAndSettle();
+    expect(find.text('新增子任务'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    // 父任务行的更多菜单不再包含添加子任务入口。
+    final Finder rootRow = find.byKey(
+      ValueKey<String>('todo-tree-root-${root.id}'),
+    );
+    final Finder rootMoreButton = find.descendant(
+      of: rootRow,
+      matching: find.byTooltip('更多操作'),
+    );
+    await tester.tap(rootMoreButton);
+    await tester.pumpAndSettle();
+    expect(find.text('编辑'), findsOneWidget);
+    expect(find.text('添加子任务'), findsNothing);
+    await tester.tap(find.text('编辑'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    // 第一行左侧有子任务的象限卡片。
+    final Finder tallerQuadrant = find.byKey(
+      ValueKey<String>(
+        'todo-quadrant-card-${TodoPriorityQuadrant.urgentImportant.value}',
+      ),
+    );
+    // 第一行右侧空状态象限卡片。
+    final Finder filledQuadrant = find.byKey(
+      ValueKey<String>(
+        'todo-quadrant-card-${TodoPriorityQuadrant.urgentNotImportant.value}',
+      ),
+    );
+    expect(
+      tester.getSize(filledQuadrant).height,
+      tester.getSize(tallerQuadrant).height,
     );
     // 主任务拖动手柄。
     final Finder handle = find.byKey(
