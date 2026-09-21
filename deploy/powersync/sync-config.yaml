@@ -6,9 +6,9 @@ streams:
     auto_subscribe: true
     queries:
       - >-
-        SELECT id, title, description, scheduled_date, due_at, priority_quadrant,
+        SELECT id, parent_id, title, description, scheduled_date, due_at, priority_quadrant,
         is_completed, completed_at, reminder_at, repeat_rule,
-        repeat_series_id, sort_order, notes, created_at, updated_at, deleted_at
+        repeat_series_id, sort_order, created_at, updated_at, deleted_at
         FROM todo_items WHERE user_id = auth.user_id()
       - >-
         SELECT id, content, source, is_enabled, created_at, updated_at, deleted_at

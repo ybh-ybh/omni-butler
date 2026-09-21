@@ -71,8 +71,11 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
     if (!context.mounted) {
       return;
     }
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('“${membership.name}”已移入回收站')));
+    showOmniMessage(
+      context,
+      message: '“${membership.name}”已移入回收站',
+      tone: OmniMessageTone.success,
+    );
   }
 
   /// 更新快捷筛选。
@@ -2076,8 +2079,11 @@ class _MembershipEditorDialogState
       }
     } on FormatException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.message)));
+        showOmniMessage(
+          context,
+          message: error.message,
+          tone: OmniMessageTone.error,
+        );
       }
     } finally {
       if (mounted) {
@@ -2537,8 +2543,7 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
     // 解析后的金额。
     final double? amount = double.tryParse(_amountController.text);
     if (amount == null || amount < 0) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('请输入有效金额')));
+      showOmniMessage(context, message: '请输入有效金额', tone: OmniMessageTone.error);
       return;
     }
     setState(() => _saving = true);

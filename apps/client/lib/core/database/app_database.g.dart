@@ -42,6 +42,17 @@ class $TodoItemsTable extends TodoItems
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _parentIdMeta = const VerificationMeta(
+    'parentId',
+  );
+  @override
+  late final GeneratedColumn<String> parentId = GeneratedColumn<String>(
+    'parent_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _scheduledDateMeta = const VerificationMeta(
     'scheduledDate',
   );
@@ -146,15 +157,6 @@ class $TodoItemsTable extends TodoItems
     requiredDuringInsert: false,
     defaultValue: const Constant<int>(0),
   );
-  static const VerificationMeta _notesMeta = const VerificationMeta('notes');
-  @override
-  late final GeneratedColumn<String> notes = GeneratedColumn<String>(
-    'notes',
-    aliasedName,
-    true,
-    type: DriftSqlType.string,
-    requiredDuringInsert: false,
-  );
   static const VerificationMeta _syncStateMeta = const VerificationMeta(
     'syncState',
   );
@@ -205,6 +207,7 @@ class $TodoItemsTable extends TodoItems
     id,
     title,
     description,
+    parentId,
     scheduledDate,
     dueAt,
     priorityQuadrant,
@@ -214,7 +217,6 @@ class $TodoItemsTable extends TodoItems
     repeatRule,
     repeatSeriesId,
     sortOrder,
-    notes,
     syncState,
     createdAt,
     updatedAt,
@@ -252,6 +254,12 @@ class $TodoItemsTable extends TodoItems
           data['description']!,
           _descriptionMeta,
         ),
+      );
+    }
+    if (data.containsKey('parent_id')) {
+      context.handle(
+        _parentIdMeta,
+        parentId.isAcceptableOrUnknown(data['parent_id']!, _parentIdMeta),
       );
     }
     if (data.containsKey('scheduled_date')) {
@@ -325,12 +333,6 @@ class $TodoItemsTable extends TodoItems
         sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
       );
     }
-    if (data.containsKey('notes')) {
-      context.handle(
-        _notesMeta,
-        notes.isAcceptableOrUnknown(data['notes']!, _notesMeta),
-      );
-    }
     if (data.containsKey('sync_state')) {
       context.handle(
         _syncStateMeta,
@@ -380,6 +382,10 @@ class $TodoItemsTable extends TodoItems
         DriftSqlType.string,
         data['${effectivePrefix}description'],
       ),
+      parentId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}parent_id'],
+      ),
       scheduledDate: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}scheduled_date'],
@@ -416,10 +422,6 @@ class $TodoItemsTable extends TodoItems
         DriftSqlType.int,
         data['${effectivePrefix}sort_order'],
       )!,
-      notes: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}notes'],
-      ),
       syncState: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}sync_state'],
@@ -455,6 +457,9 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
   /// 待办描述。
   final String? description;
 
+  /// 可选父任务标识；为空表示主任务。
+  final String? parentId;
+
   /// 所属自然日。
   final DateTime scheduledDate;
 
@@ -482,9 +487,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
   /// 用户排序值。
   final int sortOrder;
 
-  /// 备注。
-  final String? notes;
-
   /// 同步状态。
   final String syncState;
 
@@ -500,6 +502,7 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     required this.id,
     required this.title,
     this.description,
+    this.parentId,
     required this.scheduledDate,
     this.dueAt,
     required this.priorityQuadrant,
@@ -509,7 +512,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     this.repeatRule,
     this.repeatSeriesId,
     required this.sortOrder,
-    this.notes,
     required this.syncState,
     required this.createdAt,
     required this.updatedAt,
@@ -522,6 +524,9 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     map['title'] = Variable<String>(title);
     if (!nullToAbsent || description != null) {
       map['description'] = Variable<String>(description);
+    }
+    if (!nullToAbsent || parentId != null) {
+      map['parent_id'] = Variable<String>(parentId);
     }
     map['scheduled_date'] = Variable<DateTime>(scheduledDate);
     if (!nullToAbsent || dueAt != null) {
@@ -542,9 +547,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
       map['repeat_series_id'] = Variable<String>(repeatSeriesId);
     }
     map['sort_order'] = Variable<int>(sortOrder);
-    if (!nullToAbsent || notes != null) {
-      map['notes'] = Variable<String>(notes);
-    }
     map['sync_state'] = Variable<String>(syncState);
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
@@ -561,6 +563,9 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
       description: description == null && nullToAbsent
           ? const Value.absent()
           : Value(description),
+      parentId: parentId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(parentId),
       scheduledDate: Value(scheduledDate),
       dueAt: dueAt == null && nullToAbsent
           ? const Value.absent()
@@ -580,9 +585,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
           ? const Value.absent()
           : Value(repeatSeriesId),
       sortOrder: Value(sortOrder),
-      notes: notes == null && nullToAbsent
-          ? const Value.absent()
-          : Value(notes),
       syncState: Value(syncState),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
@@ -601,6 +603,7 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
       id: serializer.fromJson<String>(json['id']),
       title: serializer.fromJson<String>(json['title']),
       description: serializer.fromJson<String?>(json['description']),
+      parentId: serializer.fromJson<String?>(json['parentId']),
       scheduledDate: serializer.fromJson<DateTime>(json['scheduledDate']),
       dueAt: serializer.fromJson<DateTime?>(json['dueAt']),
       priorityQuadrant: serializer.fromJson<int>(json['priorityQuadrant']),
@@ -610,7 +613,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
       repeatRule: serializer.fromJson<String?>(json['repeatRule']),
       repeatSeriesId: serializer.fromJson<String?>(json['repeatSeriesId']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
-      notes: serializer.fromJson<String?>(json['notes']),
       syncState: serializer.fromJson<String>(json['syncState']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
@@ -624,6 +626,7 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
       'id': serializer.toJson<String>(id),
       'title': serializer.toJson<String>(title),
       'description': serializer.toJson<String?>(description),
+      'parentId': serializer.toJson<String?>(parentId),
       'scheduledDate': serializer.toJson<DateTime>(scheduledDate),
       'dueAt': serializer.toJson<DateTime?>(dueAt),
       'priorityQuadrant': serializer.toJson<int>(priorityQuadrant),
@@ -633,7 +636,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
       'repeatRule': serializer.toJson<String?>(repeatRule),
       'repeatSeriesId': serializer.toJson<String?>(repeatSeriesId),
       'sortOrder': serializer.toJson<int>(sortOrder),
-      'notes': serializer.toJson<String?>(notes),
       'syncState': serializer.toJson<String>(syncState),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
@@ -645,6 +647,7 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     String? id,
     String? title,
     Value<String?> description = const Value.absent(),
+    Value<String?> parentId = const Value.absent(),
     DateTime? scheduledDate,
     Value<DateTime?> dueAt = const Value.absent(),
     int? priorityQuadrant,
@@ -654,7 +657,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     Value<String?> repeatRule = const Value.absent(),
     Value<String?> repeatSeriesId = const Value.absent(),
     int? sortOrder,
-    Value<String?> notes = const Value.absent(),
     String? syncState,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -663,6 +665,7 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     id: id ?? this.id,
     title: title ?? this.title,
     description: description.present ? description.value : this.description,
+    parentId: parentId.present ? parentId.value : this.parentId,
     scheduledDate: scheduledDate ?? this.scheduledDate,
     dueAt: dueAt.present ? dueAt.value : this.dueAt,
     priorityQuadrant: priorityQuadrant ?? this.priorityQuadrant,
@@ -674,7 +677,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
         ? repeatSeriesId.value
         : this.repeatSeriesId,
     sortOrder: sortOrder ?? this.sortOrder,
-    notes: notes.present ? notes.value : this.notes,
     syncState: syncState ?? this.syncState,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -687,6 +689,7 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
       description: data.description.present
           ? data.description.value
           : this.description,
+      parentId: data.parentId.present ? data.parentId.value : this.parentId,
       scheduledDate: data.scheduledDate.present
           ? data.scheduledDate.value
           : this.scheduledDate,
@@ -710,7 +713,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
           ? data.repeatSeriesId.value
           : this.repeatSeriesId,
       sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
-      notes: data.notes.present ? data.notes.value : this.notes,
       syncState: data.syncState.present ? data.syncState.value : this.syncState,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
@@ -724,6 +726,7 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
           ..write('id: $id, ')
           ..write('title: $title, ')
           ..write('description: $description, ')
+          ..write('parentId: $parentId, ')
           ..write('scheduledDate: $scheduledDate, ')
           ..write('dueAt: $dueAt, ')
           ..write('priorityQuadrant: $priorityQuadrant, ')
@@ -733,7 +736,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
           ..write('repeatRule: $repeatRule, ')
           ..write('repeatSeriesId: $repeatSeriesId, ')
           ..write('sortOrder: $sortOrder, ')
-          ..write('notes: $notes, ')
           ..write('syncState: $syncState, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
@@ -747,6 +749,7 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     id,
     title,
     description,
+    parentId,
     scheduledDate,
     dueAt,
     priorityQuadrant,
@@ -756,7 +759,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     repeatRule,
     repeatSeriesId,
     sortOrder,
-    notes,
     syncState,
     createdAt,
     updatedAt,
@@ -769,6 +771,7 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
           other.id == this.id &&
           other.title == this.title &&
           other.description == this.description &&
+          other.parentId == this.parentId &&
           other.scheduledDate == this.scheduledDate &&
           other.dueAt == this.dueAt &&
           other.priorityQuadrant == this.priorityQuadrant &&
@@ -778,7 +781,6 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
           other.repeatRule == this.repeatRule &&
           other.repeatSeriesId == this.repeatSeriesId &&
           other.sortOrder == this.sortOrder &&
-          other.notes == this.notes &&
           other.syncState == this.syncState &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt &&
@@ -789,6 +791,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
   final Value<String> id;
   final Value<String> title;
   final Value<String?> description;
+  final Value<String?> parentId;
   final Value<DateTime> scheduledDate;
   final Value<DateTime?> dueAt;
   final Value<int> priorityQuadrant;
@@ -798,7 +801,6 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
   final Value<String?> repeatRule;
   final Value<String?> repeatSeriesId;
   final Value<int> sortOrder;
-  final Value<String?> notes;
   final Value<String> syncState;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
@@ -808,6 +810,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     this.id = const Value.absent(),
     this.title = const Value.absent(),
     this.description = const Value.absent(),
+    this.parentId = const Value.absent(),
     this.scheduledDate = const Value.absent(),
     this.dueAt = const Value.absent(),
     this.priorityQuadrant = const Value.absent(),
@@ -817,7 +820,6 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     this.repeatRule = const Value.absent(),
     this.repeatSeriesId = const Value.absent(),
     this.sortOrder = const Value.absent(),
-    this.notes = const Value.absent(),
     this.syncState = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
@@ -828,6 +830,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     required String id,
     required String title,
     this.description = const Value.absent(),
+    this.parentId = const Value.absent(),
     required DateTime scheduledDate,
     this.dueAt = const Value.absent(),
     this.priorityQuadrant = const Value.absent(),
@@ -837,7 +840,6 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     this.repeatRule = const Value.absent(),
     this.repeatSeriesId = const Value.absent(),
     this.sortOrder = const Value.absent(),
-    this.notes = const Value.absent(),
     this.syncState = const Value.absent(),
     required DateTime createdAt,
     required DateTime updatedAt,
@@ -852,6 +854,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     Expression<String>? id,
     Expression<String>? title,
     Expression<String>? description,
+    Expression<String>? parentId,
     Expression<DateTime>? scheduledDate,
     Expression<DateTime>? dueAt,
     Expression<int>? priorityQuadrant,
@@ -861,7 +864,6 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     Expression<String>? repeatRule,
     Expression<String>? repeatSeriesId,
     Expression<int>? sortOrder,
-    Expression<String>? notes,
     Expression<String>? syncState,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
@@ -872,6 +874,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
       if (id != null) 'id': id,
       if (title != null) 'title': title,
       if (description != null) 'description': description,
+      if (parentId != null) 'parent_id': parentId,
       if (scheduledDate != null) 'scheduled_date': scheduledDate,
       if (dueAt != null) 'due_at': dueAt,
       if (priorityQuadrant != null) 'priority_quadrant': priorityQuadrant,
@@ -881,7 +884,6 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
       if (repeatRule != null) 'repeat_rule': repeatRule,
       if (repeatSeriesId != null) 'repeat_series_id': repeatSeriesId,
       if (sortOrder != null) 'sort_order': sortOrder,
-      if (notes != null) 'notes': notes,
       if (syncState != null) 'sync_state': syncState,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
@@ -894,6 +896,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     Value<String>? id,
     Value<String>? title,
     Value<String?>? description,
+    Value<String?>? parentId,
     Value<DateTime>? scheduledDate,
     Value<DateTime?>? dueAt,
     Value<int>? priorityQuadrant,
@@ -903,7 +906,6 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     Value<String?>? repeatRule,
     Value<String?>? repeatSeriesId,
     Value<int>? sortOrder,
-    Value<String?>? notes,
     Value<String>? syncState,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
@@ -914,6 +916,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
       id: id ?? this.id,
       title: title ?? this.title,
       description: description ?? this.description,
+      parentId: parentId ?? this.parentId,
       scheduledDate: scheduledDate ?? this.scheduledDate,
       dueAt: dueAt ?? this.dueAt,
       priorityQuadrant: priorityQuadrant ?? this.priorityQuadrant,
@@ -923,7 +926,6 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
       repeatRule: repeatRule ?? this.repeatRule,
       repeatSeriesId: repeatSeriesId ?? this.repeatSeriesId,
       sortOrder: sortOrder ?? this.sortOrder,
-      notes: notes ?? this.notes,
       syncState: syncState ?? this.syncState,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -943,6 +945,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     }
     if (description.present) {
       map['description'] = Variable<String>(description.value);
+    }
+    if (parentId.present) {
+      map['parent_id'] = Variable<String>(parentId.value);
     }
     if (scheduledDate.present) {
       map['scheduled_date'] = Variable<DateTime>(scheduledDate.value);
@@ -971,9 +976,6 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     if (sortOrder.present) {
       map['sort_order'] = Variable<int>(sortOrder.value);
     }
-    if (notes.present) {
-      map['notes'] = Variable<String>(notes.value);
-    }
     if (syncState.present) {
       map['sync_state'] = Variable<String>(syncState.value);
     }
@@ -998,6 +1000,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
           ..write('id: $id, ')
           ..write('title: $title, ')
           ..write('description: $description, ')
+          ..write('parentId: $parentId, ')
           ..write('scheduledDate: $scheduledDate, ')
           ..write('dueAt: $dueAt, ')
           ..write('priorityQuadrant: $priorityQuadrant, ')
@@ -1007,7 +1010,6 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
           ..write('repeatRule: $repeatRule, ')
           ..write('repeatSeriesId: $repeatSeriesId, ')
           ..write('sortOrder: $sortOrder, ')
-          ..write('notes: $notes, ')
           ..write('syncState: $syncState, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
@@ -10373,6 +10375,7 @@ typedef $$TodoItemsTableCreateCompanionBuilder = TodoItemsCompanion Function({
   required String id,
   required String title,
   Value<String?> description,
+  Value<String?> parentId,
   required DateTime scheduledDate,
   Value<DateTime?> dueAt,
   Value<int> priorityQuadrant,
@@ -10382,7 +10385,6 @@ typedef $$TodoItemsTableCreateCompanionBuilder = TodoItemsCompanion Function({
   Value<String?> repeatRule,
   Value<String?> repeatSeriesId,
   Value<int> sortOrder,
-  Value<String?> notes,
   Value<String> syncState,
   required DateTime createdAt,
   required DateTime updatedAt,
@@ -10393,6 +10395,7 @@ typedef $$TodoItemsTableUpdateCompanionBuilder = TodoItemsCompanion Function({
   Value<String> id,
   Value<String> title,
   Value<String?> description,
+  Value<String?> parentId,
   Value<DateTime> scheduledDate,
   Value<DateTime?> dueAt,
   Value<int> priorityQuadrant,
@@ -10402,7 +10405,6 @@ typedef $$TodoItemsTableUpdateCompanionBuilder = TodoItemsCompanion Function({
   Value<String?> repeatRule,
   Value<String?> repeatSeriesId,
   Value<int> sortOrder,
-  Value<String?> notes,
   Value<String> syncState,
   Value<DateTime> createdAt,
   Value<DateTime> updatedAt,
@@ -10431,6 +10433,11 @@ class $$TodoItemsTableFilterComposer
 
   ColumnFilters<String> get description => $composableBuilder(
     column: $table.description,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get parentId => $composableBuilder(
+    column: $table.parentId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -10479,11 +10486,6 @@ class $$TodoItemsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get notes => $composableBuilder(
-    column: $table.notes,
-    builder: (column) => ColumnFilters(column),
-  );
-
   ColumnFilters<String> get syncState => $composableBuilder(
     column: $table.syncState,
     builder: (column) => ColumnFilters(column),
@@ -10526,6 +10528,11 @@ class $$TodoItemsTableOrderingComposer
 
   ColumnOrderings<String> get description => $composableBuilder(
     column: $table.description,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get parentId => $composableBuilder(
+    column: $table.parentId,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -10574,11 +10581,6 @@ class $$TodoItemsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get notes => $composableBuilder(
-    column: $table.notes,
-    builder: (column) => ColumnOrderings(column),
-  );
-
   ColumnOrderings<String> get syncState => $composableBuilder(
     column: $table.syncState,
     builder: (column) => ColumnOrderings(column),
@@ -10620,6 +10622,9 @@ class $$TodoItemsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<String> get parentId =>
+      $composableBuilder(column: $table.parentId, builder: (column) => column);
+
   GeneratedColumn<DateTime> get scheduledDate => $composableBuilder(
     column: $table.scheduledDate,
     builder: (column) => column,
@@ -10660,9 +10665,6 @@ class $$TodoItemsTableAnnotationComposer
 
   GeneratedColumn<int> get sortOrder =>
       $composableBuilder(column: $table.sortOrder, builder: (column) => column);
-
-  GeneratedColumn<String> get notes =>
-      $composableBuilder(column: $table.notes, builder: (column) => column);
 
   GeneratedColumn<String> get syncState =>
       $composableBuilder(column: $table.syncState, builder: (column) => column);
@@ -10711,6 +10713,7 @@ class $$TodoItemsTableTableManager
                 Value<String> id = const Value.absent(),
                 Value<String> title = const Value.absent(),
                 Value<String?> description = const Value.absent(),
+                Value<String?> parentId = const Value.absent(),
                 Value<DateTime> scheduledDate = const Value.absent(),
                 Value<DateTime?> dueAt = const Value.absent(),
                 Value<int> priorityQuadrant = const Value.absent(),
@@ -10720,7 +10723,6 @@ class $$TodoItemsTableTableManager
                 Value<String?> repeatRule = const Value.absent(),
                 Value<String?> repeatSeriesId = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
-                Value<String?> notes = const Value.absent(),
                 Value<String> syncState = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
@@ -10730,6 +10732,7 @@ class $$TodoItemsTableTableManager
                 id: id,
                 title: title,
                 description: description,
+                parentId: parentId,
                 scheduledDate: scheduledDate,
                 dueAt: dueAt,
                 priorityQuadrant: priorityQuadrant,
@@ -10739,7 +10742,6 @@ class $$TodoItemsTableTableManager
                 repeatRule: repeatRule,
                 repeatSeriesId: repeatSeriesId,
                 sortOrder: sortOrder,
-                notes: notes,
                 syncState: syncState,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
@@ -10751,6 +10753,7 @@ class $$TodoItemsTableTableManager
                 required String id,
                 required String title,
                 Value<String?> description = const Value.absent(),
+                Value<String?> parentId = const Value.absent(),
                 required DateTime scheduledDate,
                 Value<DateTime?> dueAt = const Value.absent(),
                 Value<int> priorityQuadrant = const Value.absent(),
@@ -10760,7 +10763,6 @@ class $$TodoItemsTableTableManager
                 Value<String?> repeatRule = const Value.absent(),
                 Value<String?> repeatSeriesId = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
-                Value<String?> notes = const Value.absent(),
                 Value<String> syncState = const Value.absent(),
                 required DateTime createdAt,
                 required DateTime updatedAt,
@@ -10770,6 +10772,7 @@ class $$TodoItemsTableTableManager
                 id: id,
                 title: title,
                 description: description,
+                parentId: parentId,
                 scheduledDate: scheduledDate,
                 dueAt: dueAt,
                 priorityQuadrant: priorityQuadrant,
@@ -10779,7 +10782,6 @@ class $$TodoItemsTableTableManager
                 repeatRule: repeatRule,
                 repeatSeriesId: repeatSeriesId,
                 sortOrder: sortOrder,
-                notes: notes,
                 syncState: syncState,
                 createdAt: createdAt,
                 updatedAt: updatedAt,

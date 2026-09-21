@@ -49,25 +49,33 @@ model RefreshToken {
 }
 
 model TodoItem {
-  id             String    @id @db.Uuid
-  userId         String    @map("user_id") @db.Uuid
-  title          String    @db.VarChar(200)
-  description    String?
-  scheduledDate  DateTime  @map("scheduled_date") @db.Date
-  dueAt          DateTime? @map("due_at") @db.Timestamptz(3)
-  priorityQuadrant Int       @default(2) @map("priority_quadrant")
-  isCompleted    Boolean   @default(false) @map("is_completed")
-  completedAt    DateTime? @map("completed_at") @db.Timestamptz(3)
-  reminderAt     DateTime? @map("reminder_at") @db.Timestamptz(3)
-  repeatRule     String?   @map("repeat_rule") @db.VarChar(16)
-  repeatSeriesId String?   @map("repeat_series_id") @db.Uuid
-  sortOrder      Int       @default(0) @map("sort_order")
-  notes          String?
-  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(3)
-  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id               String     @id @db.Uuid
+  userId           String     @map("user_id") @db.Uuid
+  /// 可空的同用户父任务标识。
+  parentId         String?    @map("parent_id") @db.Uuid
+  title            String     @db.VarChar(200)
+  description      String?
+  scheduledDate    DateTime   @map("scheduled_date") @db.Date
+  dueAt            DateTime?  @map("due_at") @db.Timestamptz(3)
+  priorityQuadrant Int        @default(2) @map("priority_quadrant")
+  isCompleted      Boolean    @default(false) @map("is_completed")
+  completedAt      DateTime?  @map("completed_at") @db.Timestamptz(3)
+  reminderAt       DateTime?  @map("reminder_at") @db.Timestamptz(3)
+  repeatRule       String?    @map("repeat_rule") @db.VarChar(16)
+  repeatSeriesId   String?    @map("repeat_series_id") @db.Uuid
+  sortOrder        Int        @default(0) @map("sort_order")
+  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime?  @map("deleted_at") @db.Timestamptz(3)
+  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 当前任务所属的父任务。
+  parent           TodoItem?  @relation("TodoSubtasks", fields: [userId, parentId], references: [userId, id], onDelete: Cascade)
+  /// 当前任务直接包含的子任务。
+  subtasks         TodoItem[] @relation("TodoSubtasks")
 
+  @@unique([userId, id])
+  @@index([userId, parentId, sortOrder])
+  @@index([userId, isCompleted, completedAt])
   @@index([userId, scheduledDate])
   @@index([userId, updatedAt])
   @@map("todo_items")

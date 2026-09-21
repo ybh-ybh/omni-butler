@@ -1,6 +1,7 @@
 export 'omni_button.dart';
 export 'omni_date_time_picker.dart';
 export 'omni_dropdown.dart';
+export 'omni_message.dart';
 export 'omni_overlay.dart';
 export 'omni_page_header.dart';
 export 'omni_panel.dart';

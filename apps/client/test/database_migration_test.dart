@@ -7,7 +7,7 @@ import 'package:omni_butler/core/database/app_database.dart';
 
 /// 验证 v2 本地数据升级为最新 PowerSync 兼容结构且内容不丢失。
 void main() {
-  test('v2 日期、内置标识和待办象限字段安全迁移到 v8', () async {
+  test('v2 日期、内置标识、待办象限与父任务字段安全迁移到 v10', () async {
     // 本测试独占的临时目录。
     final Directory directory = await Directory.systemTemp.createTemp(
       'omni_butler_migration_',
@@ -63,8 +63,79 @@ void main() {
       expect(taxonomy.id, matches(_uuidPattern));
       expect(taxonomy.normalizedName, '工作');
       expect(todoColumnNames, contains('priority_quadrant'));
+      expect(todoColumnNames, contains('parent_id'));
       expect(todoColumnNames, isNot(contains('urgency')));
+      expect(todoColumnNames, isNot(contains('notes')));
       expect(priorityQuadrantDefault, '2');
+    } finally {
+      await database.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('v9 待办表升级到 v10 后删除备注且保留其他业务数据', () async {
+    // 本测试独占的临时目录。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_butler_todo_notes_migration_',
+    );
+    // 测试数据库文件。
+    final File databaseFile = File(
+      '${directory.path}${Platform.pathSeparator}migration.sqlite',
+    );
+    // 固定测试数据时间。
+    final DateTime now = DateTime.utc(2026, 9, 21, 7);
+    // 先创建最新结构，再补回 v9 的备注列构造升级夹具。
+    AppDatabase database = AppDatabase.forTesting(NativeDatabase(databaseFile));
+    await database.customSelect('SELECT 1').get();
+    await database
+        .into(database.todoItems)
+        .insert(
+          TodoItemsCompanion.insert(
+            id: 'legacy-todo-with-notes',
+            title: '保留待办主体',
+            description: const Value<String?>('保留描述'),
+            scheduledDate: DateTime.utc(2026, 9, 21),
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    await database.customStatement(
+      'ALTER TABLE todo_items ADD COLUMN notes TEXT',
+    );
+    await database.customStatement(
+      'UPDATE todo_items SET notes = ? WHERE id = ?',
+      <Object?>['应被丢弃的旧备注', 'legacy-todo-with-notes'],
+    );
+    await database.customStatement('PRAGMA user_version = 9');
+    await database.close();
+
+    database = AppDatabase.forTesting(NativeDatabase(databaseFile));
+    try {
+      // 触发 Drift v9 到 v10 升级。
+      await database.customSelect('SELECT 1').get();
+      // 升级后的待办表字段信息。
+      final List<QueryRow> todoColumns = await database
+          .customSelect("PRAGMA table_info('todo_items')")
+          .get();
+      // 升级后的待办表字段名。
+      final List<String> todoColumnNames = todoColumns
+          .map((QueryRow row) => row.read<String>('name'))
+          .toList(growable: false);
+      // 升级后重建的待办索引。
+      final List<String> todoIndexNames =
+          (await database.customSelect("PRAGMA index_list('todo_items')").get())
+              .map((QueryRow row) => row.read<String>('name'))
+              .toList();
+      // 升级后保留的待办记录。
+      final TodoRecord todo = await database
+          .select(database.todoItems)
+          .getSingle();
+
+      expect(todoColumnNames, isNot(contains('notes')));
+      expect(todo.title, '保留待办主体');
+      expect(todo.description, '保留描述');
+      expect(todoIndexNames, contains('todo_items_parent_sort_idx'));
+      expect(todoIndexNames, contains('todo_items_completed_at_idx'));
     } finally {
       await database.close();
       await directory.delete(recursive: true);

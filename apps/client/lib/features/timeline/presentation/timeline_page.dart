@@ -124,8 +124,10 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('“${timeEntryDisplayActivity(record)}”已移入回收站')),
+    showOmniMessage(
+      context,
+      message: '“${timeEntryDisplayActivity(record)}”已移入回收站',
+      tone: OmniMessageTone.success,
     );
   }
 
@@ -598,13 +600,19 @@ class _TimeEntryEditorDialogState
       }
     } on TimeEntryConflict catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.toString())));
+        showOmniMessage(
+          context,
+          message: error.toString(),
+          tone: OmniMessageTone.error,
+        );
       }
     } on FormatException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.message)));
+        showOmniMessage(
+          context,
+          message: error.message,
+          tone: OmniMessageTone.error,
+        );
       }
     } finally {
       if (mounted) {
@@ -1716,8 +1724,7 @@ class _AbsoluteTimeEntryDialogState
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    showOmniMessage(context, message: message, tone: OmniMessageTone.error);
   }
 
   /// 更新日期并保留原时分。

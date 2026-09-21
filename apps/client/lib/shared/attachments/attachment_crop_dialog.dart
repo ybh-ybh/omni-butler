@@ -214,7 +214,10 @@ class _AttachmentCropDialogState extends State<AttachmentCropDialog> {
 
       final int srcX = math.max(0, (x * scale).round());
       final int srcY = math.max(0, (y * scale).round());
-      final int srcWidth = math.min(source.width - srcX, (width * scale).round());
+      final int srcWidth = math.min(
+        source.width - srcX,
+        (width * scale).round(),
+      );
       final int srcHeight = math.min(
         source.height - srcY,
         (height * scale).round(),
@@ -238,8 +241,11 @@ class _AttachmentCropDialogState extends State<AttachmentCropDialog> {
       return target.path;
     } on Exception catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('裁剪失败：$e')));
+        showOmniMessage(
+          context,
+          message: '裁剪失败：$e',
+          tone: OmniMessageTone.error,
+        );
       }
       return null;
     }
@@ -427,12 +433,10 @@ class _AttachmentCropDialogState extends State<AttachmentCropDialog> {
             child: _error != null
                 ? Center(child: Text(_error!))
                 : _sourceImage == null
-                    ? const Center(child: CircularProgressIndicator())
-                    : LayoutBuilder(
-                        builder: (
-                          BuildContext context,
-                          BoxConstraints constraints,
-                        ) {
+                ? const Center(child: CircularProgressIndicator())
+                : LayoutBuilder(
+                    builder:
+                        (BuildContext context, BoxConstraints constraints) {
                           // 仅在尺寸变化时重新初始化裁剪框。
                           final Rect newRect = _calculateImageRect(
                             Size(
@@ -494,7 +498,7 @@ class _AttachmentCropDialogState extends State<AttachmentCropDialog> {
                             ),
                           );
                         },
-                      ),
+                  ),
           ),
           const SizedBox(height: OmniSpacing.md),
           Wrap(
@@ -525,24 +529,10 @@ class _AttachmentCropDialogState extends State<AttachmentCropDialog> {
 }
 
 /// 裁剪交互区域。
-enum _CropRegion {
-  none,
-  move,
-  left,
-  right,
-  top,
-  bottom,
-}
+enum _CropRegion { none, move, left, right, top, bottom }
 
 /// 裁剪交互模式。
-enum _CropMode {
-  idle,
-  move,
-  left,
-  right,
-  top,
-  bottom,
-}
+enum _CropMode { idle, move, left, right, top, bottom }
 
 /// 裁剪框视觉。
 class _CropFrame extends StatelessWidget {
@@ -557,10 +547,7 @@ class _CropFrame extends StatelessWidget {
       child: Stack(
         children: <Widget>[
           // 三分线。
-          CustomPaint(
-            size: Size.infinite,
-            painter: _RuleOfThirdsPainter(),
-          ),
+          CustomPaint(size: Size.infinite, painter: _RuleOfThirdsPainter()),
           // 手柄。
           Positioned(
             left: -6,
@@ -639,15 +626,11 @@ class _CropMaskPainter extends CustomPainter {
   final Rect imageRect;
   final Rect cropRect;
 
-  const _CropMaskPainter({
-    required this.imageRect,
-    required this.cropRect,
-  });
+  const _CropMaskPainter({required this.imageRect, required this.cropRect});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final Paint paint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.6);
+    final Paint paint = Paint()..color = Colors.black.withValues(alpha: 0.6);
 
     final Path screenPath = Path()
       ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
@@ -661,6 +644,5 @@ class _CropMaskPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _CropMaskPainter oldDelegate) =>
-      oldDelegate.imageRect != imageRect ||
-      oldDelegate.cropRect != cropRect;
+      oldDelegate.imageRect != imageRect || oldDelegate.cropRect != cropRect;
 }

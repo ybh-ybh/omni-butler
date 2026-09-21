@@ -71,11 +71,7 @@ class GlobalSearchRepository {
       _database.todoItems,
     )..where((TodoItems table) => table.deletedAt.isNull())).get();
     for (final TodoRecord record in todos) {
-      if (_matches(keyword, <String?>[
-        record.title,
-        record.description,
-        record.notes,
-      ])) {
+      if (_matches(keyword, <String?>[record.title, record.description])) {
         results.add(
           GlobalSearchResult(
             type: GlobalSearchType.todo,

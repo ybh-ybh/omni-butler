@@ -168,12 +168,10 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
         : '已将 ${result.affectedCount} 项迁移到“${result.destinationName}”';
     // 被跳过记录的补充文案。
     final int skippedCount = result.unchangedCount + result.missingCount;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          skippedCount == 0 ? message : '$message，跳过 $skippedCount 项',
-        ),
-      ),
+    showOmniMessage(
+      context,
+      message: skippedCount == 0 ? message : '$message，跳过 $skippedCount 项',
+      tone: OmniMessageTone.success,
     );
   }
 
@@ -264,8 +262,11 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('“${item.name}”已移入回收站')));
+    showOmniMessage(
+      context,
+      message: '“${item.name}”已移入回收站',
+      tone: OmniMessageTone.success,
+    );
   }
 
   /// 更新物品网格列数。
@@ -2818,8 +2819,11 @@ class _InventoryEditorDialogState
       }
     } on FormatException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.message)));
+        showOmniMessage(
+          context,
+          message: error.message,
+          tone: OmniMessageTone.error,
+        );
       }
     } finally {
       if (mounted) {

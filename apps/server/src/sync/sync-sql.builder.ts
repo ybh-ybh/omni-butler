@@ -12,6 +12,7 @@ export interface SyncStatement {
 /// 各同步表允许由客户端写入的列。
 const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
   todo_items: new Set([
+    'parent_id',
     'title',
     'description',
     'scheduled_date',
@@ -23,7 +24,6 @@ const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
     'repeat_rule',
     'repeat_series_id',
     'sort_order',
-    'notes',
     'created_at',
     'updated_at',
     'deleted_at',

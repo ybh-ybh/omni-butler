@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -51,6 +52,26 @@ void main() {
       themeMode: 'dark',
     );
   });
+
+  testWidgets('每日待办桌面完成历史视觉基线', (WidgetTester tester) async {
+    await _verifyTodoGolden(
+      tester,
+      viewport: const Size(1440, 900),
+      platform: TargetPlatform.windows,
+      goldenPath: 'goldens/todos_history_light_1440x900.png',
+      showHistory: true,
+    );
+  });
+
+  testWidgets('每日待办完成浮动消息视觉基线', (WidgetTester tester) async {
+    await _verifyTodoGolden(
+      tester,
+      viewport: const Size(1440, 900),
+      platform: TargetPlatform.windows,
+      goldenPath: 'goldens/todos_completion_popup_light_1440x900.png',
+      showCompletionPopup: true,
+    );
+  });
 }
 
 /// 在指定视口打开每日待办页并比对视觉基线。
@@ -60,6 +81,8 @@ Future<void> _verifyTodoGolden(
   required TargetPlatform platform,
   required String goldenPath,
   bool seedTodos = true,
+  bool showHistory = false,
+  bool showCompletionPopup = false,
   String themeMode = 'light',
 }) async {
   tester.view.physicalSize = viewport;
@@ -86,6 +109,32 @@ Future<void> _verifyTodoGolden(
         scheduledDate: today,
         dueAt: DateTime(2026, 9, 6, 9, 30),
         priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
+      ),
+    );
+    // 用于树形视觉基线的紧急主任务。
+    final TodoRecord urgentRoot = await (database.select(
+      database.todoItems,
+    )..where((TodoItems table) => table.title.equals('提交发布说明'))).getSingle();
+    await repository.save(
+      TodoDraft(
+        title: '核对数据库迁移',
+        parentId: urgentRoot.id,
+        scheduledDate: today,
+      ),
+    );
+    await repository.save(
+      TodoDraft(title: '检查同步字段', parentId: urgentRoot.id, scheduledDate: today),
+    );
+    // 固定一条已完成子任务，验证进度与完成历史布局。
+    final TodoRecord completedChild = await (database.select(
+      database.todoItems,
+    )..where((TodoItems table) => table.title.equals('核对数据库迁移'))).getSingle();
+    await database.updateTodo(
+      completedChild.id,
+      TodoItemsCompanion(
+        isCompleted: const Value<bool>(true),
+        completedAt: Value<DateTime>(DateTime(2026, 9, 6, 8, 30)),
+        updatedAt: Value<DateTime>(DateTime(2026, 9, 6, 8, 30)),
       ),
     );
     await repository.save(
@@ -124,6 +173,27 @@ Future<void> _verifyTodoGolden(
   container.read(appRouterProvider).go('/todos');
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 600));
+  if (showHistory) {
+    await tester.tap(find.text('完成历史'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+  }
+  if (showCompletionPopup) {
+    // 用于触发浮动消息的普通主任务。
+    final TodoRecord popupTodo = await (database.select(
+      database.todoItems,
+    )..where((TodoItems table) => table.title.equals('回复合作方邮件'))).getSingle();
+    // 目标任务行内的完成复选框。
+    final Finder completionCheckbox = find.descendant(
+      of: find.byKey(ValueKey<String>('todo-row-${popupTodo.id}')),
+      matching: find.byType(Checkbox),
+    );
+    await tester.tap(completionCheckbox);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+  }
 
   await expectLater(find.byType(OmniButlerApp), matchesGoldenFile(goldenPath));
 

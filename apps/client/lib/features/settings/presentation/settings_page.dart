@@ -526,9 +526,11 @@ class _NotificationCardState extends ConsumerState<_NotificationCard> {
       return;
     }
     setState(() {});
-    ScaffoldMessenger.of(
+    showOmniMessage(
       context,
-    ).showSnackBar(SnackBar(content: Text(succeeded ? '测试通知已发送' : '测试通知发送失败')));
+      message: succeeded ? '测试通知已发送' : '测试通知发送失败',
+      tone: succeeded ? OmniMessageTone.success : OmniMessageTone.error,
+    );
   }
 }
 
@@ -974,8 +976,7 @@ class _SyncSettingsCard extends ConsumerWidget {
     await ref.read(syncPreferenceProvider.notifier).setEnabled(enabled);
     if (!enabled) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('多端同步已关闭，当前只保存到本机')));
+        showOmniMessage(context, message: '多端同步已关闭，当前只保存到本机');
       }
       return;
     }
@@ -991,8 +992,11 @@ class _SyncSettingsCard extends ConsumerWidget {
       return;
     }
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('已连接服务器，正在同步本机结构化数据')));
+      showOmniMessage(
+        context,
+        message: '已连接服务器，正在同步本机结构化数据',
+        tone: OmniMessageTone.success,
+      );
     }
   }
 
@@ -1003,8 +1007,11 @@ class _SyncSettingsCard extends ConsumerWidget {
     if (!context.mounted || !succeeded) {
       return;
     }
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('已连接服务器，正在同步本机结构化数据')));
+    showOmniMessage(
+      context,
+      message: '已连接服务器，正在同步本机结构化数据',
+      tone: OmniMessageTone.success,
+    );
   }
 
   /// 确认断开服务器并说明本机数据保留规则。
@@ -1062,8 +1069,7 @@ class _SyncSettingsCard extends ConsumerWidget {
     final String message = choice == _DisconnectChoice.delete
         ? '已断开服务器并删除本机数据'
         : '已断开服务器，本机数据仍然保留';
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    showOmniMessage(context, message: message, tone: OmniMessageTone.success);
   }
 }
 
@@ -1115,6 +1121,13 @@ class _RecycleBinCard extends ConsumerWidget {
                           .read(recycleBinRepositoryProvider)
                           .restore(item);
                       ref.invalidate(recycleBinItemsProvider);
+                      if (context.mounted) {
+                        showOmniMessage(
+                          context,
+                          message: '“${item.title}”已恢复',
+                          tone: OmniMessageTone.success,
+                        );
+                      }
                     },
                   ),
                   OmniButton(
@@ -1197,6 +1210,13 @@ class _RecycleBinCard extends ConsumerWidget {
     if (confirmed) {
       await ref.read(recycleBinRepositoryProvider).permanentlyDelete(item);
       ref.invalidate(recycleBinItemsProvider);
+      if (context.mounted) {
+        showOmniMessage(
+          context,
+          message: '“${item.title}”已永久删除',
+          tone: OmniMessageTone.success,
+        );
+      }
     }
   }
 }

@@ -160,13 +160,19 @@ class _InventoryMoveDialogState extends ConsumerState<InventoryMoveDialog> {
       }
     } on FormatException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.message)));
+        showOmniMessage(
+          context,
+          message: error.message,
+          tone: OmniMessageTone.error,
+        );
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('物品迁移失败：$error')));
+        showOmniMessage(
+          context,
+          message: '物品迁移失败：$error',
+          tone: OmniMessageTone.error,
+        );
       }
     } finally {
       if (mounted) {

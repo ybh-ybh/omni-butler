@@ -131,6 +131,7 @@ void main() {
           .toList(growable: false);
       expect(columnNames, contains('priority_quadrant'));
       expect(columnNames, isNot(contains('urgency')));
+      expect(columnNames, isNot(contains('notes')));
     } finally {
       await runtime.close();
       await directory.delete(recursive: true);

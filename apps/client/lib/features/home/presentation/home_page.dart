@@ -504,49 +504,31 @@ class _TodayTodoCard extends StatefulWidget {
 
 /// 今日待办摘要卡状态。
 class _TodayTodoCardState extends State<_TodayTodoCard> {
-  /// 当前可撤销的已完成待办。
-  TodoRecord? _undoTodo;
+  /// 当前撤销浮动消息。
+  OmniMessageHandle? _undoMessage;
 
-  /// 撤销横幅自动关闭计时器。
-  Timer? _undoTimer;
-
-  /// 完成任务并在模块内展示撤销入口。
+  /// 完成任务并展示顶部浮动撤销消息。
   Future<void> _completeTodo(TodoRecord todo) async {
     await widget.onToggle(todo, true);
     if (!mounted) {
       return;
     }
-    _undoTimer?.cancel();
-    setState(() => _undoTodo = todo);
-    _undoTimer = Timer(const Duration(seconds: 6), _dismissUndo);
+    _undoMessage?.dismiss();
+    _undoMessage = showOmniMessage(
+      context,
+      message: '已完成“${todo.title}”',
+      tone: OmniMessageTone.success,
+      duration: const Duration(seconds: 6),
+      actionLabel: '撤销',
+      onAction: () => unawaited(widget.onToggle(todo, false)),
+      onDismissed: () => _undoMessage = null,
+    );
   }
 
-  /// 撤销最近一次完成操作。
-  Future<void> _undoCompletion() async {
-    // 当前准备恢复的待办。
-    final TodoRecord? todo = _undoTodo;
-    if (todo == null) {
-      return;
-    }
-    _undoTimer?.cancel();
-    await widget.onToggle(todo, false);
-    if (mounted && _undoTodo?.id == todo.id) {
-      setState(() => _undoTodo = null);
-    }
-  }
-
-  /// 关闭模块内撤销横幅。
-  void _dismissUndo() {
-    _undoTimer?.cancel();
-    if (mounted && _undoTodo != null) {
-      setState(() => _undoTodo = null);
-    }
-  }
-
-  /// 释放撤销横幅计时器。
+  /// 释放撤销浮动消息。
   @override
   void dispose() {
-    _undoTimer?.cancel();
+    _undoMessage?.dismiss();
     super.dispose();
   }
 
@@ -557,12 +539,6 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
     final OmniColors colors = OmniColors.of(context);
     // 待办列表或状态内容。
     final Widget todoContent = _buildTodoContent(context, colors);
-    // 当前可撤销的已完成待办。
-    final TodoRecord? undoTodo = _undoTodo;
-    // 当前是否关闭非必要动画。
-    final bool disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
-
     return OmniPanel(
       key: const ValueKey<String>('home-todo-card'),
       padding: const EdgeInsets.all(OmniSpacing.lg),
@@ -598,21 +574,6 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
                 color: colors.todo,
               ),
             ],
-          ),
-          AnimatedSize(
-            duration: disableAnimations ? Duration.zero : OmniMotion.normal,
-            curve: OmniMotion.standardCurve,
-            child: undoTodo == null
-                ? const SizedBox.shrink()
-                : Padding(
-                    padding: const EdgeInsets.only(top: OmniSpacing.xs),
-                    child: _HomeTodoUndoBanner(
-                      key: ValueKey<String>('home-todo-undo-${undoTodo.id}'),
-                      todo: undoTodo,
-                      onUndo: () => unawaited(_undoCompletion()),
-                      onDismiss: _dismissUndo,
-                    ),
-                  ),
           ),
           const SizedBox(height: 14),
           if (widget.fillHeight) Expanded(child: todoContent) else todoContent,
@@ -1174,66 +1135,6 @@ class _HomeTodoCheckIndicator extends StatelessWidget {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// 今日待办模块内部的完成撤销横幅。
-class _HomeTodoUndoBanner extends StatelessWidget {
-  /// 刚完成的待办。
-  final TodoRecord todo;
-
-  /// 撤销完成操作回调。
-  final VoidCallback onUndo;
-
-  /// 关闭横幅回调。
-  final VoidCallback onDismiss;
-
-  /// 创建模块内撤销横幅。
-  const _HomeTodoUndoBanner({
-    required this.todo,
-    required this.onUndo,
-    required this.onDismiss,
-    super.key,
-  });
-
-  /// 构建紧凑且不遮挡象限内容的横幅。
-  @override
-  Widget build(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
-
-    return Container(
-      key: const ValueKey<String>('home-todo-undo-banner'),
-      constraints: const BoxConstraints(minHeight: 40),
-      padding: const EdgeInsets.only(left: OmniSpacing.sm),
-      decoration: BoxDecoration(
-        color: colors.success.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(OmniRadius.control),
-        border: Border.all(color: colors.success.withValues(alpha: 0.24)),
-      ),
-      child: Row(
-        children: <Widget>[
-          Icon(Icons.check_circle_rounded, size: 18, color: colors.success),
-          const SizedBox(width: OmniSpacing.xs),
-          Expanded(
-            child: Text(
-              '已完成“${todo.title}”',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall
-                  ?.copyWith(color: colors.ink, fontWeight: FontWeight.w500),
-            ),
-          ),
-          TextButton(onPressed: onUndo, child: const Text('撤销')),
-          IconButton(
-            tooltip: '关闭提示',
-            onPressed: onDismiss,
-            visualDensity: VisualDensity.compact,
-            icon: Icon(Icons.close_rounded, size: 18, color: colors.muted),
-          ),
-        ],
       ),
     );
   }

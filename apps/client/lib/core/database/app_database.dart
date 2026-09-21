@@ -16,6 +16,9 @@ class TodoItems extends Table {
   /// 待办描述。
   TextColumn get description => text().nullable()();
 
+  /// 可选父任务标识；为空表示主任务。
+  TextColumn get parentId => text().nullable()();
+
   /// 所属自然日。
   DateTimeColumn get scheduledDate => dateTime()();
 
@@ -44,9 +47,6 @@ class TodoItems extends Table {
 
   /// 用户排序值。
   IntColumn get sortOrder => integer().withDefault(const Constant<int>(0))();
-
-  /// 备注。
-  TextColumn get notes => text().nullable()();
 
   /// 同步状态。
   TextColumn get syncState =>
@@ -676,12 +676,15 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 10;
 
   /// 创建数据库并从旧版本安全升级。
   @override
   MigrationStrategy get migration => MigrationStrategy(
-    onCreate: (Migrator migrator) => migrator.createAll(),
+    onCreate: (Migrator migrator) async {
+      await migrator.createAll();
+      await _createTodoIndexes();
+    },
     onUpgrade: (Migrator migrator, int from, int to) async {
       if (from < 2) {
         await migrator.createTable(bannerSettings);
@@ -794,8 +797,75 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
           await migrator.alterTable(TableMigration(timeEntries));
         }
       }
+      if (from < 9) {
+        // 当前待办表字段信息。
+        final List<QueryRow> todoColumns = await customSelect(
+          "PRAGMA table_info('todo_items')",
+        ).get();
+        // 是否已经存在父任务字段。
+        final bool hasParentId = todoColumns.any(
+          (QueryRow row) => row.read<String>('name') == 'parent_id',
+        );
+        if (!hasParentId) {
+          // 为旧待办补充可空父任务字段，旧记录继续作为主任务。
+          await migrator.addColumn(todoItems, todoItems.parentId);
+        }
+        await _createTodoIndexes();
+      }
+      if (from < 10) {
+        // 按 v10 定义重建待办表，直接丢弃已下线的备注列及旧数据。
+        await migrator.alterTable(TableMigration(todoItems));
+        await _createTodoIndexes();
+      }
     },
   );
+
+  /// 创建待办树、排序和完成历史查询索引。
+  Future<void> _createTodoIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS todo_items_parent_sort_idx '
+      'ON todo_items(parent_id, sort_order)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS todo_items_completed_at_idx '
+      'ON todo_items(is_completed, completed_at)',
+    );
+  }
+
+  /// 监听全部未删除待办，用于在仓储层组装进行中的任务树。
+  Stream<List<TodoRecord>> watchAllTodos() {
+    // 全部有效待办查询。
+    final query = select(todoItems)
+      ..where((TodoItems table) => table.deletedAt.isNull())
+      ..orderBy(<OrderingTerm Function(TodoItems)>[
+        (TodoItems table) => OrderingTerm.desc(table.priorityQuadrant),
+        (TodoItems table) => OrderingTerm.asc(table.sortOrder),
+        (TodoItems table) => OrderingTerm.asc(table.createdAt),
+      ]);
+    return query.watch();
+  }
+
+  /// 监听指定完成日期的历史待办。
+  Stream<List<TodoRecord>> watchCompletedTodosForDay(DateTime day) {
+    // 指定完成自然日的零点。
+    final DateTime start = DateTime(day.year, day.month, day.day);
+    // 下一自然日的零点。
+    final DateTime end = start.add(const Duration(days: 1));
+    // 当天完成记录查询。
+    final query = select(todoItems)
+      ..where(
+        (TodoItems table) =>
+            table.isCompleted.equals(true) &
+            table.completedAt.isBiggerOrEqualValue(start) &
+            table.completedAt.isSmallerThanValue(end) &
+            table.deletedAt.isNull(),
+      )
+      ..orderBy(<OrderingTerm Function(TodoItems)>[
+        (TodoItems table) => OrderingTerm.desc(table.completedAt),
+        (TodoItems table) => OrderingTerm.asc(table.createdAt),
+      ]);
+    return query.watch();
+  }
 
   /// 按 PRD 排序规则监听指定自然日的有效待办。
   Stream<List<TodoRecord>> watchTodosForDay(DateTime day) {
@@ -809,6 +879,7 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         (TodoItems table) =>
             table.scheduledDate.isBiggerOrEqualValue(start) &
             table.scheduledDate.isSmallerThanValue(end) &
+            table.parentId.isNull() &
             table.deletedAt.isNull(),
       )
       ..orderBy(<OrderingTerm Function(TodoItems)>[

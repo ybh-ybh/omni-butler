@@ -381,9 +381,9 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(activeRecordButton);
     await tester.pumpAndSettle();
-    // 页面顶部的完成撤销横幅。
+    // 窗口顶部的统一完成撤销浮动消息。
     final Finder undoBanner = find.byKey(
-      const ValueKey<String>('event-completion-undo-banner'),
+      const ValueKey<String>('omni-message-popup'),
     );
     expect(undoBanner, findsOneWidget);
     expect(find.byType(SnackBar), findsNothing);

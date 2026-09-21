@@ -23,23 +23,14 @@ class EventsPage extends ConsumerStatefulWidget {
 
 /// 周期事件页面状态。
 class _EventsPageState extends ConsumerState<EventsPage> {
-  /// 撤销横幅展示时长。
-  static const Duration _undoBannerDuration = Duration(seconds: 6);
-
   /// 是否显示归档事件。
   bool _showArchived = false;
 
   /// 是否优先使用双列事件卡片布局。
   bool _useTwoColumns = true;
 
-  /// 当前可撤销的完成操作。
-  EventCompletionUndo? _pendingCompletionUndo;
-
-  /// 当前可撤销操作对应的事件名称。
-  String? _pendingCompletionEventName;
-
-  /// 撤销横幅自动关闭计时器。
-  Timer? _undoBannerTimer;
+  /// 当前事件完成撤销浮动消息。
+  OmniMessageHandle? _undoMessage;
 
   /// 打开事件编辑器。
   Future<void> _openEditor([EventRecord? event]) async {
@@ -66,36 +57,21 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     if (!mounted) {
       return;
     }
-    _undoBannerTimer?.cancel();
-    setState(() {
-      _pendingCompletionUndo = undo;
-      _pendingCompletionEventName = event.name;
-    });
-    _undoBannerTimer = Timer(_undoBannerDuration, _dismissUndoBanner);
+    _undoMessage?.dismiss();
+    _undoMessage = showOmniMessage(
+      context,
+      message: '已记录“${event.name}”为现在完成',
+      tone: OmniMessageTone.success,
+      duration: const Duration(seconds: 6),
+      actionLabel: '撤销',
+      onAction: () => unawaited(_undoLastCompletion(undo)),
+      onDismissed: () => _undoMessage = null,
+    );
   }
 
   /// 撤销最近一次事件完成操作。
-  Future<void> _undoLastCompletion() async {
-    // 当前准备撤销的完成操作。
-    final EventCompletionUndo? undo = _pendingCompletionUndo;
-    if (undo == null) {
-      return;
-    }
-    _dismissUndoBanner();
+  Future<void> _undoLastCompletion(EventCompletionUndo undo) async {
     await ref.read(eventRepositoryProvider).undoRecord(undo);
-  }
-
-  /// 关闭页面顶部撤销横幅。
-  void _dismissUndoBanner() {
-    _undoBannerTimer?.cancel();
-    _undoBannerTimer = null;
-    if (!mounted || _pendingCompletionUndo == null) {
-      return;
-    }
-    setState(() {
-      _pendingCompletionUndo = null;
-      _pendingCompletionEventName = null;
-    });
   }
 
   /// 归档或恢复事件。
@@ -112,14 +88,17 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('“${event.name}”已移入回收站')));
+    showOmniMessage(
+      context,
+      message: '“${event.name}”已移入回收站',
+      tone: OmniMessageTone.success,
+    );
   }
 
-  /// 释放撤销横幅计时器。
+  /// 释放撤销浮动消息。
   @override
   void dispose() {
-    _undoBannerTimer?.cancel();
+    _undoMessage?.dismiss();
     super.dispose();
   }
 
@@ -144,11 +123,6 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     final bool compact = OmniBreakpoint.isCompact(
       MediaQuery.sizeOf(context).width,
     );
-    // 当前可撤销操作对应的事件名称。
-    final String? pendingCompletionEventName = _pendingCompletionEventName;
-    // 当前是否关闭非必要动画。
-    final bool disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     return Scaffold(
       body: Padding(
         padding: compact
@@ -165,22 +139,6 @@ class _EventsPageState extends ConsumerState<EventsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            AnimatedSize(
-              duration: disableAnimations ? Duration.zero : OmniMotion.normal,
-              curve: OmniMotion.standardCurve,
-              child:
-                  _pendingCompletionUndo == null ||
-                      pendingCompletionEventName == null
-                  ? const SizedBox.shrink()
-                  : Padding(
-                      padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
-                      child: _EventCompletionUndoBanner(
-                        eventName: pendingCompletionEventName,
-                        onUndo: () => unawaited(_undoLastCompletion()),
-                        onDismiss: _dismissUndoBanner,
-                      ),
-                    ),
-            ),
             OmniPageHeader(
               title: '事件记录',
               actions: <Widget>[
@@ -231,68 +189,6 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                 error: (Object error, StackTrace stackTrace) =>
                     Center(child: Text('事件读取失败：$error')),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 事件管理页顶部的完成撤销横幅。
-class _EventCompletionUndoBanner extends StatelessWidget {
-  /// 刚刚记录完成的事件名称。
-  final String eventName;
-
-  /// 撤销完成操作回调。
-  final VoidCallback onUndo;
-
-  /// 关闭横幅回调。
-  final VoidCallback onDismiss;
-
-  /// 创建事件完成撤销横幅。
-  const _EventCompletionUndoBanner({
-    required this.eventName,
-    required this.onUndo,
-    required this.onDismiss,
-  });
-
-  /// 构建位于页面内容顶部的紧凑反馈横幅。
-  @override
-  Widget build(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
-
-    return Semantics(
-      liveRegion: true,
-      child: Container(
-        key: const ValueKey<String>('event-completion-undo-banner'),
-        constraints: const BoxConstraints(minHeight: 44),
-        padding: const EdgeInsets.only(left: OmniSpacing.sm),
-        decoration: BoxDecoration(
-          color: colors.success.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(OmniRadius.control),
-          border: Border.all(color: colors.success.withValues(alpha: 0.24)),
-        ),
-        child: Row(
-          children: <Widget>[
-            Icon(Icons.check_circle_rounded, size: 18, color: colors.success),
-            const SizedBox(width: OmniSpacing.xs),
-            Expanded(
-              child: Text(
-                '已记录“$eventName”为现在完成',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(color: colors.ink, fontWeight: FontWeight.w500),
-              ),
-            ),
-            TextButton(onPressed: onUndo, child: const Text('撤销')),
-            IconButton(
-              tooltip: '关闭提示',
-              onPressed: onDismiss,
-              visualDensity: VisualDensity.compact,
-              icon: Icon(Icons.close_rounded, size: 18, color: colors.muted),
             ),
           ],
         ),
@@ -1605,8 +1501,11 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
       }
     } on FormatException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.message)));
+        showOmniMessage(
+          context,
+          message: error.message,
+          tone: OmniMessageTone.error,
+        );
       }
     } finally {
       if (mounted) {

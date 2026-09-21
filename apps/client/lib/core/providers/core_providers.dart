@@ -124,6 +124,28 @@ final todosForDayProvider = StreamProvider.family<List<TodoRecord>, DateTime>((
   return repository.watchForDay(day);
 });
 
+/// 全部进行中待办树流提供者。
+final activeTodoTreesProvider =
+    StreamProvider.family<List<TodoTreeNode>, DateTime>((
+      Ref ref,
+      DateTime today,
+    ) {
+      // 待办仓储。
+      final TodoRepository repository = ref.watch(todoRepositoryProvider);
+      return repository.watchActiveTrees(today);
+    });
+
+/// 指定完成日期的待办历史流提供者。
+final completedTodosForDayProvider =
+    StreamProvider.family<List<TodoHistoryEntry>, DateTime>((
+      Ref ref,
+      DateTime day,
+    ) {
+      // 待办仓储。
+      final TodoRepository repository = ref.watch(todoRepositoryProvider);
+      return repository.watchCompletedForDay(day);
+    });
+
 /// 回收站待办流提供者。
 final StreamProvider<List<TodoRecord>> deletedTodosProvider =
     StreamProvider<List<TodoRecord>>((Ref ref) {
@@ -358,7 +380,9 @@ final Provider<RecycleBinRepository> recycleBinRepositoryProvider =
     Provider<RecycleBinRepository>((Ref ref) {
       // 当前设备数据库。
       final AppDatabase database = ref.watch(appDatabaseProvider);
-      return RecycleBinRepository(database);
+      // 待办仓储。
+      final TodoRepository todoRepository = ref.watch(todoRepositoryProvider);
+      return RecycleBinRepository(database, todoRepository);
     });
 
 /// 统一回收站记录提供者。

@@ -15,6 +15,9 @@ class TodoEditorDialog extends ConsumerStatefulWidget {
   /// 可选现有待办。
   final TodoRecord? record;
 
+  /// 新增子任务时所属的主任务。
+  final TodoRecord? parent;
+
   /// 默认所属日期。
   final DateTime initialDate;
 
@@ -24,6 +27,7 @@ class TodoEditorDialog extends ConsumerStatefulWidget {
   /// 创建待办编辑对话框。
   TodoEditorDialog({
     this.record,
+    this.parent,
     DateTime? initialDate,
     this.initialPriorityQuadrant = TodoPriorityQuadrant.importantNotUrgent,
     super.key,
@@ -33,6 +37,7 @@ class TodoEditorDialog extends ConsumerStatefulWidget {
   static Future<bool?> show(
     BuildContext context, {
     TodoRecord? record,
+    TodoRecord? parent,
     DateTime? initialDate,
     TodoPriorityQuadrant initialPriorityQuadrant =
         TodoPriorityQuadrant.importantNotUrgent,
@@ -42,6 +47,7 @@ class TodoEditorDialog extends ConsumerStatefulWidget {
       builder: (BuildContext context) {
         return TodoEditorDialog(
           record: record,
+          parent: parent,
           initialDate: initialDate,
           initialPriorityQuadrant: initialPriorityQuadrant,
         );
@@ -162,9 +168,6 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
   /// 描述输入控制器。
   late final TextEditingController _descriptionController;
 
-  /// 备注输入控制器。
-  late final TextEditingController _notesController;
-
   /// 当前所属日期。
   late DateTime _scheduledDate;
 
@@ -193,12 +196,15 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
     _descriptionController = TextEditingController(
       text: record?.description ?? '',
     );
-    _notesController = TextEditingController(text: record?.notes ?? '');
     _scheduledDate = DateUtils.dateOnly(
-      record?.scheduledDate ?? widget.initialDate,
+      record?.scheduledDate ??
+          widget.parent?.scheduledDate ??
+          widget.initialDate,
     );
     _priorityQuadrant = TodoPriorityQuadrant.fromValue(
-      record?.priorityQuadrant ?? widget.initialPriorityQuadrant.value,
+      record?.priorityQuadrant ??
+          widget.parent?.priorityQuadrant ??
+          widget.initialPriorityQuadrant.value,
     );
     _repeatRule = TodoRepeatRule.values.firstWhere(
       (TodoRepeatRule value) => value.name == record?.repeatRule,
@@ -213,7 +219,6 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
-    _notesController.dispose();
     super.dispose();
   }
 
@@ -222,9 +227,18 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
   Widget build(BuildContext context) {
     // 是否编辑现有待办。
     final bool isEditing = widget.record != null;
+    // 当前是否新增或编辑子任务。
+    final bool isChild =
+        widget.parent != null || widget.record?.parentId != null;
 
     return OmniSideSheetScaffold(
-      title: isEditing ? '编辑待办' : '新增待办',
+      title: isEditing
+          ? isChild
+                ? '编辑子任务'
+                : '编辑待办'
+          : isChild
+          ? '新增子任务'
+          : '新增待办',
       canClose: !_saving,
       actions: <Widget>[
         OmniButton(
@@ -247,7 +261,9 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
               Text(
-                '先保存到本机，联网后再同步。',
+                widget.parent == null
+                    ? '先保存到本机，联网后再同步。'
+                    : '所属主任务：${widget.parent!.title}；计划日期和象限跟随主任务。',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: OmniSpacing.lg),
@@ -273,89 +289,124 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
                 decoration: const InputDecoration(labelText: '描述（可选）'),
               ),
               const SizedBox(height: OmniSpacing.md),
-              Text('所属日期', style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: OmniSpacing.xs),
-              OmniDatePickerButton(
-                value: _scheduledDate,
-                initialDate: _scheduledDate,
-                firstDate: DateTime(2000),
-                lastDate: DateTime(2100),
-                label: DateFormat('yyyy年M月d日').format(_scheduledDate),
-                onChanged: (DateTime selected) {
-                  setState(() => _scheduledDate = selected);
-                },
-              ),
-              const SizedBox(height: OmniSpacing.md),
-              Text('时间', style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: OmniSpacing.xs),
-              _buildDateTimeControls(
-                value: _dueAt,
-                defaultHour: 18,
-                emptyDateLabel: '设置截止日期',
-                dateIcon: Icons.flag_outlined,
-                clearTooltip: '清除截止时间',
-                onChanged: (DateTime? value) => setState(() => _dueAt = value),
-              ),
-              const SizedBox(height: OmniSpacing.xs),
-              _buildDateTimeControls(
-                value: _reminderAt,
-                defaultHour: 9,
-                emptyDateLabel: '设置提醒日期',
-                dateIcon: Icons.notifications_outlined,
-                clearTooltip: '清除提醒时间',
-                onChanged: (DateTime? value) =>
-                    setState(() => _reminderAt = value),
-              ),
-              const SizedBox(height: OmniSpacing.md),
-              Text('优先象限', style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: OmniSpacing.xs),
-              LayoutBuilder(
-                builder: (BuildContext context, BoxConstraints constraints) {
-                  // 单个象限选项的可用宽度。
-                  final double optionWidth =
-                      (constraints.maxWidth - OmniSpacing.xs) / 2;
-                  return Wrap(
-                    spacing: OmniSpacing.xs,
-                    runSpacing: OmniSpacing.xs,
-                    children: <Widget>[
-                      for (final TodoPriorityQuadrant quadrant
-                          in todoPriorityQuadrantMatrixOrder)
-                        SizedBox(
-                          width: optionWidth,
-                          child: _PriorityQuadrantOption(
-                            quadrant: quadrant,
-                            selected: quadrant == _priorityQuadrant,
-                            onSelected: () {
-                              setState(() => _priorityQuadrant = quadrant);
-                            },
+              if (!isChild) ...<Widget>[
+                Text('优先象限', style: Theme.of(context).textTheme.labelLarge),
+                const SizedBox(height: OmniSpacing.xs),
+                LayoutBuilder(
+                  builder: (BuildContext context, BoxConstraints constraints) {
+                    // 单个象限选项的可用宽度。
+                    final double optionWidth =
+                        (constraints.maxWidth - OmniSpacing.xs) / 2;
+                    return Wrap(
+                      spacing: OmniSpacing.xs,
+                      runSpacing: OmniSpacing.xs,
+                      children: <Widget>[
+                        for (final TodoPriorityQuadrant quadrant
+                            in todoPriorityQuadrantMatrixOrder)
+                          SizedBox(
+                            width: optionWidth,
+                            child: _PriorityQuadrantOption(
+                              quadrant: quadrant,
+                              selected: quadrant == _priorityQuadrant,
+                              onSelected: () {
+                                setState(() => _priorityQuadrant = quadrant);
+                              },
+                            ),
                           ),
-                        ),
-                    ],
-                  );
-                },
-              ),
+                      ],
+                    );
+                  },
+                ),
+              ],
               const SizedBox(height: OmniSpacing.md),
-              OmniDropdownButtonFormField<TodoRepeatRule>(
-                initialValue: _repeatRule,
-                decoration: const InputDecoration(labelText: '重复'),
-                items: <DropdownMenuItem<TodoRepeatRule>>[
-                  for (final TodoRepeatRule rule in TodoRepeatRule.values)
-                    DropdownMenuItem<TodoRepeatRule>(
-                      value: rule,
-                      child: Text(_repeatLabel(rule)),
+              OmniPanel(
+                padding: EdgeInsets.zero,
+                child: ExpansionTile(
+                  key: const ValueKey<String>('todo-time-settings'),
+                  initiallyExpanded: false,
+                  leading: const Icon(Icons.schedule_outlined),
+                  title: const Text('时间设置'),
+                  subtitle: const Text('计划日期、截止与提醒'),
+                  tilePadding: const EdgeInsets.symmetric(
+                    horizontal: OmniSpacing.md,
+                  ),
+                  childrenPadding: const EdgeInsets.fromLTRB(
+                    OmniSpacing.md,
+                    0,
+                    OmniSpacing.md,
+                    OmniSpacing.md,
+                  ),
+                  children: <Widget>[
+                    if (!isChild) ...<Widget>[
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '计划日期',
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                      ),
+                      const SizedBox(height: OmniSpacing.xs),
+                      OmniDatePickerButton(
+                        value: _scheduledDate,
+                        initialDate: _scheduledDate,
+                        firstDate: DateTime(2000),
+                        lastDate: DateTime(2100),
+                        label: DateFormat('yyyy年M月d日').format(_scheduledDate),
+                        onChanged: (DateTime selected) {
+                          setState(() => _scheduledDate = selected);
+                        },
+                      ),
+                      const SizedBox(height: OmniSpacing.md),
+                    ],
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '截止与提醒',
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
                     ),
-                ],
-                onChanged: (TodoRepeatRule? value) {
-                  if (value != null) {
-                    setState(() => _repeatRule = value);
-                  }
-                },
-              ),
-              const SizedBox(height: OmniSpacing.sm),
-              TextFormField(
-                controller: _notesController,
-                maxLines: 2,
-                decoration: const InputDecoration(labelText: '备注（可选）'),
+                    const SizedBox(height: OmniSpacing.xs),
+                    _buildDateTimeControls(
+                      value: _dueAt,
+                      defaultHour: 18,
+                      emptyDateLabel: '设置截止日期',
+                      dateIcon: Icons.flag_outlined,
+                      clearTooltip: '清除截止时间',
+                      onChanged: (DateTime? value) =>
+                          setState(() => _dueAt = value),
+                    ),
+                    const SizedBox(height: OmniSpacing.xs),
+                    _buildDateTimeControls(
+                      value: _reminderAt,
+                      defaultHour: 9,
+                      emptyDateLabel: '设置提醒日期',
+                      dateIcon: Icons.notifications_outlined,
+                      clearTooltip: '清除提醒时间',
+                      onChanged: (DateTime? value) =>
+                          setState(() => _reminderAt = value),
+                    ),
+                    if (!isChild) ...<Widget>[
+                      const SizedBox(height: OmniSpacing.md),
+                      OmniDropdownButtonFormField<TodoRepeatRule>(
+                        initialValue: _repeatRule,
+                        decoration: const InputDecoration(labelText: '重复'),
+                        items: <DropdownMenuItem<TodoRepeatRule>>[
+                          for (final TodoRepeatRule rule
+                              in TodoRepeatRule.values)
+                            DropdownMenuItem<TodoRepeatRule>(
+                              value: rule,
+                              child: Text(_repeatLabel(rule)),
+                            ),
+                        ],
+                        onChanged: (TodoRepeatRule? value) {
+                          if (value != null) {
+                            setState(() => _repeatRule = value);
+                          }
+                        },
+                      ),
+                    ],
+                  ],
+                ),
               ),
               const SizedBox(height: OmniSpacing.xl),
             ],
@@ -457,12 +508,12 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
           id: widget.record?.id,
           title: _titleController.text,
           description: _descriptionController.text,
+          parentId: widget.parent?.id ?? widget.record?.parentId,
           scheduledDate: _scheduledDate,
           dueAt: _dueAt,
           priorityQuadrant: _priorityQuadrant,
           reminderAt: _reminderAt,
           repeatRule: _repeatRule,
-          notes: _notesController.text,
         ),
         scope: scope,
       );
@@ -471,8 +522,11 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
       }
     } on FormatException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.message)));
+        showOmniMessage(
+          context,
+          message: error.message,
+          tone: OmniMessageTone.error,
+        );
       }
     } finally {
       if (mounted) {

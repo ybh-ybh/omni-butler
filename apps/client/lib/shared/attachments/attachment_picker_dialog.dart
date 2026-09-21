@@ -91,8 +91,11 @@ class AttachmentPickerDialog extends ConsumerWidget {
           );
     } on FileSystemException catch (error) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.message)));
+        showOmniMessage(
+          context,
+          message: error.message,
+          tone: OmniMessageTone.error,
+        );
       }
     }
   }

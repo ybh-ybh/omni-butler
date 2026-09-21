@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
+import 'package:omni_butler/features/todos/data/todo_repository.dart';
 
 /// 回收站业务类型。
 enum RecycleEntityType {
@@ -50,8 +51,11 @@ class RecycleBinRepository {
   /// 本地数据库。
   final AppDatabase _database;
 
+  /// 待办仓储，用于保持任务树恢复与永久删除语义。
+  final TodoRepository _todoRepository;
+
   /// 创建统一回收站仓储。
-  const RecycleBinRepository(this._database);
+  const RecycleBinRepository(this._database, this._todoRepository);
 
   /// 读取全部顶层软删除记录。
   Future<List<RecycleBinItem>> loadItems() async {
@@ -61,8 +65,22 @@ class RecycleBinRepository {
     final List<TodoRecord> todos = await (_database.select(
       _database.todoItems,
     )..where((TodoItems table) => table.deletedAt.isNotNull())).get();
+    // 按标识索引的已删除待办。
+    final Map<String, TodoRecord> deletedTodosById = <String, TodoRecord>{
+      for (final TodoRecord todo in todos) todo.id: todo,
+    };
+    // 只展示主任务或被独立删除的子任务，隐藏随主任务同批删除的子项。
+    final List<TodoRecord> visibleTodos = todos
+        .where((TodoRecord record) {
+          // 可选已删除父任务。
+          final TodoRecord? parent = record.parentId == null
+              ? null
+              : deletedTodosById[record.parentId!];
+          return parent == null || parent.deletedAt != record.deletedAt;
+        })
+        .toList(growable: false);
     items.addAll(
-      todos.map(
+      visibleTodos.map(
         (TodoRecord record) => RecycleBinItem(
           type: RecycleEntityType.todo,
           id: record.id,
@@ -157,7 +175,7 @@ class RecycleBinRepository {
     final DateTime now = DateTime.now();
     switch (item.type) {
       case RecycleEntityType.todo:
-        await _database.restoreTodo(item.id);
+        await _todoRepository.restore(item.id);
       case RecycleEntityType.event:
         await (_database.update(
           _database.events,
@@ -216,7 +234,7 @@ class RecycleBinRepository {
     await _database.transaction(() async {
       switch (item.type) {
         case RecycleEntityType.todo:
-          await _database.permanentlyDeleteTodo(item.id);
+          await _todoRepository.permanentlyDelete(item.id);
         case RecycleEntityType.event:
           await (_database.delete(_database.eventCompletions)..where(
                 (EventCompletions table) => table.eventId.equals(item.id),

@@ -91,22 +91,16 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
   /// 名称输入错误。
   String? _nameError;
 
-  /// 非表单操作错误。
-  String? _operationError;
-
   /// 用户本次打开弹窗后确认的本地显示顺序。
   List<String>? _localOrderIds;
 
-  /// 最近删除且仍可撤销的分类标签。
-  TaxonomyEntry? _deletedEntry;
-
-  /// 删除撤销入口自动消失计时器。
-  Timer? _deleteUndoTimer;
+  /// 当前操作反馈浮动消息。
+  OmniMessageHandle? _feedbackMessage;
 
   /// 释放名称编辑控制器。
   @override
   void dispose() {
-    _deleteUndoTimer?.cancel();
+    _feedbackMessage?.dismiss();
     _nameController.dispose();
     super.dispose();
   }
@@ -172,7 +166,12 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
     final String message = error is FormatException
         ? error.message
         : '操作失败，请重试';
-    setState(() => _operationError = message);
+    _feedbackMessage = showOmniMessage(
+      context,
+      message: message,
+      tone: OmniMessageTone.error,
+      onDismissed: () => _feedbackMessage = null,
+    );
   }
 
   /// 新增分类标签。
@@ -291,13 +290,16 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
       if (_editingId == entry.id) {
         _cancelEditing();
       }
-      _deleteUndoTimer?.cancel();
-      setState(() => _deletedEntry = entry);
-      _deleteUndoTimer = Timer(const Duration(seconds: 10), () {
-        if (mounted && _deletedEntry?.id == entry.id) {
-          setState(() => _deletedEntry = null);
-        }
-      });
+      _feedbackMessage?.dismiss();
+      _feedbackMessage = showOmniMessage(
+        context,
+        message: '已删除“${entry.name}”',
+        tone: OmniMessageTone.success,
+        duration: const Duration(seconds: 10),
+        actionLabel: '撤销',
+        onAction: () => unawaited(_undoDelete(entry)),
+        onDismissed: () => _feedbackMessage = null,
+      );
     } on Object catch (error) {
       if (mounted) {
         _showError(error);
@@ -306,18 +308,9 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
   }
 
   /// 恢复最近删除的分类标签。
-  Future<void> _undoDelete() async {
-    // 当前可恢复的分类标签。
-    final TaxonomyEntry? entry = _deletedEntry;
-    if (entry == null) {
-      return;
-    }
+  Future<void> _undoDelete(TaxonomyEntry entry) async {
     try {
       await ref.read(taxonomyRepositoryProvider).restore(entry.id);
-      if (mounted) {
-        _deleteUndoTimer?.cancel();
-        setState(() => _deletedEntry = null);
-      }
     } on Object catch (error) {
       if (mounted) {
         _showError(error);
@@ -342,7 +335,6 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
         .toList(growable: false);
     setState(() {
       _localOrderIds = reorderedIds;
-      _operationError = null;
     });
     try {
       await ref.read(taxonomyRepositoryProvider).reorder(reorderedIds);
@@ -498,71 +490,10 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
             ),
           ),
         ),
-        if (_operationError != null) ...<Widget>[
-          const SizedBox(height: OmniSpacing.xs),
-          _buildErrorBar(_operationError!),
-        ] else if (_deletedEntry != null) ...<Widget>[
-          const SizedBox(height: OmniSpacing.xs),
-          _buildUndoBar(_deletedEntry!),
-        ],
         if (entries.length > 1) ...<Widget>[
           const SizedBox(height: OmniSpacing.xs),
         ],
       ],
-    );
-  }
-
-  /// 构建非表单操作错误条。
-  Widget _buildErrorBar(String message) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
-    return Container(
-      constraints: const BoxConstraints(minHeight: OmniSize.touch),
-      padding: const EdgeInsets.only(left: OmniSpacing.sm),
-      decoration: BoxDecoration(
-        color: colors.danger.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(OmniRadius.control),
-      ),
-      child: Row(
-        children: <Widget>[
-          Icon(Icons.error_outline_rounded, size: 18, color: colors.danger),
-          const SizedBox(width: OmniSpacing.xs),
-          Expanded(child: Text(message)),
-          IconButton(
-            tooltip: '关闭提示',
-            onPressed: () => setState(() => _operationError = null),
-            icon: const Icon(Icons.close_rounded, size: 18),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 构建删除后的撤销条。
-  Widget _buildUndoBar(TaxonomyEntry entry) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
-    return Container(
-      constraints: const BoxConstraints(minHeight: OmniSize.touch),
-      padding: const EdgeInsets.only(left: OmniSpacing.sm),
-      decoration: BoxDecoration(
-        color: colors.ink,
-        borderRadius: BorderRadius.circular(OmniRadius.control),
-      ),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: Text(
-              '已删除“${entry.name}”',
-              style: TextStyle(color: colors.paper),
-            ),
-          ),
-          TextButton(
-            onPressed: _undoDelete,
-            child: Text('撤销', style: TextStyle(color: colors.brandSoft)),
-          ),
-        ],
-      ),
     );
   }
 

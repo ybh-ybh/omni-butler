@@ -38,8 +38,11 @@ class QuoteLibraryDialog extends ConsumerWidget {
       _invalidateToday(ref);
     } on FormatException catch (error) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.message)));
+        showOmniMessage(
+          context,
+          message: error.message,
+          tone: OmniMessageTone.error,
+        );
       }
     }
   }
@@ -62,6 +65,13 @@ class QuoteLibraryDialog extends ConsumerWidget {
       await ref.read(quoteRepositoryProvider).delete(quote.id);
       ref.invalidate(recycleBinItemsProvider);
       _invalidateToday(ref);
+      if (context.mounted) {
+        showOmniMessage(
+          context,
+          message: '“${quote.content}”已移入回收站',
+          tone: OmniMessageTone.success,
+        );
+      }
     }
   }
 
