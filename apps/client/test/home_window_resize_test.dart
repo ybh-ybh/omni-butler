@@ -9,9 +9,9 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 验证 Windows 窗口实时缩放时的自适应与渐进隐藏规则。
+/// 验证 Windows 窗口实时缩放时的卡片重排与完整保留规则。
 void main() {
-  testWidgets('Windows 首页缩放时主区域伸缩且次要组件不重排', (WidgetTester tester) async {
+  testWidgets('Windows 首页缩放时从三列重排为两列且卡片不消失', (WidgetTester tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     tester.view.physicalSize = const Size(1440, 900);
     tester.view.devicePixelRatio = 1;
@@ -62,7 +62,11 @@ void main() {
     expect(narrowTodoWidth, greaterThan(wideTodoWidth));
     expect(
       find.byKey(const ValueKey<String>('home-context-card')),
-      findsNothing,
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('home-time-status-card')),
+      findsOneWidget,
     );
     expect(
       find.byKey(const ValueKey<String>('compact-navigation')),
@@ -76,13 +80,20 @@ void main() {
     tester.view.physicalSize = const Size(1024, 500);
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey<String>('home-quote-card')), findsNothing);
+    expect(
+      find.byKey(const ValueKey<String>('home-quote-card')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey<String>('home-day-ruler')),
       findsOneWidget,
     );
     expect(
       find.byKey(const ValueKey<String>('home-todo-card')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('home-context-card')),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);

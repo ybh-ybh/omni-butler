@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -15,7 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证待办四象限在首页、完整页面与编辑器中保持一致。
 void main() {
-  testWidgets('首页每个象限最多展示三条任务', (WidgetTester tester) async {
+  testWidgets('首页三个重点区间各最多展示三条任务', (WidgetTester tester) async {
     // 桌面测试视口。
     const Size viewport = Size(1440, 900);
     tester.view.physicalSize = viewport;
@@ -63,22 +65,31 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
 
-    for (final TodoPriorityQuadrant quadrant
-        in todoPriorityQuadrantMatrixOrder) {
+    // 首页展示的三个重点区间。
+    const List<TodoPriorityQuadrant> focusQuadrants = <TodoPriorityQuadrant>[
+      TodoPriorityQuadrant.urgentImportant,
+      TodoPriorityQuadrant.importantNotUrgent,
+      TodoPriorityQuadrant.urgentNotImportant,
+    ];
+    for (final TodoPriorityQuadrant quadrant in focusQuadrants) {
       expect(find.text('${quadrant.label}任务1'), findsOneWidget);
       expect(find.text('${quadrant.label}任务2'), findsOneWidget);
       expect(find.text('${quadrant.label}任务3'), findsOneWidget);
       expect(find.text('${quadrant.label}任务4'), findsNothing);
     }
-    expect(find.text('还有 1 项'), findsNWidgets(4));
-    // 浅色主题下的紧急且重要象限容器。
-    final Container lightQuadrant = tester.widget<Container>(
-      find.byKey(const ValueKey<String>('home-todo-quadrant-3')),
+    for (int index = 1; index <= 4; index += 1) {
+      expect(find.text('不紧急·不重要任务$index'), findsNothing);
+    }
+    expect(find.text('还有 1 项'), findsNWidgets(3));
+    // 浅色主题下承载重点区间的首页面板。
+    final Finder lightPanel = find.ancestor(
+      of: find.byKey(const ValueKey<String>('home-todo-quadrant-3')),
+      matching: find.byWidgetPredicate(
+        (Widget widget) =>
+            widget is Material && widget.color == const Color(0xFFFFFFFF),
+      ),
     );
-    // 象限容器的浅色主题装饰。
-    final BoxDecoration lightDecoration =
-        lightQuadrant.decoration! as BoxDecoration;
-    expect(lightDecoration.color, const Color(0xFFFFFFFF));
+    expect(lightPanel, findsOneWidget);
 
     await database.close();
     debugDefaultTargetPlatformOverride = null;
@@ -112,6 +123,9 @@ void main() {
         priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
       ),
     );
+    // 首页交互测试使用的待办记录。
+    final TodoRecord task =
+        (await database.select(database.todoItems).get()).single;
 
     await tester.pumpWidget(
       ProviderScope(
@@ -129,8 +143,70 @@ void main() {
     // 当前任务文本。
     final Finder taskText = find.text('动画任务');
     // 当前任务行。
-    final Finder taskRow = find.widgetWithText(InkWell, '动画任务');
-    await tester.tap(taskText);
+    final Finder taskRow = find.byKey(
+      ValueKey<String>('home-todo-row-${task.id}'),
+    );
+    // 当前任务整行的悬停背景。
+    final Finder hoverSurface = find.byKey(
+      ValueKey<String>('home-todo-hover-${task.id}'),
+    );
+    // 模拟桌面鼠标悬停任务行。
+    final TestGesture mouse = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer();
+    await mouse.moveTo(tester.getCenter(taskRow));
+    await tester.pump(OmniMotion.fast);
+    // 悬停后的圆角灰色背景装饰。
+    final BoxDecoration hoverDecoration =
+        tester.widget<AnimatedContainer>(hoverSurface).decoration!
+            as BoxDecoration;
+    expect(hoverDecoration.color, isNot(Colors.transparent));
+    expect(
+      hoverDecoration.borderRadius,
+      BorderRadius.circular(OmniRadius.control),
+    );
+    // 当前任务的勾选框点击热区。
+    final Finder checkboxAction = find.byKey(
+      ValueKey<String>('home-todo-checkbox-action-${task.id}'),
+    );
+    await mouse.moveTo(tester.getCenter(checkboxAction));
+    await tester.pump(OmniMotion.fast);
+    // 勾选框热区本身不再绘制向外溢出的悬停底色。
+    final InkWell checkboxInkWell = tester.widget<InkWell>(checkboxAction);
+    expect(checkboxInkWell.hoverColor, Colors.transparent);
+    // 深灰悬停底色仅由实际 18px 勾选框绘制。
+    final Finder checkboxIndicatorFinder = find.descendant(
+      of: checkboxAction,
+      matching: find.byType(AnimatedContainer),
+    );
+    final AnimatedContainer checkboxIndicator = tester
+        .widget<AnimatedContainer>(checkboxIndicatorFinder);
+    expect(tester.getSize(checkboxIndicatorFinder), const Size.square(18));
+    expect(
+      (checkboxIndicator.decoration! as BoxDecoration).color,
+      isNot(Colors.transparent),
+    );
+    await mouse.removePointer();
+
+    // 点击任务名称只打开编辑器。
+    await tester.tap(
+      find.byKey(ValueKey<String>('home-todo-title-action-${task.id}')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('编辑待办'), findsOneWidget);
+    expect(
+      (await (database.select(
+            database.todoItems,
+          )..where((TodoItems table) => table.id.equals(task.id))).getSingle())
+          .isCompleted,
+      isFalse,
+    );
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+
+    // 只有点击勾选框才触发完成反馈。
+    await tester.tap(checkboxAction);
     await tester.pump();
 
     expect(taskText, findsOneWidget);

@@ -579,7 +579,7 @@ class _FeatureManagementCard extends ConsumerWidget {
 
     return _SettingsSection(
       title: '可用功能',
-      description: '关闭后会隐藏导航并阻止打开该功能；已有数据不会删除。',
+      description: '关闭后会隐藏导航、搜索及首页相关卡片内容；已有数据不会删除。',
       icon: Icons.tune_rounded,
       children: <Widget>[
         OmniListRow(

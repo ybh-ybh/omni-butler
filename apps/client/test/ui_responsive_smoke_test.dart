@@ -39,7 +39,7 @@ void main() {
     );
   });
 
-  testWidgets('Windows 窄窗口保持桌面骨架并隐藏次要区域', (WidgetTester tester) async {
+  testWidgets('Windows 窄窗口保持桌面导航并将首页卡片改为单列', (WidgetTester tester) async {
     await _verifyRoutesAtSize(
       tester,
       const Size(640, 760),
@@ -95,7 +95,7 @@ Future<void> _verifyRoutesAtSize(
     );
     expect(
       find.byKey(const ValueKey<String>('home-context-card')),
-      findsNothing,
+      findsOneWidget,
     );
     expect(
       find.byKey(const ValueKey<String>('home-todo-card')),

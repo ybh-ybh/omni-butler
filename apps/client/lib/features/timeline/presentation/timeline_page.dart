@@ -13,6 +13,34 @@ import 'package:omni_butler/features/timeline/presentation/timeline_review.dart'
 import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
+/// 在当前页面打开轻量开始记录弹窗。
+Future<void> showStartTimeEntryDialog(
+  BuildContext context, {
+  required DateTime day,
+}) async {
+  await showDialog<void>(
+    context: context,
+    builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
+      mode: _TimeEntryEditorMode.startOnly,
+      day: DateUtils.dateOnly(day),
+    ),
+  );
+}
+
+/// 在当前页面打开完整时间补记弹窗。
+Future<void> showBackfillTimeEntryDialog(
+  BuildContext context, {
+  required DateTime day,
+}) async {
+  await showDialog<void>(
+    context: context,
+    builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
+      mode: _TimeEntryEditorMode.completed,
+      day: DateUtils.dateOnly(day),
+    ),
+  );
+}
+
 /// 24 小时时间记录页面。
 class TimelinePage extends ConsumerStatefulWidget {
   /// 创建时间记录页面。
@@ -87,13 +115,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
 
   /// 打开轻量开始记录弹窗。
   Future<void> _openStartEditor() async {
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
-        mode: _TimeEntryEditorMode.startOnly,
-        day: DateUtils.dateOnly(ref.read(nowProvider)),
-      ),
-    );
+    await showStartTimeEntryDialog(context, day: ref.read(nowProvider));
   }
 
   /// 打开进行中记录的结束弹窗。

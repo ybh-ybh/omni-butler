@@ -107,6 +107,9 @@ class OmniListRow extends StatelessWidget {
   /// 前置区域与主内容之间的间距。
   final double leadingGap;
 
+  /// 可选的行背景与水波纹圆角。
+  final BorderRadius? borderRadius;
+
   /// 创建紧凑列表行。
   const OmniListRow({
     required this.title,
@@ -119,6 +122,7 @@ class OmniListRow extends StatelessWidget {
       vertical: OmniSpacing.sm,
     ),
     this.leadingGap = OmniSpacing.sm,
+    this.borderRadius,
     super.key,
   });
 
@@ -167,8 +171,11 @@ class OmniListRow extends StatelessWidget {
 
     return Material(
       color: Colors.transparent,
+      borderRadius: borderRadius,
+      clipBehavior: borderRadius == null ? Clip.none : Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
+        borderRadius: borderRadius,
         hoverColor: colors.ink.withValues(alpha: 0.06),
         focusColor: colors.brand.withValues(alpha: 0.12),
         child: ConstrainedBox(

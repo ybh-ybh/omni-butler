@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -11,10 +11,17 @@ import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/attachments/attachment_repository.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/features/home/data/home_card_preferences.dart';
+import 'package:omni_butler/features/home/presentation/home_card_catalog.dart';
+import 'package:omni_butler/features/home/presentation/home_card_manager.dart';
+import 'package:omni_butler/features/home/presentation/home_context_card.dart';
+import 'package:omni_butler/features/home/presentation/home_time_status_card.dart';
+import 'package:omni_butler/features/home/presentation/quote_library_dialog.dart';
+import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
+import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/features/todos/presentation/todo_priority_quadrant_style.dart';
-import 'package:omni_butler/features/home/presentation/quote_library_dialog.dart';
 import 'package:omni_butler/shared/attachments/attachment_picker_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
@@ -23,7 +30,7 @@ class HomePage extends ConsumerWidget {
   /// 创建今日工作台页面。
   const HomePage({super.key});
 
-  /// 构建左右分栏的今日工作台。
+  /// 构建可配置卡片式今日工作台。
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // 当前应用时间。
@@ -34,21 +41,30 @@ class HomePage extends ConsumerWidget {
     final AsyncValue<QuoteRecord> quoteAsync = ref.watch(
       quoteForDayProvider(today),
     );
-    // 今日待办异步状态。
-    final AsyncValue<List<TodoRecord>> todosAsync = ref.watch(
-      todosForDayProvider(today),
+    // 全部进行中待办树异步状态。
+    final AsyncValue<List<TodoTreeNode>> todoTreesAsync = ref.watch(
+      activeTodoTreesProvider(today),
     );
-    // 今日待办。
-    final List<TodoRecord> todos = todosAsync.asData?.value ?? <TodoRecord>[];
-    // 今日未完成待办。
-    final List<TodoRecord> pendingTodos = todos
-        .where((TodoRecord item) => !item.isCompleted)
-        .toList(growable: false);
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
+    // 今日仍有未完成内容的待办树。
+    final List<TodoTreeNode> pendingTodoTrees =
+        (todoTreesAsync.asData?.value ?? <TodoTreeNode>[])
+            .where(
+              (TodoTreeNode tree) =>
+                  DateUtils.isSameDay(tree.root.scheduledDate, today),
+            )
+            .toList(growable: false);
+    // 当前设备首页卡片偏好。
+    final HomeCardPreference cardPreference = ref.watch(
+      homeCardPreferenceProvider,
+    );
+    // 当前设备功能偏好。
+    final FeaturePreference featurePreference = ref.watch(
+      featurePreferenceProvider,
+    );
     // 今日名言卡。
     final Widget quoteCard = _QuoteHero(
       quoteAsync: quoteAsync,
+      dense: true,
       onManage: () => QuoteLibraryDialog.show(context),
       onBackground: () => AttachmentPickerDialog.show(
         context,
@@ -64,148 +80,37 @@ class HomePage extends ConsumerWidget {
     );
     // 今日时间刻度卡。
     final Widget dayRuler = _DayRuler(now: now);
-    // 今日待办卡。
+    // 今日重点待办卡。
     final Widget todoCard = _TodayTodoCard(
-      todosAsync: todosAsync,
-      pendingTodos: pendingTodos,
+      todoTreesAsync: todoTreesAsync,
+      pendingTodoTrees: pendingTodoTrees,
       onCreate: () => TodoEditorDialog.show(context, initialDate: today),
-      onCreateInQuadrant: (TodoPriorityQuadrant quadrant) =>
-          TodoEditorDialog.show(
-            context,
-            initialDate: today,
-            initialPriorityQuadrant: quadrant,
-          ),
       onOpenQuadrant: (TodoPriorityQuadrant quadrant) =>
           context.go('/todos?quadrant=${quadrant.value}'),
+      onEdit: (TodoRecord todo) =>
+          unawaited(TodoEditorDialog.show(context, record: todo)),
       onToggle: (TodoRecord todo, bool value) =>
           _setTodoCompleted(ref, todo, value),
     );
-    // 今日脉络卡。
-    final Widget contextCard = _TodayContextCard(colors: colors);
+    // 所有稳定标识对应的首页卡片。
+    final Map<HomeCardId, Widget> cards = <HomeCardId, Widget>{
+      HomeCardId.quote: quoteCard,
+      HomeCardId.dayRuler: dayRuler,
+      HomeCardId.todos: todoCard,
+      HomeCardId.todayContext: HomeTodayContextCard(now: now),
+      HomeCardId.timeStatus: HomeTimeStatusCard(now: now),
+    };
+    // 同时满足用户选择和功能依赖的有序卡片。
+    final List<HomeCardId> visibleCards = cardPreference.orderedCards
+        .where(
+          (HomeCardId card) => isHomeCardAvailable(card, featurePreference),
+        )
+        .toList(growable: false);
 
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        // 当前是否运行在桌面端。
-        final bool isDesktopPlatform = OmniBreakpoint.isDesktopPlatform(
-          Theme.of(context).platform,
-        );
-        // 当前是否使用移动端纵向内容流。
-        final bool useMobileFlow =
-            !isDesktopPlatform &&
-            OmniBreakpoint.isCompact(constraints.maxWidth);
-
-        if (useMobileFlow) {
-          return SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(
-              OmniSpacing.xs,
-              OmniSpacing.xs,
-              OmniSpacing.xs,
-              OmniSpacing.md,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                quoteCard,
-                const SizedBox(height: OmniSpacing.xs),
-                dayRuler,
-                const SizedBox(height: OmniSpacing.xs),
-                todoCard,
-                const SizedBox(height: OmniSpacing.xs),
-                contextCard,
-              ],
-            ),
-          );
-        }
-
-        // 桌面内容可用高度。
-        final double contentHeight = math.max(constraints.maxHeight - 48, 0);
-        // 当前是否有足够的整窗宽度显示次要脉络面板。
-        final bool showContext = MediaQuery.sizeOf(context).width >= 1320;
-        // 当前高度是否足以显示名言横幅。
-        final bool showQuote = contentHeight >= 560;
-        // 当前高度是否足以显示时间刻度。
-        final bool showRuler = contentHeight >= 320;
-        // 根据窗口高度平滑调整名言横幅高度。
-        final double quoteHeight = math.min(
-          174,
-          math.max(144, contentHeight * 0.2),
-        );
-        // 右侧脉络面板宽度，宽屏增长但不超过阅读上限。
-        final double contextWidth = math.min(
-          380,
-          math.max(320, constraints.maxWidth * 0.28),
-        );
-
-        return Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: 14,
-            vertical: OmniSpacing.sm,
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    if (showQuote) ...<Widget>[
-                      SizedBox(
-                        height: quoteHeight,
-                        child: _QuoteHero(
-                          quoteAsync: quoteAsync,
-                          dense: true,
-                          onManage: () => QuoteLibraryDialog.show(context),
-                          onBackground: () => AttachmentPickerDialog.show(
-                            context,
-                            businessType: AttachmentBusinessType.quoteBanner,
-                            businessId: 'home-banner',
-                            title: '首页横幅背景',
-                            cropAspectRatio: 3.0,
-                          ),
-                          onChange: () async {
-                            await ref
-                                .read(appDatabaseProvider)
-                                .changeQuoteForDay(today);
-                            ref.invalidate(quoteForDayProvider(today));
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: OmniSpacing.xs),
-                    ],
-                    if (showRuler) ...<Widget>[
-                      SizedBox(height: 86, child: dayRuler),
-                      const SizedBox(height: OmniSpacing.xs),
-                    ],
-                    Expanded(
-                      child: _TodayTodoCard(
-                        todosAsync: todosAsync,
-                        pendingTodos: pendingTodos,
-                        fillHeight: true,
-                        onCreate: () =>
-                            TodoEditorDialog.show(context, initialDate: today),
-                        onCreateInQuadrant: (TodoPriorityQuadrant quadrant) =>
-                            TodoEditorDialog.show(
-                              context,
-                              initialDate: today,
-                              initialPriorityQuadrant: quadrant,
-                            ),
-                        onOpenQuadrant: (TodoPriorityQuadrant quadrant) =>
-                            context.go('/todos?quadrant=${quadrant.value}'),
-                        onToggle: (TodoRecord todo, bool value) =>
-                            _setTodoCompleted(ref, todo, value),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (showContext) ...<Widget>[
-                const SizedBox(width: OmniSpacing.xs),
-                SizedBox(width: contextWidth, child: contextCard),
-              ],
-            ],
-          ),
-        );
-      },
+    return _HomeDashboard(
+      visibleCards: visibleCards,
+      cards: cards,
+      onManageCards: () => showHomeCardManager(context),
     );
   }
 
@@ -215,6 +120,549 @@ class HomePage extends ConsumerWidget {
     TodoRecord todo,
     bool completed,
   ) => ref.read(todoRepositoryProvider).setCompleted(todo.id, completed);
+}
+
+/// 首页卡片式工作台骨架。
+class _HomeDashboard extends StatelessWidget {
+  /// 实际可见卡片顺序。
+  final List<HomeCardId> visibleCards;
+
+  /// 卡片标识对应的界面内容。
+  final Map<HomeCardId, Widget> cards;
+
+  /// 打开卡片管理面板回调。
+  final VoidCallback onManageCards;
+
+  /// 创建首页卡片式工作台。
+  const _HomeDashboard({
+    required this.visibleCards,
+    required this.cards,
+    required this.onManageCards,
+  });
+
+  /// 构建工作台工具栏、响应式网格与空状态。
+  @override
+  Widget build(BuildContext context) {
+    // 当前是否减少界面动画。
+    final bool reduceMotion =
+        MediaQuery.of(context).disableAnimations ||
+        MediaQuery.of(context).accessibleNavigation;
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 扣除页面水平边距后的卡片网格宽度。
+        final double contentWidth = constraints.maxWidth > 28
+            ? constraints.maxWidth - 28
+            : 0;
+        // 当前是否使用窄视口单列布局。
+        final bool compact = OmniBreakpoint.isCompact(constraints.maxWidth);
+        // 当前是否使用十二栏宽屏布局。
+        final bool wide = contentWidth >= 1180;
+        // 卡片网格列数。
+        final int columnCount = compact ? 1 : (wide ? 3 : 2);
+        // 卡片间距。
+        const double gap = OmniSpacing.xs;
+        // 工具栏、上下边距与工具栏后间距占用的垂直空间。
+        const double dashboardChromeHeight =
+            OmniSpacing.xs + OmniSpacing.xl + OmniSize.control + OmniSpacing.xs;
+        // 非移动布局中卡片网格至少填满的剩余视口高度。
+        final double minimumGridHeight =
+            !compact && constraints.hasBoundedHeight
+            ? (constraints.maxHeight - dashboardChromeHeight)
+                  .clamp(0, double.infinity)
+                  .toDouble()
+            : 0;
+        // 单列可用宽度。
+        final double columnWidth =
+            ((contentWidth - (columnCount - 1) * gap) / columnCount)
+                .floorToDouble();
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(
+            14,
+            OmniSpacing.xs,
+            14,
+            OmniSpacing.xl,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              _HomeDashboardToolbar(onManageCards: onManageCards),
+              const SizedBox(height: OmniSpacing.xs),
+              if (visibleCards.isEmpty)
+                _EmptyHomeDashboard(onManageCards: onManageCards)
+              else
+                AnimatedSize(
+                  duration: reduceMotion ? Duration.zero : OmniMotion.normal,
+                  curve: OmniMotion.standardCurve,
+                  alignment: Alignment.topLeft,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minHeight: minimumGridHeight),
+                    child: _FillRemainingCardGrid(
+                      gap: gap,
+                      fillLastRow: !compact,
+                      children: _buildGridRows(
+                        compact: compact,
+                        columnCount: columnCount,
+                        columnWidth: columnWidth,
+                        gap: gap,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 按卡片顺序构建不会因浮点误差换行的显式网格行。
+  List<Widget> _buildGridRows({
+    required bool compact,
+    required int columnCount,
+    required double columnWidth,
+    required double gap,
+  }) {
+    // 已完成的网格行。
+    final List<List<HomeCardId>> rows = <List<HomeCardId>>[];
+    // 当前正在填充的网格行。
+    List<HomeCardId> currentRow = <HomeCardId>[];
+    // 当前行已经使用的列数。
+    int usedColumns = 0;
+    for (final HomeCardId card in visibleCards) {
+      // 当前卡片占用的列数。
+      final int span = _cardSpan(card: card, compact: compact);
+      if (currentRow.isNotEmpty && usedColumns + span > columnCount) {
+        rows.add(currentRow);
+        currentRow = <HomeCardId>[];
+        usedColumns = 0;
+      }
+      currentRow.add(card);
+      usedColumns += span;
+    }
+    if (currentRow.isNotEmpty) {
+      rows.add(currentRow);
+    }
+
+    // 不含行间距的网格界面；统一由网格渲染对象添加间距。
+    final List<Widget> gridRows = <Widget>[];
+    for (int rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      // 当前网格行的卡片。
+      final List<HomeCardId> rowCards = rows[rowIndex];
+      // 当前网格行界面；先测量最高卡片，再让同一行其余卡片填满高度。
+      final Widget row = _EqualHeightCardRow(
+        gap: gap,
+        children: <Widget>[
+          for (final HomeCardId card in rowCards)
+            _buildCardBox(
+              card: card,
+              compact: compact,
+              columnWidth: columnWidth,
+              gap: gap,
+            ),
+        ],
+      );
+      gridRows.add(row);
+    }
+    return gridRows;
+  }
+
+  /// 构建带稳定宽高的单张首页卡片。
+  Widget _buildCardBox({
+    required HomeCardId card,
+    required bool compact,
+    required double columnWidth,
+    required double gap,
+  }) {
+    // 当前卡片占用的列数。
+    final int span = _cardSpan(card: card, compact: compact);
+    // 当前卡片完整宽度。
+    final double width = columnWidth * span + gap * (span - 1);
+    return SizedBox(
+      key: ValueKey<String>('home-dashboard-card-${card.name}'),
+      width: width,
+      height:
+          !compact && (card == HomeCardId.quote || card == HomeCardId.dayRuler)
+          ? 156
+          : null,
+      child: cards[card]!,
+    );
+  }
+
+  /// 返回指定卡片在当前断点下占用的列数。
+  int _cardSpan({required HomeCardId card, required bool compact}) {
+    if (compact) {
+      return 1;
+    }
+    if (card == HomeCardId.quote) {
+      return 2;
+    }
+    return 1;
+  }
+}
+
+/// 在内容不足时让最后一排卡片填满网格剩余高度。
+class _FillRemainingCardGrid extends MultiChildRenderObjectWidget {
+  /// 相邻网格行间距。
+  final double gap;
+
+  /// 是否拉伸最后一排。
+  final bool fillLastRow;
+
+  /// 创建可填满剩余高度的首页网格。
+  const _FillRemainingCardGrid({
+    required this.gap,
+    required this.fillLastRow,
+    required super.children,
+  });
+
+  /// 创建纵向网格渲染对象。
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderFillRemainingCardGrid(gap, fillLastRow);
+  }
+
+  /// 更新网格间距与最后一排填充策略。
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant _RenderFillRemainingCardGrid renderObject,
+  ) {
+    renderObject
+      ..gap = gap
+      ..fillLastRow = fillLastRow;
+  }
+}
+
+/// 可填满剩余高度网格的子元素布局数据。
+class _FillRemainingCardGridParentData
+    extends ContainerBoxParentData<RenderBox> {}
+
+/// 先自然排列各行，再将视口剩余高度分配给最后一排。
+class _RenderFillRemainingCardGrid extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _FillRemainingCardGridParentData>,
+        RenderBoxContainerDefaultsMixin<
+          RenderBox,
+          _FillRemainingCardGridParentData
+        > {
+  /// 相邻网格行间距。
+  double _gap;
+
+  /// 是否拉伸最后一排。
+  bool _fillLastRow;
+
+  /// 创建可填满剩余高度的网格渲染对象。
+  _RenderFillRemainingCardGrid(this._gap, this._fillLastRow);
+
+  /// 当前相邻网格行间距。
+  double get gap => _gap;
+
+  /// 更新相邻网格行间距并触发布局。
+  set gap(double value) {
+    if (_gap == value) {
+      return;
+    }
+    _gap = value;
+    markNeedsLayout();
+  }
+
+  /// 当前是否拉伸最后一排。
+  bool get fillLastRow => _fillLastRow;
+
+  /// 更新最后一排填充策略并触发布局。
+  set fillLastRow(bool value) {
+    if (_fillLastRow == value) {
+      return;
+    }
+    _fillLastRow = value;
+    markNeedsLayout();
+  }
+
+  /// 为每一排安装纵向偏移数据。
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _FillRemainingCardGridParentData) {
+      child.parentData = _FillRemainingCardGridParentData();
+    }
+  }
+
+  /// 测量自然总高度并将不足部分补到最后一排。
+  @override
+  void performLayout() {
+    if (childCount == 0) {
+      size = constraints.constrain(Size.zero);
+      return;
+    }
+    // 每一排使用的水平约束。
+    final BoxConstraints rowConstraints = BoxConstraints(
+      minWidth: constraints.minWidth,
+      maxWidth: constraints.maxWidth,
+    );
+    // 所有网格行的自然总高度。
+    double naturalHeight = gap * (childCount - 1);
+    // 网格行中的最大自然宽度。
+    double naturalWidth = 0;
+    // 当前待测量网格行。
+    RenderBox? child = firstChild;
+    while (child != null) {
+      child.layout(rowConstraints, parentUsesSize: true);
+      naturalHeight += child.size.height;
+      if (child.size.width > naturalWidth) {
+        naturalWidth = child.size.width;
+      }
+      // 当前网格行布局数据。
+      final _FillRemainingCardGridParentData parentData =
+          child.parentData! as _FillRemainingCardGridParentData;
+      child = parentData.nextSibling;
+    }
+    // 网格受父级最小高度约束后的目标总高度。
+    final double targetHeight = constraints.constrainHeight(naturalHeight);
+    // 最后一排需要额外吸收的剩余高度。
+    final double remainingHeight = fillLastRow
+        ? targetHeight - naturalHeight
+        : 0;
+    if (remainingHeight > 0 && lastChild != null) {
+      // 最后一排扩展后的目标高度。
+      final double lastRowHeight = lastChild!.size.height + remainingHeight;
+      lastChild!.layout(
+        BoxConstraints(
+          minWidth: constraints.minWidth,
+          maxWidth: constraints.maxWidth,
+          minHeight: lastRowHeight,
+        ),
+        parentUsesSize: true,
+      );
+    }
+    // 下一排起始纵坐标。
+    double offsetY = 0;
+    child = firstChild;
+    while (child != null) {
+      // 当前网格行布局数据。
+      final _FillRemainingCardGridParentData parentData =
+          child.parentData! as _FillRemainingCardGridParentData;
+      parentData.offset = Offset(0, offsetY);
+      offsetY += child.size.height + gap;
+      child = parentData.nextSibling;
+    }
+    size = constraints.constrain(Size(naturalWidth, targetHeight));
+  }
+
+  /// 按纵向偏移绘制全部网格行。
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    defaultPaint(context, offset);
+  }
+
+  /// 将点击命中转发给对应网格行。
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    return defaultHitTestChildren(result, position: position);
+  }
+}
+
+/// 让同一网格行中的卡片以最高内容为准填满高度。
+class _EqualHeightCardRow extends MultiChildRenderObjectWidget {
+  /// 相邻卡片间距。
+  final double gap;
+
+  /// 创建等高卡片行。
+  const _EqualHeightCardRow({required this.gap, required super.children});
+
+  /// 创建两阶段测量的等高行渲染对象。
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderEqualHeightCardRow(gap: gap);
+  }
+
+  /// 更新卡片间距。
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant _RenderEqualHeightCardRow renderObject,
+  ) {
+    renderObject.gap = gap;
+  }
+}
+
+/// 等高卡片行的子元素布局数据。
+class _EqualHeightCardRowParentData extends ContainerBoxParentData<RenderBox> {}
+
+/// 先自然测量再按最大高度重排的卡片行渲染对象。
+class _RenderEqualHeightCardRow extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _EqualHeightCardRowParentData>,
+        RenderBoxContainerDefaultsMixin<
+          RenderBox,
+          _EqualHeightCardRowParentData
+        > {
+  /// 相邻卡片间距。
+  double _gap;
+
+  /// 创建等高卡片行渲染对象。
+  _RenderEqualHeightCardRow({required this._gap});
+
+  /// 当前相邻卡片间距。
+  double get gap => _gap;
+
+  /// 更新相邻卡片间距并触发布局。
+  set gap(double value) {
+    if (_gap == value) {
+      return;
+    }
+    _gap = value;
+    markNeedsLayout();
+  }
+
+  /// 为卡片子元素安装行内偏移数据。
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _EqualHeightCardRowParentData) {
+      child.parentData = _EqualHeightCardRowParentData();
+    }
+  }
+
+  /// 测量每张卡片的自然高度并按最大值重新布局。
+  @override
+  void performLayout() {
+    // 首轮自然测量使用的宽松高度约束。
+    final BoxConstraints naturalConstraints = BoxConstraints(
+      maxWidth: constraints.maxWidth,
+    );
+    // 当前行自然内容总宽度。
+    double totalWidth = 0;
+    // 当前行自然内容最大高度。
+    double maxHeight = 0;
+    // 当前待测量子卡片。
+    RenderBox? child = firstChild;
+    while (child != null) {
+      child.layout(naturalConstraints, parentUsesSize: true);
+      // 当前卡片基于真实内容计算的最大固有高度。
+      final double intrinsicHeight = child.getMaxIntrinsicHeight(
+        child.size.width,
+      );
+      // 当前卡片用于等高比较的可靠高度。
+      final double naturalHeight = intrinsicHeight > child.size.height
+          ? intrinsicHeight
+          : child.size.height;
+      totalWidth += child.size.width;
+      if (naturalHeight > maxHeight) {
+        maxHeight = naturalHeight;
+      }
+      // 当前卡片布局数据。
+      final _EqualHeightCardRowParentData parentData =
+          child.parentData! as _EqualHeightCardRowParentData;
+      child = parentData.nextSibling;
+    }
+    if (childCount > 1) {
+      totalWidth += gap * (childCount - 1);
+    }
+    // 受父布局约束后的整行尺寸。
+    final Size rowSize = constraints.constrain(Size(totalWidth, maxHeight));
+    // 当前卡片的水平偏移。
+    double offsetX = 0;
+    child = firstChild;
+    while (child != null) {
+      // 当前卡片在首轮测量得到的宽度。
+      final double childWidth = child.size.width;
+      child.layout(
+        BoxConstraints.tightFor(width: childWidth, height: rowSize.height),
+        parentUsesSize: true,
+      );
+      // 当前卡片布局数据。
+      final _EqualHeightCardRowParentData parentData =
+          child.parentData! as _EqualHeightCardRowParentData;
+      parentData.offset = Offset(offsetX, 0);
+      offsetX += childWidth + gap;
+      child = parentData.nextSibling;
+    }
+    size = rowSize;
+  }
+
+  /// 按行内偏移绘制全部卡片。
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    defaultPaint(context, offset);
+  }
+
+  /// 将点击命中转发给对应卡片。
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    return defaultHitTestChildren(result, position: position);
+  }
+}
+
+/// 首页工作台工具栏。
+class _HomeDashboardToolbar extends StatelessWidget {
+  /// 打开卡片管理面板回调。
+  final VoidCallback onManageCards;
+
+  /// 创建首页工作台工具栏。
+  const _HomeDashboardToolbar({required this.onManageCards});
+
+  /// 构建工作台名称与管理入口。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    return SizedBox(
+      height: OmniSize.control,
+      child: Row(
+        children: <Widget>[
+          Icon(Icons.dashboard_customize_outlined, color: colors.muted),
+          const SizedBox(width: OmniSpacing.xs),
+          Expanded(
+            child: Text('今日工作台', style: Theme.of(context).textTheme.labelLarge),
+          ),
+          OmniButton(
+            label: '管理卡片',
+            icon: Icons.tune_rounded,
+            variant: OmniButtonVariant.secondary,
+            onPressed: onManageCards,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 首页没有任何实际可见卡片时的空状态。
+class _EmptyHomeDashboard extends StatelessWidget {
+  /// 打开卡片管理面板回调。
+  final VoidCallback onManageCards;
+
+  /// 创建首页工作台空状态。
+  const _EmptyHomeDashboard({required this.onManageCards});
+
+  /// 构建添加卡片引导。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    return OmniPanel(
+      key: const ValueKey<String>('home-dashboard-empty'),
+      padding: const EdgeInsets.symmetric(vertical: 72, horizontal: 24),
+      child: Column(
+        children: <Widget>[
+          Icon(
+            Icons.dashboard_customize_outlined,
+            size: 42,
+            color: colors.muted,
+          ),
+          const SizedBox(height: OmniSpacing.md),
+          Text('首页还没有卡片', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: OmniSpacing.xs),
+          Text('添加你每天最想先看到的内容。', style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: OmniSpacing.lg),
+          OmniButton(
+            label: '添加卡片',
+            icon: Icons.add_rounded,
+            onPressed: onManageCards,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// 每日名言横幅。
@@ -381,7 +829,7 @@ class _DayRuler extends StatelessWidget {
   /// 创建当日时间刻度。
   const _DayRuler({required this.now});
 
-  /// 构建当天已过去比例。
+  /// 构建日期、大号当前时刻和当天已过去比例。
   @override
   Widget build(BuildContext context) {
     // 当前主题语义色。
@@ -408,52 +856,83 @@ class _DayRuler extends StatelessWidget {
 
     return OmniPanel(
       key: const ValueKey<String>('home-day-ruler'),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 7),
+      padding: const EdgeInsets.all(OmniSpacing.md),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           Row(
             children: <Widget>[
-              Text('今日刻度', style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(width: OmniSpacing.xs),
-              Expanded(
-                child: Text(
-                  dateLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: colors.muted, fontSize: 11),
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: colors.brandSoft,
+                  borderRadius: BorderRadius.circular(OmniRadius.control),
+                ),
+                child: Icon(
+                  Icons.schedule_rounded,
+                  color: colors.brand,
+                  size: OmniSize.icon,
                 ),
               ),
               const SizedBox(width: OmniSpacing.xs),
+              Expanded(
+                child: Text(
+                  '今日刻度',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+              ),
               Text(
                 '${(progress * 100).round()}% 已经过',
                 style: TextStyle(color: colors.muted, fontSize: 12),
               ),
             ],
           ),
-          const SizedBox(height: 5),
+          const SizedBox(height: OmniSpacing.md),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  DateFormat('HH:mm').format(now),
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    color: colors.brand,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: const <FontFeature>[
+                      FontFeature.tabularFigures(),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 3),
+                child: Text(
+                  dateLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: OmniSpacing.xs),
           ClipRRect(
             borderRadius: BorderRadius.circular(OmniRadius.tiny),
             child: LinearProgressIndicator(
               value: progress,
-              minHeight: 6,
+              minHeight: 7,
               color: colors.accent,
               backgroundColor: colors.mist,
             ),
           ),
-          const SizedBox(height: 3),
+          const SizedBox(height: OmniSpacing.xxs),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
               Text('00:00', style: Theme.of(context).textTheme.bodySmall),
-              Text(
-                DateFormat('HH:mm').format(now),
-                style: TextStyle(
-                  color: colors.accent,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 12,
-                ),
-              ),
               Text('24:00', style: Theme.of(context).textTheme.bodySmall),
             ],
           ),
@@ -465,36 +944,32 @@ class _DayRuler extends StatelessWidget {
 
 /// 今日待办摘要卡。
 class _TodayTodoCard extends StatefulWidget {
-  /// 今日待办异步状态。
-  final AsyncValue<List<TodoRecord>> todosAsync;
+  /// 今日待办树异步状态。
+  final AsyncValue<List<TodoTreeNode>> todoTreesAsync;
 
-  /// 今日未完成待办。
-  final List<TodoRecord> pendingTodos;
+  /// 今日仍有未完成内容的待办树。
+  final List<TodoTreeNode> pendingTodoTrees;
 
   /// 新增回调。
   final VoidCallback onCreate;
 
-  /// 在指定象限新增回调。
-  final ValueChanged<TodoPriorityQuadrant> onCreateInQuadrant;
-
   /// 查看指定象限回调。
   final ValueChanged<TodoPriorityQuadrant> onOpenQuadrant;
+
+  /// 编辑指定待办回调。
+  final ValueChanged<TodoRecord> onEdit;
 
   /// 完成状态变化回调。
   final Future<void> Function(TodoRecord todo, bool value) onToggle;
 
-  /// 是否填满桌面左栏分配的高度。
-  final bool fillHeight;
-
   /// 创建今日待办摘要卡。
   const _TodayTodoCard({
-    required this.todosAsync,
-    required this.pendingTodos,
+    required this.todoTreesAsync,
+    required this.pendingTodoTrees,
     required this.onCreate,
-    required this.onCreateInQuadrant,
     required this.onOpenQuadrant,
+    required this.onEdit,
     required this.onToggle,
-    this.fillHeight = false,
   });
 
   /// 创建今日待办摘要卡状态。
@@ -541,8 +1016,9 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
     final Widget todoContent = _buildTodoContent(context, colors);
     return OmniPanel(
       key: const ValueKey<String>('home-todo-card'),
-      padding: const EdgeInsets.all(OmniSpacing.lg),
+      padding: const EdgeInsets.all(OmniSpacing.md),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           Row(
@@ -561,22 +1037,25 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
                 ),
               ),
               const SizedBox(width: 10),
-              Text('今日待办', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(width: OmniSpacing.xs),
-              OmniButton(
-                label: '新增待办',
-                icon: Icons.add_rounded,
-                onPressed: widget.onCreate,
+              Expanded(
+                child: Text(
+                  '今日待办',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
               ),
-              const Spacer(),
-              OmniTag(
-                label: '${widget.pendingTodos.length} 项未完成',
-                color: colors.todo,
+              SizedBox(
+                key: const ValueKey<String>('home-todo-create-button'),
+                height: 30,
+                child: OmniButton(
+                  label: '新增',
+                  icon: Icons.add_rounded,
+                  onPressed: widget.onCreate,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          if (widget.fillHeight) Expanded(child: todoContent) else todoContent,
+          const SizedBox(height: OmniSpacing.xs),
+          todoContent,
         ],
       ),
     );
@@ -584,123 +1063,56 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
 
   /// 构建待办列表、加载状态或空状态。
   Widget _buildTodoContent(BuildContext context, OmniColors colors) {
-    if (widget.todosAsync.isLoading) {
+    if (widget.todoTreesAsync.isLoading) {
       return const Padding(
         padding: EdgeInsets.all(24),
         child: Center(child: CircularProgressIndicator()),
       );
     }
-    if (widget.todosAsync.hasError) {
+    if (widget.todoTreesAsync.hasError) {
       return Align(
         alignment: Alignment.centerLeft,
         child: Text('待办暂时无法读取', style: TextStyle(color: colors.danger)),
       );
     }
-    // 按象限分组后的今日待办。
-    final Map<TodoPriorityQuadrant, List<TodoRecord>> groupedTodos =
-        <TodoPriorityQuadrant, List<TodoRecord>>{
-          for (final TodoPriorityQuadrant quadrant
-              in todoPriorityQuadrantMatrixOrder)
-            quadrant: <TodoRecord>[],
+    // 首页展示的三个重点待办区间。
+    const List<TodoPriorityQuadrant> focusQuadrants = <TodoPriorityQuadrant>[
+      TodoPriorityQuadrant.urgentImportant,
+      TodoPriorityQuadrant.importantNotUrgent,
+      TodoPriorityQuadrant.urgentNotImportant,
+    ];
+    // 按重点区间分组后的今日待办树。
+    final Map<TodoPriorityQuadrant, List<TodoTreeNode>> groupedTodoTrees =
+        <TodoPriorityQuadrant, List<TodoTreeNode>>{
+          for (final TodoPriorityQuadrant quadrant in focusQuadrants)
+            quadrant: <TodoTreeNode>[],
         };
-    for (final TodoRecord todo in widget.pendingTodos) {
-      // 当前待办所属象限。
+    for (final TodoTreeNode tree in widget.pendingTodoTrees) {
+      // 当前待办树所属象限。
       final TodoPriorityQuadrant quadrant = TodoPriorityQuadrant.fromValue(
-        todo.priorityQuadrant,
+        tree.root.priorityQuadrant,
       );
-      groupedTodos[quadrant]!.add(todo);
-    }
-    // 当前是否运行在桌面端。
-    final bool isDesktopPlatform = OmniBreakpoint.isDesktopPlatform(
-      Theme.of(context).platform,
-    );
-    // 移动平台使用纵向象限，确保任务标题与触控区域不被压缩。
-    final bool useVerticalQuadrants = !isDesktopPlatform;
-
-    if (useVerticalQuadrants) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          for (
-            int index = 0;
-            index < todoPriorityQuadrantMatrixOrder.length;
-            index += 1
-          ) ...<Widget>[
-            if (index > 0) const SizedBox(height: OmniSpacing.xs),
-            _HomeTodoQuadrant(
-              quadrant: todoPriorityQuadrantMatrixOrder[index],
-              todos: groupedTodos[todoPriorityQuadrantMatrixOrder[index]]!,
-              fillHeight: false,
-              onCreate: () => widget.onCreateInQuadrant(
-                todoPriorityQuadrantMatrixOrder[index],
-              ),
-              onOpen: () =>
-                  widget.onOpenQuadrant(todoPriorityQuadrantMatrixOrder[index]),
-              onToggle: (TodoRecord todo, bool value) =>
-                  value ? _completeTodo(todo) : widget.onToggle(todo, false),
-            ),
-          ],
-        ],
-      );
+      groupedTodoTrees[quadrant]?.add(tree);
     }
 
     return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Expanded(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              for (int index = 0; index < 2; index += 1) ...<Widget>[
-                if (index > 0) const SizedBox(width: OmniSpacing.xs),
-                Expanded(
-                  child: _HomeTodoQuadrant(
-                    quadrant: todoPriorityQuadrantMatrixOrder[index],
-                    todos:
-                        groupedTodos[todoPriorityQuadrantMatrixOrder[index]]!,
-                    fillHeight: widget.fillHeight,
-                    onCreate: () => widget.onCreateInQuadrant(
-                      todoPriorityQuadrantMatrixOrder[index],
-                    ),
-                    onOpen: () => widget.onOpenQuadrant(
-                      todoPriorityQuadrantMatrixOrder[index],
-                    ),
-                    onToggle: (TodoRecord todo, bool value) => value
-                        ? _completeTodo(todo)
-                        : widget.onToggle(todo, false),
-                  ),
-                ),
-              ],
-            ],
+        for (
+          int index = 0;
+          index < focusQuadrants.length;
+          index += 1
+        ) ...<Widget>[
+          _HomeTodoQuadrant(
+            quadrant: focusQuadrants[index],
+            todoTrees: groupedTodoTrees[focusQuadrants[index]]!,
+            onOpen: () => widget.onOpenQuadrant(focusQuadrants[index]),
+            onEdit: widget.onEdit,
+            onToggle: (TodoRecord todo, bool value) =>
+                value ? _completeTodo(todo) : widget.onToggle(todo, false),
           ),
-        ),
-        const SizedBox(height: OmniSpacing.xs),
-        Expanded(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              for (int index = 2; index < 4; index += 1) ...<Widget>[
-                if (index > 2) const SizedBox(width: OmniSpacing.xs),
-                Expanded(
-                  child: _HomeTodoQuadrant(
-                    quadrant: todoPriorityQuadrantMatrixOrder[index],
-                    todos:
-                        groupedTodos[todoPriorityQuadrantMatrixOrder[index]]!,
-                    fillHeight: widget.fillHeight,
-                    onCreate: () => widget.onCreateInQuadrant(
-                      todoPriorityQuadrantMatrixOrder[index],
-                    ),
-                    onOpen: () => widget.onOpenQuadrant(
-                      todoPriorityQuadrantMatrixOrder[index],
-                    ),
-                    onToggle: (TodoRecord todo, bool value) => value
-                        ? _completeTodo(todo)
-                        : widget.onToggle(todo, false),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
+        ],
       ],
     );
   }
@@ -711,17 +1123,14 @@ class _HomeTodoQuadrant extends StatelessWidget {
   /// 当前象限。
   final TodoPriorityQuadrant quadrant;
 
-  /// 当前象限全部未完成待办。
-  final List<TodoRecord> todos;
-
-  /// 是否填满桌面网格高度。
-  final bool fillHeight;
-
-  /// 新增回调。
-  final VoidCallback onCreate;
+  /// 当前象限全部未完成待办树。
+  final List<TodoTreeNode> todoTrees;
 
   /// 查看当前象限回调。
   final VoidCallback onOpen;
+
+  /// 编辑指定待办回调。
+  final ValueChanged<TodoRecord> onEdit;
 
   /// 完成状态变化回调。
   final Future<void> Function(TodoRecord todo, bool value) onToggle;
@@ -729,10 +1138,9 @@ class _HomeTodoQuadrant extends StatelessWidget {
   /// 创建首页象限摘要。
   const _HomeTodoQuadrant({
     required this.quadrant,
-    required this.todos,
-    required this.fillHeight,
-    required this.onCreate,
+    required this.todoTrees,
     required this.onOpen,
+    required this.onEdit,
     required this.onToggle,
   });
 
@@ -741,112 +1149,72 @@ class _HomeTodoQuadrant extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    // 当前象限强调色。
+    // 当前象限用于轻量分区的语义色。
     final Color accentColor = quadrant.color(colors);
-    // 浅色主题使用白色象限表面，避免大面积灰底压迫内容。
-    final Color quadrantSurface =
-        Theme.of(context).brightness == Brightness.light
-        ? colors.paper
-        : colors.paperSubtle;
-    // 按截止时间与用户顺序整理后的象限待办。
-    final List<TodoRecord> sortedTodos = List<TodoRecord>.of(todos)
-      ..sort(_compareTodoPriority);
-    // 首页当前象限最多展示的三条待办。
-    final List<TodoRecord> visibleTodos = sortedTodos
+    // 按截止时间与用户顺序整理后的象限待办树。
+    final List<TodoTreeNode> sortedTodoTrees = List<TodoTreeNode>.of(todoTrees)
+      ..sort(
+        (TodoTreeNode left, TodoTreeNode right) =>
+            _compareTodoPriority(left.root, right.root),
+      );
+    // 首页当前象限最多展示的三棵待办树。
+    final List<TodoTreeNode> visibleTodoTrees = sortedTodoTrees
         .take(3)
         .toList(growable: false);
-    // 未直接展示的待办数量。
-    final int hiddenCount = todos.length - visibleTodos.length;
+    // 未直接展示的根待办数量。
+    final int hiddenCount = todoTrees.length - visibleTodoTrees.length;
     // 当前象限任务内容。
-    final Widget todoContent = visibleTodos.isEmpty
-        ? _buildEmptyState(context, accentColor)
-        : _buildTodoList(context, visibleTodos, hiddenCount);
+    final Widget todoContent = visibleTodoTrees.isEmpty
+        ? _buildEmptyState(context)
+        : _buildTodoTreeList(context, visibleTodoTrees, hiddenCount);
 
-    return Container(
+    return Column(
       key: ValueKey<String>('home-todo-quadrant-${quadrant.value}'),
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: quadrantSurface,
-        borderRadius: BorderRadius.circular(OmniRadius.control),
-        border: Border.all(color: colors.line),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Container(height: 3, color: accentColor),
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onOpen,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  OmniSpacing.sm,
-                  OmniSpacing.xs,
-                  OmniSpacing.xs,
-                  OmniSpacing.xs,
-                ),
-                child: Row(
-                  children: <Widget>[
-                    Icon(quadrant.icon, size: 15, color: accentColor),
-                    const SizedBox(width: OmniSpacing.xs),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(
-                            quadrant.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodyMedium
-                                ?.copyWith(fontWeight: FontWeight.w600),
-                          ),
-                          Text(
-                            quadrant.actionLabel,
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: accentColor),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Text(
-                      '${todos.length}',
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: accentColor,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    Icon(Icons.chevron_right_rounded, color: colors.muted),
-                  ],
-                ),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.only(top: OmniSpacing.sm),
+          child: Row(
+            children: <Widget>[
+              Text(
+                quadrant.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelSmall
+                    ?.copyWith(color: accentColor, fontWeight: FontWeight.w500),
               ),
-            ),
+              const SizedBox(width: OmniSpacing.xs),
+              Expanded(child: Divider(color: accentColor)),
+            ],
           ),
-          if (fillHeight) Expanded(child: todoContent) else todoContent,
-        ],
-      ),
+        ),
+        todoContent,
+      ],
     );
   }
 
   /// 构建当前象限的任务列表。
-  Widget _buildTodoList(
+  Widget _buildTodoTreeList(
     BuildContext context,
-    List<TodoRecord> visibleTodos,
+    List<TodoTreeNode> visibleTodoTrees,
     int hiddenCount,
   ) {
-    // 带分隔线的任务列表内容。
+    // 带分隔线的任务树列表内容。
     final List<Widget> children = <Widget>[];
-    for (int index = 0; index < visibleTodos.length; index += 1) {
+    for (int index = 0; index < visibleTodoTrees.length; index += 1) {
       if (index > 0) {
-        children.add(const Divider(indent: 40));
+        children.add(const Divider(indent: 28));
       }
-      // 当前任务。
-      final TodoRecord todo = visibleTodos[index];
+      // 当前任务树。
+      final TodoTreeNode tree = visibleTodoTrees[index];
       children.add(
-        _HomeTodoRow(
-          key: ValueKey<String>('home-todo-row-${todo.id}'),
-          todo: todo,
+        _HomeTodoTree(
+          key: ValueKey<String>('home-todo-tree-${tree.root.id}'),
+          tree: tree,
           accentColor: quadrant.color(OmniColors.of(context)),
-          onComplete: (TodoRecord currentTodo) => onToggle(currentTodo, true),
+          onEdit: onEdit,
+          onComplete: (TodoRecord todo) => onToggle(todo, true),
         ),
       );
     }
@@ -855,17 +1223,16 @@ class _HomeTodoQuadrant extends StatelessWidget {
         TextButton(onPressed: onOpen, child: Text('还有 $hiddenCount 项')),
       );
     }
-    return fillHeight
-        ? ListView(padding: EdgeInsets.zero, children: children)
-        : Column(mainAxisSize: MainAxisSize.min, children: children);
+    return Column(mainAxisSize: MainAxisSize.min, children: children);
   }
 
   /// 构建当前象限的紧凑空状态。
-  Widget _buildEmptyState(BuildContext context, Color accentColor) {
-    return TextButton.icon(
-      onPressed: onCreate,
-      icon: Icon(Icons.add_rounded, size: 16, color: accentColor),
-      label: Text('新增任务', style: TextStyle(color: accentColor)),
+  Widget _buildEmptyState(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(27, OmniSpacing.xs, 0, OmniSpacing.sm),
+      child: Text('暂无任务', style: TextStyle(color: colors.muted)),
     );
   }
 
@@ -889,6 +1256,201 @@ class _HomeTodoQuadrant extends StatelessWidget {
   }
 }
 
+/// 首页中的单棵两层待办树。
+class _HomeTodoTree extends StatefulWidget {
+  /// 当前待办树。
+  final TodoTreeNode tree;
+
+  /// 当前任务所属象限强调色。
+  final Color accentColor;
+
+  /// 编辑指定待办回调。
+  final ValueChanged<TodoRecord> onEdit;
+
+  /// 完成任务回调。
+  final Future<void> Function(TodoRecord todo) onComplete;
+
+  /// 创建首页待办树。
+  const _HomeTodoTree({
+    required this.tree,
+    required this.accentColor,
+    required this.onEdit,
+    required this.onComplete,
+    super.key,
+  });
+
+  /// 创建首页待办树展开状态。
+  @override
+  State<_HomeTodoTree> createState() => _HomeTodoTreeState();
+}
+
+/// 管理首页父任务的子任务展开状态。
+class _HomeTodoTreeState extends State<_HomeTodoTree> {
+  /// 父任务勾选框中心对应的树形主干横坐标。
+  static const double _treeTrunkX = OmniSpacing.xs + 16;
+
+  /// 子任务相对任务树左侧的缩进。
+  static const double _childIndent = _treeTrunkX + OmniSpacing.xxs;
+
+  /// 子任务支线停在勾选框左侧的横坐标。
+  static const double _branchEndX = _childIndent + OmniSpacing.xs + 7;
+
+  /// 子任务当前是否展开。
+  bool _expanded = true;
+
+  /// 切换子任务展开状态。
+  void _toggleChildren() {
+    setState(() => _expanded = !_expanded);
+  }
+
+  /// 构建父任务、展开控制与直属子任务。
+  @override
+  Widget build(BuildContext context) {
+    // 当前仍未完成的直属子任务。
+    final List<TodoRecord> pendingChildren = widget.tree.children
+        .where((TodoRecord child) => !child.isCompleted)
+        .toList(growable: false);
+    // 当前任务树是否存在需要展示的子任务。
+    final bool hasChildren = pendingChildren.isNotEmpty;
+    // 当前是否关闭非必要动画。
+    final bool disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    // 子任务展开收起动画时长。
+    final Duration duration = disableAnimations
+        ? Duration.zero
+        : OmniMotion.normal;
+    // 父任务行；展开控制收纳在行尾，确保勾选框始终位于最左侧。
+    final Widget rootRow = _HomeTodoRow(
+      key: ValueKey<String>('home-todo-row-${widget.tree.root.id}'),
+      todo: widget.tree.root,
+      accentColor: widget.accentColor,
+      onEdit: widget.onEdit,
+      onComplete: widget.onComplete,
+      childrenExpanded: hasChildren ? _expanded : null,
+      onToggleChildren: hasChildren ? _toggleChildren : null,
+    );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        rootRow,
+        AnimatedSize(
+          alignment: Alignment.topCenter,
+          duration: duration,
+          curve: OmniMotion.standardCurve,
+          child: _expanded && hasChildren
+              ? Column(
+                  key: ValueKey<String>(
+                    'home-todo-tree-children-${widget.tree.root.id}',
+                  ),
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    for (
+                      int index = 0;
+                      index < pendingChildren.length;
+                      index += 1
+                    )
+                      CustomPaint(
+                        key: ValueKey<String>(
+                          'home-todo-tree-branch-${pendingChildren[index].id}',
+                        ),
+                        painter: _HomeTodoTreeBranchPainter(
+                          lineColor: OmniColors.of(context).muted
+                              .withValues(alpha: 0.46),
+                          trunkX: _treeTrunkX,
+                          branchEndX: _branchEndX,
+                          isLast: index == pendingChildren.length - 1,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: _childIndent),
+                          child: _HomeTodoRow(
+                            key: ValueKey<String>(
+                              'home-todo-row-${pendingChildren[index].id}',
+                            ),
+                            todo: pendingChildren[index],
+                            accentColor: widget.accentColor,
+                            onEdit: widget.onEdit,
+                            onComplete: widget.onComplete,
+                          ),
+                        ),
+                      ),
+                  ],
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
+    );
+  }
+}
+
+/// 绘制首页父子任务之间的竖向主干与圆角支线。
+class _HomeTodoTreeBranchPainter extends CustomPainter {
+  /// 树线颜色。
+  final Color lineColor;
+
+  /// 父任务勾选框中心对应的主干横坐标。
+  final double trunkX;
+
+  /// 子任务支线结束横坐标。
+  final double branchEndX;
+
+  /// 当前子任务是否为最后一项。
+  final bool isLast;
+
+  /// 创建首页待办树引导线绘制器。
+  const _HomeTodoTreeBranchPainter({
+    required this.lineColor,
+    required this.trunkX,
+    required this.branchEndX,
+    required this.isLast,
+  });
+
+  /// 绘制连续主干和指向子任务的圆角支线。
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 当前子任务行的垂直中心。
+    final double branchY = size.height / 2;
+    // 树线画笔。
+    final Paint linePaint = Paint()
+      ..color = lineColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.25
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    if (!isLast) {
+      canvas
+        ..drawLine(Offset(trunkX, 0), Offset(trunkX, size.height), linePaint)
+        ..drawLine(
+          Offset(trunkX, branchY),
+          Offset(branchEndX, branchY),
+          linePaint,
+        );
+      return;
+    }
+    // 最后一条支线的圆角半径。
+    final double cornerRadius = branchY < OmniSpacing.xs
+        ? branchY
+        : OmniSpacing.xs;
+    // 最后一条支线的圆角路径。
+    final Path branchPath = Path()
+      ..moveTo(trunkX, 0)
+      ..lineTo(trunkX, branchY - cornerRadius)
+      ..quadraticBezierTo(trunkX, branchY, trunkX + cornerRadius, branchY)
+      ..lineTo(branchEndX, branchY);
+    canvas.drawPath(branchPath, linePaint);
+  }
+
+  /// 仅在线条几何或颜色变化时重绘。
+  @override
+  bool shouldRepaint(covariant _HomeTodoTreeBranchPainter oldDelegate) {
+    return oldDelegate.lineColor != lineColor ||
+        oldDelegate.trunkX != trunkX ||
+        oldDelegate.branchEndX != branchEndX ||
+        oldDelegate.isLast != isLast;
+  }
+}
+
 /// 首页任务完成时的分阶段反馈行。
 class _HomeTodoRow extends StatefulWidget {
   /// 当前任务。
@@ -897,14 +1459,26 @@ class _HomeTodoRow extends StatefulWidget {
   /// 当前任务所属象限强调色。
   final Color accentColor;
 
+  /// 打开当前任务编辑器回调。
+  final ValueChanged<TodoRecord> onEdit;
+
   /// 完成动画结束后的提交回调。
   final Future<void> Function(TodoRecord todo) onComplete;
+
+  /// 可选子任务展开状态；为空表示当前任务没有子任务。
+  final bool? childrenExpanded;
+
+  /// 可选子任务展开状态切换回调。
+  final VoidCallback? onToggleChildren;
 
   /// 创建首页任务反馈行。
   const _HomeTodoRow({
     required this.todo,
     required this.accentColor,
+    required this.onEdit,
     required this.onComplete,
+    this.childrenExpanded,
+    this.onToggleChildren,
     super.key,
   });
 
@@ -927,6 +1501,39 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
   /// 是否正在提交完成操作。
   bool _submitting = false;
 
+  /// 鼠标当前是否悬停在整行任务上。
+  bool _hovered = false;
+
+  /// 鼠标当前是否悬停在勾选框热区上。
+  bool _checkboxHovered = false;
+
+  /// 勾选框当前是否获得键盘焦点。
+  bool _checkboxFocused = false;
+
+  /// 更新整行任务的悬停状态。
+  void _setHovered(bool hovered) {
+    if (_hovered == hovered) {
+      return;
+    }
+    setState(() => _hovered = hovered);
+  }
+
+  /// 更新勾选框热区的悬停状态。
+  void _setCheckboxHovered(bool hovered) {
+    if (_checkboxHovered == hovered) {
+      return;
+    }
+    setState(() => _checkboxHovered = hovered);
+  }
+
+  /// 更新勾选框的键盘焦点状态。
+  void _setCheckboxFocused(bool focused) {
+    if (_checkboxFocused == focused) {
+      return;
+    }
+    setState(() => _checkboxFocused = focused);
+  }
+
   /// 依次播放勾选、淡出与收起动画，再提交完成状态。
   Future<void> _complete() async {
     if (_submitting) {
@@ -947,7 +1554,6 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
     final Duration collapseDuration = disableAnimations
         ? Duration.zero
         : OmniMotion.panel;
-
     setState(() {
       _submitting = true;
       _checked = true;
@@ -998,6 +1604,10 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
     final Duration collapseDuration = disableAnimations
         ? Duration.zero
         : OmniMotion.panel;
+    // 当前任务紧凑的截止时间文字。
+    final String? dueLabel = widget.todo.dueAt == null
+        ? null
+        : _formatHomeTodoDueAt(widget.todo);
 
     return AnimatedSize(
       duration: collapseDuration,
@@ -1013,10 +1623,22 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                 opacity: _fading ? 0 : 1,
                 duration: fadeDuration,
                 curve: OmniMotion.standardCurve,
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: _submitting ? null : () => unawaited(_complete()),
+                child: MouseRegion(
+                  onEnter: (_) => _setHovered(true),
+                  onExit: (_) => _setHovered(false),
+                  child: AnimatedContainer(
+                    key: ValueKey<String>('home-todo-hover-${widget.todo.id}'),
+                    duration: disableAnimations
+                        ? Duration.zero
+                        : OmniMotion.fast,
+                    curve: OmniMotion.standardCurve,
+                    decoration: BoxDecoration(
+                      color: _hovered
+                          ? colors.ink.withValues(alpha: 0.06)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(OmniRadius.control),
+                    ),
+                    clipBehavior: Clip.antiAlias,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: OmniSpacing.xs,
@@ -1024,37 +1646,123 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                       ),
                       child: Row(
                         children: <Widget>[
-                          SizedBox(
-                            width: 32,
-                            height: 32,
-                            child: Center(
-                              child: _HomeTodoCheckIndicator(
-                                checked: _checked,
-                                accentColor: widget.accentColor,
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              key: ValueKey<String>(
+                                'home-todo-checkbox-action-${widget.todo.id}',
+                              ),
+                              onTap: _submitting
+                                  ? null
+                                  : () => unawaited(_complete()),
+                              onHover: _setCheckboxHovered,
+                              onFocusChange: _setCheckboxFocused,
+                              borderRadius: BorderRadius.circular(
+                                OmniRadius.control,
+                              ),
+                              hoverColor: Colors.transparent,
+                              focusColor: Colors.transparent,
+                              splashColor: Colors.transparent,
+                              highlightColor: Colors.transparent,
+                              child: SizedBox(
+                                key: ValueKey<String>(
+                                  'home-todo-checkbox-${widget.todo.id}',
+                                ),
+                                width: 32,
+                                height: 32,
+                                child: Center(
+                                  child: _HomeTodoCheckIndicator(
+                                    checked: _checked,
+                                    highlighted:
+                                        _checkboxHovered || _checkboxFocused,
+                                    accentColor: widget.accentColor,
+                                  ),
+                                ),
                               ),
                             ),
                           ),
                           const SizedBox(width: OmniSpacing.xxs),
                           Expanded(
-                            child: AnimatedDefaultTextStyle(
-                              duration: disableAnimations
-                                  ? Duration.zero
-                                  : OmniMotion.fast,
-                              curve: OmniMotion.standardCurve,
-                              style: TextStyle(
-                                color: _checked ? colors.muted : colors.ink,
-                                fontWeight: FontWeight.w400,
-                                decoration: _checked
-                                    ? TextDecoration.lineThrough
-                                    : TextDecoration.none,
-                              ),
-                              child: Text(
-                                widget.todo.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                key: ValueKey<String>(
+                                  'home-todo-title-action-${widget.todo.id}',
+                                ),
+                                onTap: () => widget.onEdit(widget.todo),
+                                borderRadius: BorderRadius.circular(
+                                  OmniRadius.control,
+                                ),
+                                hoverColor: Colors.transparent,
+                                focusColor: colors.brandSoft,
+                                child: SizedBox(
+                                  height: 32,
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: AnimatedDefaultTextStyle(
+                                      duration: disableAnimations
+                                          ? Duration.zero
+                                          : OmniMotion.fast,
+                                      curve: OmniMotion.standardCurve,
+                                      style: TextStyle(
+                                        color: _checked
+                                            ? colors.muted
+                                            : colors.ink,
+                                        fontWeight: FontWeight.w400,
+                                        decoration: _checked
+                                            ? TextDecoration.lineThrough
+                                            : TextDecoration.none,
+                                      ),
+                                      child: Text(
+                                        widget.todo.title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
                           ),
+                          if (dueLabel != null) ...<Widget>[
+                            const SizedBox(width: OmniSpacing.xs),
+                            Text(
+                              dueLabel,
+                              key: ValueKey<String>(
+                                'home-todo-due-${widget.todo.id}',
+                              ),
+                              maxLines: 1,
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(color: colors.muted),
+                            ),
+                          ],
+                          if (widget.onToggleChildren != null) ...<Widget>[
+                            const SizedBox(width: OmniSpacing.xxs),
+                            SizedBox.square(
+                              dimension: 28,
+                              child: IconButton(
+                                key: ValueKey<String>(
+                                  'home-todo-tree-toggle-${widget.todo.id}',
+                                ),
+                                tooltip: widget.childrenExpanded ?? false
+                                    ? '收起子任务'
+                                    : '展开子任务',
+                                onPressed: widget.onToggleChildren,
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 28,
+                                  height: 28,
+                                ),
+                                icon: Icon(
+                                  widget.childrenExpanded ?? false
+                                      ? Icons.expand_more_rounded
+                                      : Icons.chevron_right_rounded,
+                                  color: colors.muted,
+                                  size: 18,
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -1064,6 +1772,16 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
             ),
     );
   }
+
+  /// 将首页任务截止时间格式化为紧凑文本。
+  String _formatHomeTodoDueAt(TodoRecord todo) {
+    // 当前任务截止时间。
+    final DateTime dueAt = todo.dueAt!;
+    if (DateUtils.isSameDay(dueAt, todo.scheduledDate)) {
+      return DateFormat('HH:mm').format(dueAt);
+    }
+    return DateFormat('M月d日 HH:mm').format(dueAt);
+  }
 }
 
 /// 首页任务的自定义勾选反馈。
@@ -1071,12 +1789,16 @@ class _HomeTodoCheckIndicator extends StatelessWidget {
   /// 是否处于完成状态。
   final bool checked;
 
+  /// 是否处于悬停或键盘焦点状态。
+  final bool highlighted;
+
   /// 当前任务所属象限强调色。
   final Color accentColor;
 
   /// 创建首页任务勾选反馈。
   const _HomeTodoCheckIndicator({
     required this.checked,
+    required this.highlighted,
     required this.accentColor,
   });
 
@@ -1103,7 +1825,11 @@ class _HomeTodoCheckIndicator extends StatelessWidget {
         duration: duration,
         curve: OmniMotion.standardCurve,
         decoration: BoxDecoration(
-          color: checked ? accentColor : Colors.transparent,
+          color: checked
+              ? accentColor
+              : highlighted
+              ? colors.ink.withValues(alpha: 0.1)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(4),
           border: Border.all(
             color: checked ? accentColor : colors.muted.withValues(alpha: 0.72),
@@ -1136,99 +1862,6 @@ class _HomeTodoCheckIndicator extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// 今日跨模块脉络卡。
-class _TodayContextCard extends StatelessWidget {
-  /// 当前主题语义色。
-  final OmniColors colors;
-
-  /// 创建今日脉络卡。
-  const _TodayContextCard({required this.colors});
-
-  /// 构建其他模块的首版入口与空状态。
-  @override
-  Widget build(BuildContext context) {
-    return OmniPanel(
-      key: const ValueKey<String>('home-context-card'),
-      padding: const EdgeInsets.all(OmniSpacing.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Text('今日脉络', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 6),
-          Text(
-            '把到期、记录与空白放在同一条时间线上。',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 22),
-          _ContextItem(
-            icon: Icons.event_repeat_rounded,
-            color: colors.event,
-            title: '周期事件',
-            detail: '暂无即将到期事件',
-            onTap: () => context.go('/events'),
-          ),
-          Divider(color: colors.line),
-          _ContextItem(
-            icon: Icons.view_timeline_rounded,
-            color: colors.time,
-            title: '时间记录',
-            detail: '今天尚未记录时间',
-            onTap: () => context.go('/timeline'),
-          ),
-          Divider(color: colors.line),
-          _ContextItem(
-            icon: Icons.loyalty_rounded,
-            color: colors.member,
-            title: '会员提醒',
-            detail: '暂无近期续费',
-            onTap: () => context.go('/memberships'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 今日脉络单项。
-class _ContextItem extends StatelessWidget {
-  /// 模块图标。
-  final IconData icon;
-
-  /// 模块颜色。
-  final Color color;
-
-  /// 模块标题。
-  final String title;
-
-  /// 模块摘要。
-  final String detail;
-
-  /// 打开模块回调。
-  final VoidCallback onTap;
-
-  /// 创建今日脉络单项。
-  const _ContextItem({
-    required this.icon,
-    required this.color,
-    required this.title,
-    required this.detail,
-    required this.onTap,
-  });
-
-  /// 构建模块摘要入口。
-  @override
-  Widget build(BuildContext context) {
-    return OmniListRow(
-      onTap: onTap,
-      padding: const EdgeInsets.symmetric(vertical: OmniSpacing.xs),
-      leading: Icon(icon, color: color, size: OmniSize.navigationIcon),
-      title: Text(title),
-      subtitle: Text(detail),
-      trailing: const Icon(Icons.chevron_right_rounded, size: OmniSize.icon),
     );
   }
 }

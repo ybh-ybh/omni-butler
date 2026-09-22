@@ -7,6 +7,7 @@ import 'package:omni_butler/shared/ui/omni_button.dart';
 Future<T?> showOmniSideSheet<T>(
   BuildContext context, {
   required WidgetBuilder builder,
+  double desktopWidth = OmniSize.sideSheet,
 }) {
   // 当前视口是否为紧凑布局。
   final bool compact = OmniBreakpoint.isCompact(
@@ -29,9 +30,7 @@ Future<T?> showOmniSideSheet<T>(
           return Align(
             alignment: Alignment.centerRight,
             child: SizedBox(
-              width: compact
-                  ? MediaQuery.sizeOf(context).width
-                  : OmniSize.sideSheet,
+              width: compact ? MediaQuery.sizeOf(context).width : desktopWidth,
               height: MediaQuery.sizeOf(context).height,
               child: Material(color: Colors.transparent, child: content),
             ),
