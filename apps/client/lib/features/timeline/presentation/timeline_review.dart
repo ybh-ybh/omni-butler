@@ -164,49 +164,67 @@ class TimelineReviewContent extends ConsumerWidget {
           rangeEnd: rangeEnd,
           period: period,
         );
-        return SingleChildScrollView(
-          key: const ValueKey<String>('timeline-review-content'),
+        return Padding(
           padding: const EdgeInsets.only(bottom: OmniSpacing.md),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              _TimelineInsightBanner(
-                text: _buildInsight(
-                  records: records,
-                  previousRecords: previousRecords,
-                  summary: summary,
-                  previousSummary: previousSummary,
-                  period: period,
-                ),
-                hasRecords: records.isNotEmpty,
-              ),
-              const SizedBox(height: OmniSpacing.xs),
-              _TimelineMetricsPanel(metrics: metrics),
-              const SizedBox(height: OmniSpacing.xs),
-              _TimeFingerprintPanel(
-                records: records,
-                rangeStart: rangeStart,
-                rangeEnd: rangeEnd,
-                period: period,
-                categoryColors: categoryColors,
-                onOpenDay: onOpenDay,
-                onEdit: onEdit,
-              ),
-              const SizedBox(height: OmniSpacing.xs),
-              if (twoColumns)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          child: CustomScrollView(
+            key: const ValueKey<String>('timeline-review-content'),
+            slivers: <Widget>[
+              SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
-                    Expanded(flex: 7, child: categoryPanel),
-                    const SizedBox(width: OmniSpacing.xs),
-                    Expanded(flex: 5, child: trendPanel),
+                    _TimelineInsightBanner(
+                      text: _buildInsight(
+                        records: records,
+                        previousRecords: previousRecords,
+                        summary: summary,
+                        previousSummary: previousSummary,
+                        period: period,
+                      ),
+                      hasRecords: records.isNotEmpty,
+                    ),
+                    const SizedBox(height: OmniSpacing.xs),
+                    _TimelineMetricsPanel(metrics: metrics),
+                    const SizedBox(height: OmniSpacing.xs),
+                    _TimeFingerprintPanel(
+                      records: records,
+                      rangeStart: rangeStart,
+                      rangeEnd: rangeEnd,
+                      period: period,
+                      categoryColors: categoryColors,
+                      onOpenDay: onOpenDay,
+                      onEdit: onEdit,
+                    ),
                   ],
+                ),
+              ),
+              if (twoColumns)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: OmniSpacing.xs),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        Expanded(flex: 7, child: categoryPanel),
+                        const SizedBox(width: OmniSpacing.xs),
+                        Expanded(flex: 5, child: trendPanel),
+                      ],
+                    ),
+                  ),
                 )
-              else ...<Widget>[
-                categoryPanel,
-                const SizedBox(height: OmniSpacing.xs),
-                trendPanel,
-              ],
+              else
+                SliverToBoxAdapter(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      const SizedBox(height: OmniSpacing.xs),
+                      categoryPanel,
+                      const SizedBox(height: OmniSpacing.xs),
+                      trendPanel,
+                    ],
+                  ),
+                ),
             ],
           ),
         );

@@ -13,6 +13,7 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
+import 'package:omni_butler/shared/ui/omni_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证待办四象限在首页、完整页面与编辑器中保持一致。
@@ -315,13 +316,118 @@ void main() {
     await tester.tap(
       find.byKey(const ValueKey<String>('todo-quadrant-heading-3')),
     );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-grid')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-focus-3')),
+      findsOneWidget,
+    );
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('todo-quadrant-grid')),
       findsNothing,
     );
-    expect(find.text('返回四象限'), findsOneWidget);
-    await tester.tap(find.text('返回四象限'));
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-focus-3')),
+      findsOneWidget,
+    );
+    // 左侧聚焦的主象限位置。
+    final Offset leftFocusedPosition = tester.getTopLeft(
+      find.byKey(const ValueKey<String>('todo-quadrant-card-3')),
+    );
+    // 右侧第一个次要象限位置。
+    final Offset firstRightPosition = tester.getTopLeft(
+      find.byKey(const ValueKey<String>('todo-quadrant-card-1')),
+    );
+    // 右侧第二个次要象限位置。
+    final Offset secondRightPosition = tester.getTopLeft(
+      find.byKey(const ValueKey<String>('todo-quadrant-card-2')),
+    );
+    // 右侧第三个次要象限位置。
+    final Offset thirdRightPosition = tester.getTopLeft(
+      find.byKey(const ValueKey<String>('todo-quadrant-card-0')),
+    );
+    expect(firstRightPosition.dx, greaterThan(leftFocusedPosition.dx));
+    expect(secondRightPosition.dx, moreOrLessEquals(firstRightPosition.dx));
+    expect(thirdRightPosition.dx, moreOrLessEquals(firstRightPosition.dx));
+    expect(secondRightPosition.dy, greaterThan(firstRightPosition.dy));
+    expect(thirdRightPosition.dy, greaterThan(secondRightPosition.dy));
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('todo-quadrant-heading-1')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-focus-1')),
+      findsOneWidget,
+    );
+    // 右侧聚焦的主象限位置。
+    final Offset rightFocusedPosition = tester.getTopLeft(
+      find.byKey(const ValueKey<String>('todo-quadrant-card-1')),
+    );
+    // 左侧纵向列的三个象限位置。
+    final List<Offset> leftColumnPositions = <Offset>[
+      tester.getTopLeft(
+        find.byKey(const ValueKey<String>('todo-quadrant-card-3')),
+      ),
+      tester.getTopLeft(
+        find.byKey(const ValueKey<String>('todo-quadrant-card-2')),
+      ),
+      tester.getTopLeft(
+        find.byKey(const ValueKey<String>('todo-quadrant-card-0')),
+      ),
+    ];
+    expect(leftColumnPositions.first.dx, lessThan(rightFocusedPosition.dx));
+    expect(
+      leftColumnPositions[1].dx,
+      moreOrLessEquals(leftColumnPositions.first.dx),
+    );
+    expect(
+      leftColumnPositions[2].dx,
+      moreOrLessEquals(leftColumnPositions.first.dx),
+    );
+    expect(
+      leftColumnPositions[1].dy,
+      greaterThan(leftColumnPositions.first.dy),
+    );
+    expect(leftColumnPositions[2].dy, greaterThan(leftColumnPositions[1].dy));
+
+    container.read(appRouterProvider).go('/home');
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-focus-1')),
+      findsNothing,
+    );
+    container.read(appRouterProvider).go('/todos');
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-focus-1')),
+      findsOneWidget,
+    );
+    expect(find.text('返回四象限'), findsNothing);
+    expect(find.text('返回'), findsOneWidget);
+    // 完成历史分段标签的位置。
+    final Rect historyLabelRect = tester.getRect(find.text('完成历史'));
+    // 返回按钮的位置。
+    final Rect returnButtonRect = tester.getRect(
+      find.byKey(const ValueKey<String>('todo-return-quadrants')),
+    );
+    expect(returnButtonRect.left, greaterThan(historyLabelRect.right));
+    await tester.tap(
+      find.byKey(const ValueKey<String>('todo-return-quadrants')),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-focus-1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-grid')),
+      findsOneWidget,
+    );
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('todo-quadrant-grid')),
@@ -1020,6 +1126,25 @@ void main() {
     expect(
       find.byKey(ValueKey<String>('todo-tree-branch-${child.id}')),
       findsOneWidget,
+    );
+    // 父任务的统一列表行。
+    final OmniListRow rootListRow = tester.widget<OmniListRow>(
+      find.descendant(
+        of: find.byKey(ValueKey<String>('todo-tree-root-${root.id}')),
+        matching: find.byType(OmniListRow),
+      ),
+    );
+    // 子任务的统一列表行。
+    final OmniListRow childListRow = tester.widget<OmniListRow>(
+      find.descendant(
+        of: find.byKey(ValueKey<String>('todo-child-${child.id}')),
+        matching: find.byType(OmniListRow),
+      ),
+    );
+    expect(rootListRow.borderRadius, BorderRadius.circular(OmniRadius.control));
+    expect(
+      childListRow.borderRadius,
+      BorderRadius.circular(OmniRadius.control),
     );
     expect(find.text('截止 9月21日 18:00'), findsOneWidget);
     expect(find.text('计划 9月21日'), findsNothing);

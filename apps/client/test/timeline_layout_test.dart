@@ -55,6 +55,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('时间管理'), findsWidgets);
+    expect(find.text('看清时间去了哪里，也看见它如何变化'), findsNothing);
     expect(
       find.byKey(const ValueKey<String>('timeline-review-content')),
       findsOneWidget,
@@ -71,6 +72,35 @@ void main() {
       find.byKey(const ValueKey<String>('timeline-entry-list')),
       findsNothing,
     );
+    // 底部两张统计卡片应保持等高。
+    // 类别结构卡片的全局位置。
+    final Rect categoryRect = tester.getRect(
+      find.byKey(const ValueKey<String>('timeline-category-structure')),
+    );
+    // 记录趋势卡片的全局位置。
+    final Rect trendRect = tester.getRect(
+      find.byKey(const ValueKey<String>('timeline-daily-trend')),
+    );
+    expect(categoryRect.height, closeTo(trendRect.height, 0.01));
+
+    tester.view.physicalSize = const Size(1440, 1100);
+    await tester.pumpAndSettle();
+    // 高视口下复盘滚动区的全局位置。
+    final Rect filledReviewRect = tester.getRect(
+      find.byKey(const ValueKey<String>('timeline-review-content')),
+    );
+    // 高视口下类别结构卡片的全局位置。
+    final Rect filledCategoryRect = tester.getRect(
+      find.byKey(const ValueKey<String>('timeline-category-structure')),
+    );
+    // 高视口下记录趋势卡片的全局位置。
+    final Rect filledTrendRect = tester.getRect(
+      find.byKey(const ValueKey<String>('timeline-daily-trend')),
+    );
+    expect(filledCategoryRect.height, closeTo(filledTrendRect.height, 0.01));
+    expect(filledCategoryRect.bottom, closeTo(filledReviewRect.bottom, 0.01));
+    tester.view.physicalSize = viewport;
+    await tester.pumpAndSettle();
 
     await expectLater(
       find.byType(OmniButlerApp),

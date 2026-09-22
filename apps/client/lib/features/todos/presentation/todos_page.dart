@@ -23,6 +23,25 @@ enum _TodoPageView {
   history,
 }
 
+/// 待办页面当前聚焦象限的会话状态控制器。
+class _TodoQuadrantFocusController extends Notifier<TodoPriorityQuadrant?> {
+  /// 默认显示完整四象限布局。
+  @override
+  TodoPriorityQuadrant? build() => null;
+
+  /// 更新当前聚焦象限，空值表示完整四象限布局。
+  void setFocusedQuadrant(TodoPriorityQuadrant? quadrant) {
+    state = quadrant;
+  }
+}
+
+/// 跨一级页面切换保留的待办象限状态。
+final NotifierProvider<_TodoQuadrantFocusController, TodoPriorityQuadrant?>
+_todoQuadrantFocusProvider =
+    NotifierProvider<_TodoQuadrantFocusController, TodoPriorityQuadrant?>(
+      _TodoQuadrantFocusController.new,
+    );
+
 /// 桌面拖拽携带的主任务信息。
 class _TodoDragPayload {
   /// 主任务标识。
@@ -56,8 +75,9 @@ class _TodosPageState extends ConsumerState<TodosPage> {
   /// 当前一级视图。
   _TodoPageView _pageView = _TodoPageView.active;
 
-  /// 当前聚焦象限。
-  TodoPriorityQuadrant? _priorityQuadrantFilter;
+  /// 当前跨路由保留的聚焦象限。
+  TodoPriorityQuadrant? get _priorityQuadrantFilter =>
+      ref.read(_todoQuadrantFocusProvider);
 
   /// 最近一次读取到的进行中任务树。
   List<TodoTreeNode> _latestTrees = <TodoTreeNode>[];
@@ -73,17 +93,31 @@ class _TodosPageState extends ConsumerState<TodosPage> {
   void initState() {
     super.initState();
     _selectedDay = DateUtils.dateOnly(ref.read(nowProvider));
-    _priorityQuadrantFilter = widget.initialPriorityQuadrant;
+    // 路由明确指定的初始象限。
+    final TodoPriorityQuadrant? initialQuadrant =
+        widget.initialPriorityQuadrant;
+    if (initialQuadrant != null) {
+      _setPriorityQuadrantFilter(initialQuadrant);
+    }
   }
 
   /// 响应路由中的象限变化。
   @override
   void didUpdateWidget(covariant TodosPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.initialPriorityQuadrant != widget.initialPriorityQuadrant) {
-      _priorityQuadrantFilter = widget.initialPriorityQuadrant;
+    // 新路由明确指定的目标象限。
+    final TodoPriorityQuadrant? initialQuadrant =
+        widget.initialPriorityQuadrant;
+    if (initialQuadrant != null &&
+        oldWidget.initialPriorityQuadrant != initialQuadrant) {
+      _setPriorityQuadrantFilter(initialQuadrant);
       _pageView = _TodoPageView.active;
     }
+  }
+
+  /// 更新会话内保留的聚焦象限。
+  void _setPriorityQuadrantFilter(TodoPriorityQuadrant? quadrant) {
+    ref.read(_todoQuadrantFocusProvider.notifier).setFocusedQuadrant(quadrant);
   }
 
   /// 释放撤销浮动消息。
@@ -96,6 +130,8 @@ class _TodosPageState extends ConsumerState<TodosPage> {
   /// 构建进行中看板或完成历史。
   @override
   Widget build(BuildContext context) {
+    // 监听跨路由保留的象限状态变化。
+    ref.watch(_todoQuadrantFocusProvider);
     // 当前固定时间。
     final DateTime now = ref.watch(nowProvider);
     // 当前自然日。
@@ -242,6 +278,12 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         onDaySelected: (DateTime value) {
           setState(() => _selectedDay = DateUtils.dateOnly(value));
         },
+        onReturnToQuadrants:
+            !mobile &&
+                _pageView == _TodoPageView.active &&
+                _priorityQuadrantFilter != null
+            ? () => _setPriorityQuadrantFilter(null)
+            : null,
       ),
       const SizedBox(height: OmniSpacing.sm),
     ];
@@ -297,30 +339,58 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     if (mobile) {
       return _buildMobileBoard(context, grouped, now: now);
     }
-    if (_priorityQuadrantFilter != null) {
-      // 当前聚焦象限。
-      final TodoPriorityQuadrant quadrant = _priorityQuadrantFilter!;
-      return ListView(
-        children: <Widget>[
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: () => setState(() => _priorityQuadrantFilter = null),
-              icon: const Icon(Icons.arrow_back_rounded, size: 17),
-              label: const Text('返回四象限'),
-            ),
-          ),
-          _buildQuadrant(
+    // 当前系统是否要求减少动态效果。
+    final bool disableLayoutAnimation =
+        MediaQuery.disableAnimationsOf(context) ||
+        MediaQuery.of(context).accessibleNavigation;
+    // 桌面端布局切换时使用的时长。
+    final Duration transitionDuration = disableLayoutAnimation
+        ? Duration.zero
+        : OmniMotion.panel;
+    // 当前桌面端象限布局。
+    final Widget desktopBoard = _priorityQuadrantFilter == null
+        ? _buildDesktopQuadrantGrid(context, grouped, now: now)
+        : _buildDesktopFocusedBoard(
             context,
-            quadrant,
-            grouped[quadrant]!,
+            grouped,
+            focusedQuadrant: _priorityQuadrantFilter!,
             now: now,
-            allowFocus: false,
-            allowDrag: false,
+          );
+    return AnimatedSwitcher(
+      duration: transitionDuration,
+      reverseDuration: transitionDuration,
+      switchInCurve: OmniMotion.standardCurve,
+      switchOutCurve: OmniMotion.standardCurve,
+      layoutBuilder: (Widget? currentChild, List<Widget> previousChildren) =>
+          Stack(
+            alignment: Alignment.topCenter,
+            children: <Widget>[...previousChildren, ?currentChild],
           ),
-        ],
-      );
-    }
+      transitionBuilder: (Widget child, Animation<double> animation) {
+        // 聚焦布局进入时的水平起点。
+        final double horizontalOffset = _priorityQuadrantFilter == null
+            ? 0
+            : (_isLeftQuadrant(_priorityQuadrantFilter!) ? -0.025 : 0.025);
+        // 当前布局的位移动画。
+        final Animation<Offset> slideAnimation = Tween<Offset>(
+          begin: Offset(horizontalOffset, 0),
+          end: Offset.zero,
+        ).animate(animation);
+        return FadeTransition(
+          opacity: animation,
+          child: SlideTransition(position: slideAnimation, child: child),
+        );
+      },
+      child: desktopBoard,
+    );
+  }
+
+  /// 构建桌面端默认的两行两列象限。
+  Widget _buildDesktopQuadrantGrid(
+    BuildContext context,
+    Map<TodoPriorityQuadrant, List<TodoTreeNode>> grouped, {
+    required DateTime now,
+  }) {
     // 桌面端四象限按两行两列排列。
     final List<TodoPriorityQuadrant> quadrants =
         todoPriorityQuadrantMatrixOrder;
@@ -367,6 +437,82 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     );
   }
 
+  /// 构建桌面端主象限与对侧纵向象限列。
+  Widget _buildDesktopFocusedBoard(
+    BuildContext context,
+    Map<TodoPriorityQuadrant, List<TodoTreeNode>> grouped, {
+    required TodoPriorityQuadrant focusedQuadrant,
+    required DateTime now,
+  }) {
+    // 聚焦象限是否来自默认矩阵左侧。
+    final bool focusedOnLeft = _isLeftQuadrant(focusedQuadrant);
+    // 聚焦后在对侧纵向展示的其余象限。
+    final List<TodoPriorityQuadrant> secondaryQuadrants =
+        todoPriorityQuadrantMatrixOrder
+            .where(
+              (TodoPriorityQuadrant quadrant) => quadrant != focusedQuadrant,
+            )
+            .toList(growable: false);
+    // 当前聚焦的主象限卡片。
+    final Widget primaryQuadrant = _buildQuadrant(
+      context,
+      focusedQuadrant,
+      grouped[focusedQuadrant]!,
+      now: now,
+      allowFocus: true,
+      allowDrag: true,
+    );
+    // 对侧纵向排列的象限列。
+    final Widget secondaryColumn = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        for (
+          int index = 0;
+          index < secondaryQuadrants.length;
+          index += 1
+        ) ...<Widget>[
+          if (index > 0) const SizedBox(height: OmniSpacing.xs),
+          _buildQuadrant(
+            context,
+            secondaryQuadrants[index],
+            grouped[secondaryQuadrants[index]]!,
+            now: now,
+            allowFocus: true,
+            allowDrag: true,
+          ),
+        ],
+      ],
+    );
+    // 聚焦象限和其余象限之间的水平间距。
+    const Widget horizontalGap = SizedBox(width: OmniSpacing.xs);
+    return SingleChildScrollView(
+      key: ValueKey<String>('todo-quadrant-focus-${focusedQuadrant.value}'),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            if (focusedOnLeft) ...<Widget>[
+              Expanded(flex: 2, child: primaryQuadrant),
+              horizontalGap,
+              Expanded(child: secondaryColumn),
+            ] else ...<Widget>[
+              Expanded(child: secondaryColumn),
+              horizontalGap,
+              Expanded(flex: 2, child: primaryQuadrant),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 判断象限是否位于默认二维矩阵的左侧。
+  bool _isLeftQuadrant(TodoPriorityQuadrant quadrant) {
+    // 象限在二维矩阵中的位置。
+    final int quadrantIndex = todoPriorityQuadrantMatrixOrder.indexOf(quadrant);
+    return quadrantIndex.isEven;
+  }
+
   /// 构建移动端纵向象限。
   Widget _buildMobileBoard(
     BuildContext context,
@@ -387,7 +533,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
               quadrant: grouped[quadrant]!.length,
           },
           onSelected: (TodoPriorityQuadrant? value) {
-            setState(() => _priorityQuadrantFilter = value);
+            _setPriorityQuadrantFilter(value);
           },
         ),
         const SizedBox(height: OmniSpacing.xs),
@@ -427,7 +573,9 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       completingTodoIds: _completingTodoIds,
       allowDrag: allowDrag,
       onFocus: allowFocus
-          ? () => setState(() => _priorityQuadrantFilter = quadrant)
+          ? () => _setPriorityQuadrantFilter(
+              _priorityQuadrantFilter == quadrant ? null : quadrant,
+            )
           : null,
       onCreate: () => TodoEditorDialog.show(
         context,
@@ -984,6 +1132,9 @@ class _TodoViewBar extends StatelessWidget {
   /// 历史日期切换回调。
   final ValueChanged<DateTime> onDaySelected;
 
+  /// 返回完整四象限布局的回调。
+  final VoidCallback? onReturnToQuadrants;
+
   /// 创建视图控制区。
   const _TodoViewBar({
     required this.view,
@@ -992,6 +1143,7 @@ class _TodoViewBar extends StatelessWidget {
     required this.activeCount,
     required this.onViewChanged,
     required this.onDaySelected,
+    this.onReturnToQuadrants,
   });
 
   /// 构建视图切换和可选日期巡航。
@@ -1015,8 +1167,24 @@ class _TodoViewBar extends StatelessWidget {
         onViewChanged(values.first);
       },
     );
+    // 视图切换器与可选返回操作。
+    final Widget selectorActions = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        selector,
+        if (onReturnToQuadrants != null) ...<Widget>[
+          const SizedBox(width: OmniSpacing.xs),
+          TextButton.icon(
+            key: const ValueKey<String>('todo-return-quadrants'),
+            onPressed: onReturnToQuadrants,
+            icon: const Icon(Icons.arrow_back_rounded, size: 17),
+            label: const Text('返回'),
+          ),
+        ],
+      ],
+    );
     if (view == _TodoPageView.active) {
-      return Align(alignment: Alignment.centerLeft, child: selector);
+      return Align(alignment: Alignment.centerLeft, child: selectorActions);
     }
     // 完成历史日期巡航。
     final Widget dateSelector = Row(
@@ -1049,13 +1217,13 @@ class _TodoViewBar extends StatelessWidget {
       builder: (BuildContext context, BoxConstraints constraints) {
         if (constraints.maxWidth >= 720) {
           return Row(
-            children: <Widget>[selector, const Spacer(), dateSelector],
+            children: <Widget>[selectorActions, const Spacer(), dateSelector],
           );
         }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            selector,
+            selectorActions,
             const SizedBox(height: OmniSpacing.xs),
             dateSelector,
           ],
@@ -1665,6 +1833,7 @@ class _TodoTaskRow extends StatelessWidget {
         absorbing: completing,
         child: OmniListRow(
           onTap: onEdit,
+          borderRadius: BorderRadius.circular(OmniRadius.control),
           padding: const EdgeInsets.symmetric(
             horizontal: OmniSpacing.sm,
             vertical: OmniSpacing.xs,

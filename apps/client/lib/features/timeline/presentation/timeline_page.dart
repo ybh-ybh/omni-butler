@@ -205,7 +205,6 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
         children: <Widget>[
           OmniPageHeader(
             title: '时间管理',
-            description: '看清时间去了哪里，也看见它如何变化',
             actions: <Widget>[
               OmniButton(
                 label: '分类',
