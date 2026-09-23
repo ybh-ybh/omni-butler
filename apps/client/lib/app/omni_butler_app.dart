@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:omni_butler/app/omni_scroll_behavior.dart';
 import 'package:omni_butler/app/router/app_router.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
@@ -118,6 +119,7 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
       theme: AppTheme.build(brightness: Brightness.light),
       darkTheme: AppTheme.build(brightness: Brightness.dark),
       themeMode: preference.mode,
+      scrollBehavior: const OmniScrollBehavior(),
       routerConfig: router,
     );
   }
