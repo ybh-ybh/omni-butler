@@ -995,16 +995,12 @@ class _MembershipQuickFilters extends StatelessWidget {
   /// 构建带滑块动画的快捷筛选控件。
   @override
   Widget build(BuildContext context) {
-    // 当前主题色，沿用原分段按钮的颜色语义。
-    final ColorScheme scheme = Theme.of(context).colorScheme;
     // 快捷筛选的固定顺序。
     const List<_MembershipQuickFilter> options = <_MembershipQuickFilter>[
       _MembershipQuickFilter.all,
       _MembershipQuickFilter.upcoming,
       _MembershipQuickFilter.autoRenew,
     ];
-    // 当前选中项在轨道中的位置。
-    final int selectedIndex = options.indexOf(selected);
     // 快捷筛选标签文案。
     String labelFor(_MembershipQuickFilter option) {
       return switch (option) {
@@ -1014,68 +1010,15 @@ class _MembershipQuickFilters extends StatelessWidget {
       };
     }
 
-    return Container(
+    return OmniSlidingSegmentedControl<_MembershipQuickFilter>(
       key: const ValueKey<String>('membership-quick-filters'),
+      options: options,
+      selected: selected,
       width: 306,
-      height: 36,
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        color: scheme.surface,
-        borderRadius: BorderRadius.circular(OmniRadius.dialog),
-        border: Border.all(color: scheme.outline),
-      ),
-      child: Stack(
-        children: <Widget>[
-          AnimatedAlign(
-            duration: OmniMotion.normal,
-            curve: OmniMotion.standardCurve,
-            alignment: Alignment(-1 + selectedIndex.toDouble(), 0),
-            child: FractionallySizedBox(
-              widthFactor: 1 / options.length,
-              heightFactor: 1,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: scheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(OmniRadius.control),
-                ),
-              ),
-            ),
-          ),
-          Row(
-            children: <Widget>[
-              for (final _MembershipQuickFilter option in options)
-                Expanded(
-                  child: Semantics(
-                    button: true,
-                    selected: option == selected,
-                    label: labelFor(option),
-                    child: InkWell(
-                      key: ValueKey<String>('membership-quick-${option.name}'),
-                      borderRadius: BorderRadius.circular(OmniRadius.control),
-                      onTap: () => onChanged(option),
-                      child: Center(
-                        child: Text(
-                          labelFor(option),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.labelMedium
-                              ?.copyWith(
-                                color: option == selected
-                                    ? scheme.onPrimaryContainer
-                                    : scheme.onSurfaceVariant,
-                                fontWeight: option == selected
-                                    ? FontWeight.w600
-                                    : FontWeight.w400,
-                              ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ],
-      ),
+      labelBuilder: labelFor,
+      itemKeyBuilder: (_MembershipQuickFilter option) =>
+          ValueKey<String>('membership-quick-${option.name}'),
+      onChanged: onChanged,
     );
   }
 }

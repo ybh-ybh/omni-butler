@@ -33,6 +33,16 @@ void main() {
     );
   });
 
+  testWidgets('每日待办移动端完成历史视觉基线', (WidgetTester tester) async {
+    await _verifyTodoGolden(
+      tester,
+      viewport: const Size(390, 844),
+      platform: TargetPlatform.android,
+      goldenPath: 'goldens/todos_history_light_390x844.png',
+      showHistory: true,
+    );
+  });
+
   testWidgets('每日待办桌面空白日视觉基线', (WidgetTester tester) async {
     await _verifyTodoGolden(
       tester,

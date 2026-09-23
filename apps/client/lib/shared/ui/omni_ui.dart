@@ -5,5 +5,6 @@ export 'omni_message.dart';
 export 'omni_overlay.dart';
 export 'omni_page_header.dart';
 export 'omni_panel.dart';
+export 'omni_sliding_segmented_control.dart';
 export 'omni_switch.dart';
 export 'omni_tag.dart';

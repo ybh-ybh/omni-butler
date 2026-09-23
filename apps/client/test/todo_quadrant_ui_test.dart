@@ -14,6 +14,7 @@ import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/shared/ui/omni_panel.dart';
+import 'package:omni_butler/shared/ui/omni_sliding_segmented_control.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证待办四象限在首页、完整页面与编辑器中保持一致。
@@ -823,6 +824,15 @@ void main() {
     final AppDatabase database = AppDatabase.forTesting(
       NativeDatabase.memory(),
     );
+    // 移动端导航数量角标使用的测试仓储。
+    final TodoRepository repository = TodoRepository(database);
+    await repository.save(
+      TodoDraft(
+        title: '移动端角标任务',
+        scheduledDate: DateTime(2026, 9, 6),
+        priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
+      ),
+    );
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -845,6 +855,42 @@ void main() {
       find.byKey(const ValueKey<String>('todo-mobile-filter-all')),
       findsOneWidget,
     );
+    expect(find.textContaining('跨计划日期常驻显示'), findsNothing);
+    expect(find.byType(ChoiceChip), findsNothing);
+    expect(
+      find.byType(OmniSlidingSegmentedControl<TodoPriorityQuadrant?>),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-count-3')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-count-2')),
+      findsNothing,
+    );
+    // 待办象限轨道中的滑块动画。
+    final AnimatedAlign quadrantIndicator = tester.widget<AnimatedAlign>(
+      find.descendant(
+        of: find.byKey(const ValueKey<String>('todo-mobile-quadrant-filters')),
+        matching: find.byType(AnimatedAlign),
+      ),
+    );
+    expect(quadrantIndicator.duration, OmniMotion.normal);
+    expect(quadrantIndicator.curve, OmniMotion.standardCurve);
+    // 一级视图轨道中的滑块动画。
+    final AnimatedAlign viewIndicator = tester.widget<AnimatedAlign>(
+      find.descendant(
+        of: find.byKey(const ValueKey<String>('todo-mobile-view-filters')),
+        matching: find.byType(AnimatedAlign),
+      ),
+    );
+    expect(viewIndicator.duration, OmniMotion.normal);
+    expect(viewIndicator.curve, OmniMotion.standardCurve);
     expect(
       find.byKey(const ValueKey<String>('todo-mobile-create')),
       findsOneWidget,
@@ -863,6 +909,33 @@ void main() {
       );
     }
 
+    for (final double width in <double>[320, 360, 390]) {
+      tester.view.physicalSize = Size(width, viewport.height);
+      await tester.pumpAndSettle();
+      // 当前宽度下的一体化导航边界。
+      final Rect navigationRect = tester.getRect(
+        find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
+      );
+      for (final TodoPriorityQuadrant? quadrant in <TodoPriorityQuadrant?>[
+        null,
+        ...todoPriorityQuadrantActionOrder,
+      ]) {
+        // 当前象限点击区域边界。
+        final Rect filterRect = tester.getRect(
+          find.byKey(
+            ValueKey<String>(
+              quadrant == null
+                  ? 'todo-mobile-filter-all'
+                  : 'todo-mobile-filter-${quadrant.value}',
+            ),
+          ),
+        );
+        expect(filterRect.left, greaterThanOrEqualTo(navigationRect.left));
+        expect(filterRect.right, lessThanOrEqualTo(navigationRect.right));
+      }
+      expect(tester.takeException(), isNull);
+    }
+
     await tester.tap(
       find.byKey(const ValueKey<String>('todo-mobile-filter-2')),
     );
@@ -874,6 +947,41 @@ void main() {
     expect(
       find.byKey(const ValueKey<String>('todo-mobile-section-3-all')),
       findsNothing,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('todo-mobile-view-history')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-history-date-row')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-quadrant-filters')),
+      findsNothing,
+    );
+    for (final double width in <double>[320, 360, 390]) {
+      tester.view.physicalSize = Size(width, viewport.height);
+      await tester.pumpAndSettle();
+      // 当前宽度下的历史日期行边界。
+      final Rect dateRowRect = tester.getRect(
+        find.byKey(const ValueKey<String>('todo-mobile-history-date-row')),
+      );
+      // 当前宽度下的一体化导航边界。
+      final Rect navigationRect = tester.getRect(
+        find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
+      );
+      expect(dateRowRect.left, greaterThanOrEqualTo(navigationRect.left));
+      expect(dateRowRect.right, lessThanOrEqualTo(navigationRect.right));
+      expect(tester.takeException(), isNull);
+    }
+    await tester.tap(
+      find.byKey(const ValueKey<String>('todo-mobile-view-active')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-section-2-focused')),
+      findsOneWidget,
     );
 
     await tester.pumpWidget(const SizedBox.shrink());

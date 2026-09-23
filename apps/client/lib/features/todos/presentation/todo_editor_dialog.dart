@@ -247,7 +247,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
           onPressed: _saving ? null : () => Navigator.pop(context, false),
         ),
         OmniButton(
-          label: _saving ? '正在保存' : '保存到本机',
+          label: _saving ? '正在保存' : '保存',
           icon: Icons.save_outlined,
           loading: _saving,
           onPressed: _saving ? null : _save,

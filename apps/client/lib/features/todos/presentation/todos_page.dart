@@ -218,6 +218,20 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       (int count, TodoTreeNode tree) =>
           count + (tree.root.isCompleted ? 0 : 1) + tree.pendingChildrenCount,
     );
+    // 移动端导航展示的各象限主任务数量。
+    final Map<TodoPriorityQuadrant, int> quadrantCounts =
+        <TodoPriorityQuadrant, int>{
+          for (final TodoPriorityQuadrant quadrant
+              in todoPriorityQuadrantActionOrder)
+            quadrant: 0,
+        };
+    for (final TodoTreeNode tree in trees) {
+      // 当前主任务所属的象限。
+      final TodoPriorityQuadrant quadrant = TodoPriorityQuadrant.fromValue(
+        tree.root.priorityQuadrant,
+      );
+      quadrantCounts.update(quadrant, (int count) => count + 1);
+    }
     // 当前视图主体。
     final Widget body = _pageView == _TodoPageView.active
         ? activeAsync.when(
@@ -232,6 +246,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
               key: ValueKey<String>(
                 'todo-history-${DateUtils.dateOnly(_selectedDay).toIso8601String()}',
               ),
+              mobile: mobile,
               entries: records,
               onReopen: (TodoRecord todo) => _setTodoCompleted(todo, false),
               onEdit: (TodoRecord todo) =>
@@ -245,7 +260,9 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     final List<Widget> header = <Widget>[
       OmniPageHeader(
         title: '每日待办',
-        description: _pageView == _TodoPageView.active
+        description: mobile
+            ? null
+            : _pageView == _TodoPageView.active
             ? '${trees.length} 个主任务 · $pendingCount 项未完成，跨计划日期常驻显示'
             : '${DateFormat('yyyy 年 M 月 d 日').format(_selectedDay)}完成的任务',
         actions: mobile || _pageView == _TodoPageView.history
@@ -266,9 +283,12 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       const SizedBox(height: OmniSpacing.sm),
       _TodoViewBar(
         view: _pageView,
+        mobile: mobile,
         selectedDay: _selectedDay,
         today: DateUtils.dateOnly(now),
         activeCount: pendingCount,
+        selectedQuadrant: _priorityQuadrantFilter,
+        quadrantCounts: quadrantCounts,
         onViewChanged: (_TodoPageView value) {
           _dismissUndo();
           setState(() {
@@ -278,6 +298,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         onDaySelected: (DateTime value) {
           setState(() => _selectedDay = DateUtils.dateOnly(value));
         },
+        onQuadrantSelected: _setPriorityQuadrantFilter,
         onReturnToQuadrants:
             !mobile &&
                 _pageView == _TodoPageView.active &&
@@ -526,17 +547,6 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        _MobileQuadrantNavigation(
-          selectedQuadrant: _priorityQuadrantFilter,
-          counts: <TodoPriorityQuadrant, int>{
-            for (final TodoPriorityQuadrant quadrant in grouped.keys)
-              quadrant: grouped[quadrant]!.length,
-          },
-          onSelected: (TodoPriorityQuadrant? value) {
-            _setPriorityQuadrantFilter(value);
-          },
-        ),
-        const SizedBox(height: OmniSpacing.xs),
         for (int index = 0; index < quadrants.length; index += 1) ...<Widget>[
           if (index > 0) const SizedBox(height: OmniSpacing.xs),
           KeyedSubtree(
@@ -1117,6 +1127,9 @@ class _TodoViewBar extends StatelessWidget {
   /// 当前视图。
   final _TodoPageView view;
 
+  /// 是否使用移动端一体化导航。
+  final bool mobile;
+
   /// 当前历史日期。
   final DateTime selectedDay;
 
@@ -1126,11 +1139,20 @@ class _TodoViewBar extends StatelessWidget {
   /// 未完成节点数量。
   final int activeCount;
 
+  /// 当前移动端聚焦的象限。
+  final TodoPriorityQuadrant? selectedQuadrant;
+
+  /// 各象限主任务数量。
+  final Map<TodoPriorityQuadrant, int> quadrantCounts;
+
   /// 视图切换回调。
   final ValueChanged<_TodoPageView> onViewChanged;
 
   /// 历史日期切换回调。
   final ValueChanged<DateTime> onDaySelected;
+
+  /// 移动端象限切换回调。
+  final ValueChanged<TodoPriorityQuadrant?> onQuadrantSelected;
 
   /// 返回完整四象限布局的回调。
   final VoidCallback? onReturnToQuadrants;
@@ -1138,17 +1160,34 @@ class _TodoViewBar extends StatelessWidget {
   /// 创建视图控制区。
   const _TodoViewBar({
     required this.view,
+    required this.mobile,
     required this.selectedDay,
     required this.today,
     required this.activeCount,
+    required this.selectedQuadrant,
+    required this.quadrantCounts,
     required this.onViewChanged,
     required this.onDaySelected,
+    required this.onQuadrantSelected,
     this.onReturnToQuadrants,
   });
 
   /// 构建视图切换和可选日期巡航。
   @override
   Widget build(BuildContext context) {
+    if (mobile) {
+      return _MobileTodoNavigation(
+        view: view,
+        selectedDay: selectedDay,
+        today: today,
+        activeCount: activeCount,
+        selectedQuadrant: selectedQuadrant,
+        quadrantCounts: quadrantCounts,
+        onViewChanged: onViewChanged,
+        onDaySelected: onDaySelected,
+        onQuadrantSelected: onQuadrantSelected,
+      );
+    }
     // 进行中与完成历史切换。
     final Widget selector = SegmentedButton<_TodoPageView>(
       showSelectedIcon: false,
@@ -1998,6 +2037,9 @@ class _TodoInlineTitle extends StatelessWidget {
 
 /// 已完成任务历史树列表。
 class _CompletedTodoHistory extends StatefulWidget {
+  /// 是否嵌入移动端页面的外层滚动容器。
+  final bool mobile;
+
   /// 当前日期完成记录。
   final List<TodoHistoryEntry> entries;
 
@@ -2009,6 +2051,7 @@ class _CompletedTodoHistory extends StatefulWidget {
 
   /// 创建完成历史列表。
   const _CompletedTodoHistory({
+    required this.mobile,
     required this.entries,
     required this.onReopen,
     required this.onEdit,
@@ -2035,6 +2078,8 @@ class _CompletedTodoHistoryState extends State<_CompletedTodoHistory> {
     final List<_TodoHistoryGroup> groups = _groupEntries(widget.entries);
     return ListView.separated(
       padding: EdgeInsets.zero,
+      shrinkWrap: widget.mobile,
+      physics: widget.mobile ? const NeverScrollableScrollPhysics() : null,
       itemCount: groups.length,
       separatorBuilder: (BuildContext context, int index) =>
           const SizedBox(height: OmniSpacing.xs),
@@ -2420,59 +2465,304 @@ class _TodoHistoryParentContextRow extends StatelessWidget {
   }
 }
 
-/// 移动端象限导航。
-class _MobileQuadrantNavigation extends StatelessWidget {
-  /// 当前选中象限。
+/// 移动端一级视图、象限筛选与历史日期的一体化导航。
+class _MobileTodoNavigation extends StatelessWidget {
+  /// 当前一级视图。
+  final _TodoPageView view;
+
+  /// 当前历史日期。
+  final DateTime selectedDay;
+
+  /// 当前自然日。
+  final DateTime today;
+
+  /// 未完成节点数量。
+  final int activeCount;
+
+  /// 当前聚焦象限。
   final TodoPriorityQuadrant? selectedQuadrant;
 
   /// 各象限主任务数量。
-  final Map<TodoPriorityQuadrant, int> counts;
+  final Map<TodoPriorityQuadrant, int> quadrantCounts;
 
-  /// 象限选择回调。
-  final ValueChanged<TodoPriorityQuadrant?> onSelected;
+  /// 一级视图切换回调。
+  final ValueChanged<_TodoPageView> onViewChanged;
 
-  /// 创建移动端象限导航。
-  const _MobileQuadrantNavigation({
+  /// 历史日期切换回调。
+  final ValueChanged<DateTime> onDaySelected;
+
+  /// 象限切换回调。
+  final ValueChanged<TodoPriorityQuadrant?> onQuadrantSelected;
+
+  /// 创建移动端一体化导航。
+  const _MobileTodoNavigation({
+    required this.view,
+    required this.selectedDay,
+    required this.today,
+    required this.activeCount,
     required this.selectedQuadrant,
-    required this.counts,
-    required this.onSelected,
+    required this.quadrantCounts,
+    required this.onViewChanged,
+    required this.onDaySelected,
+    required this.onQuadrantSelected,
   });
 
-  /// 构建横向滚动选择项。
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 40,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
+  /// 返回一级视图标签。
+  String _viewLabel(_TodoPageView option) {
+    return switch (option) {
+      _TodoPageView.active => '进行中 $activeCount',
+      _TodoPageView.history => '完成历史',
+    };
+  }
+
+  /// 返回象限的可见短标签。
+  String _quadrantLabel(TodoPriorityQuadrant? quadrant) {
+    return quadrant?.actionLabel ?? '全部';
+  }
+
+  /// 返回包含非零数量的象限无障碍标签。
+  String _quadrantSemanticLabel(TodoPriorityQuadrant? quadrant) {
+    if (quadrant == null) {
+      return '四象限';
+    }
+    // 当前象限主任务数量。
+    final int count = quadrantCounts[quadrant] ?? 0;
+    return count > 0
+        ? '${quadrant.actionLabel}，$count 个任务'
+        : quadrant.actionLabel;
+  }
+
+  /// 构建带非零数量角标的象限标签。
+  Widget _buildQuadrantItem(
+    BuildContext context,
+    TodoPriorityQuadrant? quadrant,
+    bool selected,
+  ) {
+    // 当前主题色。
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    // 当前象限主任务数量。
+    final int count = quadrant == null ? 0 : quadrantCounts[quadrant] ?? 0;
+    // 最多展示两位任务数量。
+    final String countLabel = count > 99 ? '99+' : '$count';
+    // 当前标签文字颜色。
+    final Color labelColor = selected
+        ? scheme.onPrimaryContainer
+        : scheme.onSurfaceVariant;
+    return SizedBox.expand(
+      child: Stack(
+        alignment: Alignment.center,
         children: <Widget>[
-          ChoiceChip(
-            key: const ValueKey<String>('todo-mobile-filter-all'),
-            label: const Text('四象限'),
-            selected: selectedQuadrant == null,
-            onSelected: (bool selected) {
-              if (selected) {
-                onSelected(null);
-              }
-            },
-          ),
-          const SizedBox(width: OmniSpacing.xs),
-          for (final TodoPriorityQuadrant quadrant
-              in todoPriorityQuadrantActionOrder) ...<Widget>[
-            ChoiceChip(
-              key: ValueKey<String>('todo-mobile-filter-${quadrant.value}'),
-              label: Text('${quadrant.actionLabel} ${counts[quadrant] ?? 0}'),
-              selected: selectedQuadrant == quadrant,
-              onSelected: (bool selected) {
-                if (selected) {
-                  onSelected(quadrant);
-                }
-              },
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                _quadrantLabel(quadrant),
+                maxLines: 1,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: labelColor,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
             ),
-            const SizedBox(width: OmniSpacing.xs),
-          ],
+          ),
+          if (count > 0)
+            Positioned(
+              top: 1,
+              right: 1,
+              child: Container(
+                key: ValueKey<String>('todo-mobile-count-${quadrant!.value}'),
+                height: 13,
+                constraints: const BoxConstraints(minWidth: 13),
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? scheme.primary
+                      : scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(OmniRadius.pill),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  countLabel,
+                  style: TextStyle(
+                    color: selected
+                        ? scheme.onPrimary
+                        : scheme.onSurfaceVariant,
+                    fontSize: 8,
+                    height: 1,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
+    );
+  }
+
+  /// 构建进行中视图的五等分象限导航。
+  Widget _buildQuadrantSelector(double width) {
+    // 完整四象限与各单象限选项的固定顺序。
+    final List<TodoPriorityQuadrant?> options = <TodoPriorityQuadrant?>[
+      null,
+      ...todoPriorityQuadrantActionOrder,
+    ];
+    return OmniSlidingSegmentedControl<TodoPriorityQuadrant?>(
+      key: const ValueKey<String>('todo-mobile-quadrant-filters'),
+      options: options,
+      selected: selectedQuadrant,
+      width: width,
+      height: OmniSize.touch,
+      embedded: true,
+      labelBuilder: _quadrantSemanticLabel,
+      itemBuilder: _buildQuadrantItem,
+      itemKeyBuilder: (TodoPriorityQuadrant? quadrant) => ValueKey<String>(
+        quadrant == null
+            ? 'todo-mobile-filter-all'
+            : 'todo-mobile-filter-${quadrant.value}',
+      ),
+      onChanged: onQuadrantSelected,
+    );
+  }
+
+  /// 构建完成历史视图的日期导航。
+  Widget _buildDateSelector() {
+    // 日期按钮的嵌入式样式。
+    final ButtonStyle dateButtonStyle = OutlinedButton.styleFrom(
+      side: BorderSide.none,
+      minimumSize: const Size(0, 36),
+      padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    return SizedBox(
+      key: const ValueKey<String>('todo-mobile-history-date-row'),
+      height: OmniSize.touch,
+      width: double.infinity,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          IconButton(
+            key: const ValueKey<String>('todo-mobile-history-previous-day'),
+            tooltip: '前一天',
+            constraints: const BoxConstraints.tightFor(
+              width: OmniSize.touch,
+              height: OmniSize.touch,
+            ),
+            padding: EdgeInsets.zero,
+            onPressed: () =>
+                onDaySelected(selectedDay.subtract(const Duration(days: 1))),
+            icon: const Icon(Icons.chevron_left_rounded),
+          ),
+          Expanded(
+            child: OmniDatePickerButton(
+              key: const ValueKey<String>('todo-mobile-history-date-picker'),
+              value: selectedDay,
+              initialDate: selectedDay,
+              currentDate: today,
+              firstDate: DateTime(2000),
+              lastDate: DateTime(2100),
+              label: DateFormat('yyyy 年 M 月 d 日').format(selectedDay),
+              icon: null,
+              style: dateButtonStyle,
+              onChanged: onDaySelected,
+            ),
+          ),
+          IconButton(
+            key: const ValueKey<String>('todo-mobile-history-next-day'),
+            tooltip: '后一天',
+            constraints: const BoxConstraints.tightFor(
+              width: OmniSize.touch,
+              height: OmniSize.touch,
+            ),
+            padding: EdgeInsets.zero,
+            onPressed: () =>
+                onDaySelected(selectedDay.add(const Duration(days: 1))),
+            icon: const Icon(Icons.chevron_right_rounded),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 构建共用外框、滑块动效与上下文第二层的导航面板。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题色。
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    // 当前系统是否要求减少动态效果。
+    final bool disableAnimation =
+        MediaQuery.disableAnimationsOf(context) ||
+        MediaQuery.of(context).accessibleNavigation;
+    // 第二层联动切换时长。
+    final Duration transitionDuration = disableAnimation
+        ? Duration.zero
+        : OmniMotion.normal;
+    // 一级视图选项固定顺序。
+    const List<_TodoPageView> viewOptions = <_TodoPageView>[
+      _TodoPageView.active,
+      _TodoPageView.history,
+    ];
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 导航面板占用的完整可用宽度。
+        final double width = constraints.maxWidth;
+        // 随一级视图变化的第二层导航。
+        final Widget contextNavigation = view == _TodoPageView.active
+            ? _buildQuadrantSelector(width)
+            : _buildDateSelector();
+        return Container(
+          key: const ValueKey<String>('todo-mobile-view-navigation'),
+          width: width,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: scheme.surface,
+            borderRadius: BorderRadius.circular(OmniRadius.dialog),
+            border: Border.all(color: scheme.outline),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              OmniSlidingSegmentedControl<_TodoPageView>(
+                key: const ValueKey<String>('todo-mobile-view-filters'),
+                options: viewOptions,
+                selected: view,
+                width: width,
+                height: OmniSize.touch,
+                embedded: true,
+                labelBuilder: _viewLabel,
+                itemKeyBuilder: (_TodoPageView option) =>
+                    ValueKey<String>('todo-mobile-view-${option.name}'),
+                onChanged: onViewChanged,
+              ),
+              Divider(height: 1, thickness: 1, color: scheme.outlineVariant),
+              SizedBox(
+                height: OmniSize.touch,
+                width: width,
+                child: AnimatedSwitcher(
+                  duration: transitionDuration,
+                  reverseDuration: transitionDuration,
+                  switchInCurve: OmniMotion.standardCurve,
+                  switchOutCurve: OmniMotion.standardCurve,
+                  layoutBuilder:
+                      (Widget? currentChild, List<Widget> previousChildren) =>
+                          Stack(
+                            alignment: Alignment.center,
+                            children: <Widget>[
+                              ...previousChildren,
+                              ?currentChild,
+                            ],
+                          ),
+                  transitionBuilder: (
+                    Widget child,
+                    Animation<double> animation,
+                  ) => FadeTransition(opacity: animation, child: child),
+                  child: contextNavigation,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
