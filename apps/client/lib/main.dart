@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/auth/auth_providers.dart';
 import 'package:omni_butler/core/auth/auth_repository.dart';
@@ -16,9 +18,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 初始化本地依赖并启动应用。
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // 初始化窗口管理并限制最小窗口尺寸。
-  await windowManager.ensureInitialized();
-  await windowManager.setMinimumSize(const Size(512, 512));
+  // 桌面端初始化窗口管理并限制最小窗口尺寸。
+  if (OmniBreakpoint.isDesktopPlatform(defaultTargetPlatform)) {
+    await windowManager.ensureInitialized();
+    await windowManager.setMinimumSize(const Size(512, 512));
+  }
   // 设备本地主题偏好存储。
   final SharedPreferences preferences = await SharedPreferences.getInstance();
   // 当前平台系统安全存储。
