@@ -26,6 +26,15 @@ abstract final class OmniDropdownMotion {
   static const Duration reveal = Duration(milliseconds: 90);
 }
 
+/// 下拉菜单当前选项勾选标记的位置。
+enum OmniDropdownSelectionIndicatorPosition {
+  /// 勾选标记位于菜单项最左侧。
+  leading,
+
+  /// 勾选标记位于菜单项最右侧。
+  trailing,
+}
+
 /// 统一的独立下拉选择按钮。
 class OmniDropdownButton<T> extends StatelessWidget {
   /// 当前选中的值。
@@ -52,6 +61,9 @@ class OmniDropdownButton<T> extends StatelessWidget {
   /// 是否自动获取焦点。
   final bool autofocus;
 
+  /// 当前选项勾选标记的位置。
+  final OmniDropdownSelectionIndicatorPosition selectionIndicatorPosition;
+
   /// 创建独立下拉选择按钮。
   const OmniDropdownButton({
     required this.value,
@@ -62,6 +74,8 @@ class OmniDropdownButton<T> extends StatelessWidget {
     this.height = OmniSize.control,
     this.focusNode,
     this.autofocus = false,
+    this.selectionIndicatorPosition =
+        OmniDropdownSelectionIndicatorPosition.leading,
     super.key,
   });
 
@@ -78,6 +92,7 @@ class OmniDropdownButton<T> extends StatelessWidget {
         height: height,
         focusNode: focusNode,
         autofocus: autofocus,
+        selectionIndicatorPosition: selectionIndicatorPosition,
       ),
     );
   }
@@ -94,6 +109,8 @@ class OmniDropdownButtonFormField<T> extends FormField<T> {
     InputDecoration decoration = const InputDecoration(),
     FocusNode? focusNode,
     bool autofocus = false,
+    OmniDropdownSelectionIndicatorPosition selectionIndicatorPosition =
+        OmniDropdownSelectionIndicatorPosition.leading,
     super.onSaved,
     super.validator,
     AutovalidateMode? autovalidateMode,
@@ -118,6 +135,7 @@ class OmniDropdownButtonFormField<T> extends FormField<T> {
              decoration: effectiveDecoration,
              focusNode: focusNode,
              autofocus: autofocus,
+             selectionIndicatorPosition: selectionIndicatorPosition,
            );
          },
        );
@@ -252,6 +270,9 @@ class _OmniDropdownControl<T> extends StatefulWidget {
   /// 是否自动获取焦点。
   final bool autofocus;
 
+  /// 当前选项勾选标记的位置。
+  final OmniDropdownSelectionIndicatorPosition selectionIndicatorPosition;
+
   /// 创建下拉选择控件实现。
   const _OmniDropdownControl({
     required this.value,
@@ -260,6 +281,7 @@ class _OmniDropdownControl<T> extends StatefulWidget {
     required this.hint,
     required this.focusNode,
     required this.autofocus,
+    required this.selectionIndicatorPosition,
     this.height = OmniSize.control,
     this.decoration,
   });
@@ -419,6 +441,10 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
         .map((DropdownMenuItem<T> item) {
           // 当前菜单项是否被选中。
           final bool selected = item.value == widget.value;
+          // 当前菜单项的勾选图标。
+          final Widget? selectionIndicator = selected
+              ? Icon(Icons.check_rounded, size: 16, color: colors.brand)
+              : null;
           return TweenAnimationBuilder<double>(
             tween: Tween<double>(begin: 0, end: 1),
             duration: disableAnimations
@@ -432,12 +458,16 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
               onPressed: item.enabled && widget.onChanged != null
                   ? () => _selectItem(item)
                   : null,
-              leadingIcon: SizedBox.square(
-                dimension: 16,
-                child: selected
-                    ? Icon(Icons.check_rounded, size: 16, color: colors.brand)
-                    : null,
-              ),
+              leadingIcon:
+                  widget.selectionIndicatorPosition ==
+                      OmniDropdownSelectionIndicatorPosition.leading
+                  ? SizedBox.square(dimension: 16, child: selectionIndicator)
+                  : null,
+              trailingIcon:
+                  widget.selectionIndicatorPosition ==
+                      OmniDropdownSelectionIndicatorPosition.trailing
+                  ? SizedBox.square(dimension: 16, child: selectionIndicator)
+                  : null,
               style: _itemStyle(colors, selected: selected),
               child: DefaultTextStyle.merge(
                 maxLines: 1,

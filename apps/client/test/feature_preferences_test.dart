@@ -8,6 +8,7 @@ import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/presentation/settings_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -81,6 +82,13 @@ void main() {
     );
     expect(find.text('首页'), findsOneWidget);
     expect(find.text('始终开启'), findsOneWidget);
+    expect(find.text('Windows 桌面悬浮框'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('floating-window-toggle')),
+    );
+    await tester.pumpAndSettle();
+    expect(container.read(floatingWindowPreferenceProvider).enabled, isTrue);
 
     await tester.tap(
       find.byKey(const ValueKey<String>('feature-toggle-memberships')),

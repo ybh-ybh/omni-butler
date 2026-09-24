@@ -114,6 +114,78 @@ void main() {
     expect(selectedAction, 'edit');
   });
 
+  testWidgets('表单下拉菜单可保留左侧色点并将选中勾放到右侧', (WidgetTester tester) async {
+    // 象限色点的测试标识。
+    const ValueKey<String> quadrantDotKey = ValueKey<String>('quadrant-dot');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.build(brightness: Brightness.light),
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 240,
+              child: OmniDropdownButtonFormField<int>(
+                initialValue: 1,
+                selectionIndicatorPosition:
+                    OmniDropdownSelectionIndicatorPosition.trailing,
+                items: const <DropdownMenuItem<int>>[
+                  DropdownMenuItem<int>(
+                    value: 1,
+                    child: Row(
+                      children: <Widget>[
+                        DecoratedBox(
+                          key: quadrantDotKey,
+                          decoration: BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                          child: SizedBox.square(dimension: 6),
+                        ),
+                        SizedBox(width: 8),
+                        Expanded(child: Text('重要且紧急')),
+                      ],
+                    ),
+                  ),
+                  DropdownMenuItem<int>(value: 2, child: Text('重要不紧急')),
+                ],
+                onChanged: (int? value) {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('重要且紧急'));
+    await tester.pumpAndSettle();
+
+    // 当前选中菜单项的可视范围。
+    final Finder selectedMenuItem = find.widgetWithText(
+      MenuItemButton,
+      '重要且紧急',
+    );
+    // 选中项内的象限色点。
+    final Finder quadrantDot = find.descendant(
+      of: selectedMenuItem,
+      matching: find.byKey(quadrantDotKey),
+    );
+    // 选中项内的勾选图标。
+    final Finder selectionCheck = find.descendant(
+      of: selectedMenuItem,
+      matching: find.byIcon(Icons.check_rounded),
+    );
+
+    expect(selectedMenuItem, findsOneWidget);
+    expect(quadrantDot, findsOneWidget);
+    expect(selectionCheck, findsOneWidget);
+    expect(
+      tester.getCenter(quadrantDot).dx,
+      lessThan(tester.getCenter(selectionCheck).dx),
+    );
+  });
+
   testWidgets('飞书式下拉菜单视觉基线', (WidgetTester tester) async {
     // 下拉菜单视觉基线尺寸。
     const Size viewport = Size(420, 360);

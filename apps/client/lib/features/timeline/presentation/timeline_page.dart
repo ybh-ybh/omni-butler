@@ -41,6 +41,22 @@ Future<void> showBackfillTimeEntryDialog(
   );
 }
 
+/// 在当前页面打开进行中记录的结束弹窗。
+Future<void> showFinishTimeEntryDialog(
+  BuildContext context, {
+  required TimeEntryRecord record,
+}) async {
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
+      mode: _TimeEntryEditorMode.finish,
+      day: DateUtils.dateOnly(record.startedAt),
+      record: record,
+    ),
+  );
+}
+
 /// Android 时间页拆分按钮中的次要操作。
 enum _TimelineMobileAction {
   /// 补记完整时间记录。
@@ -132,15 +148,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
 
   /// 打开进行中记录的结束弹窗。
   Future<void> _openFinishEditor(TimeEntryRecord record) async {
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
-        mode: _TimeEntryEditorMode.finish,
-        day: DateUtils.dateOnly(record.startedAt),
-        record: record,
-      ),
-    );
+    await showFinishTimeEntryDialog(context, record: record);
   }
 
   /// 打开时间分类管理器。

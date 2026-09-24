@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -13,6 +14,7 @@ import 'package:omni_butler/core/notifications/notification_providers.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/sync/sync_preferences.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
+import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
 import 'package:omni_butler/features/settings/presentation/sync_connection_dialog.dart';
@@ -869,6 +871,16 @@ class _FeatureManagementCard extends ConsumerWidget {
     final OmniColors colors = OmniColors.of(context);
     // 当前设备功能偏好。
     final FeaturePreference preference = ref.watch(featurePreferenceProvider);
+    // 当前设备悬浮框偏好。
+    final FloatingWindowPreference floatingPreference = ref.watch(
+      floatingWindowPreferenceProvider,
+    );
+    // 当前是否运行在 Windows 平台。
+    final bool isWindows = defaultTargetPlatform == TargetPlatform.windows;
+    // 悬浮框当前是否至少有一个可展示的业务分区。
+    final bool floatingContentAvailable =
+        preference.isEnabled(AppFeature.todos) ||
+        preference.isEnabled(AppFeature.timeline);
 
     return _SettingsSection(
       title: '可用功能',
@@ -900,6 +912,31 @@ class _FeatureManagementCard extends ConsumerWidget {
               onChanged: (bool enabled) => ref
                   .read(featurePreferenceProvider.notifier)
                   .setFeatureEnabled(feature, enabled),
+            ),
+          ),
+        if (isWindows)
+          OmniListRow(
+            leading: _FeatureIcon(
+              icon: Icons.picture_in_picture_alt_outlined,
+              enabled: floatingPreference.enabled && floatingContentAvailable,
+              colors: colors,
+            ),
+            title: const Text('Windows 桌面悬浮框'),
+            subtitle: Text(
+              floatingContentAvailable
+                  ? '在桌面显示今日待办和时间记录快捷操作，仅保存在当前设备'
+                  : floatingPreference.enabled
+                  ? '相关功能均已关闭，悬浮框已暂时隐藏'
+                  : '请先开启每日待办或时间管理',
+            ),
+            trailing: OmniSwitch(
+              key: const ValueKey<String>('floating-window-toggle'),
+              value: floatingPreference.enabled,
+              onChanged: floatingContentAvailable || floatingPreference.enabled
+                  ? (bool enabled) => ref
+                        .read(floatingWindowPreferenceProvider.notifier)
+                        .setEnabled(enabled)
+                  : null,
             ),
           ),
       ],
