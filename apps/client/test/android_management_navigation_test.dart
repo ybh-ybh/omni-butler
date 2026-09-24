@@ -17,6 +17,164 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证 Android 管理聚合页的导航、操作与功能开关联动。
 void main() {
+  testWidgets('Android 更多页展示分组设置并支持二级返回', (WidgetTester tester) async {
+    await _configureAndroidView(tester);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'appearance.theme_mode': 'light',
+    });
+    // 测试用主题与功能偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 显式管理的依赖容器。
+    final ProviderContainer container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(preferences),
+        appDatabaseProvider.overrideWithValue(database),
+        nowProvider.overrideWithValue(DateTime(2026, 9, 24, 10)),
+      ],
+    );
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const OmniButlerApp(),
+      ),
+    );
+    container.read(appRouterProvider).go('/settings');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-overview')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey<String>('android-settings-header')),
+        matching: find.text('设置'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-back')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-group-features')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-group-appearance')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-group-sync')),
+      findsOneWidget,
+    );
+
+    // 五个分类入口的视觉顺序。
+    final List<Finder> categoryRows = <Finder>[
+      find.byKey(const ValueKey<String>('android-settings-category-features')),
+      find.byKey(
+        const ValueKey<String>('android-settings-category-appearance'),
+      ),
+      find.byKey(
+        const ValueKey<String>('android-settings-category-notifications'),
+      ),
+      find.byKey(const ValueKey<String>('android-settings-category-sync')),
+      find.byKey(const ValueKey<String>('android-settings-category-storage')),
+    ];
+    // 各分类入口的顶部纵坐标。
+    final List<double> categoryTops = categoryRows
+        .map((Finder finder) => tester.getTopLeft(finder).dy)
+        .toList(growable: false);
+    expect(categoryTops, orderedEquals(categoryTops.toList()..sort()));
+
+    await tester.tap(categoryRows.first);
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-detail-features')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('settings-content-features')),
+      findsOneWidget,
+    );
+    // 二级页返回按钮的实际位置。
+    final Rect settingsBackButtonRect = tester.getRect(
+      find.byKey(const ValueKey<String>('android-settings-back')),
+    );
+    expect(settingsBackButtonRect.left, lessThan(OmniSize.touch));
+    expect(settingsBackButtonRect.width, greaterThanOrEqualTo(OmniSize.touch));
+    expect(settingsBackButtonRect.height, greaterThanOrEqualTo(OmniSize.touch));
+    expect(find.byType(OmniPageHeader), findsNothing);
+    expect(find.text('会员管理'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('android-settings-back')),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-overview')),
+      findsOneWidget,
+    );
+
+    await tester.tap(categoryRows[1]);
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-detail-appearance')),
+      findsOneWidget,
+    );
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-overview')),
+      findsOneWidget,
+    );
+
+    // 其余分类都应复用原有详情内容并可返回分类主页。
+    const List<(String, String)> remainingCategories = <(String, String)>[
+      ('notifications', '通知提醒'),
+      ('sync', '数据同步'),
+      ('storage', '数据与存储'),
+    ];
+    for (final (String name, String label) in remainingCategories) {
+      await tester.tap(
+        find.byKey(ValueKey<String>('android-settings-category-$name')),
+      );
+      await tester.pump();
+      expect(
+        find.byKey(ValueKey<String>('android-settings-detail-$name')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey<String>('android-settings-header')),
+          matching: find.text(label),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(ValueKey<String>('settings-content-$name')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey<String>('android-settings-back')),
+      );
+      await tester.pump();
+    }
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    container.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+    await database.close();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('Android 管理滑块切换三个功能并记住上次页签', (WidgetTester tester) async {
     await _configureAndroidView(tester);
     SharedPreferences.setMockInitialValues(<String, Object>{
@@ -268,7 +426,16 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-overview')),
+      findsOneWidget,
+    );
     expect(find.text('事件记录'), findsNothing);
+    expect(find.text('会员管理'), findsNothing);
+    await tester.tap(
+      find.byKey(const ValueKey<String>('android-settings-category-features')),
+    );
+    await tester.pump();
     expect(find.text('会员管理'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());

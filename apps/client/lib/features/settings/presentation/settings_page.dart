@@ -91,6 +91,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   /// 当前选中的一级分类。
   _SettingsCategory _selectedCategory = _SettingsCategory.features;
 
+  /// Android 紧凑布局当前打开的二级分类，空值表示分类主页。
+  _SettingsCategory? _androidSelectedCategory;
+
   /// 构建桌面双栏或窄窗口单栏设置布局。
   @override
   Widget build(BuildContext context) {
@@ -99,6 +102,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
+        // 当前是否采用 Android 专用的二级设置结构。
+        final bool showAndroidHierarchy =
+            Theme.of(context).platform == TargetPlatform.android &&
+            OmniBreakpoint.isCompact(constraints.maxWidth);
+        if (showAndroidHierarchy) {
+          return _buildAndroidSettings(colors);
+        }
         // 当前是否展示 Windows 风格的左侧一级分类栏。
         final bool showSidebar = constraints.maxWidth >= 760;
         // 当前分类对应的右侧内容。
@@ -141,6 +151,283 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   /// 切换当前设置一级分类。
   void _selectCategory(_SettingsCategory category) {
     setState(() => _selectedCategory = category);
+  }
+
+  /// 构建 Android 分类主页或当前二级分类详情。
+  Widget _buildAndroidSettings(OmniColors colors) {
+    // 当前 Android 二级分类。
+    final _SettingsCategory? selectedCategory = _androidSelectedCategory;
+    return PopScope<Object?>(
+      canPop: selectedCategory == null,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (!didPop && _androidSelectedCategory != null) {
+          _closeAndroidCategory();
+        }
+      },
+      child: selectedCategory == null
+          ? _AndroidSettingsOverview(onSelected: _openAndroidCategory)
+          : _AndroidSettingsDetail(
+              category: selectedCategory,
+              onBack: _closeAndroidCategory,
+              child: _SettingsCategoryContent(
+                category: selectedCategory,
+                colors: colors,
+                showPageHeader: false,
+              ),
+            ),
+    );
+  }
+
+  /// 打开 Android 指定二级分类并同步桌面选中状态。
+  void _openAndroidCategory(_SettingsCategory category) {
+    setState(() {
+      _selectedCategory = category;
+      _androidSelectedCategory = category;
+    });
+  }
+
+  /// 返回 Android 设置分类主页。
+  void _closeAndroidCategory() {
+    setState(() => _androidSelectedCategory = null);
+  }
+}
+
+/// Android 设置分类主页。
+class _AndroidSettingsOverview extends StatelessWidget {
+  /// 分类选择回调。
+  final ValueChanged<_SettingsCategory> onSelected;
+
+  /// 创建 Android 设置分类主页。
+  const _AndroidSettingsOverview({required this.onSelected});
+
+  /// 构建分组三组的设置分类卡片。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 按用途划分的 Android 设置分类组。
+    const List<List<_SettingsCategory>> categoryGroups =
+        <List<_SettingsCategory>>[
+          <_SettingsCategory>[_SettingsCategory.features],
+          <_SettingsCategory>[
+            _SettingsCategory.appearance,
+            _SettingsCategory.notifications,
+          ],
+          <_SettingsCategory>[
+            _SettingsCategory.sync,
+            _SettingsCategory.storage,
+          ],
+        ];
+
+    return ColoredBox(
+      key: const ValueKey<String>('android-settings-overview'),
+      color: colors.canvas,
+      child: Column(
+        children: <Widget>[
+          const _AndroidSettingsHeader(title: '设置'),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(
+                OmniSpacing.md,
+                OmniSpacing.md,
+                OmniSpacing.md,
+                OmniSpacing.xxl,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  for (
+                    int index = 0;
+                    index < categoryGroups.length;
+                    index += 1
+                  ) ...<Widget>[
+                    _AndroidSettingsGroupCard(
+                      categories: categoryGroups[index],
+                      onSelected: onSelected,
+                    ),
+                    if (index < categoryGroups.length - 1)
+                      const SizedBox(height: OmniSpacing.md),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Android 设置二级分类详情。
+class _AndroidSettingsDetail extends StatelessWidget {
+  /// 当前分类。
+  final _SettingsCategory category;
+
+  /// 返回分类主页回调。
+  final VoidCallback onBack;
+
+  /// 当前分类内容。
+  final Widget child;
+
+  /// 创建 Android 设置二级分类详情。
+  const _AndroidSettingsDetail({
+    required this.category,
+    required this.onBack,
+    required this.child,
+  });
+
+  /// 构建带返回标题栏的分类详情。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    return ColoredBox(
+      key: ValueKey<String>('android-settings-detail-${category.name}'),
+      color: colors.canvas,
+      child: Column(
+        children: <Widget>[
+          _AndroidSettingsHeader(title: category.label, onBack: onBack),
+          Expanded(child: child),
+        ],
+      ),
+    );
+  }
+}
+
+/// Android 设置页面居中标题栏。
+class _AndroidSettingsHeader extends StatelessWidget {
+  /// 标题文字。
+  final String title;
+
+  /// 可选返回回调。
+  final VoidCallback? onBack;
+
+  /// 创建 Android 设置标题栏。
+  const _AndroidSettingsHeader({required this.title, this.onBack});
+
+  /// 构建居中标题与可选返回按钮。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    return SizedBox(
+      key: const ValueKey<String>('android-settings-header'),
+      height: 60,
+      child: Stack(
+        alignment: Alignment.center,
+        children: <Widget>[
+          Text(title, style: Theme.of(context).textTheme.headlineMedium),
+          if (onBack != null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(left: OmniSpacing.xxs),
+                child: IconButton(
+                  key: const ValueKey<String>('android-settings-back'),
+                  tooltip: '返回设置',
+                  onPressed: onBack,
+                  color: colors.ink,
+                  icon: const Icon(Icons.arrow_back_rounded),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Android 设置分类分组卡片。
+class _AndroidSettingsGroupCard extends StatelessWidget {
+  /// 当前分组分类。
+  final List<_SettingsCategory> categories;
+
+  /// 分类选择回调。
+  final ValueChanged<_SettingsCategory> onSelected;
+
+  /// 创建 Android 设置分类分组卡片。
+  const _AndroidSettingsGroupCard({
+    required this.categories,
+    required this.onSelected,
+  });
+
+  /// 构建无边框圆角卡片与组内分隔线。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    return Material(
+      key: ValueKey<String>('android-settings-group-${categories.first.name}'),
+      color: colors.paper,
+      borderRadius: BorderRadius.circular(OmniRadius.dialog),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          for (
+            int index = 0;
+            index < categories.length;
+            index += 1
+          ) ...<Widget>[
+            if (index > 0)
+              Divider(
+                indent: OmniSpacing.lg,
+                endIndent: OmniSpacing.lg,
+                color: colors.line,
+              ),
+            _AndroidSettingsCategoryRow(
+              category: categories[index],
+              onTap: () => onSelected(categories[index]),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Android 设置分类入口行。
+class _AndroidSettingsCategoryRow extends StatelessWidget {
+  /// 当前分类。
+  final _SettingsCategory category;
+
+  /// 点击回调。
+  final VoidCallback onTap;
+
+  /// 创建 Android 设置分类入口行。
+  const _AndroidSettingsCategoryRow({
+    required this.category,
+    required this.onTap,
+  });
+
+  /// 构建纯文字与右箭头入口。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    return InkWell(
+      key: ValueKey<String>('android-settings-category-${category.name}'),
+      onTap: onTap,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 64),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.lg),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  category.label,
+                  style: Theme.of(context).textTheme.bodyLarge
+                      ?.copyWith(fontWeight: FontWeight.w500),
+                ),
+              ),
+              const SizedBox(width: OmniSpacing.sm),
+              Icon(Icons.chevron_right_rounded, size: 24, color: colors.muted),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -332,10 +619,14 @@ class _SettingsCategoryContent extends ConsumerWidget {
   /// 当前主题语义色。
   final OmniColors colors;
 
+  /// 是否展示分类页面标题与说明。
+  final bool showPageHeader;
+
   /// 创建一级分类内容。
   const _SettingsCategoryContent({
     required this.category,
     required this.colors,
+    this.showPageHeader = true,
   });
 
   /// 构建带分类标题的可滚动内容区。
@@ -377,11 +668,13 @@ class _SettingsCategoryContent extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              OmniPageHeader(
-                title: category.label,
-                description: category.description,
-              ),
-              const SizedBox(height: OmniSpacing.xl),
+              if (showPageHeader) ...<Widget>[
+                OmniPageHeader(
+                  title: category.label,
+                  description: category.description,
+                ),
+                const SizedBox(height: OmniSpacing.xl),
+              ],
               categoryBody,
             ],
           ),
