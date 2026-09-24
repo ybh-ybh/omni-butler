@@ -33,6 +33,9 @@ class OmniSplitActionButton<T> extends StatefulWidget {
   /// 主操作按钮文案。
   final String label;
 
+  /// 主操作图标。
+  final IconData primaryIcon;
+
   /// 主操作的无障碍文案。
   final String primarySemanticsLabel;
 
@@ -57,6 +60,7 @@ class OmniSplitActionButton<T> extends StatefulWidget {
     required this.onPressed,
     required this.actions,
     required this.onSelected,
+    this.primaryIcon = Icons.add_rounded,
     super.key,
   }) : assert(actions.length > 0, '拆分按钮至少需要一个次要操作');
 
@@ -266,7 +270,7 @@ class _OmniSplitActionButtonState<T> extends State<OmniSplitActionButton<T>> {
                             ),
                             alignment: Alignment.center,
                             child: Icon(
-                              Icons.add_rounded,
+                              widget.primaryIcon,
                               size: 16,
                               color: colors.accentInk,
                             ),

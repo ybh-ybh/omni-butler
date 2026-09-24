@@ -855,6 +855,7 @@ void main() {
       find.byKey(const ValueKey<String>('todo-mobile-filter-all')),
       findsOneWidget,
     );
+    expect(find.text('每日待办'), findsNothing);
     expect(find.textContaining('跨计划日期常驻显示'), findsNothing);
     expect(find.byType(ChoiceChip), findsNothing);
     expect(

@@ -41,6 +41,15 @@ Future<void> showBackfillTimeEntryDialog(
   );
 }
 
+/// Android 时间页拆分按钮中的次要操作。
+enum _TimelineMobileAction {
+  /// 补记完整时间记录。
+  backfill,
+
+  /// 管理时间分类。
+  categories,
+}
+
 /// 24 小时时间记录页面。
 class TimelinePage extends ConsumerStatefulWidget {
   /// 创建时间记录页面。
@@ -53,6 +62,9 @@ class TimelinePage extends ConsumerStatefulWidget {
 
 /// 24 小时时间记录页面状态。
 class _TimelinePageState extends ConsumerState<TimelinePage> {
+  /// Android 悬浮拆分按钮需要避让的滚动内容高度。
+  static const double _mobileActionClearance = 88;
+
   /// 当前查看日期。
   late DateTime _selectedDay;
 
@@ -131,6 +143,27 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     );
   }
 
+  /// 打开时间分类管理器。
+  Future<void> _openTimelineCategories() async {
+    await TaxonomyManagerDialog.show(
+      context,
+      module: TaxonomyModule.timeline,
+      kind: TaxonomyKind.category,
+    );
+  }
+
+  /// 执行 Android 拆分按钮中的次要操作。
+  Future<void> _handleMobileAction(_TimelineMobileAction action) async {
+    switch (action) {
+      case _TimelineMobileAction.backfill:
+        await _openEditor();
+        return;
+      case _TimelineMobileAction.categories:
+        await _openTimelineCategories();
+        return;
+    }
+  }
+
   /// 打开指定日期的记录明细。
   void _openDayDetails(DateTime day) {
     setState(() {
@@ -188,13 +221,17 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     final bool compact = OmniBreakpoint.isCompact(
       MediaQuery.sizeOf(context).width,
     );
-    return Padding(
+    // 当前是否使用 Android 紧凑时间页布局。
+    final bool androidCompact =
+        compact && Theme.of(context).platform == TargetPlatform.android;
+    // 保持桌面结构不变的时间页主体。
+    final Widget pageContent = Padding(
       padding: compact
-          ? const EdgeInsets.fromLTRB(
+          ? EdgeInsets.fromLTRB(
               OmniSpacing.xs,
               OmniSpacing.xs,
               OmniSpacing.xs,
-              OmniSpacing.md,
+              androidCompact ? 0 : OmniSpacing.md,
             )
           : const EdgeInsets.symmetric(
               horizontal: 14,
@@ -203,39 +240,37 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          OmniPageHeader(
-            title: '时间管理',
-            actions: <Widget>[
-              OmniButton(
-                label: '分类',
-                icon: Icons.category_outlined,
-                variant: OmniButtonVariant.secondary,
-                onPressed: () => TaxonomyManagerDialog.show(
-                  context,
-                  module: TaxonomyModule.timeline,
-                  kind: TaxonomyKind.category,
+          if (!androidCompact) ...<Widget>[
+            OmniPageHeader(
+              title: '时间管理',
+              actions: <Widget>[
+                OmniButton(
+                  label: '分类',
+                  icon: Icons.category_outlined,
+                  variant: OmniButtonVariant.secondary,
+                  onPressed: _openTimelineCategories,
                 ),
-              ),
-              OmniButton(
-                label: '补记时间',
-                icon: Icons.edit_calendar_outlined,
-                variant: OmniButtonVariant.secondary,
-                onPressed: () => _openEditor(),
-              ),
-              OmniButton(
-                label: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
-                icon: ongoingEntries.isEmpty
-                    ? Icons.play_arrow_rounded
-                    : Icons.stop_rounded,
-                variant: OmniButtonVariant.pagePrimary,
-                onPressed: ongoingEntries.isEmpty
-                    ? _openStartEditor
-                    : () => _openFinishEditor(ongoingEntries.first),
-              ),
-            ],
-          ),
-          const SizedBox(height: OmniSpacing.xs),
-          _buildToolbar(context),
+                OmniButton(
+                  label: '补记时间',
+                  icon: Icons.edit_calendar_outlined,
+                  variant: OmniButtonVariant.secondary,
+                  onPressed: () => _openEditor(),
+                ),
+                OmniButton(
+                  label: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
+                  icon: ongoingEntries.isEmpty
+                      ? Icons.play_arrow_rounded
+                      : Icons.stop_rounded,
+                  variant: OmniButtonVariant.pagePrimary,
+                  onPressed: ongoingEntries.isEmpty
+                      ? _openStartEditor
+                      : () => _openFinishEditor(ongoingEntries.first),
+                ),
+              ],
+            ),
+            const SizedBox(height: OmniSpacing.xs),
+          ],
+          _buildToolbar(context, androidCompact: androidCompact),
           if (ongoingEntries.isNotEmpty) ...<Widget>[
             const SizedBox(height: OmniSpacing.xs),
             _OngoingTimeEntryBanner(
@@ -267,6 +302,9 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
                           rangeStart: statsRange.$1,
                           rangeEnd: statsRange.$2,
                           period: _statsPeriod,
+                          safeBottomPadding: androidCompact
+                              ? _mobileActionClearance
+                              : 0,
                           onOpenDay: _openDayDetails,
                           onEdit: (TimeEntryRecord record) =>
                               _openEditor(record: record),
@@ -280,6 +318,9 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
                     data: (List<TimeEntryRecord> records) =>
                         TimelineDetailsContent(
                           day: _selectedDay,
+                          safeBottomPadding: androidCompact
+                              ? _mobileActionClearance
+                              : 0,
                           records: splitTimeEntriesForRange(
                             records: records,
                             rangeStart: _selectedDay,
@@ -303,12 +344,44 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
         ],
       ),
     );
+    if (!androidCompact) {
+      return pageContent;
+    }
+    return Scaffold(
+      floatingActionButton: OmniSplitActionButton<_TimelineMobileAction>(
+        keyPrefix: 'timeline-mobile',
+        label: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
+        primaryIcon: ongoingEntries.isEmpty
+            ? Icons.play_arrow_rounded
+            : Icons.stop_rounded,
+        primarySemanticsLabel: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
+        menuTooltip: '更多时间操作',
+        onPressed: ongoingEntries.isEmpty
+            ? _openStartEditor
+            : () => _openFinishEditor(ongoingEntries.first),
+        actions: const <OmniSplitAction<_TimelineMobileAction>>[
+          OmniSplitAction<_TimelineMobileAction>(
+            value: _TimelineMobileAction.backfill,
+            label: '补记时间',
+            icon: Icons.edit_calendar_outlined,
+          ),
+          OmniSplitAction<_TimelineMobileAction>(
+            value: _TimelineMobileAction.categories,
+            label: '分类',
+            icon: Icons.category_outlined,
+          ),
+        ],
+        onSelected: _handleMobileAction,
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      body: pageContent,
+    );
   }
 
   /// 构建可在紧凑宽度换行的日期与统计工具栏。
-  Widget _buildToolbar(BuildContext context) {
-    // 页面模式切换。
-    final Widget viewControl = SegmentedButton<TimelineViewMode>(
+  Widget _buildToolbar(BuildContext context, {required bool androidCompact}) {
+    // 桌面与其他平台使用的页面模式切换。
+    final Widget legacyViewControl = SegmentedButton<TimelineViewMode>(
       key: const ValueKey<String>('timeline-view-mode'),
       showSelectedIcon: false,
       segments: const <ButtonSegment<TimelineViewMode>>[
@@ -388,6 +461,71 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
 
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
+        // 当前布局实际使用的页面模式切换。
+        final Widget viewControl = androidCompact
+            ? OmniSlidingSegmentedControl<TimelineViewMode>(
+                key: const ValueKey<String>('timeline-view-mode'),
+                options: TimelineViewMode.values,
+                selected: _viewMode,
+                width: constraints.maxWidth,
+                height: OmniSize.touch,
+                labelBuilder: (TimelineViewMode mode) => switch (mode) {
+                  TimelineViewMode.review => '时间复盘',
+                  TimelineViewMode.details => '记录明细',
+                },
+                itemKeyBuilder: (TimelineViewMode mode) =>
+                    ValueKey<String>('timeline-view-mode-${mode.name}'),
+                itemBuilder:
+                    (
+                      BuildContext itemContext,
+                      TimelineViewMode mode,
+                      bool selected,
+                    ) {
+                      // 当前分段选项使用的主题色。
+                      final ColorScheme scheme = Theme.of(itemContext)
+                          .colorScheme;
+                      // 当前分段选项的图文颜色。
+                      final Color foreground = selected
+                          ? scheme.onPrimaryContainer
+                          : scheme.onSurfaceVariant;
+                      // 当前分段选项文案。
+                      final String label = switch (mode) {
+                        TimelineViewMode.review => '时间复盘',
+                        TimelineViewMode.details => '记录明细',
+                      };
+                      // 当前分段选项图标。
+                      final IconData icon = switch (mode) {
+                        TimelineViewMode.review => Icons.insights_outlined,
+                        TimelineViewMode.details =>
+                          Icons.view_timeline_outlined,
+                      };
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Icon(icon, size: 18, color: foreground),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(itemContext).textTheme.labelMedium
+                                  ?.copyWith(
+                                    color: foreground,
+                                    fontWeight: selected
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
+                                  ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                onChanged: (TimelineViewMode mode) {
+                  setState(() => _viewMode = mode);
+                },
+              )
+            : legacyViewControl;
         // 当前是否运行在桌面端。
         final bool isDesktopPlatform = OmniBreakpoint.isDesktopPlatform(
           Theme.of(context).platform,
@@ -1981,14 +2119,19 @@ class _AbsoluteTimeEntryDialogState
                 Row(
                   children: <Widget>[
                     Text('开始日期', style: Theme.of(context).textTheme.labelLarge),
-                    const Spacer(),
-                    OmniDatePickerButton(
-                      value: sliderDay,
-                      initialDate: sliderDay,
-                      firstDate: DateTime(1970),
-                      lastDate: DateTime(2100),
-                      label: DateFormat('yyyy 年 M 月 d 日').format(sliderDay),
-                      onChanged: _shiftSliderDate,
+                    const SizedBox(width: OmniSpacing.xs),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: OmniDatePickerButton(
+                          value: sliderDay,
+                          initialDate: sliderDay,
+                          firstDate: DateTime(1970),
+                          lastDate: DateTime(2100),
+                          label: DateFormat('yyyy 年 M 月 d 日').format(sliderDay),
+                          onChanged: _shiftSliderDate,
+                        ),
+                      ),
                     ),
                   ],
                 ),

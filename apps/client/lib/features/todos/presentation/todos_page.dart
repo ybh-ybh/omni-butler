@@ -258,29 +258,29 @@ class _TodosPageState extends ConsumerState<TodosPage> {
           );
     // 页面头部与控制区。
     final List<Widget> header = <Widget>[
-      OmniPageHeader(
-        title: '每日待办',
-        description: mobile
-            ? null
-            : _pageView == _TodoPageView.active
-            ? '${trees.length} 个主任务 · $pendingCount 项未完成，跨计划日期常驻显示'
-            : '${DateFormat('yyyy 年 M 月 d 日').format(_selectedDay)}完成的任务',
-        actions: mobile || _pageView == _TodoPageView.history
-            ? const <Widget>[]
-            : <Widget>[
-                OmniButton(
-                  key: const ValueKey<String>('todo-primary-create'),
-                  label: '新增待办',
-                  icon: Icons.add_rounded,
-                  variant: OmniButtonVariant.pagePrimary,
-                  onPressed: () => TodoEditorDialog.show(
-                    context,
-                    initialDate: DateUtils.dateOnly(now),
+      if (!mobile) ...<Widget>[
+        OmniPageHeader(
+          title: '每日待办',
+          description: _pageView == _TodoPageView.active
+              ? '${trees.length} 个主任务 · $pendingCount 项未完成，跨计划日期常驻显示'
+              : '${DateFormat('yyyy 年 M 月 d 日').format(_selectedDay)}完成的任务',
+          actions: _pageView == _TodoPageView.history
+              ? const <Widget>[]
+              : <Widget>[
+                  OmniButton(
+                    key: const ValueKey<String>('todo-primary-create'),
+                    label: '新增待办',
+                    icon: Icons.add_rounded,
+                    variant: OmniButtonVariant.pagePrimary,
+                    onPressed: () => TodoEditorDialog.show(
+                      context,
+                      initialDate: DateUtils.dateOnly(now),
+                    ),
                   ),
-                ),
-              ],
-      ),
-      const SizedBox(height: OmniSpacing.sm),
+                ],
+        ),
+        const SizedBox(height: OmniSpacing.sm),
+      ],
       _TodoViewBar(
         view: _pageView,
         mobile: mobile,
