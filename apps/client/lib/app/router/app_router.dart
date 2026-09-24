@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/features/events/presentation/events_page.dart';
 import 'package:omni_butler/features/home/presentation/home_page.dart';
 import 'package:omni_butler/features/inventory/presentation/inventory_page.dart';
+import 'package:omni_butler/features/management/presentation/android_management_shell.dart';
 import 'package:omni_butler/features/memberships/presentation/memberships_page.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/presentation/settings_page.dart';
@@ -54,15 +56,35 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
             path: '/events',
             redirect: (context, state) =>
                 _redirectDisabledFeature(ref, AppFeature.events),
-            builder: (context, state) =>
-                _PrimaryRouteSurface(child: const EventsPage()),
+            builder: (context, state) {
+              // 当前是否使用 Android 管理聚合布局。
+              final bool embedded = _usesAndroidManagementLayout(context);
+              return _PrimaryRouteSurface(
+                child: embedded
+                    ? const AndroidManagementShell(
+                        selectedSection: ManagementSection.events,
+                        child: EventsPage(embeddedInManagement: true),
+                      )
+                    : const EventsPage(),
+              );
+            },
           ),
           GoRoute(
             path: '/inventory',
             redirect: (context, state) =>
                 _redirectDisabledFeature(ref, AppFeature.inventory),
-            builder: (context, state) =>
-                _PrimaryRouteSurface(child: const InventoryPage()),
+            builder: (context, state) {
+              // 当前是否使用 Android 管理聚合布局。
+              final bool embedded = _usesAndroidManagementLayout(context);
+              return _PrimaryRouteSurface(
+                child: embedded
+                    ? const AndroidManagementShell(
+                        selectedSection: ManagementSection.inventory,
+                        child: InventoryPage(embeddedInManagement: true),
+                      )
+                    : const InventoryPage(),
+              );
+            },
           ),
           GoRoute(
             path: '/timeline',
@@ -75,8 +97,18 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
             path: '/memberships',
             redirect: (context, state) =>
                 _redirectDisabledFeature(ref, AppFeature.memberships),
-            builder: (context, state) =>
-                _PrimaryRouteSurface(child: const MembershipsPage()),
+            builder: (context, state) {
+              // 当前是否使用 Android 管理聚合布局。
+              final bool embedded = _usesAndroidManagementLayout(context);
+              return _PrimaryRouteSurface(
+                child: embedded
+                    ? const AndroidManagementShell(
+                        selectedSection: ManagementSection.memberships,
+                        child: MembershipsPage(embeddedInManagement: true),
+                      )
+                    : const MembershipsPage(),
+              );
+            },
           ),
           GoRoute(
             path: '/settings',
@@ -88,6 +120,12 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
     ],
   );
 });
+
+/// 判断当前是否为使用底部导航的 Android 紧凑布局。
+bool _usesAndroidManagementLayout(BuildContext context) {
+  return Theme.of(context).platform == TargetPlatform.android &&
+      OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
+}
 
 /// 已关闭的业务功能统一返回首页。
 String? _redirectDisabledFeature(Ref ref, AppFeature feature) {

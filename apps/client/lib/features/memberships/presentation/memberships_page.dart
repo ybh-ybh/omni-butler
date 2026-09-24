@@ -16,8 +16,11 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 会员管理页面。
 class MembershipsPage extends ConsumerStatefulWidget {
+  /// 是否嵌入 Android 管理聚合页。
+  final bool embeddedInManagement;
+
   /// 创建会员管理页面。
-  const MembershipsPage({super.key});
+  const MembershipsPage({this.embeddedInManagement = false, super.key});
 
   /// 创建页面状态。
   @override
@@ -37,6 +40,9 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
 
   /// 当前分类筛选；空值表示全部分类。
   String? _categoryFilter;
+
+  /// 状态与分类筛选区是否展开。
+  bool _filtersExpanded = false;
 
   /// 是否优先使用双列会员卡片布局。
   bool _useTwoColumns = true;
@@ -191,13 +197,35 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
       MediaQuery.sizeOf(context).width,
     );
     return Scaffold(
+      floatingActionButton: widget.embeddedInManagement
+          ? OmniSplitActionButton<TaxonomyKind>(
+              keyPrefix: 'membership-mobile',
+              label: '新增',
+              primarySemanticsLabel: '新增会员',
+              menuTooltip: '更多会员操作',
+              onPressed: () => _openEditor(context),
+              actions: const <OmniSplitAction<TaxonomyKind>>[
+                OmniSplitAction<TaxonomyKind>(
+                  value: TaxonomyKind.category,
+                  label: '管理分类',
+                  icon: Icons.category_outlined,
+                ),
+              ],
+              onSelected: (TaxonomyKind kind) => TaxonomyManagerDialog.show(
+                context,
+                module: TaxonomyModule.membership,
+                kind: kind,
+              ),
+            )
+          : null,
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: Padding(
         padding: compact
-            ? const EdgeInsets.fromLTRB(
+            ? EdgeInsets.fromLTRB(
                 OmniSpacing.xs,
                 OmniSpacing.xs,
                 OmniSpacing.xs,
-                OmniSpacing.md,
+                widget.embeddedInManagement ? 88 : OmniSpacing.md,
               )
             : const EdgeInsets.symmetric(
                 horizontal: 14,
@@ -206,25 +234,29 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            OmniPageHeader(
-              title: '会员管理',
-              actions: <Widget>[
-                OmniButton(
-                  label: '新增会员',
-                  icon: Icons.add_rounded,
-                  variant: OmniButtonVariant.pagePrimary,
-                  onPressed: () => _openEditor(context),
-                ),
-              ],
-            ),
-            const SizedBox(height: OmniSpacing.xs),
+            if (!widget.embeddedInManagement) ...<Widget>[
+              OmniPageHeader(
+                title: '会员管理',
+                actions: <Widget>[
+                  OmniButton(
+                    label: '新增会员',
+                    icon: Icons.add_rounded,
+                    variant: OmniButtonVariant.pagePrimary,
+                    onPressed: () => _openEditor(context),
+                  ),
+                ],
+              ),
+              const SizedBox(height: OmniSpacing.xs),
+            ],
             _MembershipSpendingSummary(
               memberships: memberships,
               payments: payments,
               now: now,
+              useCarousel: widget.embeddedInManagement,
             ),
             const SizedBox(height: OmniSpacing.xs),
             _MembershipToolbar(
+              embeddedInManagement: widget.embeddedInManagement,
               memberships:
                   memberships.asData?.value ?? const <MembershipRecord>[],
               repository: repository,
@@ -240,6 +272,9 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
               onCategoryFilterChanged: _selectCategoryFilter,
               onSearchChanged: _updateSearchQuery,
               onClearSearch: _clearSearchQuery,
+              filtersExpanded: _filtersExpanded,
+              onFiltersToggled: () =>
+                  setState(() => _filtersExpanded = !_filtersExpanded),
               onToggleLayout: () =>
                   setState(() => _useTwoColumns = !_useTwoColumns),
             ),
@@ -360,11 +395,15 @@ class _MembershipSpendingSummary extends ConsumerWidget {
   /// 当前日期。
   final DateTime now;
 
+  /// 是否使用 Android 管理页统计轮播。
+  final bool useCarousel;
+
   /// 创建会员支出摘要。
   const _MembershipSpendingSummary({
     required this.memberships,
     required this.payments,
     required this.now,
+    required this.useCarousel,
   });
 
   /// 按自然周汇总本月支付金额。
@@ -525,6 +564,13 @@ class _MembershipSpendingSummary extends ConsumerWidget {
         chartValues: _upcomingRenewalsByDay(membershipRecords),
       ),
     ];
+    if (useCarousel) {
+      return OmniStatisticsCarousel(
+        key: const ValueKey<String>('membership-statistics-carousel'),
+        cardHeight: 160,
+        children: cards,
+      );
+    }
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // 摘要卡片是否横向完整展示。
@@ -741,6 +787,9 @@ class _MembershipMiniBarChart extends StatelessWidget {
 
 /// 会员列表上方的快捷筛选与布局工具栏。
 class _MembershipToolbar extends StatelessWidget {
+  /// 是否使用 Android 管理页紧凑工具栏。
+  final bool embeddedInManagement;
+
   /// 全部会员。
   final List<MembershipRecord> memberships;
 
@@ -783,11 +832,18 @@ class _MembershipToolbar extends StatelessWidget {
   /// 清空搜索回调。
   final VoidCallback onClearSearch;
 
+  /// 状态与分类筛选区是否展开。
+  final bool filtersExpanded;
+
+  /// 筛选区展开状态切换回调。
+  final VoidCallback onFiltersToggled;
+
   /// 布局切换回调。
   final VoidCallback onToggleLayout;
 
   /// 创建会员工具栏。
   const _MembershipToolbar({
+    required this.embeddedInManagement,
     required this.memberships,
     required this.repository,
     required this.now,
@@ -802,6 +858,8 @@ class _MembershipToolbar extends StatelessWidget {
     required this.onCategoryFilterChanged,
     required this.onSearchChanged,
     required this.onClearSearch,
+    required this.filtersExpanded,
+    required this.onFiltersToggled,
     required this.onToggleLayout,
   });
 
@@ -861,28 +919,112 @@ class _MembershipToolbar extends StatelessWidget {
       categories.add(categoryFilter!);
       categoryCounts[categoryFilter!] = 0;
     }
-    // 快捷筛选控件。
-    final Widget quickFilters = SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: _MembershipQuickFilters(
-        selected: quickFilter,
-        counts: <_MembershipQuickFilter, int>{
+    // 快捷筛选数量。
+    final Map<_MembershipQuickFilter, int> quickFilterCounts =
+        <_MembershipQuickFilter, int>{
           _MembershipQuickFilter.all: memberships.length,
           _MembershipQuickFilter.upcoming: upcomingCount,
           _MembershipQuickFilter.autoRenew: autoRenewCount,
-        },
+        };
+    // 桌面快捷筛选控件。
+    final Widget desktopQuickFilters = SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: _MembershipQuickFilters(
+        selected: quickFilter,
+        counts: quickFilterCounts,
         onChanged: onQuickFilterChanged,
       ),
     );
-    // 常驻在快捷筛选右侧的会员搜索框。
-    final Widget searchField = _MembershipSearchField(
+    // 桌面会员搜索框。
+    final Widget desktopSearchField = _MembershipSearchField(
       controller: searchController,
       query: searchQuery,
       onChanged: onSearchChanged,
       onClear: onClearSearch,
     );
+    // 当前已生效的筛选条件数量。
+    final int activeFilterCount = <bool>[
+      quickFilter != _MembershipQuickFilter.all,
+      categoryFilter != null,
+    ].where((bool active) => active).length;
+    // Android 搜索栏左侧的筛选开关。
+    final Widget filterButton = _MembershipFilterButton(
+      expanded: filtersExpanded,
+      activeCount: activeFilterCount,
+      onPressed: onFiltersToggled,
+    );
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
+        if (embeddedInManagement) {
+          // Android 管理页的全宽状态筛选。
+          final Widget mobileQuickFilters = _MembershipQuickFilters(
+            selected: quickFilter,
+            counts: quickFilterCounts,
+            width: constraints.maxWidth,
+            height: OmniSize.touch,
+            onChanged: onQuickFilterChanged,
+          );
+          // Android 管理页的自适应搜索框。
+          final Widget mobileSearchField = _MembershipSearchField(
+            controller: searchController,
+            query: searchQuery,
+            width: double.infinity,
+            height: OmniSize.touch,
+            onChanged: onSearchChanged,
+            onClear: onClearSearch,
+          );
+          // Android 管理页的筛选与搜索行。
+          final Widget mobileSearchRow = Row(
+            children: <Widget>[
+              filterButton,
+              const SizedBox(width: OmniSpacing.xs),
+              Expanded(child: mobileSearchField),
+            ],
+          );
+          // Android 状态与分类筛选的统一折叠区域。
+          final Widget mobileFilterPanel = AnimatedSwitcher(
+            duration: OmniMotion.normal,
+            reverseDuration: OmniMotion.fast,
+            switchInCurve: OmniMotion.standardCurve,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (Widget child, Animation<double> animation) {
+              return FadeTransition(
+                opacity: animation,
+                child: SizeTransition(
+                  sizeFactor: animation,
+                  alignment: Alignment.topCenter,
+                  child: child,
+                ),
+              );
+            },
+            child: filtersExpanded
+                ? Padding(
+                    key: const ValueKey<String>('membership-filter-panel'),
+                    padding: const EdgeInsets.only(top: OmniSpacing.xs),
+                    child: Column(
+                      children: <Widget>[
+                        mobileQuickFilters,
+                        const SizedBox(height: OmniSpacing.xxs),
+                        _MembershipCategoryFilters(
+                          categories: categories,
+                          categoryCounts: categoryCounts,
+                          membershipsCount: memberships.length,
+                          selectedCategory: categoryFilter,
+                          useTouchHeight: true,
+                          onChanged: onCategoryFilterChanged,
+                        ),
+                      ],
+                    ),
+                  )
+                : const SizedBox(
+                    key: ValueKey<String>('membership-filter-panel-collapsed'),
+                  ),
+          );
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[mobileSearchRow, mobileFilterPanel],
+          );
+        }
         // 当前宽度是否允许双列会员卡片。
         final bool canUseTwoColumns = constraints.maxWidth >= 780;
         // 右侧工具栏操作。
@@ -904,14 +1046,11 @@ class _MembershipToolbar extends StatelessWidget {
             ),
             const SizedBox(width: OmniSpacing.xs),
             OmniButton(
+              key: const ValueKey<String>('membership-manage-category'),
               label: '管理分类',
               icon: Icons.category_outlined,
               variant: OmniButtonVariant.secondary,
-              onPressed: () => TaxonomyManagerDialog.show(
-                context,
-                module: TaxonomyModule.membership,
-                kind: TaxonomyKind.category,
-              ),
+              onPressed: () => _openCategoryManager(context),
             ),
           ],
         );
@@ -921,9 +1060,9 @@ class _MembershipToolbar extends StatelessWidget {
           primaryToolbar = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              quickFilters,
+              desktopQuickFilters,
               const SizedBox(height: OmniSpacing.xs),
-              searchField,
+              desktopSearchField,
               const SizedBox(height: OmniSpacing.xs),
               actions,
             ],
@@ -934,9 +1073,9 @@ class _MembershipToolbar extends StatelessWidget {
             children: <Widget>[
               Row(
                 children: <Widget>[
-                  quickFilters,
+                  desktopQuickFilters,
                   const SizedBox(width: OmniSpacing.xs),
-                  searchField,
+                  desktopSearchField,
                 ],
               ),
               const SizedBox(height: OmniSpacing.xs),
@@ -946,9 +1085,9 @@ class _MembershipToolbar extends StatelessWidget {
         } else {
           primaryToolbar = Row(
             children: <Widget>[
-              quickFilters,
+              desktopQuickFilters,
               const SizedBox(width: OmniSpacing.xs),
-              searchField,
+              desktopSearchField,
               const Spacer(),
               const SizedBox(width: OmniSpacing.xs),
               actions,
@@ -972,6 +1111,15 @@ class _MembershipToolbar extends StatelessWidget {
       },
     );
   }
+
+  /// 打开会员分类管理器。
+  void _openCategoryManager(BuildContext context) {
+    TaxonomyManagerDialog.show(
+      context,
+      module: TaxonomyModule.membership,
+      kind: TaxonomyKind.category,
+    );
+  }
 }
 
 /// 会员快捷筛选的连续轨道控件。
@@ -982,6 +1130,12 @@ class _MembershipQuickFilters extends StatelessWidget {
   /// 各快捷筛选对应的数量。
   final Map<_MembershipQuickFilter, int> counts;
 
+  /// 筛选轨道宽度。
+  final double width;
+
+  /// 筛选轨道高度。
+  final double height;
+
   /// 快捷筛选变更回调。
   final ValueChanged<_MembershipQuickFilter> onChanged;
 
@@ -990,6 +1144,8 @@ class _MembershipQuickFilters extends StatelessWidget {
     required this.selected,
     required this.counts,
     required this.onChanged,
+    this.width = 306,
+    this.height = 36,
   });
 
   /// 构建带滑块动画的快捷筛选控件。
@@ -1014,7 +1170,8 @@ class _MembershipQuickFilters extends StatelessWidget {
       key: const ValueKey<String>('membership-quick-filters'),
       options: options,
       selected: selected,
-      width: 306,
+      width: width,
+      height: height,
       labelBuilder: labelFor,
       itemKeyBuilder: (_MembershipQuickFilter option) =>
           ValueKey<String>('membership-quick-${option.name}'),
@@ -1037,6 +1194,9 @@ class _MembershipCategoryFilters extends StatelessWidget {
   /// 当前选中的分类。
   final String? selectedCategory;
 
+  /// 是否使用移动端触控高度。
+  final bool useTouchHeight;
+
   /// 分类变更回调。
   final ValueChanged<String?> onChanged;
 
@@ -1047,6 +1207,7 @@ class _MembershipCategoryFilters extends StatelessWidget {
     required this.categoryCounts,
     required this.selectedCategory,
     required this.onChanged,
+    this.useTouchHeight = false,
   });
 
   /// 构建保持单行且可横向滚动的分类标签。
@@ -1056,7 +1217,7 @@ class _MembershipCategoryFilters extends StatelessWidget {
     final OmniColors colors = OmniColors.of(context);
     return SizedBox(
       key: const ValueKey<String>('membership-category-filters'),
-      height: OmniSize.control,
+      height: useTouchHeight ? OmniSize.touch : OmniSize.control,
       child: Row(
         children: <Widget>[
           Text(
@@ -1121,6 +1282,69 @@ class _MembershipCategoryFilters extends StatelessWidget {
   }
 }
 
+/// Android 会员页搜索框左侧的筛选展开按钮。
+class _MembershipFilterButton extends StatelessWidget {
+  /// 筛选区当前是否展开。
+  final bool expanded;
+
+  /// 当前生效的筛选条件数量。
+  final int activeCount;
+
+  /// 点击按钮后的回调。
+  final VoidCallback onPressed;
+
+  /// 创建会员筛选展开按钮。
+  const _MembershipFilterButton({
+    required this.expanded,
+    required this.activeCount,
+    required this.onPressed,
+  });
+
+  /// 构建具有选中反馈与筛选数量提示的按钮。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题的会员与中性色。
+    final OmniColors colors = OmniColors.of(context);
+    return SizedBox.square(
+      key: const ValueKey<String>('membership-filter-toggle'),
+      dimension: OmniSize.touch,
+      child: IconButton(
+        tooltip: expanded ? '收起筛选' : '展开筛选',
+        onPressed: onPressed,
+        isSelected: expanded,
+        icon: Badge(
+          isLabelVisible: activeCount > 0,
+          label: Text('$activeCount'),
+          backgroundColor: colors.member,
+          child: const Icon(Icons.filter_list_rounded),
+        ),
+        selectedIcon: Badge(
+          isLabelVisible: activeCount > 0,
+          label: Text('$activeCount'),
+          backgroundColor: colors.member,
+          child: const Icon(Icons.filter_list_off_rounded),
+        ),
+        color: colors.muted,
+        style: IconButton.styleFrom(
+          backgroundColor: expanded
+              ? colors.member.withValues(alpha: 0.12)
+              : colors.paper,
+          foregroundColor: expanded ? colors.member : colors.muted,
+          side: BorderSide(
+            color: expanded
+                ? colors.member.withValues(alpha: 0.42)
+                : colors.line,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(OmniRadius.panel),
+          ),
+        ),
+        iconSize: OmniSize.icon,
+      ),
+    );
+  }
+}
+
 /// 会员工具栏中的紧凑搜索框。
 class _MembershipSearchField extends StatelessWidget {
   /// 搜索输入控制器。
@@ -1128,6 +1352,12 @@ class _MembershipSearchField extends StatelessWidget {
 
   /// 当前搜索词。
   final String query;
+
+  /// 搜索框宽度。
+  final double width;
+
+  /// 搜索框高度。
+  final double height;
 
   /// 搜索词变更回调。
   final ValueChanged<String> onChanged;
@@ -1141,6 +1371,8 @@ class _MembershipSearchField extends StatelessWidget {
     required this.query,
     required this.onChanged,
     required this.onClear,
+    this.width = 260,
+    this.height = OmniSize.pageAction,
   });
 
   /// 构建带会员色搜索图标的紧凑输入框。
@@ -1150,8 +1382,8 @@ class _MembershipSearchField extends StatelessWidget {
     final OmniColors colors = OmniColors.of(context);
     return SizedBox(
       key: const ValueKey<String>('membership-search-field'),
-      width: 260,
-      height: OmniSize.pageAction,
+      width: width,
+      height: height,
       child: TextField(
         controller: controller,
         onChanged: onChanged,
@@ -1161,9 +1393,9 @@ class _MembershipSearchField extends StatelessWidget {
           hintText: '搜索会员、服务商或分类',
           fillColor: colors.paper,
           contentPadding: EdgeInsets.zero,
-          prefixIconConstraints: const BoxConstraints(
+          prefixIconConstraints: BoxConstraints(
             minWidth: 42,
-            minHeight: OmniSize.pageAction,
+            minHeight: height,
           ),
           prefixIcon: Padding(
             padding: const EdgeInsets.all(OmniSpacing.xxs),
@@ -1179,9 +1411,9 @@ class _MembershipSearchField extends StatelessWidget {
               ),
             ),
           ),
-          suffixIconConstraints: const BoxConstraints(
+          suffixIconConstraints: BoxConstraints(
             minWidth: OmniSize.control,
-            minHeight: OmniSize.control,
+            minHeight: height,
           ),
           suffixIcon: query.isEmpty
               ? null

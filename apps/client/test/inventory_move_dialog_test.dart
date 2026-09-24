@@ -80,6 +80,7 @@ void main() {
       overrides: [
         sharedPreferencesProvider.overrideWithValue(preferences),
         appDatabaseProvider.overrideWithValue(database),
+        nowProvider.overrideWithValue(DateTime(2026, 9, 24, 10)),
       ],
     );
     addTearDown(container.dispose);
@@ -236,6 +237,7 @@ void main() {
       overrides: [
         sharedPreferencesProvider.overrideWithValue(preferences),
         appDatabaseProvider.overrideWithValue(database),
+        nowProvider.overrideWithValue(DateTime(2026, 9, 24, 10)),
       ],
     );
     addTearDown(container.dispose);
@@ -248,9 +250,12 @@ void main() {
     await tester.pumpAndSettle();
     container.read(appRouterProvider).go('/inventory');
     await tester.pumpAndSettle();
+    // 移动端从右下角拆分按钮的次要操作菜单进入一键搬家。
     await tester.tap(
-      find.byKey(const ValueKey<String>('inventory-move-button')),
+      find.byKey(const ValueKey<String>('inventory-mobile-more-actions')),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('一键搬家'));
     await tester.pumpAndSettle();
 
     // 第一步只显示物品选择区域。

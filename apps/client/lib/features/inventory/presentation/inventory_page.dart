@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' show SemanticsRole;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,10 +21,25 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 /// 物品网格列数的本机偏好键。
 const String _inventoryColumnsPreferenceKey = 'inventory.layout_columns';
 
+/// Android 物品新增拆分按钮中的次要操作。
+enum _InventoryQuickAction {
+  /// 打开一键搬家工作台。
+  move,
+
+  /// 打开物品标签管理器。
+  manageTags,
+
+  /// 打开物品位置管理器。
+  manageLocation,
+}
+
 /// 物品管理页面。
 class InventoryPage extends ConsumerStatefulWidget {
+  /// 是否嵌入 Android 管理聚合页。
+  final bool embeddedInManagement;
+
   /// 创建物品管理页面。
-  const InventoryPage({super.key});
+  const InventoryPage({this.embeddedInManagement = false, super.key});
 
   /// 创建页面状态。
   @override
@@ -341,13 +357,30 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
       MediaQuery.sizeOf(context).width,
     );
     return Scaffold(
+      floatingActionButton: widget.embeddedInManagement
+          ? _InventoryCreateSplitButton(
+              onCreate: _openEditor,
+              onMove: _openMoveDialog,
+              onManageTags: () => TaxonomyManagerDialog.show(
+                context,
+                module: TaxonomyModule.inventory,
+                kind: TaxonomyKind.tag,
+              ),
+              onManageLocation: () => TaxonomyManagerDialog.show(
+                context,
+                module: TaxonomyModule.inventory,
+                kind: TaxonomyKind.location,
+              ),
+            )
+          : null,
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: Padding(
         padding: compact
-            ? const EdgeInsets.fromLTRB(
+            ? EdgeInsets.fromLTRB(
                 OmniSpacing.xs,
                 OmniSpacing.xs,
                 OmniSpacing.xs,
-                OmniSpacing.md,
+                widget.embeddedInManagement ? 88 : OmniSpacing.md,
               )
             : const EdgeInsets.symmetric(
                 horizontal: 14,
@@ -356,26 +389,30 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            OmniPageHeader(
-              title: '物品管理',
-              actions: <Widget>[
-                OmniButton(
-                  label: '新增物品',
-                  icon: Icons.add_rounded,
-                  variant: OmniButtonVariant.pagePrimary,
-                  onPressed: _openEditor,
-                ),
-              ],
-            ),
-            const SizedBox(height: OmniSpacing.xs),
+            if (!widget.embeddedInManagement) ...<Widget>[
+              OmniPageHeader(
+                title: '物品管理',
+                actions: <Widget>[
+                  OmniButton(
+                    label: '新增物品',
+                    icon: Icons.add_rounded,
+                    variant: OmniButtonVariant.pagePrimary,
+                    onPressed: _openEditor,
+                  ),
+                ],
+              ),
+              const SizedBox(height: OmniSpacing.xs),
+            ],
             _InventoryStatistics(
               items: allItems,
               accessories: allAccessories,
               categories: categories.asData?.value ?? const <TaxonomyEntry>[],
+              useCarousel: widget.embeddedInManagement,
             ),
             const SizedBox(height: OmniSpacing.xs),
             _InventoryToolbar(
               compact: compact,
+              embeddedInManagement: widget.embeddedInManagement,
               searchController: _searchController,
               searchQuery: _query,
               records: allItems.asData?.value ?? const <InventoryRecord>[],
@@ -441,7 +478,9 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                                   crossAxisCount: columns,
                                   crossAxisSpacing: OmniSpacing.xs,
                                   mainAxisSpacing: OmniSpacing.xs,
-                                  mainAxisExtent: 300,
+                                  mainAxisExtent: widget.embeddedInManagement
+                                      ? 128
+                                      : 300,
                                 ),
                             itemCount: filteredRecords.length,
                             itemBuilder: (BuildContext context, int index) {
@@ -450,6 +489,8 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                                   filteredRecords[index];
                               return _InventoryCard(
                                 item: item,
+                                useHorizontalLayout:
+                                    widget.embeddedInManagement,
                                 onOpen: () => _openDetails(item),
                                 onEdit: () => _openEditor(item),
                                 onAccessories: () => _openAccessories(item),
@@ -472,10 +513,402 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
   }
 }
 
+/// Android 管理页右下角的物品新增拆分按钮。
+class _InventoryCreateSplitButton extends StatefulWidget {
+  /// 执行新增物品的主操作。
+  final VoidCallback onCreate;
+
+  /// 打开一键搬家工作台的回调。
+  final VoidCallback onMove;
+
+  /// 打开物品标签管理器的回调。
+  final VoidCallback onManageTags;
+
+  /// 打开物品位置管理器的回调。
+  final VoidCallback onManageLocation;
+
+  /// 创建物品新增拆分按钮。
+  const _InventoryCreateSplitButton({
+    required this.onCreate,
+    required this.onMove,
+    required this.onManageTags,
+    required this.onManageLocation,
+  });
+
+  /// 创建并维护菜单展开状态。
+  @override
+  State<_InventoryCreateSplitButton> createState() =>
+      _InventoryCreateSplitButtonState();
+}
+
+/// 将菜单生命周期与三横线图标动画同步。
+class _InventoryCreateSplitButtonState
+    extends State<_InventoryCreateSplitButton> {
+  /// 当前次要操作菜单是否展开。
+  bool _menuOpen = false;
+
+  /// 在拆分按钮上方显示右对齐的窄菜单，并从底边向上展开。
+  Future<void> _showActions(BuildContext context) async {
+    if (_menuOpen) {
+      return;
+    }
+    // 完整拆分按钮的实际渲染区域。
+    final RenderBox button = context.findRenderObject()! as RenderBox;
+    // 根导航浮层用于统一弹出菜单和按钮的坐标。
+    final RenderBox overlay =
+        Navigator.of(
+              context,
+              rootNavigator: true,
+            ).overlay!.context.findRenderObject()!
+            as RenderBox;
+    // 按钮在根浮层中的边界。
+    final Rect anchor =
+        button.localToGlobal(Offset.zero, ancestor: overlay) & button.size;
+    // 菜单比整个按钮窄 8px，且与按钮右边缘对齐。
+    final double menuWidth = anchor.width - OmniSpacing.xs;
+    // 用户的减少动画偏好。
+    final bool reduceMotion = MediaQuery.disableAnimationsOf(context);
+    setState(() => _menuOpen = true);
+    // 用户选中的次要操作；点击外部或返回时为空。
+    final _InventoryQuickAction?
+    action = await showGeneralDialog<_InventoryQuickAction>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.transparent,
+      transitionDuration: reduceMotion ? Duration.zero : OmniMotion.normal,
+      transitionBuilder: (_, _, _, Widget child) => child,
+      pageBuilder:
+          (
+            BuildContext menuContext,
+            Animation<double> animation,
+            Animation<double> secondaryAnimation,
+          ) {
+            // 当前主题的菜单背景和描边色。
+            final OmniColors colors = OmniColors.of(menuContext);
+            // 展开进度使用统一减速曲线，收起时反向播放。
+            final Animation<double> progress = animation.drive(
+              CurveTween(curve: OmniMotion.standardCurve),
+            );
+            // 菜单轻微上移，同时始终保留与按钮之间的间隙。
+            final Animation<Offset> slide = Tween<Offset>(
+              begin: const Offset(0, 0.04),
+              end: Offset.zero,
+            ).animate(progress);
+            return Stack(
+              children: <Widget>[
+                Positioned(
+                  right: overlay.size.width - anchor.right,
+                  bottom: overlay.size.height - anchor.top + OmniSpacing.xs,
+                  width: menuWidth,
+                  child: FadeTransition(
+                    key: const ValueKey<String>(
+                      'inventory-mobile-actions-fade',
+                    ),
+                    opacity: progress,
+                    child: SizeTransition(
+                      key: const ValueKey<String>(
+                        'inventory-mobile-actions-expand',
+                      ),
+                      sizeFactor: progress,
+                      alignment: Alignment.bottomRight,
+                      child: SlideTransition(
+                        position: slide,
+                        child: Semantics(
+                          role: SemanticsRole.menu,
+                          explicitChildNodes: true,
+                          child: Material(
+                            key: const ValueKey<String>(
+                              'inventory-mobile-actions-menu',
+                            ),
+                            color: colors.paper,
+                            elevation: 4,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(
+                                OmniRadius.panel,
+                              ),
+                              side: BorderSide(color: colors.line),
+                            ),
+                            clipBehavior: Clip.antiAlias,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxHeight: math.max(
+                                  0,
+                                  anchor.top -
+                                      MediaQuery.paddingOf(menuContext).top -
+                                      OmniSpacing.md,
+                                ),
+                              ),
+                              child: SingleChildScrollView(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: OmniSpacing.xxs,
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    SizedBox(
+                                      height: OmniSize.touch,
+                                      child:
+                                          OmniPopupMenuItem<
+                                            _InventoryQuickAction
+                                          >(
+                                            value: _InventoryQuickAction.move,
+                                            label: '一键搬家',
+                                            icon: Icons.local_shipping_outlined,
+                                          ),
+                                    ),
+                                    Divider(
+                                      height: 1,
+                                      thickness: 1,
+                                      indent: OmniSpacing.sm,
+                                      endIndent: OmniSpacing.sm,
+                                      color: colors.line,
+                                    ),
+                                    SizedBox(
+                                      height: OmniSize.touch,
+                                      child:
+                                          OmniPopupMenuItem<
+                                            _InventoryQuickAction
+                                          >(
+                                            value: _InventoryQuickAction
+                                                .manageTags,
+                                            label: '管理标签',
+                                            icon: Icons.sell_outlined,
+                                          ),
+                                    ),
+                                    Divider(
+                                      height: 1,
+                                      thickness: 1,
+                                      indent: OmniSpacing.sm,
+                                      endIndent: OmniSpacing.sm,
+                                      color: colors.line,
+                                    ),
+                                    SizedBox(
+                                      height: OmniSize.touch,
+                                      child:
+                                          OmniPopupMenuItem<
+                                            _InventoryQuickAction
+                                          >(
+                                            value: _InventoryQuickAction
+                                                .manageLocation,
+                                            label: '管理位置',
+                                            icon: Icons.place_outlined,
+                                          ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+    );
+    if (!context.mounted) {
+      return;
+    }
+    setState(() => _menuOpen = false);
+    switch (action) {
+      case _InventoryQuickAction.move:
+        widget.onMove();
+      case _InventoryQuickAction.manageTags:
+        widget.onManageTags();
+      case _InventoryQuickAction.manageLocation:
+        widget.onManageLocation();
+      case null:
+        break;
+    }
+  }
+
+  /// 构建共享容器、主操作与次要操作菜单。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 拆分按钮的统一圆角。
+    final BorderRadius borderRadius = BorderRadius.circular(OmniRadius.panel);
+    return SizedBox(
+      key: const ValueKey<String>('inventory-mobile-create-split'),
+      height: OmniSize.touch,
+      child: Material(
+        color: colors.brandSoft,
+        borderRadius: borderRadius,
+        clipBehavior: Clip.antiAlias,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Semantics(
+              button: true,
+              label: '新增物品',
+              onTap: widget.onCreate,
+              child: ExcludeSemantics(
+                child: InkWell(
+                  key: const ValueKey<String>('inventory-mobile-create'),
+                  onTap: widget.onCreate,
+                  child: SizedBox(
+                    height: OmniSize.touch,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 6, right: 14),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Container(
+                            width: 24,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              color: colors.brand,
+                              borderRadius: BorderRadius.circular(
+                                OmniRadius.control,
+                              ),
+                            ),
+                            alignment: Alignment.center,
+                            child: Icon(
+                              Icons.add_rounded,
+                              size: 16,
+                              color: colors.accentInk,
+                            ),
+                          ),
+                          const SizedBox(width: OmniSpacing.xs),
+                          Text(
+                            '新增',
+                            style: Theme.of(context).textTheme.labelLarge
+                                ?.copyWith(
+                                  color: colors.brandStrong,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w400,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(
+              width: 1,
+              height: 24,
+              child: ColoredBox(color: colors.brand.withValues(alpha: 0.20)),
+            ),
+            SizedBox.square(
+              dimension: OmniSize.touch,
+              child: MergeSemantics(
+                child: Semantics(
+                  label: '更多物品操作',
+                  child: IconButton(
+                    key: const ValueKey<String>(
+                      'inventory-mobile-more-actions',
+                    ),
+                    tooltip: '更多物品操作',
+                    onPressed: () => _showActions(context),
+                    style: IconButton.styleFrom(
+                      shape: const RoundedRectangleBorder(),
+                    ),
+                    icon: _InventoryMenuToggleIcon(
+                      expanded: _menuOpen,
+                      color: colors.brandStrong,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 按参考动画将三条圆角横线转换为叉号，保留现有图标尺寸和颜色。
+class _InventoryMenuToggleIcon extends StatelessWidget {
+  /// 菜单是否展开。
+  final bool expanded;
+
+  /// 沿用拆分按钮的图标颜色。
+  final Color color;
+
+  /// 创建菜单开关图标。
+  const _InventoryMenuToggleIcon({required this.expanded, required this.color});
+
+  /// 构建 500ms 的横线旋转、位移和收缩动画。
+  @override
+  Widget build(BuildContext context) {
+    // 参考样式的 3em 宽度映射到既有图标尺寸。
+    const double unit = OmniSize.icon / 3;
+    return SizedBox.square(
+      key: const ValueKey<String>('inventory-mobile-toggle-icon'),
+      dimension: OmniSize.icon,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: 0, end: expanded ? 1 : 0),
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 500),
+        curve: const Cubic(0.25, 0.1, 0.25, 1),
+        builder: (BuildContext context, double progress, Widget? child) {
+          return Center(
+            child: SizedBox(
+              width: OmniSize.icon,
+              height: 2.3 * unit,
+              child: Stack(
+                children: <Widget>[
+                  for (int index = 0; index < 3; index += 1)
+                    Positioned(
+                      top: index * unit,
+                      left: 0,
+                      child: Transform(
+                        key: ValueKey<String>(
+                          'inventory-mobile-toggle-line-$index',
+                        ),
+                        alignment: index == 2
+                            ? Alignment.centerLeft
+                            : Alignment.center,
+                        transform: index == 2
+                            ? Matrix4.diagonal3Values(1 - progress, 1, 1)
+                            : (Matrix4.identity()
+                                ..rotateZ(
+                                  (index == 0 ? 1 : -1) *
+                                      math.pi /
+                                      4 *
+                                      progress,
+                                )
+                                ..translateByDouble(
+                                  (index == 0 ? 0.7 : 0.1) * unit * progress,
+                                  (index == 0 ? 0.7 : 0) * unit * progress,
+                                  0,
+                                  1,
+                                )),
+                        child: Container(
+                          width: OmniSize.icon,
+                          height: 0.3 * unit,
+                          decoration: BoxDecoration(
+                            color: color,
+                            borderRadius: BorderRadius.circular(10 * unit),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 /// 物品列表上方的搜索与布局工具栏。
 class _InventoryToolbar extends StatelessWidget {
   /// 当前是否为紧凑布局。
   final bool compact;
+
+  /// 是否使用 Android 管理页紧凑工具栏。
+  final bool embeddedInManagement;
 
   /// 搜索输入控制器。
   final TextEditingController searchController;
@@ -531,6 +964,7 @@ class _InventoryToolbar extends StatelessWidget {
   /// 创建物品列表工具栏。
   const _InventoryToolbar({
     required this.compact,
+    required this.embeddedInManagement,
     required this.searchController,
     required this.searchQuery,
     required this.records,
@@ -553,8 +987,8 @@ class _InventoryToolbar extends StatelessWidget {
   /// 构建搜索框与右侧操作。
   @override
   Widget build(BuildContext context) {
-    // 搜索输入框，沿用会员管理的紧凑样式。
-    final Widget searchField = _InventorySearchField(
+    // 桌面搜索输入框。
+    final Widget desktopSearchField = _InventorySearchField(
       controller: searchController,
       query: searchQuery,
       width: compact ? 232 : 260,
@@ -572,22 +1006,25 @@ class _InventoryToolbar extends StatelessWidget {
       activeCount: activeFilterCount,
       onPressed: onFiltersToggled,
     );
-    // 筛选按钮与搜索输入始终作为同一组排列。
-    final Widget searchGroup = Row(
+    // 桌面筛选按钮与搜索输入组。
+    final Widget desktopSearchGroup = Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
         filterButton,
         const SizedBox(width: OmniSpacing.xs),
-        searchField,
+        desktopSearchField,
       ],
     );
-    // 管理与布局操作。
-    final double actionHeight = compact ? OmniSize.touch : OmniSize.control;
-    final Widget actions = Wrap(
+    // 桌面管理与布局操作高度。
+    final double desktopActionHeight = compact
+        ? OmniSize.touch
+        : OmniSize.control;
+    // 桌面管理与布局操作。
+    final Widget desktopActions = Wrap(
       spacing: OmniSpacing.xs,
       children: <Widget>[
         SizedBox(
-          height: actionHeight,
+          height: desktopActionHeight,
           child: OmniButton(
             key: const ValueKey<String>('inventory-move-button'),
             label: '一键搬家',
@@ -597,7 +1034,7 @@ class _InventoryToolbar extends StatelessWidget {
           ),
         ),
         SizedBox(
-          height: actionHeight,
+          height: desktopActionHeight,
           child: OmniButton(
             key: const ValueKey<String>('inventory-manage-category'),
             label: '管理分类',
@@ -611,7 +1048,7 @@ class _InventoryToolbar extends StatelessWidget {
           ),
         ),
         SizedBox(
-          height: actionHeight,
+          height: desktopActionHeight,
           child: OmniButton(
             key: const ValueKey<String>('inventory-manage-location'),
             label: '管理位置',
@@ -628,7 +1065,7 @@ class _InventoryToolbar extends StatelessWidget {
           key: const ValueKey<String>('inventory-layout-selector'),
           value: inventoryColumns,
           width: 104,
-          height: actionHeight,
+          height: desktopActionHeight,
           items: <DropdownMenuItem<int>>[
             for (final int columns in <int>[4, 5, 6])
               DropdownMenuItem<int>(value: columns, child: Text('$columns列')),
@@ -637,73 +1074,99 @@ class _InventoryToolbar extends StatelessWidget {
         ),
       ],
     );
+    // 标签与位置筛选的展开区域。
+    final Widget filterPanel = AnimatedSwitcher(
+      duration: OmniMotion.normal,
+      reverseDuration: OmniMotion.fast,
+      switchInCurve: OmniMotion.standardCurve,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (Widget child, Animation<double> animation) {
+        // 同步高度与透明度，让筛选区自然展开和收起。
+        return FadeTransition(
+          opacity: animation,
+          child: SizeTransition(
+            sizeFactor: animation,
+            alignment: Alignment.topCenter,
+            child: child,
+          ),
+        );
+      },
+      child: filtersExpanded
+          ? Padding(
+              key: const ValueKey<String>('inventory-filter-panel'),
+              padding: const EdgeInsets.only(top: OmniSpacing.xs),
+              child: Column(
+                children: <Widget>[
+                  _InventoryFilterRow(
+                    key: const ValueKey<String>('inventory-tag-filters'),
+                    label: '标签',
+                    values: _tagNames(),
+                    counts: _tagCounts(),
+                    totalCount: records.length,
+                    showCount: true,
+                    selected: selectedTag,
+                    useTouchHeight: embeddedInManagement,
+                    onChanged: onTagChanged,
+                  ),
+                  const SizedBox(height: OmniSpacing.xxs),
+                  _InventoryFilterRow(
+                    key: const ValueKey<String>('inventory-location-filters'),
+                    label: '位置',
+                    values: _locationNames(),
+                    selected: selectedLocation,
+                    useTouchHeight: embeddedInManagement,
+                    onChanged: onLocationChanged,
+                  ),
+                ],
+              ),
+            )
+          : const SizedBox(
+              key: ValueKey<String>('inventory-filter-panel-collapsed'),
+            ),
+    );
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
+        if (embeddedInManagement) {
+          // Android 管理页的自适应搜索框。
+          final Widget mobileSearchField = _InventorySearchField(
+            controller: searchController,
+            query: searchQuery,
+            width: double.infinity,
+            height: OmniSize.touch,
+            onChanged: onSearchChanged,
+            onClear: onClearSearch,
+          );
+          // Android 管理页的筛选与搜索行。
+          final Widget mobileSearchRow = Row(
+            children: <Widget>[
+              filterButton,
+              const SizedBox(width: OmniSpacing.xs),
+              Expanded(child: mobileSearchField),
+            ],
+          );
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[mobileSearchRow, filterPanel],
+          );
+        }
         // 宽屏将操作固定在搜索框右侧，窄屏自动换行。
         final Widget primaryToolbar = constraints.maxWidth >= 760
-            ? Row(children: <Widget>[searchGroup, const Spacer(), actions])
+            ? Row(
+                children: <Widget>[
+                  desktopSearchGroup,
+                  const Spacer(),
+                  desktopActions,
+                ],
+              )
             : Wrap(
                 spacing: OmniSpacing.xs,
                 runSpacing: OmniSpacing.xs,
                 crossAxisAlignment: WrapCrossAlignment.center,
-                children: <Widget>[searchGroup, actions],
+                children: <Widget>[desktopSearchGroup, desktopActions],
               );
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            primaryToolbar,
-            AnimatedSwitcher(
-              duration: OmniMotion.normal,
-              reverseDuration: OmniMotion.fast,
-              switchInCurve: OmniMotion.standardCurve,
-              switchOutCurve: Curves.easeInCubic,
-              transitionBuilder: (Widget child, Animation<double> animation) {
-                // 同步高度与透明度，让筛选区自然展开和收起。
-                return FadeTransition(
-                  opacity: animation,
-                  child: SizeTransition(
-                    sizeFactor: animation,
-                    alignment: Alignment.topCenter,
-                    child: child,
-                  ),
-                );
-              },
-              child: filtersExpanded
-                  ? Padding(
-                      key: const ValueKey<String>('inventory-filter-panel'),
-                      padding: const EdgeInsets.only(top: OmniSpacing.xs),
-                      child: Column(
-                        children: <Widget>[
-                          _InventoryFilterRow(
-                            key: const ValueKey<String>(
-                              'inventory-tag-filters',
-                            ),
-                            label: '标签',
-                            values: _tagNames(),
-                            counts: _tagCounts(),
-                            totalCount: records.length,
-                            showCount: true,
-                            selected: selectedTag,
-                            onChanged: onTagChanged,
-                          ),
-                          const SizedBox(height: OmniSpacing.xxs),
-                          _InventoryFilterRow(
-                            key: const ValueKey<String>(
-                              'inventory-location-filters',
-                            ),
-                            label: '位置',
-                            values: _locationNames(),
-                            selected: selectedLocation,
-                            onChanged: onLocationChanged,
-                          ),
-                        ],
-                      ),
-                    )
-                  : const SizedBox(
-                      key: ValueKey<String>('inventory-filter-panel-collapsed'),
-                    ),
-            ),
-          ],
+          children: <Widget>[primaryToolbar, filterPanel],
         );
       },
     );
@@ -910,6 +1373,9 @@ class _InventorySearchField extends StatelessWidget {
   /// 搜索框宽度。
   final double width;
 
+  /// 搜索框高度。
+  final double height;
+
   /// 搜索词变更回调。
   final ValueChanged<String> onChanged;
 
@@ -923,6 +1389,7 @@ class _InventorySearchField extends StatelessWidget {
     required this.width,
     required this.onChanged,
     required this.onClear,
+    this.height = OmniSize.pageAction,
   });
 
   /// 构建带物品色搜索图标的输入框。
@@ -933,7 +1400,7 @@ class _InventorySearchField extends StatelessWidget {
     return SizedBox(
       key: const ValueKey<String>('inventory-search-field'),
       width: width,
-      height: OmniSize.pageAction,
+      height: height,
       child: TextField(
         controller: controller,
         onChanged: onChanged,
@@ -943,9 +1410,9 @@ class _InventorySearchField extends StatelessWidget {
           hintText: '搜索名称、分类、位置或标签',
           fillColor: colors.paper,
           contentPadding: EdgeInsets.zero,
-          prefixIconConstraints: const BoxConstraints(
+          prefixIconConstraints: BoxConstraints(
             minWidth: 42,
-            minHeight: OmniSize.pageAction,
+            minHeight: height,
           ),
           prefixIcon: Padding(
             padding: const EdgeInsets.all(OmniSpacing.xxs),
@@ -961,9 +1428,9 @@ class _InventorySearchField extends StatelessWidget {
               ),
             ),
           ),
-          suffixIconConstraints: const BoxConstraints(
+          suffixIconConstraints: BoxConstraints(
             minWidth: OmniSize.control,
-            minHeight: OmniSize.control,
+            minHeight: height,
           ),
           suffixIcon: query.isEmpty
               ? null
@@ -1006,6 +1473,9 @@ class _InventoryFilterRow extends StatelessWidget {
   /// 当前选中名称。
   final String? selected;
 
+  /// 是否使用移动端触控高度。
+  final bool useTouchHeight;
+
   /// 选中项变更回调。
   final ValueChanged<String?> onChanged;
 
@@ -1019,6 +1489,7 @@ class _InventoryFilterRow extends StatelessWidget {
     this.showCount = false,
     required this.selected,
     required this.onChanged,
+    this.useTouchHeight = false,
   });
 
   /// 构建保持单行且可横向滚动的筛选标签。
@@ -1027,7 +1498,7 @@ class _InventoryFilterRow extends StatelessWidget {
     // 当前主题的物品与中性色。
     final OmniColors colors = OmniColors.of(context);
     return SizedBox(
-      height: OmniSize.control,
+      height: useTouchHeight ? OmniSize.touch : OmniSize.control,
       child: Row(
         children: <Widget>[
           SizedBox(
@@ -1103,11 +1574,15 @@ class _InventoryStatistics extends StatelessWidget {
   /// 当前物品分类。
   final List<TaxonomyEntry> categories;
 
+  /// 是否使用 Android 管理页统计轮播。
+  final bool useCarousel;
+
   /// 创建物品顶部统计面板。
   const _InventoryStatistics({
     required this.items,
     required this.accessories,
     required this.categories,
+    required this.useCarousel,
   });
 
   /// 构建物品顶部统计面板。
@@ -1182,6 +1657,13 @@ class _InventoryStatistics extends StatelessWidget {
       ),
       loading: items.isLoading && !items.hasValue,
     );
+    if (useCarousel) {
+      return OmniStatisticsCarousel(
+        key: const ValueKey<String>('inventory-statistics-carousel'),
+        cardHeight: 144,
+        children: <Widget>[statusPanel, valuePanel],
+      );
+    }
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // 宽屏并排展示两个统计面板。
@@ -1856,6 +2338,9 @@ class _InventoryCard extends ConsumerWidget {
   /// 当前物品。
   final InventoryRecord item;
 
+  /// 是否使用 Android 横向记录布局。
+  final bool useHorizontalLayout;
+
   /// 打开物品详情回调。
   final VoidCallback onOpen;
 
@@ -1871,6 +2356,7 @@ class _InventoryCard extends ConsumerWidget {
   /// 创建物品卡片。
   const _InventoryCard({
     required this.item,
+    required this.useHorizontalLayout,
     required this.onOpen,
     required this.onEdit,
     required this.onAccessories,
@@ -1896,6 +2382,16 @@ class _InventoryCard extends ConsumerWidget {
         : _formatInventoryCardPrice(item.purchasePriceCents!);
     // 当前物品的已使用时长文案。
     final String usageDuration = _usageDuration(item.purchaseDate);
+    if (useHorizontalLayout) {
+      return _buildHorizontalCard(
+        context,
+        colors: colors,
+        theme: theme,
+        accessoryCount: accessoryCount,
+        price: price,
+        usageDuration: usageDuration,
+      );
+    }
     return OmniPanel(
       key: ValueKey<String>('inventory-card-${item.id}'),
       onTap: onOpen,
@@ -1950,49 +2446,7 @@ class _InventoryCard extends ConsumerWidget {
                       ),
                       const SizedBox(width: OmniSpacing.xxs),
                     ],
-                    OmniPopupMenuButton<String>(
-                      key: ValueKey<String>('inventory-more-button-${item.id}'),
-                      tooltip: '更多操作',
-                      onSelected: (String value) {
-                        if (value == 'edit') {
-                          onEdit();
-                        } else if (value == 'accessories') {
-                          onAccessories();
-                        } else if (value == 'image') {
-                          AttachmentPickerDialog.show(
-                            context,
-                            businessType: AttachmentBusinessType.inventoryImage,
-                            businessId: item.id,
-                            title: '${item.name} · 主图',
-                          );
-                        } else {
-                          onDelete();
-                        }
-                      },
-                      itemBuilder: (_) => <PopupMenuEntry<String>>[
-                        OmniPopupMenuItem<String>(
-                          value: 'edit',
-                          label: '编辑',
-                          icon: Icons.edit_outlined,
-                        ),
-                        OmniPopupMenuItem<String>(
-                          value: 'accessories',
-                          label: '配套物品',
-                          icon: Icons.inventory_2_outlined,
-                        ),
-                        OmniPopupMenuItem<String>(
-                          value: 'image',
-                          label: '更换图片',
-                          icon: Icons.add_photo_alternate_outlined,
-                        ),
-                        OmniPopupMenuItem<String>(
-                          value: 'delete',
-                          label: '移入回收站',
-                          icon: Icons.delete_outline_rounded,
-                          danger: true,
-                        ),
-                      ],
-                    ),
+                    _buildMoreButton(context),
                   ],
                 ),
                 const SizedBox(height: OmniSpacing.xxs),
@@ -2069,6 +2523,7 @@ class _InventoryCard extends ConsumerWidget {
                     const SizedBox(width: OmniSpacing.xs),
                     Text(
                       price,
+                      key: ValueKey<String>('inventory-price-${item.id}'),
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -2080,6 +2535,237 @@ class _InventoryCard extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+
+  /// 构建 Android 管理页的横向物品记录卡。
+  Widget _buildHorizontalCard(
+    BuildContext context, {
+    required OmniColors colors,
+    required ThemeData theme,
+    required int accessoryCount,
+    required String price,
+    required String usageDuration,
+  }) {
+    return OmniPanel(
+      key: ValueKey<String>('inventory-card-${item.id}'),
+      onTap: onOpen,
+      padding: const EdgeInsets.all(OmniSpacing.sm),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          ClipRRect(
+            key: ValueKey<String>('inventory-card-image-${item.id}'),
+            borderRadius: BorderRadius.circular(OmniRadius.panel),
+            child: SizedBox(
+              width: 104,
+              child: _InventoryImage(item: item, colors: colors, compact: true),
+            ),
+          ),
+          const SizedBox(width: OmniSpacing.sm),
+          Expanded(
+            child: Container(
+              key: ValueKey<String>('inventory-card-content-${item.id}'),
+              alignment: Alignment.centerLeft,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    item.name,
+                    key: ValueKey<String>('inventory-name-${item.id}'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: OmniSpacing.xxs),
+                  Row(
+                    key: ValueKey<String>('inventory-status-row-${item.id}'),
+                    children: <Widget>[
+                      OmniTag(
+                        label: _statusLabel(item.status),
+                        color: _statusColor(colors, item.status),
+                      ),
+                      const SizedBox(width: OmniSpacing.xxs),
+                      Expanded(
+                        child: Text(
+                          item.category ?? '未分类',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colors.muted,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          item.location ?? '未记录位置',
+                          key: ValueKey<String>(
+                            'inventory-location-${item.id}',
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: colors.muted,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: OmniSpacing.xxs),
+                      Text(
+                        '数量 ${item.quantity}',
+                        key: ValueKey<String>('inventory-quantity-${item.id}'),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: colors.muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          usageDuration,
+                          key: ValueKey<String>('inventory-usage-${item.id}'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colors.muted,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ),
+                      if (accessoryCount > 0) ...<Widget>[
+                        const SizedBox(width: OmniSpacing.xxs),
+                        Text(
+                          '配套 $accessoryCount',
+                          key: ValueKey<String>(
+                            'inventory-accessory-count-${item.id}',
+                          ),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colors.muted,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: OmniSpacing.xs),
+          SizedBox(
+            key: ValueKey<String>('inventory-card-trailing-${item.id}'),
+            width: 88,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: <Widget>[
+                SizedBox(
+                  height: OmniSize.touch,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: <Widget>[
+                      if (accessoryCount > 0)
+                        SizedBox.square(
+                          dimension: OmniSize.touch,
+                          child: IconButton(
+                            key: ValueKey<String>(
+                              'inventory-accessories-button-${item.id}',
+                            ),
+                            tooltip: '查看配套物品',
+                            onPressed: onAccessories,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(
+                              width: OmniSize.touch,
+                              height: OmniSize.touch,
+                            ),
+                            visualDensity: VisualDensity.compact,
+                            color: colors.item,
+                            icon: const Icon(Icons.inventory_2_outlined),
+                          ),
+                        ),
+                      SizedBox.square(
+                        dimension: OmniSize.touch,
+                        child: _buildMoreButton(context),
+                      ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    price,
+                    key: ValueKey<String>('inventory-price-${item.id}'),
+                    maxLines: 1,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 构建物品编辑、配套、图片和删除操作菜单。
+  Widget _buildMoreButton(BuildContext context) {
+    return OmniPopupMenuButton<String>(
+      key: ValueKey<String>('inventory-more-button-${item.id}'),
+      tooltip: '更多操作',
+      onSelected: (String value) {
+        if (value == 'edit') {
+          onEdit();
+        } else if (value == 'accessories') {
+          onAccessories();
+        } else if (value == 'image') {
+          AttachmentPickerDialog.show(
+            context,
+            businessType: AttachmentBusinessType.inventoryImage,
+            businessId: item.id,
+            title: '${item.name} · 主图',
+          );
+        } else {
+          onDelete();
+        }
+      },
+      itemBuilder: (_) => <PopupMenuEntry<String>>[
+        OmniPopupMenuItem<String>(
+          value: 'edit',
+          label: '编辑',
+          icon: Icons.edit_outlined,
+        ),
+        OmniPopupMenuItem<String>(
+          value: 'accessories',
+          label: '配套物品',
+          icon: Icons.inventory_2_outlined,
+        ),
+        OmniPopupMenuItem<String>(
+          value: 'image',
+          label: '更换图片',
+          icon: Icons.add_photo_alternate_outlined,
+        ),
+        OmniPopupMenuItem<String>(
+          value: 'delete',
+          label: '移入回收站',
+          icon: Icons.delete_outline_rounded,
+          danger: true,
+        ),
+      ],
     );
   }
 
@@ -2557,8 +3243,15 @@ class _InventoryImage extends StatelessWidget {
   /// 当前主题语义色。
   final OmniColors colors;
 
+  /// 是否使用紧凑占位图比例。
+  final bool compact;
+
   /// 创建图片区域。
-  const _InventoryImage({required this.item, required this.colors});
+  const _InventoryImage({
+    required this.item,
+    required this.colors,
+    this.compact = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2566,10 +3259,11 @@ class _InventoryImage extends StatelessWidget {
       return Image.file(
         File(item.imageLocalPath!),
         fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => _PlaceholderImage(colors: colors),
+        errorBuilder: (_, _, _) =>
+            _PlaceholderImage(colors: colors, compact: compact),
       );
     }
-    return _PlaceholderImage(colors: colors);
+    return _PlaceholderImage(colors: colors, compact: compact);
   }
 }
 
@@ -2578,8 +3272,11 @@ class _PlaceholderImage extends StatelessWidget {
   /// 当前主题语义色。
   final OmniColors colors;
 
+  /// 是否使用紧凑占位图比例。
+  final bool compact;
+
   /// 创建占位图。
-  const _PlaceholderImage({required this.colors});
+  const _PlaceholderImage({required this.colors, this.compact = false});
 
   @override
   Widget build(BuildContext context) {
@@ -2599,16 +3296,16 @@ class _PlaceholderImage extends StatelessWidget {
           alignment: Alignment.center,
           children: <Widget>[
             Container(
-              width: 150,
-              height: 150,
+              width: compact ? 76 : 150,
+              height: compact ? 76 : 150,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
               ),
             ),
             Container(
-              width: 76,
-              height: 76,
+              width: compact ? 40 : 76,
+              height: compact ? 40 : 76,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(color: Colors.white.withValues(alpha: 0.45)),
@@ -2618,7 +3315,8 @@ class _PlaceholderImage extends StatelessWidget {
               'ITEM',
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
                 color: Colors.white,
-                letterSpacing: 3,
+                fontSize: compact ? 10 : null,
+                letterSpacing: compact ? 1.5 : 3,
                 fontWeight: FontWeight.w800,
               ),
             ),

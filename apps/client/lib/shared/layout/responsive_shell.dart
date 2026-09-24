@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
+import 'package:omni_butler/features/management/presentation/android_management_shell.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/shared/search/global_search_dialog.dart';
@@ -24,8 +25,14 @@ class _AppDestination {
   /// 选中态图标。
   final IconData selectedIcon;
 
-  /// 可选的业务功能标识；首页与设置不受功能开关控制。
-  final AppFeature? feature;
+  /// 任一开启即显示入口的业务功能集合。
+  final List<AppFeature> features;
+
+  /// 可以命中该入口选中态的额外路由。
+  final List<String> selectionPaths;
+
+  /// 是否为 Android 管理聚合入口。
+  final bool managementGroup;
 
   /// 创建应用导航目的地。
   const _AppDestination({
@@ -33,7 +40,9 @@ class _AppDestination {
     required this.label,
     required this.icon,
     required this.selectedIcon,
-    this.feature,
+    this.features = const <AppFeature>[],
+    this.selectionPaths = const <String>[],
+    this.managementGroup = false,
   });
 }
 
@@ -50,35 +59,35 @@ const List<_AppDestination> _desktopDestinations = <_AppDestination>[
     label: '每日待办',
     icon: Icons.check_box_outlined,
     selectedIcon: Icons.check_box_rounded,
-    feature: AppFeature.todos,
+    features: <AppFeature>[AppFeature.todos],
   ),
   _AppDestination(
     path: '/timeline',
     label: '时间管理',
     icon: Icons.access_time_outlined,
     selectedIcon: Icons.access_time_filled,
-    feature: AppFeature.timeline,
+    features: <AppFeature>[AppFeature.timeline],
   ),
   _AppDestination(
     path: '/events',
     label: '事件管理',
     icon: Icons.calendar_today_outlined,
     selectedIcon: Icons.calendar_today_rounded,
-    feature: AppFeature.events,
+    features: <AppFeature>[AppFeature.events],
   ),
   _AppDestination(
     path: '/inventory',
     label: '物品管理',
     icon: Icons.inventory_2_outlined,
     selectedIcon: Icons.inventory_2_rounded,
-    feature: AppFeature.inventory,
+    features: <AppFeature>[AppFeature.inventory],
   ),
   _AppDestination(
     path: '/memberships',
     label: '会员管理',
     icon: Icons.credit_card_outlined,
     selectedIcon: Icons.credit_card_rounded,
-    feature: AppFeature.memberships,
+    features: <AppFeature>[AppFeature.memberships],
   ),
 ];
 
@@ -103,21 +112,64 @@ const List<_AppDestination> _compactDestinations = <_AppDestination>[
     label: '待办',
     icon: Icons.check_box_outlined,
     selectedIcon: Icons.check_box_rounded,
-    feature: AppFeature.todos,
+    features: <AppFeature>[AppFeature.todos],
   ),
   _AppDestination(
     path: '/timeline',
     label: '时间',
     icon: Icons.access_time_outlined,
     selectedIcon: Icons.access_time_filled,
-    feature: AppFeature.timeline,
+    features: <AppFeature>[AppFeature.timeline],
   ),
   _AppDestination(
     path: '/inventory',
     label: '物品',
     icon: Icons.inventory_2_outlined,
     selectedIcon: Icons.inventory_2_rounded,
-    feature: AppFeature.inventory,
+    features: <AppFeature>[AppFeature.inventory],
+  ),
+  _AppDestination(
+    path: '/settings',
+    label: '更多',
+    icon: Icons.apps_outlined,
+    selectedIcon: Icons.apps_rounded,
+  ),
+];
+
+/// Android 紧凑布局的五个底部导航目的地。
+const List<_AppDestination> _androidCompactDestinations = <_AppDestination>[
+  _AppDestination(
+    path: '/home',
+    label: '首页',
+    icon: Icons.home_outlined,
+    selectedIcon: Icons.home_rounded,
+  ),
+  _AppDestination(
+    path: '/todos',
+    label: '待办',
+    icon: Icons.check_box_outlined,
+    selectedIcon: Icons.check_box_rounded,
+    features: <AppFeature>[AppFeature.todos],
+  ),
+  _AppDestination(
+    path: '/timeline',
+    label: '时间',
+    icon: Icons.access_time_outlined,
+    selectedIcon: Icons.access_time_filled,
+    features: <AppFeature>[AppFeature.timeline],
+  ),
+  _AppDestination(
+    path: '/inventory',
+    label: '管理',
+    icon: Icons.dashboard_customize_outlined,
+    selectedIcon: Icons.dashboard_customize_rounded,
+    features: <AppFeature>[
+      AppFeature.inventory,
+      AppFeature.events,
+      AppFeature.memberships,
+    ],
+    selectionPaths: <String>['/inventory', '/events', '/memberships'],
+    managementGroup: true,
   ),
   _AppDestination(
     path: '/settings',
@@ -163,20 +215,31 @@ class ResponsiveShell extends ConsumerWidget {
     final FeaturePreference featurePreference = ref.watch(
       featurePreferenceProvider,
     );
+    // 当前 Android 管理页记住的分区。
+    final ManagementSection managementSection = ref.watch(
+      managementSectionProvider,
+    );
+    // 当前是否运行在 Android 平台。
+    final bool androidPlatform =
+        Theme.of(context).platform == TargetPlatform.android;
     // 当前可见的桌面导航项。
     final List<_AppDestination> desktopDestinations = _desktopDestinations
         .where(
           (_AppDestination destination) =>
-              destination.feature == null ||
-              featurePreference.isEnabled(destination.feature!),
+              destination.features.isEmpty ||
+              destination.features.any(featurePreference.isEnabled),
         )
         .toList(growable: false);
+    // 当前平台应使用的紧凑导航源列表。
+    final List<_AppDestination> compactSource = androidPlatform
+        ? _androidCompactDestinations
+        : _compactDestinations;
     // 当前可见的紧凑导航项。
-    final List<_AppDestination> compactDestinations = _compactDestinations
+    final List<_AppDestination> compactDestinations = compactSource
         .where(
           (_AppDestination destination) =>
-              destination.feature == null ||
-              featurePreference.isEnabled(destination.feature!),
+              destination.features.isEmpty ||
+              destination.features.any(featurePreference.isEnabled),
         )
         .toList(growable: false);
 
@@ -226,7 +289,14 @@ class ResponsiveShell extends ConsumerWidget {
                   bottomNavigationBar: _CompactNavigation(
                     location: location,
                     destinations: compactDestinations,
-                    onSelected: (String path) => context.go(path),
+                    onSelected: (_AppDestination destination) =>
+                        _selectCompactDestination(
+                          context,
+                          ref,
+                          destination,
+                          featurePreference,
+                          managementSection,
+                        ),
                   ),
                 );
               }
@@ -268,6 +338,30 @@ class ResponsiveShell extends ConsumerWidget {
   /// 显示全局搜索。
   void _showSearch(BuildContext context) {
     GlobalSearchDialog.show(context);
+  }
+
+  /// 打开普通底栏路由或记住的 Android 管理分区。
+  void _selectCompactDestination(
+    BuildContext context,
+    WidgetRef ref,
+    _AppDestination destination,
+    FeaturePreference preference,
+    ManagementSection preferredSection,
+  ) {
+    if (!destination.managementGroup) {
+      context.go(destination.path);
+      return;
+    }
+    // 根据功能开关解析后的实际管理分区。
+    final ManagementSection? resolvedSection = resolveManagementSection(
+      preference,
+      preferredSection,
+    );
+    if (resolvedSection == null) {
+      return;
+    }
+    ref.read(managementSectionProvider.notifier).select(resolvedSection);
+    context.go(resolvedSection.route);
   }
 }
 
@@ -463,7 +557,7 @@ class _CompactNavigation extends StatelessWidget {
   final List<_AppDestination> destinations;
 
   /// 选择回调。
-  final ValueChanged<String> onSelected;
+  final ValueChanged<_AppDestination> onSelected;
 
   /// 创建紧凑底部导航。
   const _CompactNavigation({
@@ -492,8 +586,8 @@ class _CompactNavigation extends StatelessWidget {
               Expanded(
                 child: _CompactDestination(
                   destination: destination,
-                  selected: _isSelected(destination.path, location),
-                  onTap: () => onSelected(destination.path),
+                  selected: _isDestinationSelected(destination, location),
+                  onTap: () => onSelected(destination),
                 ),
               ),
           ],
@@ -875,6 +969,15 @@ class _LocalStatusCard extends StatelessWidget {
 /// 判断路由是否选中。
 bool _isSelected(String path, String location) {
   return location == path || location.startsWith('$path/');
+}
+
+/// 判断当前路由是否命中普通入口或聚合入口。
+bool _isDestinationSelected(_AppDestination destination, String location) {
+  // 该导航入口的全部选中态路由。
+  final List<String> paths = destination.selectionPaths.isEmpty
+      ? <String>[destination.path]
+      : destination.selectionPaths;
+  return paths.any((String path) => _isSelected(path, location));
 }
 
 /// 返回明暗模式图标。

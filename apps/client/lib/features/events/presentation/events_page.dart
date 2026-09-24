@@ -13,8 +13,11 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 周期事件页面。
 class EventsPage extends ConsumerStatefulWidget {
+  /// 是否嵌入 Android 管理聚合页。
+  final bool embeddedInManagement;
+
   /// 创建周期事件页面。
-  const EventsPage({super.key});
+  const EventsPage({this.embeddedInManagement = false, super.key});
 
   /// 创建页面状态。
   @override
@@ -124,13 +127,23 @@ class _EventsPageState extends ConsumerState<EventsPage> {
       MediaQuery.sizeOf(context).width,
     );
     return Scaffold(
+      floatingActionButton: widget.embeddedInManagement
+          ? OmniButton(
+              key: const ValueKey<String>('event-mobile-create'),
+              label: '新增事件',
+              icon: Icons.add_rounded,
+              variant: OmniButtonVariant.pagePrimary,
+              onPressed: _openEditor,
+            )
+          : null,
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: Padding(
         padding: compact
-            ? const EdgeInsets.fromLTRB(
+            ? EdgeInsets.fromLTRB(
                 OmniSpacing.xs,
                 OmniSpacing.xs,
                 OmniSpacing.xs,
-                OmniSpacing.md,
+                widget.embeddedInManagement ? 88 : OmniSpacing.md,
               )
             : const EdgeInsets.symmetric(
                 horizontal: 14,
@@ -139,22 +152,25 @@ class _EventsPageState extends ConsumerState<EventsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            OmniPageHeader(
-              title: '事件记录',
-              actions: <Widget>[
-                OmniButton(
-                  label: '新增事件',
-                  icon: Icons.add_rounded,
-                  variant: OmniButtonVariant.pagePrimary,
-                  onPressed: _openEditor,
-                ),
-              ],
-            ),
-            const SizedBox(height: OmniSpacing.xs),
+            if (!widget.embeddedInManagement) ...<Widget>[
+              OmniPageHeader(
+                title: '事件记录',
+                actions: <Widget>[
+                  OmniButton(
+                    label: '新增事件',
+                    icon: Icons.add_rounded,
+                    variant: OmniButtonVariant.pagePrimary,
+                    onPressed: _openEditor,
+                  ),
+                ],
+              ),
+              const SizedBox(height: OmniSpacing.xs),
+            ],
             _EventStatistics(
               events: activeEvents,
               completions: completions,
               now: now,
+              useCarousel: widget.embeddedInManagement,
             ),
             const SizedBox(height: OmniSpacing.xs),
             _EventToolbar(
@@ -208,11 +224,15 @@ class _EventStatistics extends ConsumerWidget {
   /// 当前统计时间。
   final DateTime now;
 
+  /// 是否使用 Android 管理页统计轮播。
+  final bool useCarousel;
+
   /// 创建事件顶部统计模块。
   const _EventStatistics({
     required this.events,
     required this.completions,
     required this.now,
+    required this.useCarousel,
   });
 
   /// 按自然周汇总本月完成次数。
@@ -416,6 +436,13 @@ class _EventStatistics extends ConsumerWidget {
         ),
       ),
     ];
+    if (useCarousel) {
+      return OmniStatisticsCarousel(
+        key: const ValueKey<String>('event-statistics-carousel'),
+        cardHeight: 160,
+        children: cards,
+      );
+    }
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // 摘要卡片是否横向完整展示。

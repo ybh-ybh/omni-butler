@@ -43,7 +43,7 @@ class OmniSlidingSegmentedControl<T> extends StatelessWidget {
     this.itemBuilder,
     this.itemKeyBuilder,
     super.key,
-  }) : assert(options.length > 1);
+  }) : assert(options.length > 0);
 
   /// 构建连续轨道、选中滑块与可点击标签。
   @override
@@ -62,8 +62,9 @@ class OmniSlidingSegmentedControl<T> extends StatelessWidget {
         ? Duration.zero
         : OmniMotion.normal;
     // 当前滑块在连续轨道中的对齐位置。
-    final double indicatorAlignment =
-        -1 + (2 * selectedIndex / (options.length - 1));
+    final double indicatorAlignment = options.length == 1
+        ? 0
+        : -1 + (2 * selectedIndex / (options.length - 1));
 
     return Container(
       width: width,

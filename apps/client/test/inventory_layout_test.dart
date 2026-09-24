@@ -543,17 +543,18 @@ void main() {
       find.byKey(const ValueKey<String>('inventory-tag-filters')),
       findsNothing,
     );
-    expect(
-      find.byKey(ValueKey<String>('inventory-accessories-button-$itemId')),
-      findsOneWidget,
+    // 移动端卡片的配套物品快捷入口。
+    final Finder accessoryButton = find.byKey(
+      ValueKey<String>('inventory-accessories-button-$itemId'),
     );
+    expect(accessoryButton, findsOneWidget);
     expect(find.text('¥ 1,769'), findsOneWidget);
     expect(find.text('已使用 2 年 2 月'), findsOneWidget);
     expect(
       find.byKey(ValueKey<String>('inventory-meta-divider-$itemId')),
-      findsOneWidget,
+      findsNothing,
     );
-    // 位置、数量与配套文字均从 14px 缩小到 12px。
+    // 位置与数量使用 12px，底部配套摘要使用 10px。
     final Text locationText = tester.widget<Text>(
       find.byKey(ValueKey<String>('inventory-location-$itemId')),
     );
@@ -565,23 +566,47 @@ void main() {
     );
     expect(locationText.style?.fontSize, 12);
     expect(quantityText.style?.fontSize, 12);
-    expect(accessoryText.style?.fontSize, 12);
+    expect(accessoryText.style?.fontSize, 10);
     expect(accessoryText.style?.color, quantityText.style?.color);
-    // 已使用文字从 12px 缩小到 10px。
+    // 已使用文字保持 10px 次级信息层级。
     final Text usageText = tester.widget<Text>(
       find.byKey(ValueKey<String>('inventory-usage-$itemId')),
     );
     expect(usageText.style?.fontSize, 10);
-    // 物品名与状态行的垂直间距收紧到 4px。
-    final Finder statusRow = find.byKey(
-      ValueKey<String>('inventory-status-row-$itemId'),
+    // Android 物品记录按左图、中部信息、右侧金额与操作排列。
+    final Finder itemCard = find.byKey(
+      ValueKey<String>('inventory-card-$itemId'),
     );
-    final Finder itemName = find.byKey(
-      ValueKey<String>('inventory-name-$itemId'),
+    final Finder itemImage = find.byKey(
+      ValueKey<String>('inventory-card-image-$itemId'),
     );
+    final Finder itemContent = find.byKey(
+      ValueKey<String>('inventory-card-content-$itemId'),
+    );
+    final Finder itemTrailing = find.byKey(
+      ValueKey<String>('inventory-card-trailing-$itemId'),
+    );
+    final Finder itemPrice = find.byKey(
+      ValueKey<String>('inventory-price-$itemId'),
+    );
+    final Finder moreButton = find.byKey(
+      ValueKey<String>('inventory-more-button-$itemId'),
+    );
+    // 三个横向分区的实际位置。
+    final Rect imageRect = tester.getRect(itemImage);
+    // 中部信息区的实际位置。
+    final Rect contentRect = tester.getRect(itemContent);
+    // 右侧金额与操作区的实际位置。
+    final Rect trailingRect = tester.getRect(itemTrailing);
+    expect(tester.getSize(itemCard).height, 128);
+    expect(imageRect.width, 104);
+    expect(imageRect.right, lessThan(contentRect.left));
+    expect(contentRect.right, lessThan(trailingRect.left));
+    expect(trailingRect.contains(tester.getRect(itemPrice).center), isTrue);
+    expect(trailingRect.contains(tester.getRect(moreButton).center), isTrue);
     expect(
-      tester.getRect(itemName).top - tester.getRect(statusRow).bottom,
-      lessThanOrEqualTo(4),
+      trailingRect.contains(tester.getRect(accessoryButton).center),
+      isTrue,
     );
     expect(tester.takeException(), isNull);
 

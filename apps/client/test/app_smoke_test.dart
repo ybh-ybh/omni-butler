@@ -79,7 +79,7 @@ void main() {
     expect(find.text('首页'), findsOneWidget);
     expect(find.text('待办'), findsOneWidget);
     expect(find.text('时间'), findsOneWidget);
-    expect(find.text('物品'), findsOneWidget);
+    expect(find.text('管理'), findsOneWidget);
     expect(find.text('更多'), findsOneWidget);
 
     await database.close();

@@ -652,7 +652,7 @@ class _FeatureIcon extends StatelessWidget {
   }
 }
 
-/// 紧凑布局的低频模块入口。
+/// 非 Android 紧凑布局的低频模块入口。
 class _ModuleGateways extends ConsumerWidget {
   /// 当前主题语义色。
   final OmniColors colors;
@@ -660,7 +660,7 @@ class _ModuleGateways extends ConsumerWidget {
   /// 创建低频模块入口。
   const _ModuleGateways({required this.colors});
 
-  /// 构建事件与会员入口。
+  /// 仅在未使用管理聚合页的紧凑平台展示事件与会员入口。
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // 当前设备功能偏好。
@@ -671,7 +671,12 @@ class _ModuleGateways extends ConsumerWidget {
         final bool isDesktopPlatform = OmniBreakpoint.isDesktopPlatform(
           Theme.of(context).platform,
         );
-        if (isDesktopPlatform || constraints.maxWidth >= 720) {
+        // Android 已使用底栏管理聚合入口。
+        final bool isAndroidPlatform =
+            Theme.of(context).platform == TargetPlatform.android;
+        if (isDesktopPlatform ||
+            isAndroidPlatform ||
+            constraints.maxWidth >= 720) {
           return const SizedBox.shrink();
         }
         // 当前可展示的低频功能入口。
