@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
+import 'package:omni_butler/app/router/app_router.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
@@ -19,6 +20,115 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证首页重点区间、功能联动和时间状态真实数据。
 void main() {
+  testWidgets('首页与每日待办共享跨日期任务及用户排序', (WidgetTester tester) async {
+    // 测试当天。
+    final DateTime now = DateTime(2026, 9, 25, 14);
+    // 两个页面共用的数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 两个页面实际使用的业务仓储。
+    final TodoRepository repository = TodoRepository(database);
+    // 分别创建昨天、今天及明天的未完成任务。
+    for (final int offset in <int>[-1, 0, 1]) {
+      await repository.save(
+        TodoDraft(
+          title: '跨日期任务$offset',
+          scheduledDate: now.add(Duration(days: offset)),
+          priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
+          dueAt: now.add(Duration(days: -offset)),
+        ),
+      );
+    }
+    // 待排序任务，用户排序刻意不同于截止时间顺序。
+    final List<TodoRecord> records = await database
+        .select(database.todoItems)
+        .get();
+    await repository.reorderRoots(
+      TodoPriorityQuadrant.urgentImportant,
+      <String>[
+        for (final int offset in <int>[-1, 1, 0])
+          records
+              .singleWhere((TodoRecord row) => row.title == '跨日期任务$offset')
+              .id,
+      ],
+    );
+    // 使用完整应用路由验证两页数据。
+    final ProviderContainer container = await _pumpApp(
+      tester,
+      database: database,
+      preferences: await _preferences(<String, Object>{}),
+      now: now,
+    );
+    // 逐页比较相同任务的可见性及顺序。
+    for (final String route in <String>['/home', '/todos']) {
+      container.read(appRouterProvider).go(route);
+      await tester.pumpAndSettle();
+      for (final int offset in <int>[-1, 0, 1]) {
+        expect(find.text('跨日期任务$offset'), findsOneWidget);
+      }
+      expect(
+        tester.getTopLeft(find.text('跨日期任务-1')).dy,
+        lessThan(tester.getTopLeft(find.text('跨日期任务1')).dy),
+      );
+      expect(
+        tester.getTopLeft(find.text('跨日期任务1')).dy,
+        lessThan(tester.getTopLeft(find.text('跨日期任务0')).dy),
+      );
+    }
+    await _disposeApp(tester, database, container);
+  });
+
+  testWidgets('首页勾选后立即切换每日待办仍提交完成并响应重新打开', (WidgetTester tester) async {
+    // 测试当天。
+    final DateTime now = DateTime(2026, 9, 25, 14);
+    // 两个页面共用的数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 页面使用真实仓储，不替换数据流。
+    final TodoRepository repository = TodoRepository(database);
+    await repository.save(
+      TodoDraft(
+        title: '切页完成任务',
+        scheduledDate: now,
+        priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
+      ),
+    );
+    // 待操作任务的稳定身份。
+    final TodoRecord record = await database
+        .select(database.todoItems)
+        .getSingle();
+    // 完整应用及路由容器。
+    final ProviderContainer container = await _pumpApp(
+      tester,
+      database: database,
+      preferences: await _preferences(<String, Object>{}),
+      now: now,
+    );
+    await tester.tap(
+      find.byKey(ValueKey<String>('home-todo-checkbox-action-${record.id}')),
+    );
+    container.read(appRouterProvider).go('/todos');
+    await tester.pump();
+    // 路由销毁后动画不再请求帧，显式推进延迟而非只等待页面稳定。
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    // 动画中的页面销毁不能取消持久化。
+    final TodoRecord completed = await database
+        .select(database.todoItems)
+        .getSingle();
+    expect(completed.isCompleted, isTrue);
+    expect(find.text('切页完成任务'), findsNothing);
+    await repository.setCompleted(record.id, false);
+    await tester.pumpAndSettle();
+    expect(find.text('切页完成任务'), findsOneWidget);
+    container.read(appRouterProvider).go('/home');
+    await tester.pumpAndSettle();
+    expect(find.text('切页完成任务'), findsOneWidget);
+    await _disposeApp(tester, database, container);
+  });
+
   testWidgets('首页只展示三个重点待办区间', (WidgetTester tester) async {
     // 测试当前时间。
     final DateTime now = DateTime(2026, 9, 21, 14, 20);

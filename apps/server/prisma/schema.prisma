@@ -8,20 +8,17 @@ datasource db {
   provider = "postgresql"
 }
 
-model User {
+/// 单人部署的数据归属标识，不是登录账号。
+model SyncOwner {
   id                   String                @id @default(uuid()) @db.Uuid
-  email                String                @unique @db.VarChar(320)
-  passwordHash         String                @map("password_hash")
-  role                 String                @default("USER") @db.VarChar(16)
-  tokenVersion         Int                   @default(0) @map("token_version")
-  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
-  refreshTokens        RefreshToken[]
+  sessions             DeviceSession[]
+  receipts             SyncReceipt[]
+  tombstones           SyncTombstone[]
   todoItems            TodoItem[]
   quotes               Quote[]
   dailyQuoteSelections DailyQuoteSelection[]
-  bannerSettings       BannerSetting[]
-  attachments          Attachment[]
+  /// 旧设备日签身份到当前日历槽位的映射。
+  dailyQuoteSelectionAliases DailyQuoteSelectionAlias[]
   taxonomyEntries      TaxonomyEntry[]
   recordTaxonomyLinks  RecordTaxonomyLink[]
   events               Event[]
@@ -31,21 +28,44 @@ model User {
   memberships          Membership[]
   membershipPayments   MembershipPayment[]
 
-  @@map("users")
+  @@map("sync_owners")
 }
 
-model RefreshToken {
-  id           String    @id @default(uuid()) @db.Uuid
-  userId       String    @map("user_id") @db.Uuid
-  tokenHash    String    @map("token_hash")
-  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
-  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
-  replacedById String?   @map("replaced_by_id") @db.Uuid
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+/// 高熵设备会话凭证只保存摘要；会话删除即撤销。
+model DeviceSession {
+  id        String    @id @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash") @db.VarChar(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  user      SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
-  @@map("refresh_tokens")
+  @@map("device_sessions")
+}
+
+/// 已提交客户端事务的幂等回执，与业务写入一同提交。
+model SyncReceipt {
+  userId        String    @map("user_id") @db.Uuid
+  clientId      String    @map("client_id") @db.Uuid
+  transactionId String    @map("transaction_id") @db.VarChar(128)
+  payloadHash   String    @map("payload_hash") @db.VarChar(64)
+  applied       Int
+  ignored       Int
+  user          SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, clientId, transactionId])
+  @@map("sync_receipts")
+}
+
+/// 永久删除墓碑阻止离线旧 PUT 重新创建记录。
+model SyncTombstone {
+  userId    String    @map("user_id") @db.Uuid
+  tableName String    @map("table_name") @db.VarChar(64)
+  recordId  String    @map("record_id") @db.Uuid
+  user      SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, tableName, recordId])
+  @@map("sync_tombstones")
 }
 
 model TodoItem {
@@ -67,7 +87,7 @@ model TodoItem {
   createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt        DateTime?  @map("deleted_at") @db.Timestamptz(3)
-  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             SyncOwner  @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// 当前任务所属的父任务。
   parent           TodoItem?  @relation("TodoSubtasks", fields: [userId, parentId], references: [userId, id], onDelete: Cascade)
   /// 当前任务直接包含的子任务。
@@ -90,7 +110,7 @@ model Quote {
   createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt       DateTime?             @map("deleted_at") @db.Timestamptz(3)
-  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user            SyncOwner             @relation(fields: [userId], references: [id], onDelete: Cascade)
   dailySelections DailyQuoteSelection[]
 
   @@unique([userId, id])
@@ -99,73 +119,58 @@ model Quote {
 }
 
 model DailyQuoteSelection {
-  id        String   @id @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  dayKey    String   @map("day_key") @db.VarChar(10)
-  quoteId   String   @map("quote_id") @db.Uuid
-  isManual  Boolean  @default(false) @map("is_manual")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  quote     Quote    @relation(fields: [userId, quoteId], references: [userId, id], onDelete: Cascade)
+  id        String    @id @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  dayKey    String    @map("day_key") @db.VarChar(10)
+  quoteId   String?   @map("quote_id") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user      SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 复合外键仅清空 quote_id，具体动作由同步不变量迁移配置。
+  quote     Quote?    @relation(fields: [userId, quoteId], references: [userId, id], onDelete: NoAction)
+  /// 曾经指向同一天的其他设备身份。
+  aliases   DailyQuoteSelectionAlias[]
 
+  @@unique([userId, id])
   @@unique([userId, dayKey])
   @@index([userId, updatedAt])
   @@map("daily_quote_selections")
 }
 
-model BannerSetting {
-  id              String   @id @db.Uuid
-  userId          String   @map("user_id") @db.Uuid
-  key             String   @db.VarChar(64)
-  attachmentId    String?  @map("attachment_id") @db.Uuid
-  overlayStrength Float    @default(0.45) @map("overlay_strength")
-  textColorValue  Int?     @map("text_color_value")
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+/// 持久解析旧客户端随机日签身份；仅服务端使用，不参与同步发布。
+model DailyQuoteSelectionAlias {
+  /// 映射归属，不能跨所有者解析。
+  userId String @map("user_id") @db.Uuid
+  /// 旧设备继续用于 PATCH 和 DELETE 的原始身份。
+  recordId String @map("record_id") @db.Uuid
+  /// 当前唯一日历槽位的身份。
+  selectionId String @map("selection_id") @db.Uuid
+  /// 归属删除时一并清理映射。
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 复合外键强制目标与映射归属一致。
+  selection DailyQuoteSelection @relation(fields: [userId, selectionId], references: [userId, id], onDelete: Cascade)
 
-  @@unique([userId, key])
-  @@map("banner_settings")
-}
-
-model Attachment {
-  id           String    @id @db.Uuid
-  userId       String    @map("user_id") @db.Uuid
-  businessType String    @map("business_type") @db.VarChar(32)
-  businessId   String    @map("business_id") @db.Uuid
-  objectKey    String?   @map("object_key")
-  mimeType     String?   @map("mime_type") @db.VarChar(128)
-  sizeBytes    Int?      @map("size_bytes")
-  sha256       String?   @db.VarChar(64)
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(3)
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, businessType, businessId])
-  @@index([userId, updatedAt])
-  @@map("attachments")
+  @@id([userId, recordId])
+  @@index([userId, selectionId])
+  @@map("daily_quote_selection_aliases")
 }
 
 model TaxonomyEntry {
-  id             String               @id @db.Uuid
-  userId         String               @map("user_id") @db.Uuid
-  module         String               @db.VarChar(24)
-  kind           String               @db.VarChar(16)
-  name           String               @db.VarChar(80)
-  normalizedName String               @map("normalized_name") @db.VarChar(80)
-  colorValue     Int?                 @map("color_value")
-  iconCodePoint  Int?                 @map("icon_code_point")
-  sortOrder      Int                  @default(0) @map("sort_order")
-  isEnabled      Boolean              @default(true) @map("is_enabled")
-  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt      DateTime?            @map("deleted_at") @db.Timestamptz(3)
-  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  recordLinks    RecordTaxonomyLink[]
+  id          String               @id @db.Uuid
+  userId      String               @map("user_id") @db.Uuid
+  module      String               @db.VarChar(24)
+  kind        String               @db.VarChar(16)
+  name        String               @db.VarChar(80)
+  colorValue  BigInt?              @map("color_value")
+  sortOrder   Int                  @default(0) @map("sort_order")
+  isEnabled   Boolean              @default(true) @map("is_enabled")
+  createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime?            @map("deleted_at") @db.Timestamptz(3)
+  user        SyncOwner            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recordLinks RecordTaxonomyLink[]
 
   @@unique([userId, id])
-  @@index([userId, module, kind, normalizedName])
   @@index([userId, updatedAt])
   @@map("taxonomy_entries")
 }
@@ -178,7 +183,7 @@ model RecordTaxonomyLink {
   taxonomyId String        @map("taxonomy_id") @db.Uuid
   createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   deletedAt  DateTime?     @map("deleted_at") @db.Timestamptz(3)
-  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       SyncOwner     @relation(fields: [userId], references: [id], onDelete: Cascade)
   taxonomy   TaxonomyEntry @relation(fields: [userId, taxonomyId], references: [userId, id], onDelete: Cascade)
 
   @@index([userId, module, recordId])
@@ -204,7 +209,7 @@ model Event {
   createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt           DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt           DateTime?         @map("deleted_at") @db.Timestamptz(3)
-  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                SyncOwner         @relation(fields: [userId], references: [id], onDelete: Cascade)
   completions         EventCompletion[]
 
   @@unique([userId, id])
@@ -222,7 +227,7 @@ model EventCompletion {
   isRevoked   Boolean   @default(false) @map("is_revoked")
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
   event       Event     @relation(fields: [userId, eventId], references: [userId, id], onDelete: Cascade)
 
   @@index([userId, eventId, completedAt])
@@ -245,11 +250,10 @@ model InventoryItem {
   tags               String?
   parentItemId       String?         @map("parent_item_id") @db.Uuid
   notes              String?
-  imageAttachmentId  String?         @map("image_attachment_id") @db.Uuid
   createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt          DateTime?       @map("deleted_at") @db.Timestamptz(3)
-  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               SyncOwner       @relation(fields: [userId], references: [id], onDelete: Cascade)
   parent             InventoryItem?  @relation("InventoryAccessories", fields: [userId, parentItemId], references: [userId, id], onDelete: Cascade)
   accessories        InventoryItem[] @relation("InventoryAccessories")
 
@@ -273,7 +277,7 @@ model TimeEntry {
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, entryDate])
   @@index([userId, startedAt])
@@ -290,7 +294,6 @@ model Membership {
   description               String?
   websiteUrl                String?             @map("website_url")
   purchasePlatform          String?             @map("purchase_platform")
-  paymentMethod             String?             @map("payment_method")
   priceCents                Int                 @default(0) @map("price_cents")
   billingCycle              String              @default("year") @map("billing_cycle") @db.VarChar(24)
   baseStatus                String              @default("active") @map("base_status") @db.VarChar(24)
@@ -299,7 +302,6 @@ model Membership {
   isPermanent               Boolean             @default(false) @map("is_permanent")
   autoRenew                 Boolean             @default(false) @map("auto_renew")
   renewalDate               DateTime?           @map("renewal_date") @db.Date
-  isFavorite                Boolean             @default(false) @map("is_favorite")
   needsRenewal              Boolean             @default(false) @map("needs_renewal")
   expirationReminderEnabled Boolean             @default(false) @map("expiration_reminder_enabled")
   expirationReminderDays    Int                 @default(30) @map("expiration_reminder_days")
@@ -308,11 +310,10 @@ model Membership {
   reminderTimeMinutes       Int                 @default(540) @map("reminder_time_minutes")
   cancelGuide               String?             @map("cancel_guide")
   notes                     String?
-  imageAttachmentId         String?             @map("image_attachment_id") @db.Uuid
   createdAt                 DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                 DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt                 DateTime?           @map("deleted_at") @db.Timestamptz(3)
-  user                      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                      SyncOwner           @relation(fields: [userId], references: [id], onDelete: Cascade)
   payments                  MembershipPayment[]
 
   @@unique([userId, id])
@@ -326,14 +327,13 @@ model MembershipPayment {
   userId       String     @map("user_id") @db.Uuid
   membershipId String     @map("membership_id") @db.Uuid
   amountCents  Int        @map("amount_cents")
-  billingCycle String?    @map("billing_cycle") @db.VarChar(24)
   paidAt       DateTime   @map("paid_at") @db.Timestamptz(3)
   validFrom    DateTime?  @map("valid_from") @db.Date
   validUntil   DateTime?  @map("valid_until") @db.Date
   notes        String?
   createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   deletedAt    DateTime?  @map("deleted_at") @db.Timestamptz(3)
-  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         SyncOwner  @relation(fields: [userId], references: [id], onDelete: Cascade)
   membership   Membership @relation(fields: [userId, membershipId], references: [userId, id], onDelete: Cascade)
 
   @@index([userId, membershipId, paidAt])

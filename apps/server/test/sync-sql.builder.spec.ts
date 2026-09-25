@@ -11,7 +11,7 @@ describe('SyncSqlBuilder', () => {
   /// 固定记录标识。
   const recordId = 'ea78cdfc-4368-45e9-b541-2adb46a0c136';
 
-  it('PUT 强制使用当前用户且只更新白名单列', () => {
+  it('PUT 强制使用当前用户且重复创建不覆盖既有记录', () => {
     // 测试同步操作。
     const operation: SyncOperationDto = {
       op: 'PUT',
@@ -23,7 +23,8 @@ describe('SyncSqlBuilder', () => {
     const statement = builder.build(operation, userId);
 
     expect(statement.sql).toContain('INSERT INTO "todo_items"');
-    expect(statement.sql).toContain('"user_id" = $2::uuid');
+    expect(statement.sql).toContain('("id", "user_id",');
+    expect(statement.sql).toContain('ON CONFLICT ("id") DO NOTHING');
     expect(statement.values).toEqual([recordId, userId, 2, '喝水']);
   });
 

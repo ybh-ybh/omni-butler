@@ -38,21 +38,18 @@ class HomePage extends ConsumerWidget {
     // 今日自然日。
     final DateTime today = DateUtils.dateOnly(now);
     // 今日名言异步状态。
-    final AsyncValue<QuoteRecord> quoteAsync = ref.watch(
+    final AsyncValue<QuoteRecord?> quoteAsync = ref.watch(
       quoteForDayProvider(today),
     );
     // 全部进行中待办树异步状态。
     final AsyncValue<List<TodoTreeNode>> todoTreesAsync = ref.watch(
       activeTodoTreesProvider(today),
     );
-    // 今日仍有未完成内容的待办树。
+    // 与每日待办共用跨日期活动集合及仓储排序，首页仅限制象限和展示条数。
     final List<TodoTreeNode> pendingTodoTrees =
-        (todoTreesAsync.asData?.value ?? <TodoTreeNode>[])
-            .where(
-              (TodoTreeNode tree) =>
-                  DateUtils.isSameDay(tree.root.scheduledDate, today),
-            )
-            .toList(growable: false);
+        todoTreesAsync.asData?.value ?? <TodoTreeNode>[];
+    // 捕获页面生命周期之外仍可用的仓储，完成动画中切页也能提交。
+    final TodoRepository todoRepository = ref.watch(todoRepositoryProvider);
     // 当前设备首页卡片偏好。
     final HomeCardPreference cardPreference = ref.watch(
       homeCardPreferenceProvider,
@@ -90,7 +87,7 @@ class HomePage extends ConsumerWidget {
       onEdit: (TodoRecord todo) =>
           unawaited(TodoEditorDialog.show(context, record: todo)),
       onToggle: (TodoRecord todo, bool value) =>
-          _setTodoCompleted(ref, todo, value),
+          todoRepository.setCompleted(todo.id, value),
     );
     // 所有稳定标识对应的首页卡片。
     final Map<HomeCardId, Widget> cards = <HomeCardId, Widget>{
@@ -113,13 +110,6 @@ class HomePage extends ConsumerWidget {
       onManageCards: () => showHomeCardManager(context),
     );
   }
-
-  /// 更新首页待办完成状态。
-  Future<void> _setTodoCompleted(
-    WidgetRef ref,
-    TodoRecord todo,
-    bool completed,
-  ) => ref.read(todoRepositoryProvider).setCompleted(todo.id, completed);
 }
 
 /// 首页卡片式工作台骨架。
@@ -668,7 +658,7 @@ class _EmptyHomeDashboard extends StatelessWidget {
 /// 每日名言横幅。
 class _QuoteHero extends ConsumerWidget {
   /// 今日名言异步状态。
-  final AsyncValue<QuoteRecord> quoteAsync;
+  final AsyncValue<QuoteRecord?> quoteAsync;
 
   /// 手动换一条回调。
   final Future<void> Function() onChange;
@@ -710,12 +700,12 @@ class _QuoteHero extends ConsumerWidget {
     final String? backgroundPath = banner?.localPath;
     // 当前名言内容。
     final Widget quoteContent = quoteAsync.when(
-      data: (QuoteRecord quote) => Column(
+      data: (QuoteRecord? quote) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Text(
-            '“${quote.content}”',
+            quote == null ? '暂无可用名言，可在名言库中添加' : '“${quote.content}”',
             maxLines: dense ? 2 : null,
             overflow: dense ? TextOverflow.ellipsis : TextOverflow.visible,
             style: TextStyle(
@@ -727,7 +717,7 @@ class _QuoteHero extends ConsumerWidget {
           ),
           SizedBox(height: dense ? 2 : OmniSpacing.sm),
           Text(
-            '— ${quote.source ?? '未署名'}',
+            quote == null ? '' : '— ${quote.source ?? '未署名'}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.right,
@@ -1151,14 +1141,8 @@ class _HomeTodoQuadrant extends StatelessWidget {
     final OmniColors colors = OmniColors.of(context);
     // 当前象限用于轻量分区的语义色。
     final Color accentColor = quadrant.color(colors);
-    // 按截止时间与用户顺序整理后的象限待办树。
-    final List<TodoTreeNode> sortedTodoTrees = List<TodoTreeNode>.of(todoTrees)
-      ..sort(
-        (TodoTreeNode left, TodoTreeNode right) =>
-            _compareTodoPriority(left.root, right.root),
-      );
-    // 首页当前象限最多展示的三棵待办树。
-    final List<TodoTreeNode> visibleTodoTrees = sortedTodoTrees
+    // 保留共享任务流的用户排序，展示与每日待办相同顺序的前三棵树。
+    final List<TodoTreeNode> visibleTodoTrees = todoTrees
         .take(3)
         .toList(growable: false);
     // 未直接展示的根待办数量。
@@ -1234,25 +1218,6 @@ class _HomeTodoQuadrant extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(27, OmniSpacing.xs, 0, OmniSpacing.sm),
       child: Text('暂无任务', style: TextStyle(color: colors.muted)),
     );
-  }
-
-  /// 比较首页同一象限内待办的展示顺序。
-  int _compareTodoPriority(TodoRecord left, TodoRecord right) {
-    // 无截止时间任务使用的远期时间。
-    final DateTime distantFuture = DateTime(9999);
-    // 截止时间比较结果。
-    final int dueComparison = (left.dueAt ?? distantFuture).compareTo(
-      right.dueAt ?? distantFuture,
-    );
-    if (dueComparison != 0) {
-      return dueComparison;
-    }
-    // 用户排序值比较结果。
-    final int sortOrderComparison = left.sortOrder.compareTo(right.sortOrder);
-    if (sortOrderComparison != 0) {
-      return sortOrderComparison;
-    }
-    return left.createdAt.compareTo(right.createdAt);
   }
 }
 
@@ -1539,6 +1504,29 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
     if (_submitting) {
       return;
     }
+    // 点击时确定的任务与提交回调，不能被后续重建或页面销毁改变。
+    final TodoRecord todo = widget.todo;
+    // 回调已捕获业务仓储，不依赖销毁后的 WidgetRef。
+    final Future<void> Function(TodoRecord) onComplete = widget.onComplete;
+    try {
+      await _animateCompletion();
+      // 动画可因切页提前结束，但用户确认的业务操作必须继续提交。
+      await onComplete(todo);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _checked = false;
+          _fading = false;
+          _collapsed = false;
+          _submitting = false;
+        });
+      }
+      rethrow;
+    }
+  }
+
+  /// 仅控制视觉反馈；页面销毁只结束动画，不取消完成操作。
+  Future<void> _animateCompletion() async {
     // 当前是否关闭非必要动画。
     final bool disableAnimations =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
@@ -1569,23 +1557,6 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
     }
     setState(() => _collapsed = true);
     await Future<void>.delayed(collapseDuration);
-    if (!mounted) {
-      return;
-    }
-
-    try {
-      await widget.onComplete(widget.todo);
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _checked = false;
-          _fading = false;
-          _collapsed = false;
-          _submitting = false;
-        });
-      }
-      rethrow;
-    }
   }
 
   /// 构建带完成反馈的任务行。

@@ -91,14 +91,10 @@ class EventCompletionUndo {
   /// 新增完成历史标识。
   final String completionId;
 
-  /// 操作前最近完成时间。
-  final DateTime? previousCompletedAt;
-
   /// 创建事件撤销信息。
   const EventCompletionUndo({
     required this.eventId,
     required this.completionId,
-    required this.previousCompletedAt,
   });
 }
 
@@ -202,6 +198,13 @@ class EventRepository {
     // 当前创建时间。
     final DateTime now = DateTime.now();
     await _database.transaction(() async {
+      // 在首条历史插入前保留旧版本直接保存在事件上的初始时间。
+      final EventRecord? previous = await (_database.select(
+        _database.events,
+      )..where((Events table) => table.id.equals(eventId))).getSingleOrNull();
+      if (previous != null) {
+        await _preserveLegacyCompletion(previous, now);
+      }
       await _database
           .into(_database.eventCompletions)
           .insert(
@@ -275,46 +278,114 @@ class EventRepository {
     final DateTime now = DateTime.now();
     // 可选现有事件标识。
     final String? existingId = draft.id;
-    if (existingId == null) {
-      await _database
-          .into(_database.events)
-          .insert(
-            EventsCompanion.insert(
-              id: _uuid.v7(),
-              name: name,
-              description: Value<String?>(_cleanOptional(draft.description)),
-              category: Value<String?>(_cleanOptional(draft.category)),
-              intervalValue: Value<int>(draft.intervalValue),
-              intervalUnit: Value<String>(draft.intervalUnit.name),
-              lastCompletedAt: Value<DateTime?>(draft.lastCompletedAt),
-              reminderEnabled: Value<bool>(draft.reminderEnabled),
-              reminderDaysBefore: Value<int>(draft.reminderDaysBefore),
-              reminderTimeMinutes: Value<int>(draft.reminderTimeMinutes),
-              notes: Value<String?>(_cleanOptional(draft.notes)),
-              createdAt: now,
-              updatedAt: now,
-            ),
-          );
+    // 保留修改前的汇总值，以区分编辑时间和只编辑其他字段。
+    final EventRecord? previous = existingId == null
+        ? null
+        : await (_database.select(_database.events)
+                ..where((Events table) => table.id.equals(existingId)))
+              .getSingleOrNull();
+    await _database.transaction(() async {
+      if (existingId == null) {
+        // 新事件和它的初始完成历史共用同一事务。
+        final String eventId = _uuid.v7();
+        await _database
+            .into(_database.events)
+            .insert(
+              EventsCompanion.insert(
+                id: eventId,
+                name: name,
+                description: Value<String?>(_cleanOptional(draft.description)),
+                category: Value<String?>(_cleanOptional(draft.category)),
+                intervalValue: Value<int>(draft.intervalValue),
+                intervalUnit: Value<String>(draft.intervalUnit.name),
+                lastCompletedAt: Value<DateTime?>(draft.lastCompletedAt),
+                reminderEnabled: Value<bool>(draft.reminderEnabled),
+                reminderDaysBefore: Value<int>(draft.reminderDaysBefore),
+                reminderTimeMinutes: Value<int>(draft.reminderTimeMinutes),
+                notes: Value<String?>(_cleanOptional(draft.notes)),
+                createdAt: now,
+                updatedAt: now,
+              ),
+            );
+        await _writeInitialCompletion(eventId, draft.lastCompletedAt, now);
+        await _recalculateLastCompleted(eventId, now);
+        return;
+      }
+      await (_database.update(
+        _database.events,
+      )..where((Events table) => table.id.equals(existingId))).write(
+        EventsCompanion(
+          name: Value<String>(name),
+          description: Value<String?>(_cleanOptional(draft.description)),
+          category: Value<String?>(_cleanOptional(draft.category)),
+          intervalValue: Value<int>(draft.intervalValue),
+          intervalUnit: Value<String>(draft.intervalUnit.name),
+          lastCompletedAt: Value<DateTime?>(draft.lastCompletedAt),
+          reminderEnabled: Value<bool>(draft.reminderEnabled),
+          reminderDaysBefore: Value<int>(draft.reminderDaysBefore),
+          reminderTimeMinutes: Value<int>(draft.reminderTimeMinutes),
+          notes: Value<String?>(_cleanOptional(draft.notes)),
+          updatedAt: Value<DateTime>(now),
+          syncState: const Value<String>('localSaved'),
+        ),
+      );
+      if (previous?.lastCompletedAt != draft.lastCompletedAt) {
+        await _writeInitialCompletion(existingId, draft.lastCompletedAt, now);
+      } else if (previous != null) {
+        await _preserveLegacyCompletion(previous, now);
+      }
+      await _recalculateLastCompleted(existingId, now);
+    });
+  }
+
+  /// 将编辑器提供的初始完成时间保存为可撤销、可重算的历史。
+  Future<void> _writeInitialCompletion(
+    String eventId,
+    DateTime? completedAt,
+    DateTime now,
+  ) async {
+    // 同一事件的初始完成时间使用固定身份。
+    final String id = stableBusinessId('event-initial', <String>[eventId]);
+    if (completedAt == null) {
+      await (_database.update(_database.eventCompletions)
+            ..where((EventCompletions table) => table.id.equals(id)))
+          .write(EventCompletionsCompanion(deletedAt: Value<DateTime>(now)));
       return;
     }
-    await (_database.update(
-      _database.events,
-    )..where((Events table) => table.id.equals(existingId))).write(
-      EventsCompanion(
-        name: Value<String>(name),
-        description: Value<String?>(_cleanOptional(draft.description)),
-        category: Value<String?>(_cleanOptional(draft.category)),
-        intervalValue: Value<int>(draft.intervalValue),
-        intervalUnit: Value<String>(draft.intervalUnit.name),
-        lastCompletedAt: Value<DateTime?>(draft.lastCompletedAt),
-        reminderEnabled: Value<bool>(draft.reminderEnabled),
-        reminderDaysBefore: Value<int>(draft.reminderDaysBefore),
-        reminderTimeMinutes: Value<int>(draft.reminderTimeMinutes),
-        notes: Value<String?>(_cleanOptional(draft.notes)),
-        updatedAt: Value<DateTime>(now),
-        syncState: const Value<String>('localSaved'),
-      ),
-    );
+    await _database
+        .into(_database.eventCompletions)
+        .insertOnConflictUpdate(
+          EventCompletionsCompanion.insert(
+            id: id,
+            eventId: eventId,
+            completedAt: completedAt,
+            source: const Value<String>('initial'),
+            isRevoked: const Value<bool>(false),
+            deletedAt: const Value<DateTime?>(null),
+            createdAt: now,
+          ),
+        );
+  }
+
+  /// 兼容旧事件只有汇总时间而尚无任何历史的情况。
+  Future<void> _preserveLegacyCompletion(
+    EventRecord event,
+    DateTime now,
+  ) async {
+    if (event.lastCompletedAt == null) {
+      return;
+    }
+    // 即使历史已撤销或删除也不补造初始记录，避免撤销后复活。
+    final List<EventCompletionRecord> history =
+        await (_database.select(_database.eventCompletions)
+              ..where(
+                (EventCompletions table) => table.eventId.equals(event.id),
+              )
+              ..limit(1))
+            .get();
+    if (history.isEmpty) {
+      await _writeInitialCompletion(event.id, event.lastCompletedAt, now);
+    }
   }
 
   /// 记录当前完成时间并返回撤销信息。
@@ -324,6 +395,7 @@ class EventRepository {
     // 新完成历史标识。
     final String completionId = _uuid.v7();
     await _database.transaction(() async {
+      await _preserveLegacyCompletion(event, now);
       await _database
           .into(_database.eventCompletions)
           .insert(
@@ -335,20 +407,11 @@ class EventRepository {
               createdAt: now,
             ),
           );
-      await (_database.update(
-        _database.events,
-      )..where((Events table) => table.id.equals(event.id))).write(
-        EventsCompanion(
-          lastCompletedAt: Value<DateTime>(now),
-          updatedAt: Value<DateTime>(now),
-          syncState: const Value<String>('localSaved'),
-        ),
-      );
+      await _recalculateLastCompleted(event.id, now);
     });
     return EventCompletionUndo(
       eventId: event.id,
       completionId: completionId,
-      previousCompletedAt: event.lastCompletedAt,
     );
   }
 
@@ -363,15 +426,7 @@ class EventRepository {
                 table.eventId.equals(undo.eventId),
           ))
           .write(const EventCompletionsCompanion(isRevoked: Value<bool>(true)));
-      await (_database.update(
-        _database.events,
-      )..where((Events table) => table.id.equals(undo.eventId))).write(
-        EventsCompanion(
-          lastCompletedAt: Value<DateTime?>(undo.previousCompletedAt),
-          updatedAt: Value<DateTime>(now),
-          syncState: const Value<String>('localSaved'),
-        ),
-      );
+      await _recalculateLastCompleted(undo.eventId, now);
     });
   }
 

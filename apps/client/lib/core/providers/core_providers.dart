@@ -155,7 +155,7 @@ final StreamProvider<List<TodoRecord>> deletedTodosProvider =
     });
 
 /// 指定自然日名言提供者。
-final quoteForDayProvider = FutureProvider.family<QuoteRecord, DateTime>((
+final quoteForDayProvider = FutureProvider.family<QuoteRecord?, DateTime>((
   Ref ref,
   DateTime day,
 ) {

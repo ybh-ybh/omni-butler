@@ -1443,6 +1443,19 @@ void main() {
     expect(find.text('移入回收站？'), findsOneWidget);
     expect(cancelButton, findsOneWidget);
     expect(confirmButton, findsOneWidget);
+    // 弹窗应保留在主窗口中央，不能退化为铺满桌面的原生 Dialog 窗口。
+    final Finder recycleDialog = find
+        .descendant(of: find.byType(Dialog), matching: find.byType(Material))
+        .first;
+    // 当前应用内弹窗的实际尺寸。
+    final Size recycleDialogSize = tester.getSize(recycleDialog);
+    // 当前应用内弹窗的中心位置。
+    final Offset recycleDialogCenter = tester.getCenter(recycleDialog);
+    expect(recycleDialogSize.width, lessThan(600));
+    expect(recycleDialogSize.height, lessThan(300));
+    expect(recycleDialogCenter.dx, closeTo(viewport.width / 2, 1));
+    expect(recycleDialogCenter.dy, closeTo(viewport.height / 2, 1));
+    expect(find.byType(ModalBarrier), findsWidgets);
     // 取消按钮的自定义边框绘制区。
     final Finder cancelPaint = find.byKey(
       const ValueKey<String>('todo-recycle-cancel-border'),

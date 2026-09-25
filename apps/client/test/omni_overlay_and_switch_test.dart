@@ -1,4 +1,7 @@
+// ignore_for_file: implementation_imports, invalid_use_of_internal_member
+
 import 'package:flutter/material.dart';
+import 'package:flutter/src/foundation/_features.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
@@ -6,6 +9,39 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 验证统一侧栏与开关的关键交互。
 void main() {
+  testWidgets('统一弹窗在启用多窗口时仍保留在当前窗口', (WidgetTester tester) async {
+    // 测试前的 Flutter 多窗口特性状态。
+    final bool previousWindowingEnabled = isWindowingEnabled;
+    isWindowingEnabled = true;
+    addTearDown(() => isWindowingEnabled = previousWindowingEnabled);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.build(brightness: Brightness.light),
+        home: Builder(
+          builder: (BuildContext context) => TextButton(
+            onPressed: () => showOmniDialog<void>(
+              context,
+              builder: (BuildContext context) => const AlertDialog(
+                title: Text('应用内弹窗'),
+                content: Text('不能创建独立原生窗口'),
+              ),
+            ),
+            child: const Text('打开弹窗'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('打开弹窗'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('应用内弹窗'), findsOneWidget);
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(find.byType(ModalBarrier), findsWidgets);
+    expect(tester.binding.platformDispatcher.views, hasLength(1));
+  });
+
   testWidgets('点击侧栏左侧遮罩会关闭侧栏', (WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(

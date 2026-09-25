@@ -32,6 +32,8 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/prisma.config.ts ./prisma.config.ts
 COPY --from=build /app/package.json ./package.json
+# 为非 root 运行用户预建密钥目录，首次挂载命名卷时沿用其权限。
+RUN mkdir -p /app/keys && chown node:node /app/keys && chmod 700 /app/keys
 USER node
 EXPOSE 3000
 CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]

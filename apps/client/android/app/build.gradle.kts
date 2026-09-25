@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "com.omnibutler.omni_butler"
-    compileSdk = flutter.compileSdkVersion
+    // 安全存储插件要求 API 37，编译版本不跟随 Flutter 的较低默认值。
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

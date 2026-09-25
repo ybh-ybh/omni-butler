@@ -27,10 +27,11 @@ class SyncController extends AsyncNotifier<void> {
     }
     // 当前已恢复完成的设备同步会话。
     final SyncSession? session = await ref.watch(authControllerProvider.future);
-    if (session == null || session.isOffline) {
+    if (session == null) {
       await runtime.disconnect();
       return;
     }
+    // 离线缓存身份仍可连接引擎，由 PowerSync 在网络恢复后重试凭证和上传。
     await runtime.connect(session.identity.id);
   }
 

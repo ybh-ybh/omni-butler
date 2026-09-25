@@ -5,6 +5,7 @@ import 'package:omni_butler/core/auth/auth_repository.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/sync/omni_powersync_connector.dart';
 import 'package:omni_butler/core/sync/omni_sync_schema.dart';
+import 'package:omni_butler/core/sync/sync_client_identity.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:powersync/powersync.dart';
@@ -87,9 +88,15 @@ class OmniSyncRuntime {
       database: database,
       connector: OmniPowerSyncConnector(auth),
     );
-    await runtime._installRawTableTriggers();
-    await runtime._removeLocalOnlyTableTriggers();
-    return runtime;
+    try {
+      await runtime._installRawTableTriggers();
+      await runtime._removeLocalOnlyTableTriggers();
+      await runtime._initializeLocalUploadState();
+      return runtime;
+    } on Object {
+      await runtime.close();
+      rethrow;
+    }
   }
 
   /// 为指定服务端身份启动后台同步；同一身份重复调用保持幂等。
@@ -125,6 +132,7 @@ class OmniSyncRuntime {
   Future<void> disconnectAndClear() async {
     await powerSync.disconnectAndClear(clearLocal: true);
     _connectedUserId = null;
+    await _initializeLocalUploadState();
   }
 
   /// 关闭 Drift 与 PowerSync 持有的数据库资源。
@@ -141,6 +149,44 @@ class OmniSyncRuntime {
       <Object?>['owner'],
     );
     return row?['value'] as String?;
+  }
+
+  /// 首次接入时原子补齐旧业务数据的 PUT，已绑定服务端的数据不重新导入。
+  Future<void> _initializeLocalUploadState() async {
+    await powerSync.writeTransaction((transaction) async {
+      // 初始导入和数据归属标记，只在尚未接入同步的本地库中补建队列。
+      final metadata = await transaction.getAll(
+        'SELECT id FROM device_sync_metadata WHERE id IN (?, ?)',
+        <Object?>['initial_upload', 'owner'],
+      );
+      if (metadata.any((row) => row['id'] == 'initial_upload')) {
+        return;
+      }
+      if (metadata.isEmpty) {
+        // 尚未绑定过服务器的旧操作可折叠为当前快照，避免先上传过时字段或悬空引用。
+        // 与快照入队和标记同事务提交，失败时原队列仍然完整保留。
+        await transaction.execute('DELETE FROM ps_crud');
+        // 按客户端同步白名单生成 PUT，绝不改写原业务行或本机专属字段。
+        for (final RawTable table in omniSyncSchema.rawTables) {
+          // 当前表中允许上传的字段名来自受信任的静态 schema。
+          final List<String> columns = table.schema!.syncedColumns!;
+          // SQLite JSON 保留原始数值与空值；虚拟表负责记录事务号。
+          final String jsonColumns = columns
+              .map((String column) => "'$column', \"$column\"")
+              .join(', ');
+          await transaction.execute(
+            'INSERT INTO powersync_crud(op, id, type, data) '
+            "SELECT 'PUT', id, ?, json_object($jsonColumns) FROM \"${table.name}\"",
+            <Object?>[table.name],
+          );
+        }
+      }
+      await transaction.execute(
+        'INSERT INTO device_sync_metadata(id, value) VALUES(?, ?)',
+        <Object?>['initial_upload', '1'],
+      );
+    });
+    await ensureSyncClientId(powerSync);
   }
 
   /// 为全部 Drift Raw Table 安装幂等的本地写入捕获触发器。

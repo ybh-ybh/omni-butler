@@ -10,7 +10,7 @@ export interface SyncStatement {
 }
 
 /// 各同步表允许由客户端写入的列。
-const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
+export const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
   todo_items: new Set([
     'parent_id',
     'title',
@@ -39,7 +39,6 @@ const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
   daily_quote_selections: new Set([
     'day_key',
     'quote_id',
-    'is_manual',
     'created_at',
     'updated_at',
   ]),
@@ -47,9 +46,7 @@ const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
     'module',
     'kind',
     'name',
-    'normalized_name',
     'color_value',
-    'icon_code_point',
     'sort_order',
     'is_enabled',
     'created_at',
@@ -127,7 +124,6 @@ const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
     'description',
     'website_url',
     'purchase_platform',
-    'payment_method',
     'price_cents',
     'billing_cycle',
     'base_status',
@@ -136,7 +132,6 @@ const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
     'is_permanent',
     'auto_renew',
     'renewal_date',
-    'is_favorite',
     'needs_renewal',
     'expiration_reminder_enabled',
     'expiration_reminder_days',
@@ -152,7 +147,6 @@ const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
   membership_payments: new Set([
     'membership_id',
     'amount_cents',
-    'billing_cycle',
     'paid_at',
     'valid_from',
     'valid_until',
@@ -167,7 +161,9 @@ export class SyncSqlBuilder {
   /// 构建一条当前用户范围内的写入语句。
   build(operation: SyncOperationDto, userId: string): SyncStatement {
     // 目标表允许写入的列。
-    const allowed = writableColumns[operation.table];
+    const allowed = Object.hasOwn(writableColumns, operation.table)
+      ? writableColumns[operation.table]
+      : undefined;
     if (!allowed) {
       throw new BadRequestException(`不支持同步表：${operation.table}`);
     }
@@ -211,12 +207,9 @@ export class SyncSqlBuilder {
     const placeholders = insertColumns
       .map((_column, index) => `$${index + 1}`)
       .join(', ');
-    // 冲突更新赋值列表，永远不允许改变 user_id。
-    const updates = columns
-      .map((column) => `"${column}" = EXCLUDED."${column}"`)
-      .join(', ');
+    // PUT 只创建；另一设备生成的同一稳定实体不能覆盖既有编辑。
     return {
-      sql: `INSERT INTO "${operation.table}" (${insertColumns.map((column) => `"${column}"`).join(', ')}) VALUES (${placeholders}) ON CONFLICT ("id") DO UPDATE SET ${updates} WHERE "${operation.table}"."user_id" = $2::uuid`,
+      sql: `INSERT INTO "${operation.table}" (${insertColumns.map((column) => `"${column}"`).join(', ')}) VALUES (${placeholders}) ON CONFLICT ("id") DO NOTHING`,
       values: [operation.id, userId, ...columns.map((column) => data[column])],
     };
   }

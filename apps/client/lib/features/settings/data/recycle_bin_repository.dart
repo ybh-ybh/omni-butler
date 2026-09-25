@@ -264,10 +264,15 @@ class RecycleBinRepository {
             _database.memberships,
           )..where((Memberships table) => table.id.equals(item.id))).go();
         case RecycleEntityType.quote:
-          await (_database.delete(_database.dailyQuoteSelections)..where(
+          await (_database.update(_database.dailyQuoteSelections)..where(
                 (DailyQuoteSelections table) => table.quoteId.equals(item.id),
               ))
-              .go();
+              .write(
+                DailyQuoteSelectionsCompanion(
+                  quoteId: const Value<String?>(null),
+                  updatedAt: Value<DateTime>(DateTime.now()),
+                ),
+              );
           await (_database.delete(
             _database.quotes,
           )..where((Quotes table) => table.id.equals(item.id))).go();

@@ -44,9 +44,6 @@ class TaxonomyDraft {
   /// ARGB 颜色值。
   final int colorValue;
 
-  /// 可选 Material 图标码点。
-  final int? iconCodePoint;
-
   /// 用户排序值。
   final int sortOrder;
 
@@ -57,7 +54,6 @@ class TaxonomyDraft {
     required this.kind,
     required this.name,
     required this.colorValue,
-    this.iconCodePoint,
     this.sortOrder = 0,
   });
 }
@@ -122,21 +118,49 @@ class TaxonomyRepository {
     // 当前写入时间。
     final DateTime now = DateTime.now();
     if (draft.id == null) {
+      // 同名软删除条目可直接恢复，避免稳定主键再次插入失败。
+      final List<TaxonomyEntry> allEntries =
+          await (_database.select(_database.taxonomyEntries)..where(
+                (TaxonomyEntries table) =>
+                    table.module.equals(draft.module.name) &
+                    table.kind.equals(draft.kind.name),
+              ))
+              .get();
+      // 优先沿用已有同名墓碑身份，兼容早期随机 UUID 数据。
+      final TaxonomyEntry? deleted = allEntries
+          .where(
+            (TaxonomyEntry entry) =>
+                entry.deletedAt != null &&
+                entry.name.trim().toLowerCase() == name.toLowerCase(),
+          )
+          .firstOrNull;
+      // 新条目的业务身份；重命名占用旧身份时使用稳定的后继身份。
+      String identity = stableBusinessId('taxonomy', <String>[
+        draft.module.name,
+        draft.kind.name,
+        name.toLowerCase(),
+      ]);
+      while (allEntries.any(
+        (TaxonomyEntry entry) =>
+            entry.id == identity &&
+            entry.name.trim().toLowerCase() != name.toLowerCase(),
+      )) {
+        identity = stableBusinessId('taxonomy-successor', <String>[identity]);
+      }
       await _database
           .into(_database.taxonomyEntries)
-          .insert(
+          .insertOnConflictUpdate(
             TaxonomyEntriesCompanion.insert(
-              id: _uuid.v7(),
+              id: deleted?.id ?? identity,
               module: draft.module.name,
               kind: draft.kind.name,
               name: name,
-              normalizedName: name.toLowerCase(),
               colorValue: draft.colorValue,
-              iconCodePoint: Value<int?>(draft.iconCodePoint),
               sortOrder: Value<int>(draft.sortOrder),
               isEnabled: const Value<bool>(true),
-              createdAt: now,
+              createdAt: deleted?.createdAt ?? now,
               updatedAt: now,
+              deletedAt: const Value<DateTime?>(null),
             ),
           );
       return;
@@ -151,9 +175,7 @@ class TaxonomyRepository {
       )..where((TaxonomyEntries table) => table.id.equals(draft.id!))).write(
         TaxonomyEntriesCompanion(
           name: Value<String>(name),
-          normalizedName: Value<String>(name.toLowerCase()),
           colorValue: Value<int>(draft.colorValue),
-          iconCodePoint: Value<int?>(draft.iconCodePoint),
           sortOrder: Value<int>(draft.sortOrder),
           isEnabled: const Value<bool>(true),
           updatedAt: Value<DateTime>(now),
@@ -540,33 +562,34 @@ class TaxonomyRepository {
       return;
     }
     // 内置时间类别。
-    final List<(String, Color, IconData)> defaults =
-        <(String, Color, IconData)>[
-          ('工作', const Color(0xFF477087), Icons.work_outline_rounded),
-          ('学习', const Color(0xFF5A67A5), Icons.school_outlined),
-          ('运动', const Color(0xFF397966), Icons.directions_run_rounded),
-          ('休息', const Color(0xFF75628E), Icons.bedtime_outlined),
-          ('娱乐', const Color(0xFFA96266), Icons.sports_esports_outlined),
-          ('其他', const Color(0xFF67717D), Icons.more_horiz_rounded),
-        ];
+    final List<(String, Color)> defaults = <(String, Color)>[
+      ('工作', const Color(0xFF477087)),
+      ('学习', const Color(0xFF5A67A5)),
+      ('运动', const Color(0xFF397966)),
+      ('休息', const Color(0xFF75628E)),
+      ('娱乐', const Color(0xFFA96266)),
+      ('其他', const Color(0xFF67717D)),
+    ];
     // 当前创建时间。
     final DateTime now = DateTime.now();
     await _database.batch((Batch batch) {
       batch.insertAll(_database.taxonomyEntries, <TaxonomyEntriesCompanion>[
         for (int index = 0; index < defaults.length; index += 1)
           TaxonomyEntriesCompanion.insert(
-            id: const Uuid().v7(),
+            id: stableBusinessId('taxonomy', <String>[
+              'timeline',
+              'category',
+              defaults[index].$1.toLowerCase(),
+            ]),
             module: TaxonomyModule.timeline.name,
             kind: TaxonomyKind.category.name,
             name: defaults[index].$1,
-            normalizedName: defaults[index].$1.toLowerCase(),
             colorValue: defaults[index].$2.toARGB32(),
-            iconCodePoint: Value<int>(defaults[index].$3.codePoint),
             sortOrder: Value<int>(index),
             createdAt: now.add(Duration(milliseconds: index)),
             updatedAt: now.add(Duration(milliseconds: index)),
           ),
-      ]);
+      ], mode: InsertMode.insertOrIgnore);
     });
   }
 }

@@ -1,3 +1,5 @@
+import { resolveJwtKeys } from './jwt-keys';
+
 /// 应用启动所需的环境变量结构。
 interface EnvironmentVariables {
   /// PostgreSQL 连接地址。
@@ -37,8 +39,6 @@ export function validateEnvironment(
   // 必填环境变量名称。
   const requiredKeys = [
     'DATABASE_URL',
-    'JWT_PRIVATE_KEY_BASE64',
-    'JWT_PUBLIC_KEY_BASE64',
     'JWT_KEY_ID',
     'JWT_ISSUER',
     'JWT_AUDIENCE',
@@ -67,6 +67,14 @@ export function validateEnvironment(
   const syncSecret = String(source.SYNC_SECRET);
   if (syncSecret.length < 16) {
     throw new Error('SYNC_SECRET 至少需要 16 个字符');
+  }
+  // 其他配置校验通过后再读取或生成持久化密钥。
+  source = resolveJwtKeys(source);
+  // RSA 公私钥必须成对存在。
+  for (const key of ['JWT_PRIVATE_KEY_BASE64', 'JWT_PUBLIC_KEY_BASE64']) {
+    if (typeof source[key] !== 'string' || source[key].trim().length === 0) {
+      throw new Error(`缺少必填环境变量：${key}`);
+    }
   }
   // 安全读取可选字符串配置。
   const optionalString = (key: string, fallback: string): string =>

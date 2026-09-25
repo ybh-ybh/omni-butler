@@ -19,7 +19,8 @@ pluginManagement {
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    id("com.android.application") version "9.1.0" apply false
+    // API 37 从 AGP 9.1.1 开始受支持，兼容现有 Gradle 9.3.1。
+    id("com.android.application") version "9.1.1" apply false
     id("org.jetbrains.kotlin.android") version "2.4.0" apply false
 }
 

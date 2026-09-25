@@ -1532,27 +1532,12 @@ class $DailyQuoteSelectionsTable extends DailyQuoteSelections
   late final GeneratedColumn<String> quoteId = GeneratedColumn<String>(
     'quote_id',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.string,
-    requiredDuringInsert: true,
-    defaultConstraints: GeneratedColumn.constraintIsAlways(
-      'REFERENCES quotes (id)',
-    ),
-  );
-  static const VerificationMeta _isManualMeta = const VerificationMeta(
-    'isManual',
-  );
-  @override
-  late final GeneratedColumn<bool> isManual = GeneratedColumn<bool>(
-    'is_manual',
-    aliasedName,
-    false,
-    type: DriftSqlType.bool,
     requiredDuringInsert: false,
     defaultConstraints: GeneratedColumn.constraintIsAlways(
-      'CHECK ("is_manual" IN (0, 1))',
+      'REFERENCES quotes (id) ON DELETE SET NULL',
     ),
-    defaultValue: const Constant<bool>(false),
   );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
@@ -1581,7 +1566,6 @@ class $DailyQuoteSelectionsTable extends DailyQuoteSelections
     id,
     dayKey,
     quoteId,
-    isManual,
     createdAt,
     updatedAt,
   ];
@@ -1614,14 +1598,6 @@ class $DailyQuoteSelectionsTable extends DailyQuoteSelections
       context.handle(
         _quoteIdMeta,
         quoteId.isAcceptableOrUnknown(data['quote_id']!, _quoteIdMeta),
-      );
-    } else if (isInserting) {
-      context.missing(_quoteIdMeta);
-    }
-    if (data.containsKey('is_manual')) {
-      context.handle(
-        _isManualMeta,
-        isManual.isAcceptableOrUnknown(data['is_manual']!, _isManualMeta),
       );
     }
     if (data.containsKey('created_at')) {
@@ -1667,11 +1643,7 @@ class $DailyQuoteSelectionsTable extends DailyQuoteSelections
       quoteId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}quote_id'],
-      )!,
-      isManual: attachedDatabase.typeMapping.read(
-        DriftSqlType.bool,
-        data['${effectivePrefix}is_manual'],
-      )!,
+      ),
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
@@ -1698,10 +1670,7 @@ class DailyQuoteSelectionRecord extends DataClass
   final String dayKey;
 
   /// 当日名言标识。
-  final String quoteId;
-
-  /// 是否由用户手动更换。
-  final bool isManual;
+  final String? quoteId;
 
   /// 创建时间。
   final DateTime createdAt;
@@ -1711,8 +1680,7 @@ class DailyQuoteSelectionRecord extends DataClass
   const DailyQuoteSelectionRecord({
     required this.id,
     required this.dayKey,
-    required this.quoteId,
-    required this.isManual,
+    this.quoteId,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -1721,8 +1689,9 @@ class DailyQuoteSelectionRecord extends DataClass
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
     map['day_key'] = Variable<String>(dayKey);
-    map['quote_id'] = Variable<String>(quoteId);
-    map['is_manual'] = Variable<bool>(isManual);
+    if (!nullToAbsent || quoteId != null) {
+      map['quote_id'] = Variable<String>(quoteId);
+    }
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
     return map;
@@ -1732,8 +1701,9 @@ class DailyQuoteSelectionRecord extends DataClass
     return DailyQuoteSelectionsCompanion(
       id: Value(id),
       dayKey: Value(dayKey),
-      quoteId: Value(quoteId),
-      isManual: Value(isManual),
+      quoteId: quoteId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(quoteId),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
     );
@@ -1747,8 +1717,7 @@ class DailyQuoteSelectionRecord extends DataClass
     return DailyQuoteSelectionRecord(
       id: serializer.fromJson<String>(json['id']),
       dayKey: serializer.fromJson<String>(json['dayKey']),
-      quoteId: serializer.fromJson<String>(json['quoteId']),
-      isManual: serializer.fromJson<bool>(json['isManual']),
+      quoteId: serializer.fromJson<String?>(json['quoteId']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
     );
@@ -1759,8 +1728,7 @@ class DailyQuoteSelectionRecord extends DataClass
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
       'dayKey': serializer.toJson<String>(dayKey),
-      'quoteId': serializer.toJson<String>(quoteId),
-      'isManual': serializer.toJson<bool>(isManual),
+      'quoteId': serializer.toJson<String?>(quoteId),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
     };
@@ -1769,15 +1737,13 @@ class DailyQuoteSelectionRecord extends DataClass
   DailyQuoteSelectionRecord copyWith({
     String? id,
     String? dayKey,
-    String? quoteId,
-    bool? isManual,
+    Value<String?> quoteId = const Value.absent(),
     DateTime? createdAt,
     DateTime? updatedAt,
   }) => DailyQuoteSelectionRecord(
     id: id ?? this.id,
     dayKey: dayKey ?? this.dayKey,
-    quoteId: quoteId ?? this.quoteId,
-    isManual: isManual ?? this.isManual,
+    quoteId: quoteId.present ? quoteId.value : this.quoteId,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -1788,7 +1754,6 @@ class DailyQuoteSelectionRecord extends DataClass
       id: data.id.present ? data.id.value : this.id,
       dayKey: data.dayKey.present ? data.dayKey.value : this.dayKey,
       quoteId: data.quoteId.present ? data.quoteId.value : this.quoteId,
-      isManual: data.isManual.present ? data.isManual.value : this.isManual,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
@@ -1800,7 +1765,6 @@ class DailyQuoteSelectionRecord extends DataClass
           ..write('id: $id, ')
           ..write('dayKey: $dayKey, ')
           ..write('quoteId: $quoteId, ')
-          ..write('isManual: $isManual, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -1808,8 +1772,7 @@ class DailyQuoteSelectionRecord extends DataClass
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, dayKey, quoteId, isManual, createdAt, updatedAt);
+  int get hashCode => Object.hash(id, dayKey, quoteId, createdAt, updatedAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1817,7 +1780,6 @@ class DailyQuoteSelectionRecord extends DataClass
           other.id == this.id &&
           other.dayKey == this.dayKey &&
           other.quoteId == this.quoteId &&
-          other.isManual == this.isManual &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
 }
@@ -1826,8 +1788,7 @@ class DailyQuoteSelectionsCompanion
     extends UpdateCompanion<DailyQuoteSelectionRecord> {
   final Value<String> id;
   final Value<String> dayKey;
-  final Value<String> quoteId;
-  final Value<bool> isManual;
+  final Value<String?> quoteId;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
   final Value<int> rowid;
@@ -1835,7 +1796,6 @@ class DailyQuoteSelectionsCompanion
     this.id = const Value.absent(),
     this.dayKey = const Value.absent(),
     this.quoteId = const Value.absent(),
-    this.isManual = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -1843,21 +1803,18 @@ class DailyQuoteSelectionsCompanion
   DailyQuoteSelectionsCompanion.insert({
     required String id,
     required String dayKey,
-    required String quoteId,
-    this.isManual = const Value.absent(),
+    this.quoteId = const Value.absent(),
     required DateTime createdAt,
     required DateTime updatedAt,
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        dayKey = Value(dayKey),
-       quoteId = Value(quoteId),
        createdAt = Value(createdAt),
        updatedAt = Value(updatedAt);
   static Insertable<DailyQuoteSelectionRecord> custom({
     Expression<String>? id,
     Expression<String>? dayKey,
     Expression<String>? quoteId,
-    Expression<bool>? isManual,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
     Expression<int>? rowid,
@@ -1866,7 +1823,6 @@ class DailyQuoteSelectionsCompanion
       if (id != null) 'id': id,
       if (dayKey != null) 'day_key': dayKey,
       if (quoteId != null) 'quote_id': quoteId,
-      if (isManual != null) 'is_manual': isManual,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (rowid != null) 'rowid': rowid,
@@ -1876,8 +1832,7 @@ class DailyQuoteSelectionsCompanion
   DailyQuoteSelectionsCompanion copyWith({
     Value<String>? id,
     Value<String>? dayKey,
-    Value<String>? quoteId,
-    Value<bool>? isManual,
+    Value<String?>? quoteId,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
     Value<int>? rowid,
@@ -1886,7 +1841,6 @@ class DailyQuoteSelectionsCompanion
       id: id ?? this.id,
       dayKey: dayKey ?? this.dayKey,
       quoteId: quoteId ?? this.quoteId,
-      isManual: isManual ?? this.isManual,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       rowid: rowid ?? this.rowid,
@@ -1904,9 +1858,6 @@ class DailyQuoteSelectionsCompanion
     }
     if (quoteId.present) {
       map['quote_id'] = Variable<String>(quoteId.value);
-    }
-    if (isManual.present) {
-      map['is_manual'] = Variable<bool>(isManual.value);
     }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
@@ -1926,7 +1877,6 @@ class DailyQuoteSelectionsCompanion
           ..write('id: $id, ')
           ..write('dayKey: $dayKey, ')
           ..write('quoteId: $quoteId, ')
-          ..write('isManual: $isManual, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('rowid: $rowid')
@@ -3215,17 +3165,6 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
-  static const VerificationMeta _normalizedNameMeta = const VerificationMeta(
-    'normalizedName',
-  );
-  @override
-  late final GeneratedColumn<String> normalizedName = GeneratedColumn<String>(
-    'normalized_name',
-    aliasedName,
-    false,
-    type: DriftSqlType.string,
-    requiredDuringInsert: true,
-  );
   static const VerificationMeta _colorValueMeta = const VerificationMeta(
     'colorValue',
   );
@@ -3236,17 +3175,6 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
     false,
     type: DriftSqlType.int,
     requiredDuringInsert: true,
-  );
-  static const VerificationMeta _iconCodePointMeta = const VerificationMeta(
-    'iconCodePoint',
-  );
-  @override
-  late final GeneratedColumn<int> iconCodePoint = GeneratedColumn<int>(
-    'icon_code_point',
-    aliasedName,
-    true,
-    type: DriftSqlType.int,
-    requiredDuringInsert: false,
   );
   static const VerificationMeta _sortOrderMeta = const VerificationMeta(
     'sortOrder',
@@ -3314,9 +3242,7 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
     module,
     kind,
     name,
-    normalizedName,
     colorValue,
-    iconCodePoint,
     sortOrder,
     isEnabled,
     createdAt,
@@ -3364,17 +3290,6 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
     } else if (isInserting) {
       context.missing(_nameMeta);
     }
-    if (data.containsKey('normalized_name')) {
-      context.handle(
-        _normalizedNameMeta,
-        normalizedName.isAcceptableOrUnknown(
-          data['normalized_name']!,
-          _normalizedNameMeta,
-        ),
-      );
-    } else if (isInserting) {
-      context.missing(_normalizedNameMeta);
-    }
     if (data.containsKey('color_value')) {
       context.handle(
         _colorValueMeta,
@@ -3382,15 +3297,6 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
       );
     } else if (isInserting) {
       context.missing(_colorValueMeta);
-    }
-    if (data.containsKey('icon_code_point')) {
-      context.handle(
-        _iconCodePointMeta,
-        iconCodePoint.isAcceptableOrUnknown(
-          data['icon_code_point']!,
-          _iconCodePointMeta,
-        ),
-      );
     }
     if (data.containsKey('sort_order')) {
       context.handle(
@@ -3451,18 +3357,10 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
         DriftSqlType.string,
         data['${effectivePrefix}name'],
       )!,
-      normalizedName: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}normalized_name'],
-      )!,
       colorValue: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}color_value'],
       )!,
-      iconCodePoint: attachedDatabase.typeMapping.read(
-        DriftSqlType.int,
-        data['${effectivePrefix}icon_code_point'],
-      ),
       sortOrder: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}sort_order'],
@@ -3505,14 +3403,8 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
   /// 显示名称。
   final String name;
 
-  /// 用于跨端唯一性校验的规范化名称。
-  final String normalizedName;
-
   /// ARGB 颜色值。
   final int colorValue;
-
-  /// Material 图标码点。
-  final int? iconCodePoint;
 
   /// 用户排序值。
   final int sortOrder;
@@ -3533,9 +3425,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     required this.module,
     required this.kind,
     required this.name,
-    required this.normalizedName,
     required this.colorValue,
-    this.iconCodePoint,
     required this.sortOrder,
     required this.isEnabled,
     required this.createdAt,
@@ -3549,11 +3439,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     map['module'] = Variable<String>(module);
     map['kind'] = Variable<String>(kind);
     map['name'] = Variable<String>(name);
-    map['normalized_name'] = Variable<String>(normalizedName);
     map['color_value'] = Variable<int>(colorValue);
-    if (!nullToAbsent || iconCodePoint != null) {
-      map['icon_code_point'] = Variable<int>(iconCodePoint);
-    }
     map['sort_order'] = Variable<int>(sortOrder);
     map['is_enabled'] = Variable<bool>(isEnabled);
     map['created_at'] = Variable<DateTime>(createdAt);
@@ -3570,11 +3456,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
       module: Value(module),
       kind: Value(kind),
       name: Value(name),
-      normalizedName: Value(normalizedName),
       colorValue: Value(colorValue),
-      iconCodePoint: iconCodePoint == null && nullToAbsent
-          ? const Value.absent()
-          : Value(iconCodePoint),
       sortOrder: Value(sortOrder),
       isEnabled: Value(isEnabled),
       createdAt: Value(createdAt),
@@ -3595,9 +3477,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
       module: serializer.fromJson<String>(json['module']),
       kind: serializer.fromJson<String>(json['kind']),
       name: serializer.fromJson<String>(json['name']),
-      normalizedName: serializer.fromJson<String>(json['normalizedName']),
       colorValue: serializer.fromJson<int>(json['colorValue']),
-      iconCodePoint: serializer.fromJson<int?>(json['iconCodePoint']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
       isEnabled: serializer.fromJson<bool>(json['isEnabled']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
@@ -3613,9 +3493,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
       'module': serializer.toJson<String>(module),
       'kind': serializer.toJson<String>(kind),
       'name': serializer.toJson<String>(name),
-      'normalizedName': serializer.toJson<String>(normalizedName),
       'colorValue': serializer.toJson<int>(colorValue),
-      'iconCodePoint': serializer.toJson<int?>(iconCodePoint),
       'sortOrder': serializer.toJson<int>(sortOrder),
       'isEnabled': serializer.toJson<bool>(isEnabled),
       'createdAt': serializer.toJson<DateTime>(createdAt),
@@ -3629,9 +3507,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     String? module,
     String? kind,
     String? name,
-    String? normalizedName,
     int? colorValue,
-    Value<int?> iconCodePoint = const Value.absent(),
     int? sortOrder,
     bool? isEnabled,
     DateTime? createdAt,
@@ -3642,11 +3518,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     module: module ?? this.module,
     kind: kind ?? this.kind,
     name: name ?? this.name,
-    normalizedName: normalizedName ?? this.normalizedName,
     colorValue: colorValue ?? this.colorValue,
-    iconCodePoint: iconCodePoint.present
-        ? iconCodePoint.value
-        : this.iconCodePoint,
     sortOrder: sortOrder ?? this.sortOrder,
     isEnabled: isEnabled ?? this.isEnabled,
     createdAt: createdAt ?? this.createdAt,
@@ -3659,15 +3531,9 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
       module: data.module.present ? data.module.value : this.module,
       kind: data.kind.present ? data.kind.value : this.kind,
       name: data.name.present ? data.name.value : this.name,
-      normalizedName: data.normalizedName.present
-          ? data.normalizedName.value
-          : this.normalizedName,
       colorValue: data.colorValue.present
           ? data.colorValue.value
           : this.colorValue,
-      iconCodePoint: data.iconCodePoint.present
-          ? data.iconCodePoint.value
-          : this.iconCodePoint,
       sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
       isEnabled: data.isEnabled.present ? data.isEnabled.value : this.isEnabled,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
@@ -3683,9 +3549,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
           ..write('module: $module, ')
           ..write('kind: $kind, ')
           ..write('name: $name, ')
-          ..write('normalizedName: $normalizedName, ')
           ..write('colorValue: $colorValue, ')
-          ..write('iconCodePoint: $iconCodePoint, ')
           ..write('sortOrder: $sortOrder, ')
           ..write('isEnabled: $isEnabled, ')
           ..write('createdAt: $createdAt, ')
@@ -3701,9 +3565,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     module,
     kind,
     name,
-    normalizedName,
     colorValue,
-    iconCodePoint,
     sortOrder,
     isEnabled,
     createdAt,
@@ -3718,9 +3580,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
           other.module == this.module &&
           other.kind == this.kind &&
           other.name == this.name &&
-          other.normalizedName == this.normalizedName &&
           other.colorValue == this.colorValue &&
-          other.iconCodePoint == this.iconCodePoint &&
           other.sortOrder == this.sortOrder &&
           other.isEnabled == this.isEnabled &&
           other.createdAt == this.createdAt &&
@@ -3733,9 +3593,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
   final Value<String> module;
   final Value<String> kind;
   final Value<String> name;
-  final Value<String> normalizedName;
   final Value<int> colorValue;
-  final Value<int?> iconCodePoint;
   final Value<int> sortOrder;
   final Value<bool> isEnabled;
   final Value<DateTime> createdAt;
@@ -3747,9 +3605,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     this.module = const Value.absent(),
     this.kind = const Value.absent(),
     this.name = const Value.absent(),
-    this.normalizedName = const Value.absent(),
     this.colorValue = const Value.absent(),
-    this.iconCodePoint = const Value.absent(),
     this.sortOrder = const Value.absent(),
     this.isEnabled = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -3762,9 +3618,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     required String module,
     required String kind,
     required String name,
-    required String normalizedName,
     required int colorValue,
-    this.iconCodePoint = const Value.absent(),
     this.sortOrder = const Value.absent(),
     this.isEnabled = const Value.absent(),
     required DateTime createdAt,
@@ -3775,7 +3629,6 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
        module = Value(module),
        kind = Value(kind),
        name = Value(name),
-       normalizedName = Value(normalizedName),
        colorValue = Value(colorValue),
        createdAt = Value(createdAt),
        updatedAt = Value(updatedAt);
@@ -3784,9 +3637,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     Expression<String>? module,
     Expression<String>? kind,
     Expression<String>? name,
-    Expression<String>? normalizedName,
     Expression<int>? colorValue,
-    Expression<int>? iconCodePoint,
     Expression<int>? sortOrder,
     Expression<bool>? isEnabled,
     Expression<DateTime>? createdAt,
@@ -3799,9 +3650,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
       if (module != null) 'module': module,
       if (kind != null) 'kind': kind,
       if (name != null) 'name': name,
-      if (normalizedName != null) 'normalized_name': normalizedName,
       if (colorValue != null) 'color_value': colorValue,
-      if (iconCodePoint != null) 'icon_code_point': iconCodePoint,
       if (sortOrder != null) 'sort_order': sortOrder,
       if (isEnabled != null) 'is_enabled': isEnabled,
       if (createdAt != null) 'created_at': createdAt,
@@ -3816,9 +3665,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     Value<String>? module,
     Value<String>? kind,
     Value<String>? name,
-    Value<String>? normalizedName,
     Value<int>? colorValue,
-    Value<int?>? iconCodePoint,
     Value<int>? sortOrder,
     Value<bool>? isEnabled,
     Value<DateTime>? createdAt,
@@ -3831,9 +3678,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
       module: module ?? this.module,
       kind: kind ?? this.kind,
       name: name ?? this.name,
-      normalizedName: normalizedName ?? this.normalizedName,
       colorValue: colorValue ?? this.colorValue,
-      iconCodePoint: iconCodePoint ?? this.iconCodePoint,
       sortOrder: sortOrder ?? this.sortOrder,
       isEnabled: isEnabled ?? this.isEnabled,
       createdAt: createdAt ?? this.createdAt,
@@ -3858,14 +3703,8 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     if (name.present) {
       map['name'] = Variable<String>(name.value);
     }
-    if (normalizedName.present) {
-      map['normalized_name'] = Variable<String>(normalizedName.value);
-    }
     if (colorValue.present) {
       map['color_value'] = Variable<int>(colorValue.value);
-    }
-    if (iconCodePoint.present) {
-      map['icon_code_point'] = Variable<int>(iconCodePoint.value);
     }
     if (sortOrder.present) {
       map['sort_order'] = Variable<int>(sortOrder.value);
@@ -3895,9 +3734,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
           ..write('module: $module, ')
           ..write('kind: $kind, ')
           ..write('name: $name, ')
-          ..write('normalizedName: $normalizedName, ')
           ..write('colorValue: $colorValue, ')
-          ..write('iconCodePoint: $iconCodePoint, ')
           ..write('sortOrder: $sortOrder, ')
           ..write('isEnabled: $isEnabled, ')
           ..write('createdAt: $createdAt, ')
@@ -7936,17 +7773,6 @@ class $MembershipsTable extends Memberships
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
-  static const VerificationMeta _paymentMethodMeta = const VerificationMeta(
-    'paymentMethod',
-  );
-  @override
-  late final GeneratedColumn<String> paymentMethod = GeneratedColumn<String>(
-    'payment_method',
-    aliasedName,
-    true,
-    type: DriftSqlType.string,
-    requiredDuringInsert: false,
-  );
   static const VerificationMeta _priceCentsMeta = const VerificationMeta(
     'priceCents',
   );
@@ -8046,21 +7872,6 @@ class $MembershipsTable extends Memberships
     true,
     type: DriftSqlType.dateTime,
     requiredDuringInsert: false,
-  );
-  static const VerificationMeta _isFavoriteMeta = const VerificationMeta(
-    'isFavorite',
-  );
-  @override
-  late final GeneratedColumn<bool> isFavorite = GeneratedColumn<bool>(
-    'is_favorite',
-    aliasedName,
-    false,
-    type: DriftSqlType.bool,
-    requiredDuringInsert: false,
-    defaultConstraints: GeneratedColumn.constraintIsAlways(
-      'CHECK ("is_favorite" IN (0, 1))',
-    ),
-    defaultValue: const Constant<bool>(false),
   );
   static const VerificationMeta _needsRenewalMeta = const VerificationMeta(
     'needsRenewal',
@@ -8237,7 +8048,6 @@ class $MembershipsTable extends Memberships
     description,
     websiteUrl,
     purchasePlatform,
-    paymentMethod,
     priceCents,
     billingCycle,
     baseStatus,
@@ -8246,7 +8056,6 @@ class $MembershipsTable extends Memberships
     isPermanent,
     autoRenew,
     renewalDate,
-    isFavorite,
     needsRenewal,
     expirationReminderEnabled,
     expirationReminderDays,
@@ -8323,15 +8132,6 @@ class $MembershipsTable extends Memberships
         ),
       );
     }
-    if (data.containsKey('payment_method')) {
-      context.handle(
-        _paymentMethodMeta,
-        paymentMethod.isAcceptableOrUnknown(
-          data['payment_method']!,
-          _paymentMethodMeta,
-        ),
-      );
-    }
     if (data.containsKey('price_cents')) {
       context.handle(
         _priceCentsMeta,
@@ -8395,12 +8195,6 @@ class $MembershipsTable extends Memberships
           data['renewal_date']!,
           _renewalDateMeta,
         ),
-      );
-    }
-    if (data.containsKey('is_favorite')) {
-      context.handle(
-        _isFavoriteMeta,
-        isFavorite.isAcceptableOrUnknown(data['is_favorite']!, _isFavoriteMeta),
       );
     }
     if (data.containsKey('needs_renewal')) {
@@ -8555,10 +8349,6 @@ class $MembershipsTable extends Memberships
         DriftSqlType.string,
         data['${effectivePrefix}purchase_platform'],
       ),
-      paymentMethod: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}payment_method'],
-      ),
       priceCents: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}price_cents'],
@@ -8591,10 +8381,6 @@ class $MembershipsTable extends Memberships
         DriftSqlType.dateTime,
         data['${effectivePrefix}renewal_date'],
       ),
-      isFavorite: attachedDatabase.typeMapping.read(
-        DriftSqlType.bool,
-        data['${effectivePrefix}is_favorite'],
-      )!,
       needsRenewal: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}needs_renewal'],
@@ -8683,9 +8469,6 @@ class MembershipRecord extends DataClass
   /// 购买平台。
   final String? purchasePlatform;
 
-  /// 支付方式。
-  final String? paymentMethod;
-
   /// 价格分值。
   final int priceCents;
 
@@ -8709,9 +8492,6 @@ class MembershipRecord extends DataClass
 
   /// 下次续费日期。
   final DateTime? renewalDate;
-
-  /// 是否常用。
-  final bool isFavorite;
 
   /// 是否明确需要续费。
   final bool needsRenewal;
@@ -8762,7 +8542,6 @@ class MembershipRecord extends DataClass
     this.description,
     this.websiteUrl,
     this.purchasePlatform,
-    this.paymentMethod,
     required this.priceCents,
     required this.billingCycle,
     required this.baseStatus,
@@ -8771,7 +8550,6 @@ class MembershipRecord extends DataClass
     required this.isPermanent,
     required this.autoRenew,
     this.renewalDate,
-    required this.isFavorite,
     required this.needsRenewal,
     required this.expirationReminderEnabled,
     required this.expirationReminderDays,
@@ -8807,9 +8585,6 @@ class MembershipRecord extends DataClass
     if (!nullToAbsent || purchasePlatform != null) {
       map['purchase_platform'] = Variable<String>(purchasePlatform);
     }
-    if (!nullToAbsent || paymentMethod != null) {
-      map['payment_method'] = Variable<String>(paymentMethod);
-    }
     map['price_cents'] = Variable<int>(priceCents);
     map['billing_cycle'] = Variable<String>(billingCycle);
     map['base_status'] = Variable<String>(baseStatus);
@@ -8822,7 +8597,6 @@ class MembershipRecord extends DataClass
     if (!nullToAbsent || renewalDate != null) {
       map['renewal_date'] = Variable<DateTime>(renewalDate);
     }
-    map['is_favorite'] = Variable<bool>(isFavorite);
     map['needs_renewal'] = Variable<bool>(needsRenewal);
     map['expiration_reminder_enabled'] = Variable<bool>(
       expirationReminderEnabled,
@@ -8871,9 +8645,6 @@ class MembershipRecord extends DataClass
       purchasePlatform: purchasePlatform == null && nullToAbsent
           ? const Value.absent()
           : Value(purchasePlatform),
-      paymentMethod: paymentMethod == null && nullToAbsent
-          ? const Value.absent()
-          : Value(paymentMethod),
       priceCents: Value(priceCents),
       billingCycle: Value(billingCycle),
       baseStatus: Value(baseStatus),
@@ -8886,7 +8657,6 @@ class MembershipRecord extends DataClass
       renewalDate: renewalDate == null && nullToAbsent
           ? const Value.absent()
           : Value(renewalDate),
-      isFavorite: Value(isFavorite),
       needsRenewal: Value(needsRenewal),
       expirationReminderEnabled: Value(expirationReminderEnabled),
       expirationReminderDays: Value(expirationReminderDays),
@@ -8927,7 +8697,6 @@ class MembershipRecord extends DataClass
       description: serializer.fromJson<String?>(json['description']),
       websiteUrl: serializer.fromJson<String?>(json['websiteUrl']),
       purchasePlatform: serializer.fromJson<String?>(json['purchasePlatform']),
-      paymentMethod: serializer.fromJson<String?>(json['paymentMethod']),
       priceCents: serializer.fromJson<int>(json['priceCents']),
       billingCycle: serializer.fromJson<String>(json['billingCycle']),
       baseStatus: serializer.fromJson<String>(json['baseStatus']),
@@ -8936,7 +8705,6 @@ class MembershipRecord extends DataClass
       isPermanent: serializer.fromJson<bool>(json['isPermanent']),
       autoRenew: serializer.fromJson<bool>(json['autoRenew']),
       renewalDate: serializer.fromJson<DateTime?>(json['renewalDate']),
-      isFavorite: serializer.fromJson<bool>(json['isFavorite']),
       needsRenewal: serializer.fromJson<bool>(json['needsRenewal']),
       expirationReminderEnabled: serializer.fromJson<bool>(
         json['expirationReminderEnabled'],
@@ -8976,7 +8744,6 @@ class MembershipRecord extends DataClass
       'description': serializer.toJson<String?>(description),
       'websiteUrl': serializer.toJson<String?>(websiteUrl),
       'purchasePlatform': serializer.toJson<String?>(purchasePlatform),
-      'paymentMethod': serializer.toJson<String?>(paymentMethod),
       'priceCents': serializer.toJson<int>(priceCents),
       'billingCycle': serializer.toJson<String>(billingCycle),
       'baseStatus': serializer.toJson<String>(baseStatus),
@@ -8985,7 +8752,6 @@ class MembershipRecord extends DataClass
       'isPermanent': serializer.toJson<bool>(isPermanent),
       'autoRenew': serializer.toJson<bool>(autoRenew),
       'renewalDate': serializer.toJson<DateTime?>(renewalDate),
-      'isFavorite': serializer.toJson<bool>(isFavorite),
       'needsRenewal': serializer.toJson<bool>(needsRenewal),
       'expirationReminderEnabled': serializer.toJson<bool>(
         expirationReminderEnabled,
@@ -9013,7 +8779,6 @@ class MembershipRecord extends DataClass
     Value<String?> description = const Value.absent(),
     Value<String?> websiteUrl = const Value.absent(),
     Value<String?> purchasePlatform = const Value.absent(),
-    Value<String?> paymentMethod = const Value.absent(),
     int? priceCents,
     String? billingCycle,
     String? baseStatus,
@@ -9022,7 +8787,6 @@ class MembershipRecord extends DataClass
     bool? isPermanent,
     bool? autoRenew,
     Value<DateTime?> renewalDate = const Value.absent(),
-    bool? isFavorite,
     bool? needsRenewal,
     bool? expirationReminderEnabled,
     int? expirationReminderDays,
@@ -9047,9 +8811,6 @@ class MembershipRecord extends DataClass
     purchasePlatform: purchasePlatform.present
         ? purchasePlatform.value
         : this.purchasePlatform,
-    paymentMethod: paymentMethod.present
-        ? paymentMethod.value
-        : this.paymentMethod,
     priceCents: priceCents ?? this.priceCents,
     billingCycle: billingCycle ?? this.billingCycle,
     baseStatus: baseStatus ?? this.baseStatus,
@@ -9060,7 +8821,6 @@ class MembershipRecord extends DataClass
     isPermanent: isPermanent ?? this.isPermanent,
     autoRenew: autoRenew ?? this.autoRenew,
     renewalDate: renewalDate.present ? renewalDate.value : this.renewalDate,
-    isFavorite: isFavorite ?? this.isFavorite,
     needsRenewal: needsRenewal ?? this.needsRenewal,
     expirationReminderEnabled:
         expirationReminderEnabled ?? this.expirationReminderEnabled,
@@ -9098,9 +8858,6 @@ class MembershipRecord extends DataClass
       purchasePlatform: data.purchasePlatform.present
           ? data.purchasePlatform.value
           : this.purchasePlatform,
-      paymentMethod: data.paymentMethod.present
-          ? data.paymentMethod.value
-          : this.paymentMethod,
       priceCents: data.priceCents.present
           ? data.priceCents.value
           : this.priceCents,
@@ -9123,9 +8880,6 @@ class MembershipRecord extends DataClass
       renewalDate: data.renewalDate.present
           ? data.renewalDate.value
           : this.renewalDate,
-      isFavorite: data.isFavorite.present
-          ? data.isFavorite.value
-          : this.isFavorite,
       needsRenewal: data.needsRenewal.present
           ? data.needsRenewal.value
           : this.needsRenewal,
@@ -9171,7 +8925,6 @@ class MembershipRecord extends DataClass
           ..write('description: $description, ')
           ..write('websiteUrl: $websiteUrl, ')
           ..write('purchasePlatform: $purchasePlatform, ')
-          ..write('paymentMethod: $paymentMethod, ')
           ..write('priceCents: $priceCents, ')
           ..write('billingCycle: $billingCycle, ')
           ..write('baseStatus: $baseStatus, ')
@@ -9180,7 +8933,6 @@ class MembershipRecord extends DataClass
           ..write('isPermanent: $isPermanent, ')
           ..write('autoRenew: $autoRenew, ')
           ..write('renewalDate: $renewalDate, ')
-          ..write('isFavorite: $isFavorite, ')
           ..write('needsRenewal: $needsRenewal, ')
           ..write('expirationReminderEnabled: $expirationReminderEnabled, ')
           ..write('expirationReminderDays: $expirationReminderDays, ')
@@ -9208,7 +8960,6 @@ class MembershipRecord extends DataClass
     description,
     websiteUrl,
     purchasePlatform,
-    paymentMethod,
     priceCents,
     billingCycle,
     baseStatus,
@@ -9217,7 +8968,6 @@ class MembershipRecord extends DataClass
     isPermanent,
     autoRenew,
     renewalDate,
-    isFavorite,
     needsRenewal,
     expirationReminderEnabled,
     expirationReminderDays,
@@ -9244,7 +8994,6 @@ class MembershipRecord extends DataClass
           other.description == this.description &&
           other.websiteUrl == this.websiteUrl &&
           other.purchasePlatform == this.purchasePlatform &&
-          other.paymentMethod == this.paymentMethod &&
           other.priceCents == this.priceCents &&
           other.billingCycle == this.billingCycle &&
           other.baseStatus == this.baseStatus &&
@@ -9253,7 +9002,6 @@ class MembershipRecord extends DataClass
           other.isPermanent == this.isPermanent &&
           other.autoRenew == this.autoRenew &&
           other.renewalDate == this.renewalDate &&
-          other.isFavorite == this.isFavorite &&
           other.needsRenewal == this.needsRenewal &&
           other.expirationReminderEnabled == this.expirationReminderEnabled &&
           other.expirationReminderDays == this.expirationReminderDays &&
@@ -9278,7 +9026,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
   final Value<String?> description;
   final Value<String?> websiteUrl;
   final Value<String?> purchasePlatform;
-  final Value<String?> paymentMethod;
   final Value<int> priceCents;
   final Value<String> billingCycle;
   final Value<String> baseStatus;
@@ -9287,7 +9034,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
   final Value<bool> isPermanent;
   final Value<bool> autoRenew;
   final Value<DateTime?> renewalDate;
-  final Value<bool> isFavorite;
   final Value<bool> needsRenewal;
   final Value<bool> expirationReminderEnabled;
   final Value<int> expirationReminderDays;
@@ -9311,7 +9057,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
     this.description = const Value.absent(),
     this.websiteUrl = const Value.absent(),
     this.purchasePlatform = const Value.absent(),
-    this.paymentMethod = const Value.absent(),
     this.priceCents = const Value.absent(),
     this.billingCycle = const Value.absent(),
     this.baseStatus = const Value.absent(),
@@ -9320,7 +9065,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
     this.isPermanent = const Value.absent(),
     this.autoRenew = const Value.absent(),
     this.renewalDate = const Value.absent(),
-    this.isFavorite = const Value.absent(),
     this.needsRenewal = const Value.absent(),
     this.expirationReminderEnabled = const Value.absent(),
     this.expirationReminderDays = const Value.absent(),
@@ -9345,7 +9089,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
     this.description = const Value.absent(),
     this.websiteUrl = const Value.absent(),
     this.purchasePlatform = const Value.absent(),
-    this.paymentMethod = const Value.absent(),
     this.priceCents = const Value.absent(),
     this.billingCycle = const Value.absent(),
     this.baseStatus = const Value.absent(),
@@ -9354,7 +9097,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
     this.isPermanent = const Value.absent(),
     this.autoRenew = const Value.absent(),
     this.renewalDate = const Value.absent(),
-    this.isFavorite = const Value.absent(),
     this.needsRenewal = const Value.absent(),
     this.expirationReminderEnabled = const Value.absent(),
     this.expirationReminderDays = const Value.absent(),
@@ -9383,7 +9125,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
     Expression<String>? description,
     Expression<String>? websiteUrl,
     Expression<String>? purchasePlatform,
-    Expression<String>? paymentMethod,
     Expression<int>? priceCents,
     Expression<String>? billingCycle,
     Expression<String>? baseStatus,
@@ -9392,7 +9133,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
     Expression<bool>? isPermanent,
     Expression<bool>? autoRenew,
     Expression<DateTime>? renewalDate,
-    Expression<bool>? isFavorite,
     Expression<bool>? needsRenewal,
     Expression<bool>? expirationReminderEnabled,
     Expression<int>? expirationReminderDays,
@@ -9417,7 +9157,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
       if (description != null) 'description': description,
       if (websiteUrl != null) 'website_url': websiteUrl,
       if (purchasePlatform != null) 'purchase_platform': purchasePlatform,
-      if (paymentMethod != null) 'payment_method': paymentMethod,
       if (priceCents != null) 'price_cents': priceCents,
       if (billingCycle != null) 'billing_cycle': billingCycle,
       if (baseStatus != null) 'base_status': baseStatus,
@@ -9426,7 +9165,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
       if (isPermanent != null) 'is_permanent': isPermanent,
       if (autoRenew != null) 'auto_renew': autoRenew,
       if (renewalDate != null) 'renewal_date': renewalDate,
-      if (isFavorite != null) 'is_favorite': isFavorite,
       if (needsRenewal != null) 'needs_renewal': needsRenewal,
       if (expirationReminderEnabled != null)
         'expiration_reminder_enabled': expirationReminderEnabled,
@@ -9458,7 +9196,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
     Value<String?>? description,
     Value<String?>? websiteUrl,
     Value<String?>? purchasePlatform,
-    Value<String?>? paymentMethod,
     Value<int>? priceCents,
     Value<String>? billingCycle,
     Value<String>? baseStatus,
@@ -9467,7 +9204,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
     Value<bool>? isPermanent,
     Value<bool>? autoRenew,
     Value<DateTime?>? renewalDate,
-    Value<bool>? isFavorite,
     Value<bool>? needsRenewal,
     Value<bool>? expirationReminderEnabled,
     Value<int>? expirationReminderDays,
@@ -9492,7 +9228,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
       description: description ?? this.description,
       websiteUrl: websiteUrl ?? this.websiteUrl,
       purchasePlatform: purchasePlatform ?? this.purchasePlatform,
-      paymentMethod: paymentMethod ?? this.paymentMethod,
       priceCents: priceCents ?? this.priceCents,
       billingCycle: billingCycle ?? this.billingCycle,
       baseStatus: baseStatus ?? this.baseStatus,
@@ -9501,7 +9236,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
       isPermanent: isPermanent ?? this.isPermanent,
       autoRenew: autoRenew ?? this.autoRenew,
       renewalDate: renewalDate ?? this.renewalDate,
-      isFavorite: isFavorite ?? this.isFavorite,
       needsRenewal: needsRenewal ?? this.needsRenewal,
       expirationReminderEnabled:
           expirationReminderEnabled ?? this.expirationReminderEnabled,
@@ -9547,9 +9281,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
     if (purchasePlatform.present) {
       map['purchase_platform'] = Variable<String>(purchasePlatform.value);
     }
-    if (paymentMethod.present) {
-      map['payment_method'] = Variable<String>(paymentMethod.value);
-    }
     if (priceCents.present) {
       map['price_cents'] = Variable<int>(priceCents.value);
     }
@@ -9573,9 +9304,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
     }
     if (renewalDate.present) {
       map['renewal_date'] = Variable<DateTime>(renewalDate.value);
-    }
-    if (isFavorite.present) {
-      map['is_favorite'] = Variable<bool>(isFavorite.value);
     }
     if (needsRenewal.present) {
       map['needs_renewal'] = Variable<bool>(needsRenewal.value);
@@ -9641,7 +9369,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
           ..write('description: $description, ')
           ..write('websiteUrl: $websiteUrl, ')
           ..write('purchasePlatform: $purchasePlatform, ')
-          ..write('paymentMethod: $paymentMethod, ')
           ..write('priceCents: $priceCents, ')
           ..write('billingCycle: $billingCycle, ')
           ..write('baseStatus: $baseStatus, ')
@@ -9650,7 +9377,6 @@ class MembershipsCompanion extends UpdateCompanion<MembershipRecord> {
           ..write('isPermanent: $isPermanent, ')
           ..write('autoRenew: $autoRenew, ')
           ..write('renewalDate: $renewalDate, ')
-          ..write('isFavorite: $isFavorite, ')
           ..write('needsRenewal: $needsRenewal, ')
           ..write('expirationReminderEnabled: $expirationReminderEnabled, ')
           ..write('expirationReminderDays: $expirationReminderDays, ')
@@ -9710,17 +9436,6 @@ class $MembershipPaymentsTable extends MembershipPayments
     false,
     type: DriftSqlType.int,
     requiredDuringInsert: true,
-  );
-  static const VerificationMeta _billingCycleMeta = const VerificationMeta(
-    'billingCycle',
-  );
-  @override
-  late final GeneratedColumn<String> billingCycle = GeneratedColumn<String>(
-    'billing_cycle',
-    aliasedName,
-    true,
-    type: DriftSqlType.string,
-    requiredDuringInsert: false,
   );
   static const VerificationMeta _paidAtMeta = const VerificationMeta('paidAt');
   @override
@@ -9789,7 +9504,6 @@ class $MembershipPaymentsTable extends MembershipPayments
     id,
     membershipId,
     amountCents,
-    billingCycle,
     paidAt,
     validFrom,
     validUntil,
@@ -9835,15 +9549,6 @@ class $MembershipPaymentsTable extends MembershipPayments
       );
     } else if (isInserting) {
       context.missing(_amountCentsMeta);
-    }
-    if (data.containsKey('billing_cycle')) {
-      context.handle(
-        _billingCycleMeta,
-        billingCycle.isAcceptableOrUnknown(
-          data['billing_cycle']!,
-          _billingCycleMeta,
-        ),
-      );
     }
     if (data.containsKey('paid_at')) {
       context.handle(
@@ -9909,10 +9614,6 @@ class $MembershipPaymentsTable extends MembershipPayments
         DriftSqlType.int,
         data['${effectivePrefix}amount_cents'],
       )!,
-      billingCycle: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}billing_cycle'],
-      ),
       paidAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}paid_at'],
@@ -9957,9 +9658,6 @@ class MembershipPaymentRecord extends DataClass
   /// 支付金额分值。
   final int amountCents;
 
-  /// 本次计费周期。
-  final String? billingCycle;
-
   /// 支付时间。
   final DateTime paidAt;
 
@@ -9981,7 +9679,6 @@ class MembershipPaymentRecord extends DataClass
     required this.id,
     required this.membershipId,
     required this.amountCents,
-    this.billingCycle,
     required this.paidAt,
     this.validFrom,
     this.validUntil,
@@ -9995,9 +9692,6 @@ class MembershipPaymentRecord extends DataClass
     map['id'] = Variable<String>(id);
     map['membership_id'] = Variable<String>(membershipId);
     map['amount_cents'] = Variable<int>(amountCents);
-    if (!nullToAbsent || billingCycle != null) {
-      map['billing_cycle'] = Variable<String>(billingCycle);
-    }
     map['paid_at'] = Variable<DateTime>(paidAt);
     if (!nullToAbsent || validFrom != null) {
       map['valid_from'] = Variable<DateTime>(validFrom);
@@ -10020,9 +9714,6 @@ class MembershipPaymentRecord extends DataClass
       id: Value(id),
       membershipId: Value(membershipId),
       amountCents: Value(amountCents),
-      billingCycle: billingCycle == null && nullToAbsent
-          ? const Value.absent()
-          : Value(billingCycle),
       paidAt: Value(paidAt),
       validFrom: validFrom == null && nullToAbsent
           ? const Value.absent()
@@ -10049,7 +9740,6 @@ class MembershipPaymentRecord extends DataClass
       id: serializer.fromJson<String>(json['id']),
       membershipId: serializer.fromJson<String>(json['membershipId']),
       amountCents: serializer.fromJson<int>(json['amountCents']),
-      billingCycle: serializer.fromJson<String?>(json['billingCycle']),
       paidAt: serializer.fromJson<DateTime>(json['paidAt']),
       validFrom: serializer.fromJson<DateTime?>(json['validFrom']),
       validUntil: serializer.fromJson<DateTime?>(json['validUntil']),
@@ -10065,7 +9755,6 @@ class MembershipPaymentRecord extends DataClass
       'id': serializer.toJson<String>(id),
       'membershipId': serializer.toJson<String>(membershipId),
       'amountCents': serializer.toJson<int>(amountCents),
-      'billingCycle': serializer.toJson<String?>(billingCycle),
       'paidAt': serializer.toJson<DateTime>(paidAt),
       'validFrom': serializer.toJson<DateTime?>(validFrom),
       'validUntil': serializer.toJson<DateTime?>(validUntil),
@@ -10079,7 +9768,6 @@ class MembershipPaymentRecord extends DataClass
     String? id,
     String? membershipId,
     int? amountCents,
-    Value<String?> billingCycle = const Value.absent(),
     DateTime? paidAt,
     Value<DateTime?> validFrom = const Value.absent(),
     Value<DateTime?> validUntil = const Value.absent(),
@@ -10090,7 +9778,6 @@ class MembershipPaymentRecord extends DataClass
     id: id ?? this.id,
     membershipId: membershipId ?? this.membershipId,
     amountCents: amountCents ?? this.amountCents,
-    billingCycle: billingCycle.present ? billingCycle.value : this.billingCycle,
     paidAt: paidAt ?? this.paidAt,
     validFrom: validFrom.present ? validFrom.value : this.validFrom,
     validUntil: validUntil.present ? validUntil.value : this.validUntil,
@@ -10107,9 +9794,6 @@ class MembershipPaymentRecord extends DataClass
       amountCents: data.amountCents.present
           ? data.amountCents.value
           : this.amountCents,
-      billingCycle: data.billingCycle.present
-          ? data.billingCycle.value
-          : this.billingCycle,
       paidAt: data.paidAt.present ? data.paidAt.value : this.paidAt,
       validFrom: data.validFrom.present ? data.validFrom.value : this.validFrom,
       validUntil: data.validUntil.present
@@ -10127,7 +9811,6 @@ class MembershipPaymentRecord extends DataClass
           ..write('id: $id, ')
           ..write('membershipId: $membershipId, ')
           ..write('amountCents: $amountCents, ')
-          ..write('billingCycle: $billingCycle, ')
           ..write('paidAt: $paidAt, ')
           ..write('validFrom: $validFrom, ')
           ..write('validUntil: $validUntil, ')
@@ -10143,7 +9826,6 @@ class MembershipPaymentRecord extends DataClass
     id,
     membershipId,
     amountCents,
-    billingCycle,
     paidAt,
     validFrom,
     validUntil,
@@ -10158,7 +9840,6 @@ class MembershipPaymentRecord extends DataClass
           other.id == this.id &&
           other.membershipId == this.membershipId &&
           other.amountCents == this.amountCents &&
-          other.billingCycle == this.billingCycle &&
           other.paidAt == this.paidAt &&
           other.validFrom == this.validFrom &&
           other.validUntil == this.validUntil &&
@@ -10172,7 +9853,6 @@ class MembershipPaymentsCompanion
   final Value<String> id;
   final Value<String> membershipId;
   final Value<int> amountCents;
-  final Value<String?> billingCycle;
   final Value<DateTime> paidAt;
   final Value<DateTime?> validFrom;
   final Value<DateTime?> validUntil;
@@ -10184,7 +9864,6 @@ class MembershipPaymentsCompanion
     this.id = const Value.absent(),
     this.membershipId = const Value.absent(),
     this.amountCents = const Value.absent(),
-    this.billingCycle = const Value.absent(),
     this.paidAt = const Value.absent(),
     this.validFrom = const Value.absent(),
     this.validUntil = const Value.absent(),
@@ -10197,7 +9876,6 @@ class MembershipPaymentsCompanion
     required String id,
     required String membershipId,
     required int amountCents,
-    this.billingCycle = const Value.absent(),
     required DateTime paidAt,
     this.validFrom = const Value.absent(),
     this.validUntil = const Value.absent(),
@@ -10214,7 +9892,6 @@ class MembershipPaymentsCompanion
     Expression<String>? id,
     Expression<String>? membershipId,
     Expression<int>? amountCents,
-    Expression<String>? billingCycle,
     Expression<DateTime>? paidAt,
     Expression<DateTime>? validFrom,
     Expression<DateTime>? validUntil,
@@ -10227,7 +9904,6 @@ class MembershipPaymentsCompanion
       if (id != null) 'id': id,
       if (membershipId != null) 'membership_id': membershipId,
       if (amountCents != null) 'amount_cents': amountCents,
-      if (billingCycle != null) 'billing_cycle': billingCycle,
       if (paidAt != null) 'paid_at': paidAt,
       if (validFrom != null) 'valid_from': validFrom,
       if (validUntil != null) 'valid_until': validUntil,
@@ -10242,7 +9918,6 @@ class MembershipPaymentsCompanion
     Value<String>? id,
     Value<String>? membershipId,
     Value<int>? amountCents,
-    Value<String?>? billingCycle,
     Value<DateTime>? paidAt,
     Value<DateTime?>? validFrom,
     Value<DateTime?>? validUntil,
@@ -10255,7 +9930,6 @@ class MembershipPaymentsCompanion
       id: id ?? this.id,
       membershipId: membershipId ?? this.membershipId,
       amountCents: amountCents ?? this.amountCents,
-      billingCycle: billingCycle ?? this.billingCycle,
       paidAt: paidAt ?? this.paidAt,
       validFrom: validFrom ?? this.validFrom,
       validUntil: validUntil ?? this.validUntil,
@@ -10277,9 +9951,6 @@ class MembershipPaymentsCompanion
     }
     if (amountCents.present) {
       map['amount_cents'] = Variable<int>(amountCents.value);
-    }
-    if (billingCycle.present) {
-      map['billing_cycle'] = Variable<String>(billingCycle.value);
     }
     if (paidAt.present) {
       map['paid_at'] = Variable<DateTime>(paidAt.value);
@@ -10311,7 +9982,6 @@ class MembershipPaymentsCompanion
           ..write('id: $id, ')
           ..write('membershipId: $membershipId, ')
           ..write('amountCents: $amountCents, ')
-          ..write('billingCycle: $billingCycle, ')
           ..write('paidAt: $paidAt, ')
           ..write('validFrom: $validFrom, ')
           ..write('validUntil: $validUntil, ')
@@ -10366,6 +10036,16 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     memberships,
     membershipPayments,
   ];
+  @override
+  StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'quotes',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('daily_quote_selections', kind: UpdateKind.update)],
+    ),
+  ]);
   @override
   DriftDatabaseOptions get options =>
       const DriftDatabaseOptions(storeDateTimeAsText: true);
@@ -11169,8 +10849,7 @@ typedef $$DailyQuoteSelectionsTableCreateCompanionBuilder =
     DailyQuoteSelectionsCompanion Function({
       required String id,
       required String dayKey,
-      required String quoteId,
-      Value<bool> isManual,
+      Value<String?> quoteId,
       required DateTime createdAt,
       required DateTime updatedAt,
       Value<int> rowid,
@@ -11179,8 +10858,7 @@ typedef $$DailyQuoteSelectionsTableUpdateCompanionBuilder =
     DailyQuoteSelectionsCompanion Function({
       Value<String> id,
       Value<String> dayKey,
-      Value<String> quoteId,
-      Value<bool> isManual,
+      Value<String?> quoteId,
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
       Value<int> rowid,
@@ -11202,9 +10880,9 @@ final class $$DailyQuoteSelectionsTableReferences
   static $QuotesTable _quoteIdTable(_$AppDatabase db) =>
       db.quotes.createAlias('daily_quote_selections__quote_id__quotes__id');
 
-  $$QuotesTableProcessedTableManager get quoteId {
-    final $_column = $_itemColumn<String>('quote_id')!;
-
+  $$QuotesTableProcessedTableManager? get quoteId {
+    final $_column = $_itemColumn<String>('quote_id');
+    if ($_column == null) return null;
     final manager = $$QuotesTableTableManager(
       $_db,
       $_db.quotes,
@@ -11233,11 +10911,6 @@ class $$DailyQuoteSelectionsTableFilterComposer
 
   ColumnFilters<String> get dayKey => $composableBuilder(
     column: $table.dayKey,
-    builder: (column) => ColumnFilters(column),
-  );
-
-  ColumnFilters<bool> get isManual => $composableBuilder(
-    column: $table.isManual,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -11294,11 +10967,6 @@ class $$DailyQuoteSelectionsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<bool> get isManual => $composableBuilder(
-    column: $table.isManual,
-    builder: (column) => ColumnOrderings(column),
-  );
-
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
@@ -11347,9 +11015,6 @@ class $$DailyQuoteSelectionsTableAnnotationComposer
 
   GeneratedColumn<String> get dayKey =>
       $composableBuilder(column: $table.dayKey, builder: (column) => column);
-
-  GeneratedColumn<bool> get isManual =>
-      $composableBuilder(column: $table.isManual, builder: (column) => column);
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
@@ -11419,8 +11084,7 @@ class $$DailyQuoteSelectionsTableTableManager
               ({
                 Value<String> id = const Value.absent(),
                 Value<String> dayKey = const Value.absent(),
-                Value<String> quoteId = const Value.absent(),
-                Value<bool> isManual = const Value.absent(),
+                Value<String?> quoteId = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -11428,7 +11092,6 @@ class $$DailyQuoteSelectionsTableTableManager
                 id: id,
                 dayKey: dayKey,
                 quoteId: quoteId,
-                isManual: isManual,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
@@ -11437,8 +11100,7 @@ class $$DailyQuoteSelectionsTableTableManager
               ({
                 required String id,
                 required String dayKey,
-                required String quoteId,
-                Value<bool> isManual = const Value.absent(),
+                Value<String?> quoteId = const Value.absent(),
                 required DateTime createdAt,
                 required DateTime updatedAt,
                 Value<int> rowid = const Value.absent(),
@@ -11446,7 +11108,6 @@ class $$DailyQuoteSelectionsTableTableManager
                 id: id,
                 dayKey: dayKey,
                 quoteId: quoteId,
-                isManual: isManual,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
@@ -12128,9 +11789,7 @@ typedef $$TaxonomyEntriesTableCreateCompanionBuilder =
       required String module,
       required String kind,
       required String name,
-      required String normalizedName,
       required int colorValue,
-      Value<int?> iconCodePoint,
       Value<int> sortOrder,
       Value<bool> isEnabled,
       required DateTime createdAt,
@@ -12144,9 +11803,7 @@ typedef $$TaxonomyEntriesTableUpdateCompanionBuilder =
       Value<String> module,
       Value<String> kind,
       Value<String> name,
-      Value<String> normalizedName,
       Value<int> colorValue,
-      Value<int?> iconCodePoint,
       Value<int> sortOrder,
       Value<bool> isEnabled,
       Value<DateTime> createdAt,
@@ -12218,18 +11875,8 @@ class $$TaxonomyEntriesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get normalizedName => $composableBuilder(
-    column: $table.normalizedName,
-    builder: (column) => ColumnFilters(column),
-  );
-
   ColumnFilters<int> get colorValue => $composableBuilder(
     column: $table.colorValue,
-    builder: (column) => ColumnFilters(column),
-  );
-
-  ColumnFilters<int> get iconCodePoint => $composableBuilder(
-    column: $table.iconCodePoint,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -12313,18 +11960,8 @@ class $$TaxonomyEntriesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get normalizedName => $composableBuilder(
-    column: $table.normalizedName,
-    builder: (column) => ColumnOrderings(column),
-  );
-
   ColumnOrderings<int> get colorValue => $composableBuilder(
     column: $table.colorValue,
-    builder: (column) => ColumnOrderings(column),
-  );
-
-  ColumnOrderings<int> get iconCodePoint => $composableBuilder(
-    column: $table.iconCodePoint,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -12375,18 +12012,8 @@ class $$TaxonomyEntriesTableAnnotationComposer
   GeneratedColumn<String> get name =>
       $composableBuilder(column: $table.name, builder: (column) => column);
 
-  GeneratedColumn<String> get normalizedName => $composableBuilder(
-    column: $table.normalizedName,
-    builder: (column) => column,
-  );
-
   GeneratedColumn<int> get colorValue => $composableBuilder(
     column: $table.colorValue,
-    builder: (column) => column,
-  );
-
-  GeneratedColumn<int> get iconCodePoint => $composableBuilder(
-    column: $table.iconCodePoint,
     builder: (column) => column,
   );
 
@@ -12466,9 +12093,7 @@ class $$TaxonomyEntriesTableTableManager
                 Value<String> module = const Value.absent(),
                 Value<String> kind = const Value.absent(),
                 Value<String> name = const Value.absent(),
-                Value<String> normalizedName = const Value.absent(),
                 Value<int> colorValue = const Value.absent(),
-                Value<int?> iconCodePoint = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
                 Value<bool> isEnabled = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -12480,9 +12105,7 @@ class $$TaxonomyEntriesTableTableManager
                 module: module,
                 kind: kind,
                 name: name,
-                normalizedName: normalizedName,
                 colorValue: colorValue,
-                iconCodePoint: iconCodePoint,
                 sortOrder: sortOrder,
                 isEnabled: isEnabled,
                 createdAt: createdAt,
@@ -12496,9 +12119,7 @@ class $$TaxonomyEntriesTableTableManager
                 required String module,
                 required String kind,
                 required String name,
-                required String normalizedName,
                 required int colorValue,
-                Value<int?> iconCodePoint = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
                 Value<bool> isEnabled = const Value.absent(),
                 required DateTime createdAt,
@@ -12510,9 +12131,7 @@ class $$TaxonomyEntriesTableTableManager
                 module: module,
                 kind: kind,
                 name: name,
-                normalizedName: normalizedName,
                 colorValue: colorValue,
-                iconCodePoint: iconCodePoint,
                 sortOrder: sortOrder,
                 isEnabled: isEnabled,
                 createdAt: createdAt,
@@ -14758,7 +14377,6 @@ typedef $$MembershipsTableCreateCompanionBuilder =
       Value<String?> description,
       Value<String?> websiteUrl,
       Value<String?> purchasePlatform,
-      Value<String?> paymentMethod,
       Value<int> priceCents,
       Value<String> billingCycle,
       Value<String> baseStatus,
@@ -14767,7 +14385,6 @@ typedef $$MembershipsTableCreateCompanionBuilder =
       Value<bool> isPermanent,
       Value<bool> autoRenew,
       Value<DateTime?> renewalDate,
-      Value<bool> isFavorite,
       Value<bool> needsRenewal,
       Value<bool> expirationReminderEnabled,
       Value<int> expirationReminderDays,
@@ -14793,7 +14410,6 @@ typedef $$MembershipsTableUpdateCompanionBuilder =
       Value<String?> description,
       Value<String?> websiteUrl,
       Value<String?> purchasePlatform,
-      Value<String?> paymentMethod,
       Value<int> priceCents,
       Value<String> billingCycle,
       Value<String> baseStatus,
@@ -14802,7 +14418,6 @@ typedef $$MembershipsTableUpdateCompanionBuilder =
       Value<bool> isPermanent,
       Value<bool> autoRenew,
       Value<DateTime?> renewalDate,
-      Value<bool> isFavorite,
       Value<bool> needsRenewal,
       Value<bool> expirationReminderEnabled,
       Value<int> expirationReminderDays,
@@ -14893,11 +14508,6 @@ class $$MembershipsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get paymentMethod => $composableBuilder(
-    column: $table.paymentMethod,
-    builder: (column) => ColumnFilters(column),
-  );
-
   ColumnFilters<int> get priceCents => $composableBuilder(
     column: $table.priceCents,
     builder: (column) => ColumnFilters(column),
@@ -14935,11 +14545,6 @@ class $$MembershipsTableFilterComposer
 
   ColumnFilters<DateTime> get renewalDate => $composableBuilder(
     column: $table.renewalDate,
-    builder: (column) => ColumnFilters(column),
-  );
-
-  ColumnFilters<bool> get isFavorite => $composableBuilder(
-    column: $table.isFavorite,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -15083,11 +14688,6 @@ class $$MembershipsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get paymentMethod => $composableBuilder(
-    column: $table.paymentMethod,
-    builder: (column) => ColumnOrderings(column),
-  );
-
   ColumnOrderings<int> get priceCents => $composableBuilder(
     column: $table.priceCents,
     builder: (column) => ColumnOrderings(column),
@@ -15125,11 +14725,6 @@ class $$MembershipsTableOrderingComposer
 
   ColumnOrderings<DateTime> get renewalDate => $composableBuilder(
     column: $table.renewalDate,
-    builder: (column) => ColumnOrderings(column),
-  );
-
-  ColumnOrderings<bool> get isFavorite => $composableBuilder(
-    column: $table.isFavorite,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -15240,11 +14835,6 @@ class $$MembershipsTableAnnotationComposer
     builder: (column) => column,
   );
 
-  GeneratedColumn<String> get paymentMethod => $composableBuilder(
-    column: $table.paymentMethod,
-    builder: (column) => column,
-  );
-
   GeneratedColumn<int> get priceCents => $composableBuilder(
     column: $table.priceCents,
     builder: (column) => column,
@@ -15280,11 +14870,6 @@ class $$MembershipsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get renewalDate => $composableBuilder(
     column: $table.renewalDate,
-    builder: (column) => column,
-  );
-
-  GeneratedColumn<bool> get isFavorite => $composableBuilder(
-    column: $table.isFavorite,
     builder: (column) => column,
   );
 
@@ -15410,7 +14995,6 @@ class $$MembershipsTableTableManager
                 Value<String?> description = const Value.absent(),
                 Value<String?> websiteUrl = const Value.absent(),
                 Value<String?> purchasePlatform = const Value.absent(),
-                Value<String?> paymentMethod = const Value.absent(),
                 Value<int> priceCents = const Value.absent(),
                 Value<String> billingCycle = const Value.absent(),
                 Value<String> baseStatus = const Value.absent(),
@@ -15419,7 +15003,6 @@ class $$MembershipsTableTableManager
                 Value<bool> isPermanent = const Value.absent(),
                 Value<bool> autoRenew = const Value.absent(),
                 Value<DateTime?> renewalDate = const Value.absent(),
-                Value<bool> isFavorite = const Value.absent(),
                 Value<bool> needsRenewal = const Value.absent(),
                 Value<bool> expirationReminderEnabled = const Value.absent(),
                 Value<int> expirationReminderDays = const Value.absent(),
@@ -15443,7 +15026,6 @@ class $$MembershipsTableTableManager
                 description: description,
                 websiteUrl: websiteUrl,
                 purchasePlatform: purchasePlatform,
-                paymentMethod: paymentMethod,
                 priceCents: priceCents,
                 billingCycle: billingCycle,
                 baseStatus: baseStatus,
@@ -15452,7 +15034,6 @@ class $$MembershipsTableTableManager
                 isPermanent: isPermanent,
                 autoRenew: autoRenew,
                 renewalDate: renewalDate,
-                isFavorite: isFavorite,
                 needsRenewal: needsRenewal,
                 expirationReminderEnabled: expirationReminderEnabled,
                 expirationReminderDays: expirationReminderDays,
@@ -15478,7 +15059,6 @@ class $$MembershipsTableTableManager
                 Value<String?> description = const Value.absent(),
                 Value<String?> websiteUrl = const Value.absent(),
                 Value<String?> purchasePlatform = const Value.absent(),
-                Value<String?> paymentMethod = const Value.absent(),
                 Value<int> priceCents = const Value.absent(),
                 Value<String> billingCycle = const Value.absent(),
                 Value<String> baseStatus = const Value.absent(),
@@ -15487,7 +15067,6 @@ class $$MembershipsTableTableManager
                 Value<bool> isPermanent = const Value.absent(),
                 Value<bool> autoRenew = const Value.absent(),
                 Value<DateTime?> renewalDate = const Value.absent(),
-                Value<bool> isFavorite = const Value.absent(),
                 Value<bool> needsRenewal = const Value.absent(),
                 Value<bool> expirationReminderEnabled = const Value.absent(),
                 Value<int> expirationReminderDays = const Value.absent(),
@@ -15511,7 +15090,6 @@ class $$MembershipsTableTableManager
                 description: description,
                 websiteUrl: websiteUrl,
                 purchasePlatform: purchasePlatform,
-                paymentMethod: paymentMethod,
                 priceCents: priceCents,
                 billingCycle: billingCycle,
                 baseStatus: baseStatus,
@@ -15520,7 +15098,6 @@ class $$MembershipsTableTableManager
                 isPermanent: isPermanent,
                 autoRenew: autoRenew,
                 renewalDate: renewalDate,
-                isFavorite: isFavorite,
                 needsRenewal: needsRenewal,
                 expirationReminderEnabled: expirationReminderEnabled,
                 expirationReminderDays: expirationReminderDays,
@@ -15602,7 +15179,6 @@ typedef $$MembershipPaymentsTableCreateCompanionBuilder =
       required String id,
       required String membershipId,
       required int amountCents,
-      Value<String?> billingCycle,
       required DateTime paidAt,
       Value<DateTime?> validFrom,
       Value<DateTime?> validUntil,
@@ -15616,7 +15192,6 @@ typedef $$MembershipPaymentsTableUpdateCompanionBuilder =
       Value<String> id,
       Value<String> membershipId,
       Value<int> amountCents,
-      Value<String?> billingCycle,
       Value<DateTime> paidAt,
       Value<DateTime?> validFrom,
       Value<DateTime?> validUntil,
@@ -15674,11 +15249,6 @@ class $$MembershipPaymentsTableFilterComposer
 
   ColumnFilters<int> get amountCents => $composableBuilder(
     column: $table.amountCents,
-    builder: (column) => ColumnFilters(column),
-  );
-
-  ColumnFilters<String> get billingCycle => $composableBuilder(
-    column: $table.billingCycle,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -15755,11 +15325,6 @@ class $$MembershipPaymentsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get billingCycle => $composableBuilder(
-    column: $table.billingCycle,
-    builder: (column) => ColumnOrderings(column),
-  );
-
   ColumnOrderings<DateTime> get paidAt => $composableBuilder(
     column: $table.paidAt,
     builder: (column) => ColumnOrderings(column),
@@ -15828,11 +15393,6 @@ class $$MembershipPaymentsTableAnnotationComposer
 
   GeneratedColumn<int> get amountCents => $composableBuilder(
     column: $table.amountCents,
-    builder: (column) => column,
-  );
-
-  GeneratedColumn<String> get billingCycle => $composableBuilder(
-    column: $table.billingCycle,
     builder: (column) => column,
   );
 
@@ -15916,7 +15476,6 @@ class $$MembershipPaymentsTableTableManager
                 Value<String> id = const Value.absent(),
                 Value<String> membershipId = const Value.absent(),
                 Value<int> amountCents = const Value.absent(),
-                Value<String?> billingCycle = const Value.absent(),
                 Value<DateTime> paidAt = const Value.absent(),
                 Value<DateTime?> validFrom = const Value.absent(),
                 Value<DateTime?> validUntil = const Value.absent(),
@@ -15928,7 +15487,6 @@ class $$MembershipPaymentsTableTableManager
                 id: id,
                 membershipId: membershipId,
                 amountCents: amountCents,
-                billingCycle: billingCycle,
                 paidAt: paidAt,
                 validFrom: validFrom,
                 validUntil: validUntil,
@@ -15942,7 +15500,6 @@ class $$MembershipPaymentsTableTableManager
                 required String id,
                 required String membershipId,
                 required int amountCents,
-                Value<String?> billingCycle = const Value.absent(),
                 required DateTime paidAt,
                 Value<DateTime?> validFrom = const Value.absent(),
                 Value<DateTime?> validUntil = const Value.absent(),
@@ -15954,7 +15511,6 @@ class $$MembershipPaymentsTableTableManager
                 id: id,
                 membershipId: membershipId,
                 amountCents: amountCents,
-                billingCycle: billingCycle,
                 paidAt: paidAt,
                 validFrom: validFrom,
                 validUntil: validUntil,

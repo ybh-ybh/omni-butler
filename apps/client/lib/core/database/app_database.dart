@@ -4,6 +4,18 @@ import 'package:uuid/uuid.dart';
 
 part 'app_database.g.dart';
 
+/// 用业务身份生成跨设备一致的 UUID，不包含设备时间或随机量。
+String stableBusinessId(String kind, List<String> parts) => const Uuid().v5(
+  Namespace.url.value,
+  'https://omni-butler.local/$kind/${parts.map(Uri.encodeComponent).join('/')}',
+);
+
+/// 将业务自然日编码为不受设备时区换算影响的日期键。
+String businessDayKey(DateTime day) =>
+    '${day.year.toString().padLeft(4, '0')}-'
+    '${day.month.toString().padLeft(2, '0')}-'
+    '${day.day.toString().padLeft(2, '0')}';
+
 /// 待办记录表。
 @DataClassName('TodoRecord')
 class TodoItems extends Table {
@@ -106,11 +118,8 @@ class DailyQuoteSelections extends Table {
   TextColumn get dayKey => text()();
 
   /// 当日名言标识。
-  TextColumn get quoteId => text().references(Quotes, #id)();
-
-  /// 是否由用户手动更换。
-  BoolColumn get isManual =>
-      boolean().withDefault(const Constant<bool>(false))();
+  TextColumn get quoteId =>
+      text().nullable().references(Quotes, #id, onDelete: KeyAction.setNull)();
 
   /// 创建时间。
   DateTimeColumn get createdAt => dateTime()();
@@ -222,14 +231,8 @@ class TaxonomyEntries extends Table {
   /// 显示名称。
   TextColumn get name => text()();
 
-  /// 用于跨端唯一性校验的规范化名称。
-  TextColumn get normalizedName => text()();
-
   /// ARGB 颜色值。
   IntColumn get colorValue => integer()();
-
-  /// Material 图标码点。
-  IntColumn get iconCodePoint => integer().nullable()();
 
   /// 用户排序值。
   IntColumn get sortOrder => integer().withDefault(const Constant<int>(0))();
@@ -519,9 +522,6 @@ class Memberships extends Table {
   /// 购买平台。
   TextColumn get purchasePlatform => text().nullable()();
 
-  /// 支付方式。
-  TextColumn get paymentMethod => text().nullable()();
-
   /// 价格分值。
   IntColumn get priceCents => integer().withDefault(const Constant<int>(0))();
 
@@ -549,10 +549,6 @@ class Memberships extends Table {
 
   /// 下次续费日期。
   DateTimeColumn get renewalDate => dateTime().nullable()();
-
-  /// 是否常用。
-  BoolColumn get isFavorite =>
-      boolean().withDefault(const Constant<bool>(false))();
 
   /// 是否明确需要续费。
   BoolColumn get needsRenewal =>
@@ -620,9 +616,6 @@ class MembershipPayments extends Table {
   /// 支付金额分值。
   IntColumn get amountCents => integer()();
 
-  /// 本次计费周期。
-  TextColumn get billingCycle => text().nullable()();
-
   /// 支付时间。
   DateTimeColumn get paidAt => dateTime()();
 
@@ -676,7 +669,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 13;
 
   /// 创建数据库并从旧版本安全升级。
   @override
@@ -705,10 +698,8 @@ class AppDatabase extends _$AppDatabase {
         await migrator.addColumn(memberships, memberships.description);
         await migrator.addColumn(memberships, memberships.websiteUrl);
         await migrator.addColumn(memberships, memberships.purchasePlatform);
-        await migrator.addColumn(memberships, memberships.paymentMethod);
         await migrator.addColumn(memberships, memberships.billingCycle);
         await migrator.addColumn(memberships, memberships.baseStatus);
-        await migrator.addColumn(memberships, memberships.isFavorite);
         await migrator.addColumn(memberships, memberships.needsRenewal);
         await migrator.addColumn(
           memberships,
@@ -724,10 +715,6 @@ class AppDatabase extends _$AppDatabase {
         );
         await migrator.addColumn(memberships, memberships.renewalReminderDays);
         await migrator.addColumn(memberships, memberships.reminderTimeMinutes);
-        await migrator.addColumn(
-          membershipPayments,
-          membershipPayments.billingCycle,
-        );
         await migrator.addColumn(
           membershipPayments,
           membershipPayments.validFrom,
@@ -816,6 +803,20 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         // 按 v10 定义重建待办表，直接丢弃已下线的备注列及旧数据。
         await migrator.alterTable(TableMigration(todoItems));
         await _createTodoIndexes();
+      }
+      if (from < 11) {
+        // 重建表以删除未被业务读取的展示冗余列，其余数据保持原样。
+        await migrator.alterTable(TableMigration(dailyQuoteSelections));
+        await migrator.alterTable(TableMigration(taxonomyEntries));
+      }
+      if (from < 12) {
+        // 删除无消费的会员隐藏字段及支付周期副本，保留会员计费规则和支付有效期。
+        await migrator.alterTable(TableMigration(memberships));
+        await migrator.alterTable(TableMigration(membershipPayments));
+      }
+      if (from < 13) {
+        // 每日选择身份永久保留，删除名言只清空可选引用。
+        await migrator.alterTable(TableMigration(dailyQuoteSelections));
       }
     },
   );
@@ -968,7 +969,7 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
   }
 
   /// 返回指定自然日的稳定名言。
-  Future<QuoteRecord> quoteForDay(DateTime day) async {
+  Future<QuoteRecord?> quoteForDay(DateTime day) async {
     await _ensureDefaultQuotes();
     // 当日键值。
     final String dayKey = _dayKey(day);
@@ -978,12 +979,13 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
               (DailyQuoteSelections table) => table.dayKey.equals(dayKey),
             ))
             .getSingleOrNull();
-    if (selection != null) {
+    if (selection?.quoteId != null) {
       // 已选择的名言。
       final QuoteRecord? selectedQuote =
           await (select(quotes)..where(
                 (Quotes table) =>
-                    table.id.equals(selection.quoteId) &
+                    table.id.equals(selection!.quoteId!) &
+                    table.isEnabled.equals(true) &
                     table.deletedAt.isNull(),
               ))
               .getSingleOrNull();
@@ -1003,6 +1005,25 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
                 (Quotes table) => OrderingTerm.asc(table.createdAt),
               ]))
             .get();
+    if (enabledQuotes.isEmpty) {
+      if (selection != null && selection.quoteId == null) {
+        return null;
+      }
+      // 没有可选名言也保留每日身份，避免永久删除后重建同一墓碑记录。
+      final DateTime now = DateTime.now();
+      await into(dailyQuoteSelections).insertOnConflictUpdate(
+        DailyQuoteSelectionsCompanion.insert(
+          id:
+              selection?.id ??
+              stableBusinessId('daily-quote', <String>[dayKey]),
+          dayKey: dayKey,
+          quoteId: const Value<String?>(null),
+          createdAt: selection?.createdAt ?? now,
+          updatedAt: now,
+        ),
+      );
+      return null;
+    }
     // 基于日期字符的稳定索引。
     final int stableIndex =
         dayKey.codeUnits.fold<int>(0, (int sum, int value) => sum + value) %
@@ -1013,10 +1034,10 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
     final DateTime now = DateTime.now();
     await into(dailyQuoteSelections).insertOnConflictUpdate(
       DailyQuoteSelectionsCompanion.insert(
-        id: const Uuid().v7(),
+        id: selection?.id ?? stableBusinessId('daily-quote', <String>[dayKey]),
         dayKey: dayKey,
-        quoteId: quote.id,
-        createdAt: now,
+        quoteId: Value<String?>(quote.id),
+        createdAt: selection?.createdAt ?? now,
         updatedAt: now,
       ),
     );
@@ -1024,10 +1045,13 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
   }
 
   /// 手动切换指定自然日的名言。
-  Future<QuoteRecord> changeQuoteForDay(DateTime day) async {
+  Future<QuoteRecord?> changeQuoteForDay(DateTime day) async {
     await _ensureDefaultQuotes();
     // 当前名言。
-    final QuoteRecord current = await quoteForDay(day);
+    final QuoteRecord? current = await quoteForDay(day);
+    if (current == null) {
+      return null;
+    }
     // 全部可用名言。
     final List<QuoteRecord> enabledQuotes =
         await (select(quotes)
@@ -1054,45 +1078,50 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         .write(
           DailyQuoteSelectionsCompanion(
             quoteId: Value<String>(next.id),
-            isManual: const Value<bool>(true),
             updatedAt: Value<DateTime>(now),
           ),
         );
     return next;
   }
 
-  /// 确保内置名言存在。
+  /// 仅为从未使用过名言的空库生成内置数据，不复活被删除的稳定身份。
   Future<void> _ensureDefaultQuotes() async {
-    // 当前启用名言数量。
+    // 任意现存名言都表示已经初始化，包括停用和软删除记录。
     final int count =
         await (selectOnly(quotes)
-              ..addColumns(<Expression<Object>>[quotes.id.count()])
-              ..where(
-                quotes.deletedAt.isNull() & quotes.isEnabled.equals(true),
-              ))
+              ..addColumns(<Expression<Object>>[quotes.id.count()]))
             .map((TypedResult row) => row.read(quotes.id.count()) ?? 0)
             .getSingle();
     if (count > 0) {
+      return;
+    }
+    // 永久清空名言仍保留每日选择，防止重复创建云端已经墓碑化的内置身份。
+    final List<DailyQuoteSelectionRecord> previousSelections = await (select(
+      dailyQuoteSelections,
+    )..limit(1)).get();
+    if (previousSelections.isNotEmpty) {
       return;
     }
     // 内置名言创建时间。
     final DateTime now = DateTime.now();
     await into(quotes).insertOnConflictUpdate(
       QuotesCompanion.insert(
-        id: const Uuid().v7(),
+        id: stableBusinessId('builtin-quote', <String>['quiet']),
         content: '把今天过好，便是在为明天留出余地。',
         source: const Value<String>('Omni Butler'),
         isEnabled: const Value<bool>(true),
+        deletedAt: const Value<DateTime?>(null),
         createdAt: now,
         updatedAt: now,
       ),
     );
     await into(quotes).insertOnConflictUpdate(
       QuotesCompanion.insert(
-        id: const Uuid().v7(),
+        id: stableBusinessId('builtin-quote', <String>['time']),
         content: '时间不是被填满的容器，而是被认真看见的生活。',
         source: const Value<String>('Omni Butler'),
         isEnabled: const Value<bool>(true),
+        deletedAt: const Value<DateTime?>(null),
         createdAt: now.add(const Duration(milliseconds: 1)),
         updatedAt: now.add(const Duration(milliseconds: 1)),
       ),
@@ -1176,14 +1205,6 @@ FROM banner_settings
     await customStatement(
       'ALTER TABLE banner_settings_v3 RENAME TO banner_settings',
     );
-    await customStatement(
-      'ALTER TABLE taxonomy_entries ADD COLUMN normalized_name TEXT',
-    );
-    await customStatement('''
-UPDATE taxonomy_entries
-SET normalized_name = lower(trim(name))
-WHERE normalized_name IS NULL
-''');
     await _migrateLegacyBuiltInIds();
     await _convertLegacyDateColumns();
   }
@@ -1192,8 +1213,10 @@ WHERE normalized_name IS NULL
   Future<void> _migrateLegacyBuiltInIds() async {
     // 旧版名言与本机生成的新 UUID 映射。
     final Map<String, String> quoteIds = <String, String>{
-      'builtin-quote-quiet': const Uuid().v7(),
-      'builtin-quote-time': const Uuid().v7(),
+      'builtin-quote-quiet': stableBusinessId('builtin-quote', <String>[
+        'quiet',
+      ]),
+      'builtin-quote-time': stableBusinessId('builtin-quote', <String>['time']),
     };
     for (final MapEntry<String, String> entry in quoteIds.entries) {
       await customStatement(
@@ -1216,14 +1239,26 @@ FROM quotes WHERE id = ?
     for (int index = 0; index < 6; index += 1) {
       // 旧版时间类别标识。
       final String legacyId = 'builtin-time-category-$index';
-      // 新版时间类别 UUID。
-      final String uuid = const Uuid().v7();
+      // 读取旧类别实际名称，以免重命名后丢失业务身份。
+      final QueryRow? legacy = await customSelect(
+        'SELECT module, kind, name FROM taxonomy_entries WHERE id = ?',
+        variables: <Variable<Object>>[Variable<String>(legacyId)],
+      ).getSingleOrNull();
+      if (legacy == null) {
+        continue;
+      }
+      // 新版时间类别 UUID 与新设备同名类别保持一致。
+      final String uuid = stableBusinessId('taxonomy', <String>[
+        legacy.read<String>('module'),
+        legacy.read<String>('kind'),
+        legacy.read<String>('name').trim().toLowerCase(),
+      ]);
       await customStatement(
         '''
 INSERT OR IGNORE INTO taxonomy_entries
-  (id, module, kind, name, normalized_name, color_value, icon_code_point,
+  (id, module, kind, name, color_value,
    sort_order, is_enabled, created_at, updated_at, deleted_at)
-SELECT ?, module, kind, name, normalized_name, color_value, icon_code_point,
+SELECT ?, module, kind, name, color_value,
        sort_order, is_enabled, created_at, updated_at, deleted_at
 FROM taxonomy_entries WHERE id = ?
 ''',

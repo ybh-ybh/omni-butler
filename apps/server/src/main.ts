@@ -1,6 +1,7 @@
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
@@ -8,7 +9,9 @@ import { AppModule } from './app.module';
 /// 启动 NestJS HTTP 服务。
 async function bootstrap(): Promise<void> {
   // 应用实例。
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // 完整本地事务必须整体上传，允许初始导入而不按行截断。
+  app.useBodyParser('json', { limit: '32mb' });
   // 应用配置服务。
   const config = app.get(ConfigService);
   // API 全局路径前缀。

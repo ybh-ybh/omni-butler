@@ -791,8 +791,8 @@ class _TodosPageState extends ConsumerState<TodosPage> {
   /// 确认将待办树移入回收站。
   Future<void> _confirmDelete(TodoRecord todo) async {
     // 用户选择的删除范围。
-    final TodoSeriesScope? scope = await showDialog<TodoSeriesScope>(
-      context: context,
+    final TodoSeriesScope? scope = await showOmniDialog<TodoSeriesScope>(
+      context,
       builder: (BuildContext context) => AlertDialog(
         title: const Text('移入回收站？'),
         content: Text(

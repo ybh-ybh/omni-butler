@@ -1996,9 +1996,6 @@ class _MembershipEditorDialogState
   /// 购买平台控制器。
   late final TextEditingController _platformController;
 
-  /// 支付方式控制器。
-  late final TextEditingController _paymentMethodController;
-
   /// 金额控制器。
   late final TextEditingController _priceController;
 
@@ -2034,9 +2031,6 @@ class _MembershipEditorDialogState
 
   /// 会员基础状态。
   late MembershipBaseStatus _baseStatus;
-
-  /// 是否常用。
-  late bool _isFavorite;
 
   /// 是否需要续费。
   late bool _needsRenewal;
@@ -2078,9 +2072,6 @@ class _MembershipEditorDialogState
     _platformController = TextEditingController(
       text: membership?.purchasePlatform ?? '',
     );
-    _paymentMethodController = TextEditingController(
-      text: membership?.paymentMethod ?? '',
-    );
     _priceController = TextEditingController(
       text: membership == null
           ? ''
@@ -2112,7 +2103,6 @@ class _MembershipEditorDialogState
       (MembershipBaseStatus value) => value.name == membership?.baseStatus,
       orElse: () => MembershipBaseStatus.active,
     );
-    _isFavorite = membership?.isFavorite ?? false;
     _needsRenewal = membership?.needsRenewal ?? false;
     _expirationReminderEnabled = membership?.expirationReminderEnabled ?? false;
     _renewalReminderEnabled = membership?.renewalReminderEnabled ?? false;
@@ -2174,7 +2164,6 @@ class _MembershipEditorDialogState
     _descriptionController.dispose();
     _websiteController.dispose();
     _platformController.dispose();
-    _paymentMethodController.dispose();
     _priceController.dispose();
     _cancelController.dispose();
     _notesController.dispose();
@@ -2221,7 +2210,6 @@ class _MembershipEditorDialogState
               description: _descriptionController.text,
               websiteUrl: _websiteController.text,
               purchasePlatform: _platformController.text,
-              paymentMethod: _paymentMethodController.text,
               priceCents: (double.parse(_priceController.text) * 100).round(),
               billingCycle: _billingCycle,
               baseStatus: _baseStatus,
@@ -2230,7 +2218,6 @@ class _MembershipEditorDialogState
               isPermanent: _isPermanent,
               autoRenew: !_isPermanent && _autoRenew,
               renewalDate: !_isPermanent && _autoRenew ? _renewalDate : null,
-              isFavorite: _isFavorite,
               needsRenewal: _needsRenewal,
               expirationReminderEnabled:
                   !_isPermanent && _expirationReminderEnabled,

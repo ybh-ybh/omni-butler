@@ -173,7 +173,6 @@ MembershipRecord _membership() {
     isPermanent: false,
     autoRenew: true,
     renewalDate: DateTime(2026, 10, 20),
-    isFavorite: false,
     needsRenewal: false,
     expirationReminderEnabled: true,
     expirationReminderDays: 10,

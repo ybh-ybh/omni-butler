@@ -61,12 +61,137 @@ void main() {
         DateTime.fromMillisecondsSinceEpoch(1725498000000, isUtc: true),
       );
       expect(taxonomy.id, matches(_uuidPattern));
-      expect(taxonomy.normalizedName, '工作');
+      expect(taxonomy.name, '工作');
       expect(todoColumnNames, contains('priority_quadrant'));
       expect(todoColumnNames, contains('parent_id'));
       expect(todoColumnNames, isNot(contains('urgency')));
       expect(todoColumnNames, isNot(contains('notes')));
       expect(priorityQuadrantDefault, '2');
+    } finally {
+      await database.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('v10 升级到 v11 删除闲置列且保留分类和每日选择', () async {
+    // 本测试独占的临时目录。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_butler_unused_columns_',
+    );
+    // 用于重开触发升级的数据库文件。
+    final File file = File('${directory.path}/migration.sqlite');
+    // 当前结构先生成每日选择，然后补回旧版本已废弃列。
+    AppDatabase database = AppDatabase.forTesting(NativeDatabase(file));
+    await database.quoteForDay(DateTime(2026, 9, 25));
+    await database.customStatement(
+      'ALTER TABLE daily_quote_selections ADD COLUMN is_manual INTEGER '
+      'NOT NULL DEFAULT 0',
+    );
+    await database.customStatement(
+      'ALTER TABLE taxonomy_entries ADD COLUMN normalized_name TEXT '
+      "NOT NULL DEFAULT ''",
+    );
+    await database.customStatement(
+      'ALTER TABLE taxonomy_entries ADD COLUMN icon_code_point INTEGER',
+    );
+    await database
+        .into(database.taxonomyEntries)
+        .insert(
+          TaxonomyEntriesCompanion.insert(
+            id: 'preserved-taxonomy',
+            module: 'timeline',
+            kind: 'category',
+            name: '工作',
+            colorValue: 0xFF477087,
+            createdAt: DateTime(2026, 9, 25),
+            updatedAt: DateTime(2026, 9, 25),
+          ),
+        );
+    await database.customStatement('PRAGMA user_version = 10');
+    await database.close();
+    database = AppDatabase.forTesting(NativeDatabase(file));
+    try {
+      // 开库触发升级并验证业务行完整保留。
+      expect(
+        await database.select(database.dailyQuoteSelections).get(),
+        hasLength(1),
+      );
+      expect(
+        (await database.select(database.taxonomyEntries).getSingle()).name,
+        '工作',
+      );
+      // 两张表的已废弃字段均不再物理保存。
+      final List<QueryRow> columns = <QueryRow>[
+        ...await database
+            .customSelect("PRAGMA table_info('daily_quote_selections')")
+            .get(),
+        ...await database
+            .customSelect("PRAGMA table_info('taxonomy_entries')")
+            .get(),
+      ];
+      expect(
+        columns.map((QueryRow row) => row.read<String>('name')),
+        isNot(
+          anyElement(
+            isIn(<String>['is_manual', 'normalized_name', 'icon_code_point']),
+          ),
+        ),
+      );
+    } finally {
+      await database.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('v12 每日选择升级后保留身份且允许名言引用为空', () async {
+    // 独占临时目录用于构造旧版 NOT NULL 表结构。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_daily_nullable_',
+    );
+    // 重开数据库触发 v13 迁移。
+    final File file = File('${directory.path}/migration.sqlite');
+    AppDatabase database = AppDatabase.forTesting(NativeDatabase(file));
+    await database.quoteForDay(DateTime(2026, 9, 25));
+    // 迁移前每日选择的业务身份。
+    final DailyQuoteSelectionRecord initial = await database
+        .select(database.dailyQuoteSelections)
+        .getSingle();
+    await database.customStatement('''
+CREATE TABLE daily_quote_selections_v12 (
+  id TEXT NOT NULL PRIMARY KEY,
+  day_key TEXT NOT NULL UNIQUE,
+  quote_id TEXT NOT NULL REFERENCES quotes(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)
+''');
+    await database.customStatement(
+      'INSERT INTO daily_quote_selections_v12 SELECT * FROM daily_quote_selections',
+    );
+    await database.customStatement('DROP TABLE daily_quote_selections');
+    await database.customStatement(
+      'ALTER TABLE daily_quote_selections_v12 RENAME TO daily_quote_selections',
+    );
+    await database.customStatement('PRAGMA user_version = 12');
+    await database.close();
+    database = AppDatabase.forTesting(NativeDatabase(file));
+    try {
+      // 首次查询自动升级，历史选择及引用完整保留。
+      final DailyQuoteSelectionRecord migrated = await database
+          .select(database.dailyQuoteSelections)
+          .getSingle();
+      expect(migrated.id, initial.id);
+      expect(migrated.quoteId, initial.quoteId);
+      await database
+          .update(database.dailyQuoteSelections)
+          .write(
+            const DailyQuoteSelectionsCompanion(quoteId: Value<String?>(null)),
+          );
+      expect(
+        (await database.select(database.dailyQuoteSelections).getSingle())
+            .quoteId,
+        isNull,
+      );
     } finally {
       await database.close();
       await directory.delete(recursive: true);
@@ -298,7 +423,7 @@ CREATE TABLE banner_settings (
 )
 ''');
   await database.customStatement(
-    'ALTER TABLE taxonomy_entries DROP COLUMN normalized_name',
+    'ALTER TABLE taxonomy_entries ADD COLUMN icon_code_point INTEGER',
   );
   await database.customStatement(
     'ALTER TABLE todo_items RENAME COLUMN priority_quadrant TO urgency',

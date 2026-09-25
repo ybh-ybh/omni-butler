@@ -14,11 +14,11 @@ streams:
         SELECT id, content, source, is_enabled, created_at, updated_at, deleted_at
         FROM quotes WHERE user_id = auth.user_id()
       - >-
-        SELECT id, day_key, quote_id, is_manual, created_at, updated_at
+        SELECT id, day_key, quote_id, created_at, updated_at
         FROM daily_quote_selections WHERE user_id = auth.user_id()
       - >-
-        SELECT id, module, kind, name, normalized_name, color_value,
-        icon_code_point, sort_order, is_enabled, created_at, updated_at,
+        SELECT id, module, kind, name, color_value,
+        sort_order, is_enabled, created_at, updated_at,
         deleted_at FROM taxonomy_entries WHERE user_id = auth.user_id()
       - >-
         SELECT id, module, record_id, taxonomy_id, created_at, deleted_at
@@ -34,7 +34,7 @@ streams:
         WHERE user_id = auth.user_id()
       - >-
         SELECT id, name, category, quantity,
-        purchase_price_cents, purchase_date, purchase_url, location, status,
+        purchase_price_cents, purchase_date, purchase_url, purchase_platform, location, status,
         warranty_expiration, tags, parent_item_id, notes,
         created_at, updated_at, deleted_at FROM inventory_items
         WHERE user_id = auth.user_id()
@@ -44,14 +44,14 @@ streams:
         WHERE user_id = auth.user_id()
       - >-
         SELECT id, name, provider, category, description, website_url,
-        purchase_platform, payment_method, price_cents, billing_cycle,
+        purchase_platform, price_cents, billing_cycle,
         base_status, purchase_date, expiration_date, is_permanent, auto_renew,
-        renewal_date, is_favorite, needs_renewal,
+        renewal_date, needs_renewal,
         expiration_reminder_enabled, expiration_reminder_days,
         renewal_reminder_enabled, renewal_reminder_days, reminder_time_minutes,
         cancel_guide, notes, created_at, updated_at,
         deleted_at FROM memberships WHERE user_id = auth.user_id()
       - >-
-        SELECT id, membership_id, amount_cents, billing_cycle, paid_at,
+        SELECT id, membership_id, amount_cents, paid_at,
         valid_from, valid_until, notes, created_at, deleted_at
         FROM membership_payments WHERE user_id = auth.user_id()

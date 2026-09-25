@@ -20,17 +20,9 @@ import { SyncOwnerService } from './sync-owner.service';
           config.getOrThrow<string>('JWT_PRIVATE_KEY_BASE64'),
           'base64',
         ).toString('utf8'),
-        publicKey: Buffer.from(
-          config.getOrThrow<string>('JWT_PUBLIC_KEY_BASE64'),
-          'base64',
-        ).toString('utf8'),
         signOptions: {
           algorithm: 'RS256' as const,
           keyid: config.getOrThrow<string>('JWT_KEY_ID'),
-          issuer: config.getOrThrow<string>('JWT_ISSUER'),
-        },
-        verifyOptions: {
-          algorithms: ['RS256'] as const,
           issuer: config.getOrThrow<string>('JWT_ISSUER'),
         },
       }),

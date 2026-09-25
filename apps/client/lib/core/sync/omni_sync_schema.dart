@@ -12,6 +12,47 @@ RawTable _rawTable(String name, List<String> syncedColumns) {
   );
 }
 
+/// 将同一天的旧随机身份归并到服务端身份，避免下行卡在日期唯一约束。
+RawTable _dailyQuoteSelectionsTable() {
+  return RawTable.inferred(
+    name: 'daily_quote_selections',
+    schema: const RawTableSchema(
+      syncedColumns: <String>[
+        'day_key',
+        'quote_id',
+        'created_at',
+        'updated_at',
+      ],
+      options: TableOptions(ignoreEmptyUpdates: true),
+    ),
+    put: PendingStatement(
+      sql: '''
+INSERT INTO daily_quote_selections (id, day_key, quote_id, created_at, updated_at)
+VALUES (?1, ?2, ?3, ?4, ?5)
+ON CONFLICT DO UPDATE SET
+  id = excluded.id,
+  day_key = excluded.day_key,
+  quote_id = excluded.quote_id,
+  created_at = excluded.created_at,
+  updated_at = excluded.updated_at
+''',
+      params: <PendingStatementValue>[
+        const PendingStatementValue.id(),
+        PendingStatementValue.column('day_key'),
+        PendingStatementValue.column('quote_id'),
+        PendingStatementValue.column('created_at'),
+        PendingStatementValue.column('updated_at'),
+      ],
+    ),
+    // 旧身份的后续下行删除只能匹配旧身份，不能删除已归并的同日记录。
+    delete: const PendingStatement(
+      sql: 'DELETE FROM daily_quote_selections WHERE id = ?1',
+      params: <PendingStatementValue>[PendingStatementValue.id()],
+    ),
+    clear: 'DELETE FROM daily_quote_selections',
+  );
+}
+
 /// Omni Butler 第一期客户端同步结构。
 final Schema omniSyncSchema = Schema(
   const <Table>[
@@ -43,20 +84,12 @@ final Schema omniSyncSchema = Schema(
       'updated_at',
       'deleted_at',
     ]),
-    _rawTable('daily_quote_selections', <String>[
-      'day_key',
-      'quote_id',
-      'is_manual',
-      'created_at',
-      'updated_at',
-    ]),
+    _dailyQuoteSelectionsTable(),
     _rawTable('taxonomy_entries', <String>[
       'module',
       'kind',
       'name',
-      'normalized_name',
       'color_value',
-      'icon_code_point',
       'sort_order',
       'is_enabled',
       'created_at',
@@ -134,7 +167,6 @@ final Schema omniSyncSchema = Schema(
       'description',
       'website_url',
       'purchase_platform',
-      'payment_method',
       'price_cents',
       'billing_cycle',
       'base_status',
@@ -143,7 +175,6 @@ final Schema omniSyncSchema = Schema(
       'is_permanent',
       'auto_renew',
       'renewal_date',
-      'is_favorite',
       'needs_renewal',
       'expiration_reminder_enabled',
       'expiration_reminder_days',
@@ -159,7 +190,6 @@ final Schema omniSyncSchema = Schema(
     _rawTable('membership_payments', <String>[
       'membership_id',
       'amount_cents',
-      'billing_cycle',
       'paid_at',
       'valid_from',
       'valid_until',

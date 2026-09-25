@@ -91,9 +91,6 @@ class MembershipDraft {
   /// 可选购买平台。
   final String? purchasePlatform;
 
-  /// 可选支付方式。
-  final String? paymentMethod;
-
   /// 价格分值。
   final int priceCents;
 
@@ -117,9 +114,6 @@ class MembershipDraft {
 
   /// 可选下次续费日期。
   final DateTime? renewalDate;
-
-  /// 是否常用。
-  final bool isFavorite;
 
   /// 是否需要续费。
   final bool needsRenewal;
@@ -160,7 +154,6 @@ class MembershipDraft {
     this.description,
     this.websiteUrl,
     this.purchasePlatform,
-    this.paymentMethod,
     required this.priceCents,
     this.billingCycle = BillingCycle.year,
     this.baseStatus = MembershipBaseStatus.active,
@@ -169,7 +162,6 @@ class MembershipDraft {
     required this.isPermanent,
     required this.autoRenew,
     this.renewalDate,
-    this.isFavorite = false,
     this.needsRenewal = false,
     this.expirationReminderEnabled = false,
     this.expirationReminderDays = 30,
@@ -326,9 +318,6 @@ class MembershipRepository {
                 purchasePlatform: Value<String?>(
                   _cleanOptional(draft.purchasePlatform),
                 ),
-                paymentMethod: Value<String?>(
-                  _cleanOptional(draft.paymentMethod),
-                ),
                 priceCents: Value<int>(draft.priceCents),
                 billingCycle: Value<String>(
                   draft.isPermanent
@@ -341,7 +330,6 @@ class MembershipRepository {
                 isPermanent: Value<bool>(draft.isPermanent),
                 autoRenew: Value<bool>(draft.autoRenew),
                 renewalDate: Value<DateTime?>(draft.renewalDate),
-                isFavorite: Value<bool>(draft.isFavorite),
                 needsRenewal: Value<bool>(draft.needsRenewal),
                 expirationReminderEnabled: Value<bool>(
                   !draft.isPermanent && draft.expirationReminderEnabled,
@@ -370,7 +358,6 @@ class MembershipRepository {
                   id: _uuid.v7(),
                   membershipId: id,
                   amountCents: draft.priceCents,
-                  billingCycle: Value<String>(draft.billingCycle.name),
                   paidAt: draft.purchaseDate,
                   validFrom: Value<DateTime>(draft.purchaseDate),
                   validUntil: Value<DateTime?>(draft.expirationDate),
@@ -394,7 +381,6 @@ class MembershipRepository {
         purchasePlatform: Value<String?>(
           _cleanOptional(draft.purchasePlatform),
         ),
-        paymentMethod: Value<String?>(_cleanOptional(draft.paymentMethod)),
         priceCents: Value<int>(draft.priceCents),
         billingCycle: Value<String>(
           draft.isPermanent
@@ -407,7 +393,6 @@ class MembershipRepository {
         isPermanent: Value<bool>(draft.isPermanent),
         autoRenew: Value<bool>(draft.autoRenew),
         renewalDate: Value<DateTime?>(draft.renewalDate),
-        isFavorite: Value<bool>(draft.isFavorite),
         needsRenewal: Value<bool>(draft.needsRenewal),
         expirationReminderEnabled: Value<bool>(
           !draft.isPermanent && draft.expirationReminderEnabled,
@@ -437,6 +422,7 @@ class MembershipRepository {
     DateTime? validFrom,
     DateTime? validUntil,
     String? notes,
+    bool isAutomatic = false,
   }) async {
     if (amountCents < 0) {
       throw const FormatException('支付金额不能为负数');
@@ -444,6 +430,24 @@ class MembershipRepository {
     // 当前创建时间。
     final DateTime now = DateTime.now();
     await _database.transaction(() async {
+      // 自动续费以会员和账期为业务身份；人工支付保留独立交易。
+      final String paymentId = isAutomatic
+          ? stableBusinessId('auto-renewal', <String>[
+              membershipId,
+              businessDayKey(startDate),
+            ])
+          : _uuid.v7();
+      if (isAutomatic) {
+        // 已处理账期不再次记账或推进到期日。
+        final MembershipPaymentRecord? existingPayment =
+            await (_database.select(_database.membershipPayments)..where(
+                  (MembershipPayments table) => table.id.equals(paymentId),
+                ))
+                .getSingleOrNull();
+        if (existingPayment != null) {
+          return;
+        }
+      }
       // 当前会员信息用于计算续费后的到期日。
       final MembershipRecord membership =
           await (_database.select(_database.memberships)
@@ -479,10 +483,9 @@ class MembershipRepository {
           .into(_database.membershipPayments)
           .insert(
             MembershipPaymentsCompanion.insert(
-              id: _uuid.v7(),
+              id: paymentId,
               membershipId: membershipId,
               amountCents: amountCents,
-              billingCycle: Value<String?>(effectiveCycle.name),
               paidAt: startDate,
               validFrom: Value<DateTime?>(startDate),
               validUntil: Value<DateTime?>(paymentExpirationDate),
@@ -553,7 +556,13 @@ class MembershipRepository {
           billingCycle: cycle,
           validUntil: customEndDate,
           notes: '自动续费',
+          isAutomatic: true,
         );
+        // 其他设备已上传同一账期时不在陈旧到期日上无限重试。
+        final MembershipRecord updated = await _loadMembership(current.id);
+        if (updated.expirationDate == current.expirationDate) {
+          break;
+        }
         processedCount += 1;
       }
     }

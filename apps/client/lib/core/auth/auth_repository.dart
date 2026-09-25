@@ -4,107 +4,159 @@ import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
 
-/// 安全存储中的 API 根地址键。
-const String _baseUrlKey = 'sync.api_base_url';
+/// 完整设备会话使用同一个安全存储键，避免写入中断造成凭证混搭。
+const String _sessionKey = 'sync.device_session';
 
-/// 安全存储中的访问令牌键。
-const String _accessTokenKey = 'sync.access_token';
+/// 一次原子保存的设备会话数据。
+class _StoredSession {
+  /// API 根地址。
+  final String baseUrl;
 
-/// 安全存储中的刷新令牌键。
-const String _refreshTokenKey = 'sync.refresh_token';
+  /// 短期访问凭证。
+  final String accessToken;
 
-/// 安全存储中的访问令牌过期时间键。
-const String _accessExpiresAtKey = 'sync.access_expires_at';
+  /// 固定有效期内保持不变的设备凭证。
+  final String refreshToken;
 
-/// 安全存储中的内部同步身份键。
-const String _identityKey = 'sync.identity';
+  /// 访问凭证过期时间。
+  final DateTime expiresAt;
+
+  /// 所有者身份。
+  final SyncIdentity identity;
+
+  /// 创建完整会话快照。
+  const _StoredSession({
+    required this.baseUrl,
+    required this.accessToken,
+    required this.refreshToken,
+    required this.expiresAt,
+    required this.identity,
+  });
+
+  /// 从一条安全存储记录恢复会话。
+  factory _StoredSession.fromJson(Map<String, dynamic> value) {
+    return _StoredSession(
+      baseUrl: value['baseUrl'] as String,
+      accessToken: value['accessToken'] as String,
+      refreshToken: value['refreshToken'] as String,
+      expiresAt: DateTime.parse(value['expiresAt'] as String),
+      identity: SyncIdentity.fromJson(
+        Map<String, dynamic>.from(value['identity'] as Map),
+      ),
+    );
+  }
+
+  /// 编码完整会话。
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'baseUrl': baseUrl,
+    'accessToken': accessToken,
+    'refreshToken': refreshToken,
+    'expiresAt': expiresAt.toIso8601String(),
+    'identity': <String, String>{'sub': identity.id},
+  };
+}
 
 /// 自托管同步服务连接与设备会话仓储。
 class AuthRepository {
-  /// Windows 系统安全存储。
+  /// 系统安全存储。
   final FlutterSecureStorage _storage;
 
+  /// 可选 HTTP 客户端工厂，供测试使用内存传输。
+  final Dio Function(String)? clientFactory;
+
+  /// 当前正在进行的刷新，共享给所有并发请求。
+  Future<String>? _pendingRefresh;
+
+  /// 本机会话代次，防止断开后旧请求重新写回凭证。
+  int _generation = 0;
+
+  /// 安全存储修改顺序，确保断开最终覆盖已经开始的写入。
+  Future<void> _storageWrites = Future<void>.value();
+
   /// 创建同步服务会话仓储。
-  const AuthRepository(this._storage);
+  AuthRepository(this._storage, {this.clientFactory});
 
   /// 从安全存储与服务端恢复设备同步会话。
   Future<SyncSession?> restoreSession() async {
-    // 已保存 API 根地址。
-    final String? baseUrl = await _storage.read(key: _baseUrlKey);
-    // 已保存访问令牌。
-    final String? accessToken = await _storage.read(key: _accessTokenKey);
-    // 已保存刷新令牌。
-    final String? refreshToken = await _storage.read(key: _refreshTokenKey);
-    // 已缓存内部同步身份。
-    final SyncIdentity? cachedIdentity = await _readCachedIdentity();
-    if (baseUrl == null ||
-        accessToken == null ||
-        refreshToken == null ||
-        cachedIdentity == null) {
-      return null;
-    }
+    // 已保存的完整会话。
+    final _StoredSession? saved = await _readSession();
+    if (saved == null) return null;
+    // 当前恢复操作所属代次。
+    final int generation = _generation;
     try {
       // 可用访问令牌。
-      final String token = await ensureAccessToken(baseUrl: baseUrl);
-      // 服务端最新内部同步身份。
-      final SyncIdentity identity = await _loadIdentity(baseUrl, token);
-      await _writeIdentity(identity);
+      final String token = await ensureAccessToken(baseUrl: saved.baseUrl);
+      // 服务端确认的内部身份。
+      SyncIdentity identity;
+      try {
+        identity = await _loadIdentity(saved.baseUrl, token);
+      } on DioException catch (error) {
+        if (error.response?.statusCode != 401 || generation != _generation) {
+          rethrow;
+        }
+        // 本机时钟可能滞后，访问令牌被拒绝时先验证稳定设备凭证。
+        final String refreshed = await _refresh(saved.baseUrl);
+        identity = await _loadIdentity(saved.baseUrl, refreshed);
+      }
+      if (generation != _generation) return null;
       return SyncSession(
         identity: identity,
-        apiBaseUrl: baseUrl,
+        apiBaseUrl: saved.baseUrl,
         isOffline: false,
       );
     } on DioException catch (error) {
-      if (_isNetworkFailure(error)) {
-        return SyncSession(
-          identity: cachedIdentity,
-          apiBaseUrl: baseUrl,
-          isOffline: true,
-        );
+      if (generation != _generation) return null;
+      if (error.response?.statusCode == 401) {
+        await clearSession();
+        return null;
       }
-      await clearSession();
-      return null;
+      return SyncSession(
+        identity: saved.identity,
+        apiBaseUrl: saved.baseUrl,
+        isOffline: true,
+      );
     } on ApiFailure {
-      await clearSession();
       return null;
     }
   }
 
-  /// 使用用户部署时设置的同步密钥建立设备会话。
+  /// 使用部署同步密钥建立设备会话，并一次性保存凭证及身份。
   Future<SyncSession> connect({
     required String apiBaseUrl,
     required String syncKey,
   }) async {
+    // 本次连接对应新的本机会话代次。
+    final int generation = ++_generation;
+    _pendingRefresh = null;
     // 规范化后的 API 根地址。
     final String baseUrl = normalizeBaseUrl(apiBaseUrl);
-    // 未携带认证的 API 客户端。
-    final Dio dio = _dio(baseUrl);
     try {
-      // 设备连接接口响应。
-      final Response<Map<String, dynamic>> response = await dio.post(
-        '/auth/connect',
-        data: <String, dynamic>{'syncKey': syncKey},
-      );
-      // 设备会话令牌数据。
+      // 设备连接响应。
+      final Response<Map<String, dynamic>> response = await _dio(baseUrl)
+          .post('/auth/connect', data: <String, dynamic>{'syncKey': syncKey});
+      // 服务端返回的会话令牌。
       final Map<String, dynamic> tokens = response.data ?? <String, dynamic>{};
-      // 访问令牌。
+      // 返回的访问凭证。
       final String accessToken = tokens['accessToken'] as String? ?? '';
-      // 刷新令牌。
+      // 返回的设备凭证。
       final String refreshToken = tokens['refreshToken'] as String? ?? '';
-      // 访问令牌有效秒数。
-      final int expiresIn = tokens['expiresIn'] as int? ?? 900;
       if (accessToken.isEmpty || refreshToken.isEmpty) {
         throw const ApiFailure('服务器没有返回完整设备会话令牌');
       }
-      // 服务端内部同步身份。
+      // 服务端内部身份。
       final SyncIdentity identity = await _loadIdentity(baseUrl, accessToken);
-      await _writeTokens(
-        baseUrl: baseUrl,
-        accessToken: accessToken,
-        refreshToken: refreshToken,
-        expiresIn: expiresIn,
+      await _saveSession(
+        _StoredSession(
+          baseUrl: baseUrl,
+          accessToken: accessToken,
+          refreshToken: refreshToken,
+          expiresAt: DateTime.now().add(
+            Duration(seconds: tokens['expiresIn'] as int? ?? 900),
+          ),
+          identity: identity,
+        ),
+        generation,
       );
-      await _writeIdentity(identity);
       return SyncSession(
         identity: identity,
         apiBaseUrl: baseUrl,
@@ -115,74 +167,54 @@ class AuthRepository {
     }
   }
 
-  /// 返回可用访问令牌，临近过期时自动轮换。
+  /// 返回可用访问令牌，临近过期时合并所有刷新请求。
   Future<String> ensureAccessToken({String? baseUrl}) async {
-    // 已保存 API 根地址。
-    final String? storedBaseUrl =
-        baseUrl ?? await _storage.read(key: _baseUrlKey);
-    // 已保存访问令牌。
-    final String? accessToken = await _storage.read(key: _accessTokenKey);
-    // 已保存访问令牌过期时间。
-    final String? expiresAtText = await _storage.read(key: _accessExpiresAtKey);
-    // 解析后的过期时间。
-    final DateTime? expiresAt = DateTime.tryParse(expiresAtText ?? '');
-    if (storedBaseUrl == null || accessToken == null) {
+    // 完整会话快照。
+    final _StoredSession? saved = await _readSession();
+    if (saved == null || (baseUrl != null && saved.baseUrl != baseUrl)) {
       throw const ApiFailure('当前设备尚未连接同步服务器');
     }
-    if (expiresAt != null &&
-        expiresAt.isAfter(DateTime.now().add(const Duration(minutes: 1)))) {
-      return accessToken;
+    if (saved.expiresAt.isAfter(
+      DateTime.now().add(const Duration(minutes: 1)),
+    )) {
+      return saved.accessToken;
     }
-    return _refresh(storedBaseUrl);
+    return _refresh(saved.baseUrl);
   }
 
   /// 获取 PowerSync 短期连接凭证。
   Future<PowerSyncCredential> fetchPowerSyncCredential() async {
-    // 当前 API 根地址。
-    final String? baseUrl = await _storage.read(key: _baseUrlKey);
-    if (baseUrl == null) {
-      throw const ApiFailure('当前设备尚未连接同步服务器');
-    }
-    // 可用访问令牌。
-    final String accessToken = await ensureAccessToken(baseUrl: baseUrl);
-    try {
-      // PowerSync 凭证响应。
-      final Response<Map<String, dynamic>> response = await _dio(baseUrl).post(
-        '/auth/powersync-token',
-        options: Options(
-          headers: <String, String>{'Authorization': 'Bearer $accessToken'},
-        ),
-      );
-      // PowerSync 凭证数据。
-      final Map<String, dynamic> data = response.data ?? <String, dynamic>{};
-      return PowerSyncCredential(
-        endpoint: data['endpoint'] as String,
-        token: data['token'] as String,
-        expiresIn: data['expiresIn'] as int,
-        userId: data['userId'] as String,
-      );
-    } on DioException catch (error) {
-      throw ApiFailure(_messageFor(error, fallback: '无法获取同步凭证'));
-    }
+    // 复用受保护请求的 401 刷新重试，兼容设备时钟偏差。
+    final Response<Map<String, dynamic>> response =
+        await authorizedRequest<Map<String, dynamic>>(
+          'POST',
+          '/auth/powersync-token',
+        );
+    // PowerSync 返回数据。
+    final Map<String, dynamic> data = response.data ?? <String, dynamic>{};
+    return PowerSyncCredential(
+      endpoint: data['endpoint'] as String,
+      token: data['token'] as String,
+      expiresIn: data['expiresIn'] as int,
+      userId: data['userId'] as String,
+    );
   }
 
-  /// 使用当前访问令牌执行受保护请求。
+  /// 使用当前设备会话执行受保护请求。
   Future<Response<T>> authorizedRequest<T>(
     String method,
     String path, {
     Object? data,
     Map<String, dynamic>? queryParameters,
   }) async {
-    // 当前 API 根地址。
-    final String? baseUrl = await _storage.read(key: _baseUrlKey);
-    if (baseUrl == null) {
-      throw const ApiFailure('当前设备尚未连接同步服务器');
-    }
-    // 可用访问令牌。
-    final String token = await ensureAccessToken(baseUrl: baseUrl);
+    // 当前服务器会话。
+    final _StoredSession? saved = await _readSession();
+    if (saved == null) throw const ApiFailure('当前设备尚未连接同步服务器');
+    // 当前可用访问令牌。
+    final String token = await ensureAccessToken(baseUrl: saved.baseUrl);
     try {
       return await _performAuthorizedRequest<T>(
-        baseUrl: baseUrl,
+        baseUrl: saved.baseUrl,
         token: token,
         method: method,
         path: path,
@@ -192,11 +224,18 @@ class AuthRepository {
     } on DioException catch (error) {
       if (error.response?.statusCode == 401) {
         try {
-          // 服务端拒绝旧令牌后强制轮换一次，覆盖客户端时钟漂移场景。
-          final String refreshedToken = await _refresh(baseUrl);
+          // 已有请求可能刚刚完成刷新，可直接使用其结果。
+          final _StoredSession? current = await _readSession();
+          if (current == null || current.refreshToken != saved.refreshToken) {
+            throw const ApiFailure('同步会话已变更，请重试');
+          }
+          // 同一旧访问令牌的并发 401 共用一次刷新。
+          final String refreshed = current.accessToken == token
+              ? await _refresh(saved.baseUrl)
+              : current.accessToken;
           return await _performAuthorizedRequest<T>(
-            baseUrl: baseUrl,
-            token: refreshedToken,
+            baseUrl: saved.baseUrl,
+            token: refreshed,
             method: method,
             path: path,
             data: data,
@@ -210,7 +249,7 @@ class AuthRepository {
     }
   }
 
-  /// 使用指定访问令牌执行一次受保护请求。
+  /// 使用指定令牌执行一次受保护请求。
   Future<Response<T>> _performAuthorizedRequest<T>({
     required String baseUrl,
     required String token,
@@ -230,36 +269,134 @@ class AuthRepository {
     );
   }
 
-  /// 断开当前同步服务器并保留本机业务数据。
+  /// 断开当前设备，立即阻止旧异步请求重新写入凭证。
   Future<void> disconnect() async {
-    // 已保存 API 根地址。
-    final String? baseUrl = await _storage.read(key: _baseUrlKey);
-    // 已保存刷新令牌。
-    final String? refreshToken = await _storage.read(key: _refreshTokenKey);
-    if (baseUrl != null && refreshToken != null) {
-      try {
-        await _dio(baseUrl).post(
-          '/auth/disconnect',
-          data: <String, String>{'refreshToken': refreshToken},
-        );
-      } on DioException {
-        // 断网时仍清理本机令牌，服务端令牌等待自然过期。
-      }
-    }
+    // 需要向服务端撤销的原会话。
+    final _StoredSession? saved = await _readSession();
     await clearSession();
+    if (saved == null) return;
+    try {
+      await _dio(saved.baseUrl).post(
+        '/auth/disconnect',
+        data: <String, String>{'refreshToken': saved.refreshToken},
+      );
+    } on DioException {
+      // 网络不可用时本机仍保持断开，服务端会话等待固定到期。
+    }
   }
 
-  /// 清除本机设备会话令牌与内部同步身份。
-  Future<void> clearSession() async {
-    for (final String key in <String>[
-      _baseUrlKey,
-      _accessTokenKey,
-      _refreshTokenKey,
-      _accessExpiresAtKey,
-      _identityKey,
-    ]) {
-      await _storage.delete(key: key);
+  /// 清除当前设备凭证，并使所有已发出的刷新结果过时。
+  Future<void> clearSession() {
+    _generation++;
+    _pendingRefresh = null;
+    return _enqueueStorage(() => _storage.delete(key: _sessionKey));
+  }
+
+  /// 合并同一会话的并发刷新请求。
+  Future<String> _refresh(String baseUrl) {
+    // 可以共享的刷新请求。
+    final Future<String>? pending = _pendingRefresh;
+    if (pending != null) return pending;
+    // 本次刷新所属代次。
+    final int generation = _generation;
+    // 共享的异步刷新任务。
+    late final Future<String> operation;
+    operation = _performRefresh(baseUrl, generation).whenComplete(() {
+      if (identical(_pendingRefresh, operation)) _pendingRefresh = null;
+    });
+    _pendingRefresh = operation;
+    return operation;
+  }
+
+  /// 刷新访问凭证，保留稳定设备凭证；只有明确的 401 才清理会话。
+  Future<String> _performRefresh(String baseUrl, int generation) async {
+    // 本次刷新的完整会话快照。
+    final _StoredSession? saved = await _readSession();
+    if (saved == null ||
+        saved.baseUrl != baseUrl ||
+        generation != _generation) {
+      throw const ApiFailure('同步会话已失效，请重新连接服务器');
     }
+    try {
+      // 可安全重试的刷新响应。
+      final Response<Map<String, dynamic>> response = await _dio(baseUrl).post(
+        '/auth/refresh',
+        data: <String, String>{'refreshToken': saved.refreshToken},
+      );
+      // 返回的访问凭证数据。
+      final Map<String, dynamic> tokens = response.data ?? <String, dynamic>{};
+      // 新短期访问凭证。
+      final String accessToken = tokens['accessToken'] as String;
+      await _saveSession(
+        _StoredSession(
+          baseUrl: baseUrl,
+          accessToken: accessToken,
+          refreshToken: saved.refreshToken,
+          expiresAt: DateTime.now().add(
+            Duration(seconds: tokens['expiresIn'] as int? ?? 900),
+          ),
+          identity: saved.identity,
+        ),
+        generation,
+      );
+      return accessToken;
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 401 && generation == _generation) {
+        await clearSession();
+        throw const ApiFailure('同步会话已失效，请重新连接服务器');
+      }
+      rethrow;
+    }
+  }
+
+  /// 读取服务端确认的内部同步身份。
+  Future<SyncIdentity> _loadIdentity(String baseUrl, String token) async {
+    // 当前会话身份响应。
+    final Response<Map<String, dynamic>> response = await _dio(baseUrl).get(
+      '/auth/session',
+      options: Options(
+        headers: <String, String>{'Authorization': 'Bearer $token'},
+      ),
+    );
+    return SyncIdentity.fromJson(response.data ?? <String, dynamic>{});
+  }
+
+  /// 读取完整会话；旧格式不迁移，重新连接即可。
+  Future<_StoredSession?> _readSession() async {
+    await _storageWrites;
+    // 原子保存的 JSON 文本。
+    final String? value = await _storage.read(key: _sessionKey);
+    if (value == null) return null;
+    try {
+      return _StoredSession.fromJson(
+        Map<String, dynamic>.from(jsonDecode(value) as Map),
+      );
+    } on Object {
+      return null;
+    }
+  }
+
+  /// 按序保存完整会话，拒绝已断开的异步结果。
+  Future<void> _saveSession(_StoredSession session, int generation) {
+    return _enqueueStorage(() async {
+      if (generation != _generation) throw const ApiFailure('同步会话已变更，请重试');
+      await _storage.write(
+        key: _sessionKey,
+        value: jsonEncode(session.toJson()),
+      );
+      if (generation != _generation) throw const ApiFailure('同步会话已变更，请重试');
+    });
+  }
+
+  /// 串行执行安全存储修改，单次失败不会阻塞之后的清理。
+  Future<void> _enqueueStorage(Future<void> Function() action) {
+    // 本次持久化操作。
+    final Future<void> next = _storageWrites.then((_) => action());
+    _storageWrites = next.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return next;
   }
 
   /// 校验并规范化 API 根地址。
@@ -281,9 +418,7 @@ class AuthRepository {
 
   /// 判断主机名是否属于本机或 RFC 1918 私有 IPv4 地址。
   bool _isPrivateNetworkHost(String host) {
-    if (host == 'localhost' || host == '127.0.0.1') {
-      return true;
-    }
+    if (host == 'localhost' || host == '127.0.0.1') return true;
     // IPv4 四段数值。
     final List<int>? parts = host.split('.').length == 4
         ? host.split('.').map(int.tryParse).whereType<int>().toList()
@@ -298,134 +433,28 @@ class AuthRepository {
         (parts[0] == 192 && parts[1] == 168);
   }
 
-  /// 轮换访问与刷新令牌。
-  Future<String> _refresh(String baseUrl) async {
-    // 当前刷新令牌。
-    final String? refreshToken = await _storage.read(key: _refreshTokenKey);
-    if (refreshToken == null) {
-      throw const ApiFailure('同步会话已失效，请重新连接服务器');
-    }
-    try {
-      // 刷新接口响应。
-      final Response<Map<String, dynamic>> response = await _dio(baseUrl).post(
-        '/auth/refresh',
-        data: <String, String>{'refreshToken': refreshToken},
-      );
-      // 新令牌数据。
-      final Map<String, dynamic> tokens = response.data ?? <String, dynamic>{};
-      // 新访问令牌。
-      final String accessToken = tokens['accessToken'] as String;
-      await _writeTokens(
-        baseUrl: baseUrl,
-        accessToken: accessToken,
-        refreshToken: tokens['refreshToken'] as String,
-        expiresIn: tokens['expiresIn'] as int? ?? 900,
-      );
-      return accessToken;
-    } on DioException catch (error) {
-      if (_isNetworkFailure(error)) {
-        rethrow;
-      }
-      await clearSession();
-      throw const ApiFailure('同步会话已失效，请重新连接服务器');
-    }
-  }
-
-  /// 从服务端读取内部同步身份。
-  Future<SyncIdentity> _loadIdentity(String baseUrl, String token) async {
-    try {
-      // 当前设备会话接口响应。
-      final Response<Map<String, dynamic>> response = await _dio(baseUrl).get(
-        '/auth/session',
-        options: Options(
-          headers: <String, String>{'Authorization': 'Bearer $token'},
-        ),
-      );
-      return SyncIdentity.fromJson(response.data ?? <String, dynamic>{});
-    } on DioException catch (error) {
-      if (_isNetworkFailure(error)) {
-        rethrow;
-      }
-      throw ApiFailure(_messageFor(error, fallback: '无法读取设备同步会话'));
-    }
-  }
-
-  /// 安全保存一组轮换后的令牌。
-  Future<void> _writeTokens({
-    required String baseUrl,
-    required String accessToken,
-    required String refreshToken,
-    required int expiresIn,
-  }) async {
-    // 提前三十秒记录的访问令牌过期时间。
-    final DateTime expiresAt = DateTime.now().add(Duration(seconds: expiresIn));
-    await _storage.write(key: _baseUrlKey, value: baseUrl);
-    await _storage.write(key: _accessTokenKey, value: accessToken);
-    await _storage.write(key: _refreshTokenKey, value: refreshToken);
-    await _storage.write(
-      key: _accessExpiresAtKey,
-      value: expiresAt.toIso8601String(),
-    );
-  }
-
-  /// 安全缓存服务端内部同步身份。
-  Future<void> _writeIdentity(SyncIdentity identity) async {
-    await _storage.write(
-      key: _identityKey,
-      value: jsonEncode(<String, String>{'sub': identity.id}),
-    );
-  }
-
-  /// 从安全存储读取缓存的内部同步身份。
-  Future<SyncIdentity?> _readCachedIdentity() async {
-    // 缓存同步身份 JSON 文本。
-    final String? text = await _storage.read(key: _identityKey);
-    if (text == null) {
-      return null;
-    }
-    try {
-      return SyncIdentity.fromJson(
-        Map<String, dynamic>.from(jsonDecode(text) as Map),
-      );
-    } on Object {
-      return null;
-    }
-  }
-
-  /// 创建带公共超时设置的 Dio 客户端。
+  /// 创建带公共超时设置的 HTTP 客户端。
   Dio _dio(String baseUrl) {
-    return Dio(
-      BaseOptions(
-        baseUrl: baseUrl,
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 15),
-        sendTimeout: const Duration(seconds: 15),
-        responseType: ResponseType.json,
-      ),
-    );
+    return clientFactory?.call(baseUrl) ??
+        Dio(
+          BaseOptions(
+            baseUrl: baseUrl,
+            connectTimeout: const Duration(seconds: 10),
+            receiveTimeout: const Duration(seconds: 15),
+            sendTimeout: const Duration(seconds: 15),
+            responseType: ResponseType.json,
+          ),
+        );
   }
 
-  /// 判断 Dio 异常是否属于无法访问网络。
-  bool _isNetworkFailure(DioException error) {
-    return <DioExceptionType>{
-      DioExceptionType.connectionError,
-      DioExceptionType.connectionTimeout,
-      DioExceptionType.receiveTimeout,
-      DioExceptionType.sendTimeout,
-      DioExceptionType.unknown,
-    }.contains(error.type);
-  }
-
-  /// 将服务端错误转换为不暴露敏感信息的用户提示。
+  /// 将服务端错误转换为用户提示。
   String _messageFor(DioException error, {required String fallback}) {
     // 服务端错误响应体。
     final Object? responseData = error.response?.data;
     if (responseData is Map<String, dynamic>) {
       // NestJS 标准错误消息。
       final Object? message = responseData['message'];
-      if (message is String && message.isNotEmpty) {
-        return message;
-      }
+      if (message is String && message.isNotEmpty) return message;
       if (message is List && message.isNotEmpty) {
         return message.first.toString();
       }

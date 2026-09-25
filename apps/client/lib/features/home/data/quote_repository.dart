@@ -96,14 +96,11 @@ class QuoteRepository {
     );
   }
 
-  /// 将名言移入回收站并解除每日选择关联。
+  /// 将名言移入回收站，保留每日稳定身份供下次读取时重新选择。
   Future<void> delete(String id) async {
     // 当前删除时间。
     final DateTime now = DateTime.now();
     await _database.transaction(() async {
-      await (_database.delete(
-        _database.dailyQuoteSelections,
-      )..where((DailyQuoteSelections table) => table.quoteId.equals(id))).go();
       await (_database.update(
         _database.quotes,
       )..where((Quotes table) => table.id.equals(id))).write(

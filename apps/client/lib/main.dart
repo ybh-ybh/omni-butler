@@ -32,7 +32,7 @@ Future<void> main() async {
     aOptions: AndroidOptions(),
   );
   // 应用入口与 Riverpod 共用的设备会话仓储。
-  const AuthRepository authRepository = AuthRepository(secureStorage);
+  final AuthRepository authRepository = AuthRepository(secureStorage);
   // 与设备会话状态共享的同步运行时。
   final OmniSyncRuntime syncRuntime = await OmniSyncRuntime.open(
     authRepository,

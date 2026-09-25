@@ -350,12 +350,12 @@ class TodoRepository {
     // 当前状态更新时间。
     final DateTime now = DateTime.now();
     await _database.transaction(() async {
-      if (completed && target.parentId == null) {
-        // 主任务完成时同时完成尚未完成的直属子任务。
+      if (target.parentId == null) {
+        // 主任务完成或重开时对称级联，保持服务器按子任务派生的状态一致。
         final List<TodoRecord> tree = await _treeRecords(target.id);
         for (final TodoRecord record in tree) {
-          if (!record.isCompleted) {
-            await _writeCompletion(record.id, completed: true, now: now);
+          if (record.isCompleted != completed) {
+            await _writeCompletion(record.id, completed: completed, now: now);
           }
         }
         return;
@@ -606,8 +606,15 @@ class TodoRepository {
                 ]))
               .get();
       // 新重复实例的主任务标识。
-      final String newRootId = _uuid.v7();
+      final String newRootId = stableBusinessId('repeat-todo', <String>[
+        entry.key,
+        businessDayKey(day),
+      ]);
       await _database.transaction(() async {
+        // 同一设备多个页面可能同时展开同一天，事务内再次检查稳定主键。
+        if (await _todoById(newRootId, includeDeleted: true) != null) {
+          return;
+        }
         await _database.createTodo(
           TodoItemsCompanion.insert(
             id: newRootId,
@@ -629,7 +636,11 @@ class TodoRepository {
         for (final TodoRecord child in templateChildren) {
           await _database.createTodo(
             TodoItemsCompanion.insert(
-              id: _uuid.v7(),
+              id: stableBusinessId('repeat-subtask', <String>[
+                entry.key,
+                child.repeatSeriesId ?? child.id,
+                businessDayKey(day),
+              ]),
               title: child.title,
               description: Value<String?>(child.description),
               parentId: Value<String>(newRootId),
@@ -639,9 +650,7 @@ class TodoRepository {
               reminderAt: Value<DateTime?>(
                 _moveClockToDay(child.reminderAt, day),
               ),
-              repeatSeriesId: Value<String?>(
-                child.repeatSeriesId ?? _uuid.v7(),
-              ),
+              repeatSeriesId: Value<String?>(child.repeatSeriesId ?? child.id),
               sortOrder: Value<int>(child.sortOrder),
               createdAt: now,
               updatedAt: now,

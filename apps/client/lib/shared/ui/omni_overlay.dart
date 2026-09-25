@@ -62,6 +62,44 @@ Future<T?> showOmniSideSheet<T>(
   );
 }
 
+/// 在当前应用窗口内显示模态弹窗。
+///
+/// Windows 使用实验性多窗口能力时，Flutter 的 [showDialog] 会把弹窗提升为
+/// 独立原生窗口；应用内确认框需要直接推入 [DialogRoute]，以保留遮罩、主题和尺寸。
+Future<T?> showOmniDialog<T>(
+  BuildContext context, {
+  required WidgetBuilder builder,
+  bool barrierDismissible = true,
+  bool useRootNavigator = true,
+}) {
+  // 承载应用内弹窗的导航器。
+  final NavigatorState navigator = Navigator.of(
+    context,
+    rootNavigator: useRootNavigator,
+  );
+  // 从调用位置传递到导航器覆盖层的继承主题。
+  final CapturedThemes themes = InheritedTheme.capture(
+    from: context,
+    to: navigator.context,
+  );
+  // 与 Material 默认弹窗一致的遮罩颜色。
+  final Color barrierColor =
+      DialogTheme.of(context).barrierColor ??
+      Theme.of(context).dialogTheme.barrierColor ??
+      Colors.black54;
+
+  return navigator.push<T>(
+    DialogRoute<T>(
+      context: context,
+      builder: builder,
+      themes: themes,
+      barrierColor: barrierColor,
+      barrierDismissible: barrierDismissible,
+      traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
+    ),
+  );
+}
+
 /// 侧滑编辑器统一结构。
 class OmniSideSheetScaffold extends StatelessWidget {
   /// 面板标题。

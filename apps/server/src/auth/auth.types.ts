@@ -1,24 +1,18 @@
-/// JWT 中携带的认证主体。
+/// 通过设备会话验证后的 API 认证主体。
 export interface AuthUser {
   /// 内部数据所有者标识。
   sub: string;
-  /// 仅供旧数据库结构兼容的内部邮箱。
-  email: string;
-  /// 仅供现有数据隔离逻辑使用的内部角色。
-  role: string;
+  /// 设备会话标识。
+  sid: string;
   /// 令牌用途。
-  typ: 'access' | 'refresh' | 'powersync';
-  /// 令牌唯一标识。
-  jti?: string;
-  /// 设备会话令牌版本。
-  version: number;
+  typ: 'access';
 }
 
 /// 设备连接与刷新接口返回的令牌组。
 export interface TokenPair {
   /// 短期访问令牌。
   accessToken: string;
-  /// 可轮换刷新令牌。
+  /// 固定有效期内可重复使用的高熵设备凭证。
   refreshToken: string;
   /// 访问令牌有效秒数。
   expiresIn: number;

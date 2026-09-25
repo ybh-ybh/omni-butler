@@ -86,15 +86,15 @@ void main() {
     // 测试所属自然日。
     final DateTime day = DateTime(2026, 9, 4);
     // 第一次读取的名言。
-    final QuoteRecord first = await database.quoteForDay(day);
+    final QuoteRecord first = (await database.quoteForDay(day))!;
     // 第二次读取的名言。
-    final QuoteRecord repeated = await database.quoteForDay(day);
+    final QuoteRecord repeated = (await database.quoteForDay(day))!;
     expect(repeated.id, first.id);
 
     // 手动更换后的名言。
-    final QuoteRecord changed = await database.changeQuoteForDay(day);
+    final QuoteRecord changed = (await database.changeQuoteForDay(day))!;
     expect(changed.id, isNot(first.id));
-    expect((await database.quoteForDay(day)).id, changed.id);
+    expect((await database.quoteForDay(day))!.id, changed.id);
   });
 
   test('每天重复按需生成独立实例且完成状态互不影响', () async {

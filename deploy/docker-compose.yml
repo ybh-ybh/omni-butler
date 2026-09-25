@@ -32,9 +32,12 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://omni_butler:${POSTGRES_PASSWORD}@postgres:5432/omni_butler?schema=public
       POWERSYNC_URL: ${POWERSYNC_PUBLIC_URL}
-      JWT_PRIVATE_KEY_BASE64: ${JWT_PRIVATE_KEY_BASE64}
-      JWT_PUBLIC_KEY_BASE64: ${JWT_PUBLIC_KEY_BASE64}
+      JWT_PRIVATE_KEY_BASE64: ${JWT_PRIVATE_KEY_BASE64:-}
+      JWT_PUBLIC_KEY_BASE64: ${JWT_PUBLIC_KEY_BASE64:-}
+      JWT_KEYS_DIR: /app/keys
       SYNC_SECRET: ${SYNC_SECRET}
+    volumes:
+      - api-keys:/app/keys
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,3 +89,4 @@ services:
 
 volumes:
   postgres-data:
+  api-keys:

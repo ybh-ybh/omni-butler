@@ -5,15 +5,20 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import * as argon2 from 'argon2';
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import type { DeviceSession } from '../generated/prisma/client';
 import type { AuthUser, TokenPair } from './auth.types';
 
-/// 同步密钥校验、设备令牌轮换与 PowerSync 凭证服务。
+/// 同步密钥校验、固定设备会话与 PowerSync 凭证服务。
 @Injectable()
 export class AuthService {
-  /// Access Token 有效秒数。
+  /// 访问令牌最长有效秒数。
   private readonly accessTokenSeconds = 900;
 
   /// 注入认证所需服务。
@@ -23,72 +28,60 @@ export class AuthService {
     private readonly config: ConfigService,
   ) {}
 
-  /// 使用部署时设置的同步密钥建立设备会话。
+  /// 使用部署同步密钥创建一个有固定到期时间的设备会话。
   async connect(syncKey: string): Promise<TokenPair> {
-    // 配置中的同步密钥摘要。
-    const expectedDigest = createHash('sha256')
-      .update(this.config.getOrThrow<string>('SYNC_SECRET'))
-      .digest();
-    // 请求中的同步密钥摘要。
-    const suppliedDigest = createHash('sha256').update(syncKey).digest();
+    // 配置密钥的定长摘要。
+    const expectedDigest = this.digest(
+      this.config.getOrThrow<string>('SYNC_SECRET'),
+    );
+    // 请求密钥的定长摘要。
+    const suppliedDigest = this.digest(syncKey);
     if (!timingSafeEqual(expectedDigest, suppliedDigest)) {
       throw new UnauthorizedException('同步密钥错误');
     }
     // 单人部署对应的内部数据所有者。
-    const owner = await this.prisma.user.findFirst({
-      orderBy: { createdAt: 'asc' },
-    });
+    const owner = await this.prisma.syncOwner.findFirst();
     if (!owner) {
       throw new ServiceUnavailableException('同步服务尚未完成初始化');
     }
-    return this.issueTokenPair(owner);
+    // 设备会话标识。
+    const id = randomUUID();
+    // 256 位随机凭证，仅摘要进入数据库。
+    const refreshToken = `${id}.${randomBytes(32).toString('base64url')}`;
+    // 设备会话固定到期时间，刷新不会延长。
+    const expiresAt = new Date(
+      Date.now() +
+        this.config.getOrThrow<number>('REFRESH_TOKEN_TTL_SECONDS') * 1000,
+    );
+    // 已持久化的设备会话。
+    const session = await this.prisma.deviceSession.create({
+      data: {
+        id,
+        userId: owner.id,
+        tokenHash: this.digest(refreshToken).toString('hex'),
+        expiresAt,
+      },
+    });
+    return this.issueTokenPair(session, refreshToken);
   }
 
-  /// 校验并轮换刷新令牌。
+  /// 使用稳定会话凭证刷新访问令牌，重试和并发均不会创建后继会话。
   async refresh(refreshToken: string): Promise<TokenPair> {
-    // 已解码刷新令牌主体。
-    const payload = await this.verifyRefreshToken(refreshToken);
-    if (!payload.jti) {
-      throw new UnauthorizedException('刷新令牌无效');
-    }
-    // 数据库存储的刷新令牌。
-    const stored = await this.prisma.refreshToken.findUnique({
-      where: { id: payload.jti },
-      include: { user: true },
-    });
-    if (
-      !stored ||
-      stored.revokedAt ||
-      stored.expiresAt <= new Date() ||
-      !(await argon2.verify(stored.tokenHash, refreshToken)) ||
-      stored.user.tokenVersion !== payload.version
-    ) {
-      throw new UnauthorizedException('刷新令牌已失效');
-    }
-    // 新令牌组。
-    const next = await this.issueTokenPair(stored.user);
-    // 新刷新令牌主体。
-    const nextPayload = this.jwt.decode<AuthUser>(next.refreshToken);
-    await this.prisma.refreshToken.update({
-      where: { id: stored.id },
-      data: { revokedAt: new Date(), replacedById: nextPayload?.jti },
-    });
-    return next;
+    // 已验证且尚未到期的设备会话。
+    const session = await this.verifySession(refreshToken);
+    return this.issueTokenPair(session, refreshToken);
   }
 
-  /// 撤销指定设备会话的刷新令牌。
+  /// 删除经过凭证校验的设备会话，重复断开保持幂等。
   async disconnect(refreshToken: string): Promise<void> {
     try {
-      // 已解码刷新令牌主体。
-      const payload = await this.verifyRefreshToken(refreshToken);
-      if (payload.jti) {
-        await this.prisma.refreshToken.updateMany({
-          where: { id: payload.jti, revokedAt: null },
-          data: { revokedAt: new Date() },
-        });
+      // 当前设备会话；不能仅凭公开会话标识撤销其他设备。
+      const session = await this.verifySession(refreshToken);
+      await this.prisma.deviceSession.deleteMany({ where: { id: session.id } });
+    } catch (error) {
+      if (!(error instanceof UnauthorizedException)) {
+        throw error;
       }
-    } catch {
-      // 断开接口保持幂等，不向调用方泄露令牌存在性。
     }
   }
 
@@ -99,16 +92,11 @@ export class AuthService {
     expiresIn: number;
     userId: string;
   }> {
-    // PowerSync 访问令牌有效秒数。
-    const expiresIn = 900;
-    // PowerSync 专用令牌。
+    // 连接凭证有效秒数。
+    const expiresIn = this.accessTokenSeconds;
+    // PowerSync 仅需所有者标识，不携带旧账号字段。
     const token = await this.jwt.signAsync(
-      {
-        email: user.email,
-        role: user.role,
-        typ: 'powersync',
-        version: user.version,
-      },
+      { typ: 'powersync' },
       {
         subject: user.sub,
         audience: this.config.getOrThrow<string>('POWERSYNC_AUDIENCE'),
@@ -123,76 +111,63 @@ export class AuthService {
     };
   }
 
-  /// 签发新的访问与刷新令牌组。
-  private async issueTokenPair(user: {
-    id: string;
-    email: string;
-    role: string;
-    tokenVersion: number;
-  }): Promise<TokenPair> {
-    // 刷新令牌唯一标识。
-    const refreshId = randomUUID();
-    // 公共 JWT 业务字段。
-    const common = {
-      email: user.email,
-      role: user.role,
-      version: user.tokenVersion,
-    };
-    // 短期访问令牌。
+  /// 返回短期访问令牌与原设备凭证，避免丢包时丢失刷新能力。
+  private async issueTokenPair(
+    session: { id: string; userId: string; expiresAt: Date },
+    refreshToken: string,
+  ): Promise<TokenPair> {
+    // 访问令牌不得晚于设备会话到期。
+    const expiresIn = Math.min(
+      this.accessTokenSeconds,
+      Math.floor((session.expiresAt.getTime() - Date.now()) / 1000),
+    );
+    if (expiresIn <= 0) {
+      throw new UnauthorizedException('设备同步会话已到期');
+    }
+    // 每次 API 请求还会检查此 sid 对应的会话，删除后立即失效。
     const accessToken = await this.jwt.signAsync(
-      { ...common, typ: 'access' },
+      { typ: 'access', sid: session.id },
       {
-        subject: user.id,
+        subject: session.userId,
         audience: this.config.getOrThrow<string>('JWT_AUDIENCE'),
-        expiresIn: this.accessTokenSeconds,
+        expiresIn,
       },
     );
-    // 刷新令牌有效秒数。
-    const refreshSeconds = this.config.getOrThrow<number>(
-      'REFRESH_TOKEN_TTL_SECONDS',
-    );
-    // 可轮换刷新令牌。
-    const refreshToken = await this.jwt.signAsync(
-      { ...common, typ: 'refresh' },
-      {
-        jwtid: refreshId,
-        subject: user.id,
-        audience: this.config.getOrThrow<string>('JWT_AUDIENCE'),
-        expiresIn: refreshSeconds,
-      },
-    );
-    // 刷新令牌 Argon2id 哈希。
-    const tokenHash = await argon2.hash(refreshToken, {
-      type: argon2.argon2id,
-    });
-    await this.prisma.refreshToken.create({
-      data: {
-        id: refreshId,
-        userId: user.id,
-        tokenHash,
-        expiresAt: new Date(Date.now() + refreshSeconds * 1000),
-      },
-    });
-    return {
-      accessToken,
-      refreshToken,
-      expiresIn: this.accessTokenSeconds,
-    };
+    return { accessToken, refreshToken, expiresIn };
   }
 
-  /// 验证刷新令牌签名、用途和受众。
-  private async verifyRefreshToken(token: string): Promise<AuthUser> {
-    try {
-      // 已验证的刷新令牌主体。
-      const payload = await this.jwt.verifyAsync<AuthUser>(token, {
-        audience: this.config.getOrThrow<string>('JWT_AUDIENCE'),
-      });
-      if (payload.typ !== 'refresh') {
-        throw new UnauthorizedException('令牌用途无效');
-      }
-      return payload;
-    } catch {
-      throw new UnauthorizedException('刷新令牌无效');
+  /// 读取会话并恒定时间校验高熵刷新凭证。
+  private async verifySession(refreshToken: string): Promise<DeviceSession> {
+    // 提取严格格式的 UUID 标识，避免非法数据库参数。
+    const match =
+      /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.[A-Za-z0-9_-]{43}$/.exec(
+        refreshToken,
+      );
+    if (!match) {
+      throw new UnauthorizedException('设备同步凭证无效');
     }
+    // 会话当前状态。
+    const session = await this.prisma.deviceSession.findUnique({
+      where: { id: match[1] },
+    });
+    if (!session || session.expiresAt <= new Date()) {
+      throw new UnauthorizedException('设备同步会话已失效');
+    }
+    // 数据库存储的摘要。
+    const expected = Buffer.from(session.tokenHash, 'hex');
+    // 当前传入凭证的摘要。
+    const supplied = this.digest(refreshToken);
+    if (
+      expected.length !== supplied.length ||
+      !timingSafeEqual(expected, supplied)
+    ) {
+      throw new UnauthorizedException('设备同步凭证无效');
+    }
+    return session;
+  }
+
+  /// 对高熵凭证生成定长 SHA-256 摘要。
+  private digest(value: string): Buffer {
+    return createHash('sha256').update(value).digest();
   }
 }

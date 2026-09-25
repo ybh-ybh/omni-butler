@@ -228,7 +228,6 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
               kind: widget.kind,
               name: _nameController.text,
               colorValue: entry.colorValue,
-              iconCodePoint: entry.iconCodePoint,
               sortOrder: entry.sortOrder,
             ),
           );
@@ -258,7 +257,6 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
               kind: widget.kind,
               name: entry.name,
               colorValue: color.toARGB32(),
-              iconCodePoint: entry.iconCodePoint,
               sortOrder: entry.sortOrder,
             ),
           );

@@ -396,7 +396,6 @@ void main() {
         .first;
     expect(payments, hasLength(2));
     expect(payments.first.amountCents, 2000);
-    expect(payments.first.billingCycle, BillingCycle.month.name);
     expect(payments.first.validFrom, DateTime(2026, 2, 1));
 
     final MembershipRecord renewed = (await repository.watchAll().first).single;

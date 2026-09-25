@@ -20,8 +20,6 @@ export class SyncOperationDto {
     'todo_items',
     'quotes',
     'daily_quote_selections',
-    'banner_settings',
-    'attachments',
     'taxonomy_entries',
     'record_taxonomy_links',
     'events',

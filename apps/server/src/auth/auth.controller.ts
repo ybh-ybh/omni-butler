@@ -33,18 +33,18 @@ export class AuthController {
     return this.auth.connect(input.syncKey);
   }
 
-  /// 轮换刷新令牌。
+  /// 使用稳定设备凭证刷新访问令牌。
   @Post('refresh')
   @HttpCode(200)
-  @ApiOperation({ summary: '轮换 Access Token 与 Refresh Token' })
+  @ApiOperation({ summary: '刷新 Access Token，设备凭证保持不变' })
   refresh(@Body() input: RefreshTokenDto): Promise<TokenPair> {
     return this.auth.refresh(input.refreshToken);
   }
 
-  /// 撤销刷新令牌并断开当前设备。
+  /// 删除当前设备会话并使其 API 访问凭证失效。
   @Post('disconnect')
   @HttpCode(204)
-  @ApiOperation({ summary: '撤销当前设备的刷新令牌' })
+  @ApiOperation({ summary: '断开当前设备会话' })
   disconnect(@Body() input: RefreshTokenDto): Promise<void> {
     return this.auth.disconnect(input.refreshToken);
   }
