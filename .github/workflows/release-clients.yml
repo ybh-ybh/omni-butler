@@ -175,13 +175,16 @@ jobs:
           if (-not $visualStudioPath) {
             throw "Visual Studio C++ installation was not found."
           }
-          # 数字版本目录中最新的 Visual C++ Redistributable。
-          $vcRedistVersionDirectory = Get-ChildItem -LiteralPath (Join-Path $visualStudioPath "VC/Redist/MSVC") -Directory |
-            Where-Object { $_.Name -match '^\d+\.' } |
-            Sort-Object { [version]$_.Name } -Descending |
+          # 不绑定 VC143/VC145 名称，自动发现最新 x64 CRT 目录。
+          $vcRuntimeProbe = Get-ChildItem -LiteralPath (Join-Path $visualStudioPath "VC/Redist/MSVC") -Recurse -File -Filter "msvcp140.dll" |
+            Where-Object { $_.FullName -match '[\\/]x64[\\/]Microsoft\.VC\d+\.CRT[\\/]msvcp140\.dll$' } |
+            Sort-Object FullName -Descending |
             Select-Object -First 1
+          if (-not $vcRuntimeProbe) {
+            throw "Visual C++ x64 app-local runtime was not found."
+          }
           # x64 应用本地运行库目录。
-          $vcRuntimeDirectory = Join-Path $vcRedistVersionDirectory.FullName "x64/Microsoft.VC143.CRT"
+          $vcRuntimeDirectory = $vcRuntimeProbe.Directory.FullName
           # Flutter 官方 Windows 分发要求的运行库文件名。
           $vcRuntimeFileNames = @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")
           foreach ($vcRuntimeFileName in $vcRuntimeFileNames) {
