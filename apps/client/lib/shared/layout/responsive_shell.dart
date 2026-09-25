@@ -5,11 +5,16 @@ import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
+import 'package:omni_butler/core/auth/auth_models.dart';
+import 'package:omni_butler/core/auth/auth_providers.dart';
+import 'package:omni_butler/core/sync/sync_preferences.dart';
+import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/features/management/presentation/android_management_shell.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/shared/search/global_search_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
+import 'package:powersync/powersync.dart' show SyncStatus;
 
 /// 应用导航目的地。
 class _AppDestination {
@@ -366,7 +371,7 @@ class ResponsiveShell extends ConsumerWidget {
 }
 
 /// 展开桌面侧栏。
-class _ExpandedSidebar extends StatelessWidget {
+class _ExpandedSidebar extends ConsumerWidget {
   /// 当前路由路径。
   final String location;
 
@@ -385,9 +390,35 @@ class _ExpandedSidebar extends StatelessWidget {
 
   /// 构建带品牌标识的侧栏。
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
+    // 用户是否明确开启多端同步。
+    final bool syncEnabled = ref.watch(syncPreferenceProvider);
+    // 当前侧栏需要展示的同步阶段。
+    _SidebarSyncPhase? syncPhase;
+    if (syncEnabled) {
+      // 当前设备同步会话异步状态。
+      final AsyncValue<SyncSession?> sessionState = ref.watch(
+        authControllerProvider,
+      );
+      // 当前同步连接控制器状态。
+      final AsyncValue<void> syncController = ref.watch(syncControllerProvider);
+      // 当前 PowerSync 实时状态。
+      final AsyncValue<SyncStatus?> syncStatusState = ref.watch(
+        syncStatusProvider,
+      );
+      // 当前本机待上传操作数量状态。
+      final AsyncValue<int> queueCountState = ref.watch(
+        syncUploadQueueCountProvider,
+      );
+      syncPhase = _resolveSidebarSyncPhase(
+        sessionState: sessionState,
+        syncController: syncController,
+        syncStatusState: syncStatusState,
+        queueCountState: queueCountState,
+      );
+    }
 
     return Container(
       key: const ValueKey<String>('expanded-sidebar'),
@@ -414,8 +445,10 @@ class _ExpandedSidebar extends StatelessWidget {
                   ),
                 ),
               const Spacer(),
-              _LocalStatusCard(colors: colors),
-              const SizedBox(height: 4),
+              if (syncPhase != null) ...<Widget>[
+                _SyncStatusCard(colors: colors, phase: syncPhase),
+                const SizedBox(height: 4),
+              ],
               _SidebarDestination(
                 destination: _settingsDestination,
                 selected: _isSelected(_settingsDestination.path, location),
@@ -659,7 +692,7 @@ class _TopBar extends ConsumerWidget {
   /// 创建桌面页面顶栏。
   const _TopBar();
 
-  /// 构建全局搜索和设备状态入口。
+  /// 构建全局搜索和外观模式入口。
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // 当前主题语义色。
@@ -671,9 +704,6 @@ class _TopBar extends ConsumerWidget {
       builder: (BuildContext context, BoxConstraints constraints) {
         // 当前是否展示搜索入口。
         final bool showSearch = constraints.maxWidth >= 300;
-        // 当前是否展示本机身份入口。
-        final bool showDevice = constraints.maxWidth >= 420;
-
         return Container(
           height: OmniSize.topBar,
           padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
@@ -725,18 +755,6 @@ class _TopBar extends ConsumerWidget {
                     ],
                 icon: Icon(_themeIcon(preference.mode)),
               ),
-              if (showDevice) ...<Widget>[
-                const SizedBox(width: 8),
-                Tooltip(
-                  message: '个人本机数据',
-                  child: CircleAvatar(
-                    radius: 17,
-                    backgroundColor: colors.brandSoft,
-                    foregroundColor: colors.brandStrong,
-                    child: const Icon(Icons.devices_outlined, size: 19),
-                  ),
-                ),
-              ],
             ],
           ),
         );
@@ -926,18 +944,115 @@ class _SidebarDestination extends StatelessWidget {
   }
 }
 
-/// 本机数据状态卡。
-class _LocalStatusCard extends StatelessWidget {
+/// 展开侧栏中的同步展示阶段。
+enum _SidebarSyncPhase {
+  /// 正在建立同步连接。
+  connecting,
+
+  /// 正在交换或等待上传数据。
+  syncing,
+
+  /// 当前数据已经同步完成。
+  completed,
+
+  /// 当前设备离线。
+  offline,
+
+  /// 同步链路出现异常。
+  error,
+}
+
+/// 根据同步链路状态解析展开侧栏的展示阶段。
+_SidebarSyncPhase _resolveSidebarSyncPhase({
+  required AsyncValue<SyncSession?> sessionState,
+  required AsyncValue<void> syncController,
+  required AsyncValue<SyncStatus?> syncStatusState,
+  required AsyncValue<int> queueCountState,
+}) {
+  // 当前已恢复的设备同步会话。
+  final SyncSession? session = sessionState.value;
+  // 当前 PowerSync 实时状态。
+  final SyncStatus? status = syncStatusState.value;
+  // 当前本机待上传操作数量。
+  final int queuedOperations = queueCountState.value ?? 0;
+  if (sessionState.hasError ||
+      syncController.hasError ||
+      syncStatusState.hasError ||
+      queueCountState.hasError ||
+      status?.anyError != null) {
+    return _SidebarSyncPhase.error;
+  }
+  if (session?.isOffline == true) {
+    return _SidebarSyncPhase.offline;
+  }
+  if (sessionState.isLoading ||
+      syncController.isLoading ||
+      session == null ||
+      status == null ||
+      status.connecting) {
+    return _SidebarSyncPhase.connecting;
+  }
+  if (!status.connected) {
+    return status.hasSynced == true
+        ? _SidebarSyncPhase.offline
+        : _SidebarSyncPhase.connecting;
+  }
+  if (status.uploading ||
+      status.downloading ||
+      queuedOperations > 0 ||
+      status.hasSynced != true) {
+    return _SidebarSyncPhase.syncing;
+  }
+  return _SidebarSyncPhase.completed;
+}
+
+/// 展开侧栏中的实时同步状态卡。
+class _SyncStatusCard extends StatelessWidget {
   /// 当前主题语义色。
   final OmniColors colors;
 
-  /// 创建本机数据状态卡。
-  const _LocalStatusCard({required this.colors});
+  /// 当前同步展示阶段。
+  final _SidebarSyncPhase phase;
 
-  /// 构建本机离线状态说明。
+  /// 创建实时同步状态卡。
+  const _SyncStatusCard({required this.colors, required this.phase});
+
+  /// 构建同步阶段图标和说明。
   @override
   Widget build(BuildContext context) {
+    // 当前同步阶段标题。
+    final String label = switch (phase) {
+      _SidebarSyncPhase.connecting => '连接中',
+      _SidebarSyncPhase.syncing => '正在同步',
+      _SidebarSyncPhase.completed => '同步完成',
+      _SidebarSyncPhase.offline => '离线',
+      _SidebarSyncPhase.error => '同步异常',
+    };
+    // 当前同步阶段补充说明。
+    final String description = switch (phase) {
+      _SidebarSyncPhase.connecting => '正在连接同步服务器',
+      _SidebarSyncPhase.syncing => '本机数据正在同步到服务器',
+      _SidebarSyncPhase.completed => '本机数据已同步至服务器',
+      _SidebarSyncPhase.offline => '联网后将自动继续同步',
+      _SidebarSyncPhase.error => '请前往设置查看详情',
+    };
+    // 当前同步阶段图标。
+    final IconData icon = switch (phase) {
+      _SidebarSyncPhase.connecting => Icons.cloud_queue_outlined,
+      _SidebarSyncPhase.syncing => Icons.cloud_sync_outlined,
+      _SidebarSyncPhase.completed => Icons.cloud_done_outlined,
+      _SidebarSyncPhase.offline => Icons.cloud_off_outlined,
+      _SidebarSyncPhase.error => Icons.cloud_off_outlined,
+    };
+    // 当前同步阶段语义色。
+    final Color tone = switch (phase) {
+      _SidebarSyncPhase.completed => colors.success,
+      _SidebarSyncPhase.offline => colors.muted,
+      _SidebarSyncPhase.error => colors.danger,
+      _SidebarSyncPhase.connecting || _SidebarSyncPhase.syncing => colors.brand,
+    };
     return Container(
+      key: const ValueKey<String>('sidebar-sync-status'),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: colors.paperSubtle,
@@ -946,17 +1061,14 @@ class _LocalStatusCard extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
-          Icon(Icons.cloud_off_outlined, size: 18, color: colors.muted),
+          Icon(icon, size: 18, color: tone),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('仅保存在本机', style: Theme.of(context).textTheme.labelMedium),
-                Text(
-                  '可在设置中连接同步服务器',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
+                Text(label, style: Theme.of(context).textTheme.labelMedium),
+                Text(description, style: Theme.of(context).textTheme.bodySmall),
               ],
             ),
           ),
