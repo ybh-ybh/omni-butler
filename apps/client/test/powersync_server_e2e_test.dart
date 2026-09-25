@@ -18,10 +18,16 @@ import 'package:uuid/uuid.dart';
 /// 是否显式运行需要隔离 Docker 服务的端到端测试。
 const bool _runEndToEnd = bool.fromEnvironment('OMNI_SYNC_E2E');
 
-/// 隔离测试 API 地址，允许避开真实部署的端口。
-const String _apiBaseUrl = String.fromEnvironment(
-  'OMNI_SYNC_API_URL',
-  defaultValue: 'http://127.0.0.1:3000/api/v1',
+/// 隔离服务器地址，不包含内部 API 路径，允许避开真实部署端口。
+const String _serverAddress = String.fromEnvironment(
+  'OMNI_SYNC_SERVER_URL',
+  defaultValue: 'http://127.0.0.1:3000',
+);
+
+/// 隔离服务的可配置 API 路径，用于验证非默认部署。
+const String _apiPrefix = String.fromEnvironment(
+  'OMNI_SYNC_API_PREFIX',
+  defaultValue: 'api/v1',
 );
 
 /// 仅供隔离测试环境使用的同步密钥。
@@ -104,7 +110,12 @@ class _EndToEndAuth extends AuthRepository {
 /// 为每台测试设备通过实际认证接口建立独立会话。
 Future<_EndToEndAuth> _connectTestDevice() async {
   // 测试 API 客户端，不读取真实部署的配置。
-  final Dio api = Dio(BaseOptions(baseUrl: _apiBaseUrl));
+  final Dio api = Dio(
+    BaseOptions(
+      baseUrl: AuthRepository(const FlutterSecureStorage())
+          .normalizeBaseUrl(_serverAddress, apiPrefix: _apiPrefix),
+    ),
+  );
   // 服务端签发的设备令牌组。
   final Response<Map<String, dynamic>> tokens = await api.post(
     '/auth/connect',

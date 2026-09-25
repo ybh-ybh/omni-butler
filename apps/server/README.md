@@ -9,6 +9,8 @@ NestJS 11 + Prisma 7 + PowerSync 的个人自托管同步 API。服务不提供�
 3. 执行 `npm run prisma:generate`、`npm run prisma:migrate:deploy`、`npm run dev`。密钥自动写入 `.local/keys`，无需手工生成。
 4. 打开 `http://127.0.0.1:3000/api/v1/docs` 查看 OpenAPI。
 
+以下接口示例使用默认 `API_PREFIX=api/v1`。可在 `.env` 修改前缀（不加首尾斜杠），并在客户端“API 路径”中填写相同值。Compose 会同步更新健康检查和 PowerSync 的公钥地址，Nginx 路由需要按部署说明手动调整。
+
 空数据库会自动创建随机内部归属标识，用于 `user_id` 隔离和客户端防止误连其他服务器；没有邮箱、密码或角色。
 
 当前是重整后的测试基线，旧版服务器数据库不可原地套用。测试数据可清空后重建业务库与 PowerSync 状态库，并在客户端清除旧测试数据、重新连接；不要对其他项目的数据执行清理。

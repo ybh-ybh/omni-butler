@@ -34,6 +34,9 @@ class SyncSession {
     required this.isOffline,
   });
 
+  /// 向用户展示服务器地址和端口，隐藏内部 API 路径。
+  String get serverAddress => Uri.parse(apiBaseUrl).origin;
+
   /// 复制并替换离线状态。
   SyncSession copyWith({bool? isOffline}) {
     return SyncSession(

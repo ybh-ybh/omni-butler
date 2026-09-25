@@ -65,29 +65,84 @@ void main() {
     FlutterSecureStorage.setMockInitialValues(_savedSession());
   });
 
-  test('允许 HTTPS、本机和私有局域网 HTTP，拒绝公网 HTTP', () {
+  test('服务器地址在内部拼接默认路径，并按主机类型选择默认协议', () {
     // 无网络需求的地址校验仓储。
     final AuthRepository repository = AuthRepository(storage);
     expect(
-      repository.normalizeBaseUrl('https://sync.example.com/api/v1/'),
+      repository.normalizeBaseUrl('https://sync.example.com/', apiPrefix: ''),
       'https://sync.example.com/api/v1',
     );
     expect(
-      repository.normalizeBaseUrl('http://127.0.0.1:3000/api/v1'),
+      repository.normalizeBaseUrl('127.0.0.1:3000'),
       'http://127.0.0.1:3000/api/v1',
     );
     expect(
-      repository.normalizeBaseUrl('http://192.168.1.10:3000/api/v1'),
+      repository.normalizeBaseUrl(' 192.168.1.10:3000 '),
       'http://192.168.1.10:3000/api/v1',
     );
     expect(
-      repository.normalizeBaseUrl('http://172.16.0.5:3000/api/v1'),
+      repository.normalizeBaseUrl('http://172.16.0.5:3000/'),
       'http://172.16.0.5:3000/api/v1',
     );
     expect(
-      () => repository.normalizeBaseUrl('http://sync.example.com/api/v1'),
+      repository.normalizeBaseUrl('sync.example.com'),
+      'https://sync.example.com/api/v1',
+    );
+    expect(
+      repository.normalizeBaseUrl('sync.example.com:9443'),
+      'https://sync.example.com:9443/api/v1',
+    );
+    expect(
+      repository.normalizeBaseUrl('sync.example.com:80'),
+      'https://sync.example.com:80/api/v1',
+    );
+    expect(
+      repository.normalizeBaseUrl('192.168.1.10:443'),
+      'http://192.168.1.10:443/api/v1',
+    );
+    expect(
+      repository.normalizeBaseUrl('https://192.168.1.10:9443'),
+      'https://192.168.1.10:9443/api/v1',
+    );
+    expect(
+      () => repository.normalizeBaseUrl('http://sync.example.com'),
       throwsA(isA<ApiFailure>()),
     );
+  });
+
+  test('拒绝路径、查询、凭证及非法端口，避免重复前缀或错误请求地址', () {
+    // 无网络需求的地址校验仓储。
+    final AuthRepository repository = AuthRepository(storage);
+    // 用户输入中不允许携带的附加信息。
+    for (final String address in <String>[
+      '',
+      'https://',
+      'https://sync.example.com/api/v1',
+      '192.168.1.10:3000/custom',
+      'https://sync.example.com?token=value',
+      'https://sync.example.com#fragment',
+      'https://user:pass@sync.example.com',
+      '192.168.1.10:0',
+      '192.168.1.10:65536',
+      '192.168.1.10:abc',
+      'ftp://sync.example.com',
+    ]) {
+      expect(
+        () => repository.normalizeBaseUrl(address),
+        throwsA(isA<ApiFailure>()),
+        reason: address,
+      );
+    }
+  });
+
+  test('用户可见的会话地址不展示内部 API 路径', () {
+    // 保留完整内部地址的设备会话。
+    const SyncSession session = SyncSession(
+      identity: SyncIdentity(id: 'owner-id'),
+      apiBaseUrl: 'http://192.168.1.10:9000/api/v1',
+      isOffline: false,
+    );
+    expect(session.serverAddress, 'http://192.168.1.10:9000');
   });
 
   test('并发刷新仅发一个请求且完整凭证只保存到一个键', () async {
@@ -285,7 +340,7 @@ void main() {
           }),
     );
     await repository.connect(
-      apiBaseUrl: 'https://sync.example.com/api/v1',
+      apiBaseUrl: 'https://sync.example.com',
       syncKey: 'valid-deployment-secret',
     );
     // 原子写入的全部内容。
@@ -297,5 +352,66 @@ void main() {
     expect(session['baseUrl'], 'https://sync.example.com/api/v1');
     expect(session['identity'], <String, String>{'sub': 'new-owner'});
     expect(session['refreshToken'], 'stable-device-secret');
+  });
+
+  test('连接、恢复、同步和断开请求均使用同一个自定义前缀', () async {
+    FlutterSecureStorage.setMockInitialValues(<String, String>{});
+    // 记录真实 Dio 拼接后的请求地址。
+    final List<String> urls = <String>[];
+    // 用真实地址拼接流程和内存响应执行完整会话。
+    final AuthRepository repository = AuthRepository(
+      storage,
+      clientFactory: (String url) =>
+          _client(url, (RequestOptions request) async {
+            urls.add(request.uri.toString());
+            if (request.path == '/auth/connect' ||
+                request.path == '/auth/refresh') {
+              return <String, dynamic>{
+                'accessToken': 'access',
+                'refreshToken': 'stable-device-secret',
+                'expiresIn': 900,
+              };
+            }
+            if (request.path == '/auth/powersync-token') {
+              return <String, dynamic>{
+                'token': 'sync-token',
+                'endpoint': 'http://192.168.1.10:8080',
+                'expiresIn': 900,
+                'userId': 'owner-id',
+              };
+            }
+            return <String, dynamic>{'sub': 'owner-id'};
+          }),
+    );
+    await repository.connect(
+      apiBaseUrl: '192.168.1.10:9000',
+      syncKey: 'valid-deployment-secret',
+      apiPrefix: 'butler-api/v2_private',
+    );
+    // 模拟应用重启后访问令牌到期，验证刷新仍使用同一路径。
+    final Map<String, dynamic> saved = jsonDecode(
+      (await storage.read(key: 'sync.device_session'))!,
+    ) as Map<String, dynamic>;
+    saved['expiresAt'] = DateTime.now()
+        .subtract(const Duration(hours: 1))
+        .toIso8601String();
+    await storage.write(key: 'sync.device_session', value: jsonEncode(saved));
+    expect((await repository.restoreSession())?.isOffline, false);
+    await repository.fetchPowerSyncCredential();
+    await repository.authorizedRequest<void>(
+      'POST',
+      '/sync/operations',
+      data: <String, Object>{'operations': <Object>[]},
+    );
+    await repository.disconnect();
+    expect(urls, <String>[
+      'http://192.168.1.10:9000/butler-api/v2_private/auth/connect',
+      'http://192.168.1.10:9000/butler-api/v2_private/auth/session',
+      'http://192.168.1.10:9000/butler-api/v2_private/auth/refresh',
+      'http://192.168.1.10:9000/butler-api/v2_private/auth/session',
+      'http://192.168.1.10:9000/butler-api/v2_private/auth/powersync-token',
+      'http://192.168.1.10:9000/butler-api/v2_private/sync/operations',
+      'http://192.168.1.10:9000/butler-api/v2_private/auth/disconnect',
+    ]);
   });
 }

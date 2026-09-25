@@ -10,8 +10,6 @@ interface EnvironmentVariables {
   PORT: number;
   /// API 路径前缀。
   API_PREFIX: string;
-  /// 跨域来源列表。
-  CORS_ORIGINS: string;
   /// RSA 私钥 Base64。
   JWT_PRIVATE_KEY_BASE64: string;
   /// RSA 公钥 Base64。
@@ -35,65 +33,54 @@ interface EnvironmentVariables {
 /// 校验并规范化应用环境变量。
 export function validateEnvironment(
   source: Record<string, unknown>,
-): EnvironmentVariables & Record<string, unknown> {
+): EnvironmentVariables {
   // 必填环境变量名称。
   const requiredKeys = [
     'DATABASE_URL',
-    'JWT_KEY_ID',
-    'JWT_ISSUER',
-    'JWT_AUDIENCE',
-    'POWERSYNC_AUDIENCE',
     'POWERSYNC_URL',
     'SYNC_SECRET',
   ] as const;
+  // 逐个检查部署必需的参数。
   for (const key of requiredKeys) {
     if (typeof source[key] !== 'string' || source[key].trim().length === 0) {
       throw new Error(`缺少必填环境变量：${key}`);
     }
-  }
-  // 规范化后的端口。
-  const port = Number(source.PORT ?? 3000);
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error('PORT 必须是 1 到 65535 之间的整数');
-  }
-  // 刷新令牌有效秒数。
-  const refreshTokenSeconds = Number(
-    source.REFRESH_TOKEN_TTL_SECONDS ?? 2592000,
-  );
-  if (!Number.isInteger(refreshTokenSeconds) || refreshTokenSeconds < 3600) {
-    throw new Error('REFRESH_TOKEN_TTL_SECONDS 必须是不小于 3600 的整数');
   }
   // 用户设置的同步密钥。
   const syncSecret = String(source.SYNC_SECRET);
   if (syncSecret.length < 16) {
     throw new Error('SYNC_SECRET 至少需要 16 个字符');
   }
-  // 其他配置校验通过后再读取或生成持久化密钥。
-  source = resolveJwtKeys(source);
-  // RSA 公私钥必须成对存在。
-  for (const key of ['JWT_PRIVATE_KEY_BASE64', 'JWT_PUBLIC_KEY_BASE64']) {
-    if (typeof source[key] !== 'string' || source[key].trim().length === 0) {
-      throw new Error(`缺少必填环境变量：${key}`);
-    }
+  // API 前缀使用字面路径，避免通配符、编码字符或斜杠归一化导致各服务地址不一致。
+  const apiPrefix = source.API_PREFIX ?? 'api/v1';
+  if (
+    typeof apiPrefix !== 'string' ||
+    apiPrefix !== apiPrefix.trim() ||
+    !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(apiPrefix)
+  ) {
+    throw new Error(
+      'API_PREFIX 必须由字母、数字、下划线、短横线及层级斜杠组成，不能以斜杠开头或结尾',
+    );
   }
-  // 安全读取可选字符串配置。
-  const optionalString = (key: string, fallback: string): string =>
-    typeof source[key] === 'string' ? source[key] : fallback;
+  // Compose 指定卷内目录；本地开发默认保存在已忽略的 .local/keys。
+  const keysDirectory =
+    typeof source.JWT_KEYS_DIR === 'string' && source.JWT_KEYS_DIR.trim()
+      ? source.JWT_KEYS_DIR
+      : '.local/keys';
+  // 其他配置校验通过后再读取或生成持久化密钥。
+  const keys = resolveJwtKeys(keysDirectory);
   return {
-    ...source,
+    ...keys,
     DATABASE_URL: String(source.DATABASE_URL),
-    NODE_ENV: optionalString('NODE_ENV', 'development'),
-    PORT: port,
-    API_PREFIX: optionalString('API_PREFIX', 'api/v1'),
-    CORS_ORIGINS: optionalString('CORS_ORIGINS', 'http://127.0.0.1:4173'),
-    JWT_PRIVATE_KEY_BASE64: String(source.JWT_PRIVATE_KEY_BASE64),
-    JWT_PUBLIC_KEY_BASE64: String(source.JWT_PUBLIC_KEY_BASE64),
-    JWT_KEY_ID: String(source.JWT_KEY_ID),
-    JWT_ISSUER: String(source.JWT_ISSUER),
-    JWT_AUDIENCE: String(source.JWT_AUDIENCE),
-    POWERSYNC_AUDIENCE: String(source.POWERSYNC_AUDIENCE),
+    NODE_ENV:
+      typeof source.NODE_ENV === 'string' ? source.NODE_ENV : 'development',
+    PORT: 3000,
+    API_PREFIX: apiPrefix,
+    JWT_ISSUER: 'omni-butler',
+    JWT_AUDIENCE: 'omni-butler-api',
+    POWERSYNC_AUDIENCE: 'omni-butler-powersync',
     POWERSYNC_URL: String(source.POWERSYNC_URL),
     SYNC_SECRET: syncSecret,
-    REFRESH_TOKEN_TTL_SECONDS: refreshTokenSeconds,
+    REFRESH_TOKEN_TTL_SECONDS: 30 * 24 * 60 * 60,
   };
 }

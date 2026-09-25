@@ -12,20 +12,20 @@ storage:
   uri: !env PS_STORAGE_URI
   sslmode: disable
 
-port: !env PS_PORT
+port: 8080
 
 sync_config:
   path: sync-config.yaml
 
 client_auth:
-  jwks_uri: !env PS_JWKS_URL
+  jwks_uri: !env PS_JWKS_URI
   allow_local_jwks: true
   audience:
-    - !env PS_POWERSYNC_AUDIENCE
+    - omni-butler-powersync
 
+# 当前只从本地文件加载同步规则，不向管理接口授予访问令牌。
 api:
-  tokens:
-    - !env PS_ADMIN_TOKEN
+  tokens: []
 
 telemetry:
   disable_telemetry_sharing: true

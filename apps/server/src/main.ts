@@ -16,15 +16,7 @@ async function bootstrap(): Promise<void> {
   const config = app.get(ConfigService);
   // API 全局路径前缀。
   const prefix = config.getOrThrow<string>('API_PREFIX');
-  // 允许跨域的来源列表。
-  const origins = config
-    .getOrThrow<string>('CORS_ORIGINS')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-
   app.use(helmet());
-  app.enableCors({ origin: origins, credentials: false });
   app.setGlobalPrefix(prefix);
   app.useGlobalPipes(
     new ValidationPipe({

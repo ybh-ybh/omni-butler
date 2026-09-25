@@ -1173,7 +1173,7 @@ class _SyncSettingsCard extends ConsumerWidget {
         ? '请连接自己部署的 Omni Butler 后端。当前不接入第三方同步服务和腾讯云 COS。'
         : session.isOffline
         ? '当前离线，业务编辑仍会正常保存；联网后会继续同步。'
-        : '服务器：${session.apiBaseUrl}';
+        : '服务器：${session.serverAddress}';
     // 当前同步状态可用操作。
     final List<Widget> syncActions = <Widget>[
       if (syncEnabled && session == null)

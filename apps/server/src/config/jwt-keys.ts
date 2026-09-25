@@ -1,4 +1,5 @@
 import {
+  createHash,
   createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
@@ -6,21 +7,15 @@ import {
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-/// 在配置了持久化目录且未手工配置密钥时，加载或生成 RSA 密钥。
-export function resolveJwtKeys(
-  source: Record<string, unknown>,
-): Record<string, unknown> {
-  // 手工填写的密钥优先；只填写一项时交由环境校验报错。
-  const hasManualKey = [
-    source.JWT_PRIVATE_KEY_BASE64,
-    source.JWT_PUBLIC_KEY_BASE64,
-  ].some((value) => typeof value === 'string' && value.trim().length > 0);
-  // 自动生成密钥所用的持久化目录。
-  const directory = source.JWT_KEYS_DIR;
-  if (hasManualKey || typeof directory !== 'string' || !directory.trim()) {
-    return source;
-  }
-
+/// 从持久化目录加载或生成 RSA 密钥，并从公钥计算稳定标识。
+export function resolveJwtKeys(directory: string): {
+  /// 公钥摘要标识。
+  JWT_KEY_ID: string;
+  /// 供签发服务使用的私钥 Base64。
+  JWT_PRIVATE_KEY_BASE64: string;
+  /// 供验签服务使用的公钥 Base64。
+  JWT_PUBLIC_KEY_BASE64: string;
+} {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   // 仅保存私钥，公钥由私钥推导，避免两个文件不一致。
   const privateKeyPath = join(directory, 'jwt-private.pem');
@@ -53,13 +48,19 @@ export function resolveJwtKeys(
   if (privateKey.asymmetricKeyType !== 'rsa') {
     throw new Error('持久化 JWT 私钥必须是 RSA 密钥');
   }
-  // 从同一个私钥推导的公钥 PEM。
-  const publicKeyPem = createPublicKey(privateKey).export({
+  // 从同一个私钥推导的公钥。
+  const publicKey = createPublicKey(privateKey);
+  // 用于现有签发与验签服务的公钥 PEM。
+  const publicKeyPem = publicKey.export({
     type: 'spki',
     format: 'pem',
   });
+  // 基于公钥标准 DER 编码计算标识，重启不变、换钥时自动变化。
+  const keyId = createHash('sha256')
+    .update(publicKey.export({ type: 'spki', format: 'der' }))
+    .digest('base64url');
   return {
-    ...source,
+    JWT_KEY_ID: keyId,
     JWT_PRIVATE_KEY_BASE64: Buffer.from(privateKeyPem).toString('base64'),
     JWT_PUBLIC_KEY_BASE64: Buffer.from(publicKeyPem).toString('base64'),
   };

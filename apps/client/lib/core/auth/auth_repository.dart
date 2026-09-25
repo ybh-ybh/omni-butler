@@ -124,12 +124,13 @@ class AuthRepository {
   Future<SyncSession> connect({
     required String apiBaseUrl,
     required String syncKey,
+    String apiPrefix = 'api/v1',
   }) async {
     // 本次连接对应新的本机会话代次。
     final int generation = ++_generation;
     _pendingRefresh = null;
-    // 规范化后的 API 根地址。
-    final String baseUrl = normalizeBaseUrl(apiBaseUrl);
+    // 从服务器地址和部署路径生成 API 根地址。
+    final String baseUrl = normalizeBaseUrl(apiBaseUrl, apiPrefix: apiPrefix);
     try {
       // 设备连接响应。
       final Response<Map<String, dynamic>> response = await _dio(baseUrl)
@@ -399,21 +400,54 @@ class AuthRepository {
     return next;
   }
 
-  /// 校验并规范化 API 根地址。
-  String normalizeBaseUrl(String value) {
-    // 清理尾部斜杠后的地址。
-    final String normalized = value.trim().replaceFirst(RegExp(r'/+$'), '');
-    // 解析后的 API 地址。
-    final Uri? uri = Uri.tryParse(normalized);
-    if (uri == null || uri.host.isEmpty) {
-      throw const ApiFailure('请输入完整的 API 服务地址');
+  /// 校验服务器地址并拼接部署者配置的 API 路径。
+  String normalizeBaseUrl(String value, {String apiPrefix = 'api/v1'}) {
+    // 只清理首尾空格，保留协议分隔符以便识别不完整地址。
+    final String normalized = value.trim();
+    // 是否明确指定连接协议。
+    final bool hasScheme = normalized.contains('://');
+    // 先以 HTTP 解析省略协议的地址，随后按主机类型选择协议。
+    final Uri? uri = Uri.tryParse(
+      hasScheme ? normalized : 'http://$normalized',
+    );
+    if (uri == null || uri.host.isEmpty || uri.host.contains(RegExp(r'\s'))) {
+      throw const ApiFailure('请输入有效的服务器 IP 地址或域名');
+    }
+    if ((uri.path.isNotEmpty && uri.path != '/') ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        uri.userInfo.isNotEmpty) {
+      throw const ApiFailure('服务器地址只需包含 IP 或域名和端口，不要填写路径或其他参数');
+    }
+    if (uri.port < 1 || uri.port > 65535) {
+      throw const ApiFailure('端口必须是 1 到 65535 之间的整数');
     }
     // 是否为仅限本机或局域网的私有地址。
     final bool isPrivateHost = _isPrivateNetworkHost(uri.host);
-    if (uri.scheme != 'https' && !(isPrivateHost && uri.scheme == 'http')) {
+    // 局域网默认 HTTP，公网默认 HTTPS；显式协议仍遵循原安全限制。
+    final String scheme = hasScheme
+        ? uri.scheme
+        : (isPrivateHost ? 'http' : 'https');
+    if (scheme != 'https' && !(isPrivateHost && scheme == 'http')) {
       throw const ApiFailure('公网服务必须使用 HTTPS；本机或局域网 IP 可使用 HTTP');
     }
-    return normalized;
+    // 按最终协议重新解析原始输入，保留显式填写的 80/443 等端口。
+    final Uri serverUri = Uri.parse(
+      hasScheme ? normalized : '$scheme://$normalized',
+    );
+    return serverUri
+        .replace(path: '/${normalizeApiPrefix(apiPrefix)}')
+        .toString();
+  }
+
+  /// 校验与服务端一致的字面路径；留空时使用默认前缀。
+  static String normalizeApiPrefix(String value) {
+    // 输入框留空代表采用默认配置。
+    final String prefix = value.trim().isEmpty ? 'api/v1' : value.trim();
+    if (!RegExp(r'^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$').hasMatch(prefix)) {
+      throw const ApiFailure('API 路径仅允许字母、数字、下划线、短横线及层级斜杠，不加首尾斜杠');
+    }
+    return prefix;
   }
 
   /// 判断主机名是否属于本机或 RFC 1918 私有 IPv4 地址。
