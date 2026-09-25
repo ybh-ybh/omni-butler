@@ -29,7 +29,6 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
-      API_PREFIX: ${API_PREFIX:-api/v1}
       DATABASE_URL: postgresql://omni_butler:${POSTGRES_PASSWORD}@postgres:5432/omni_butler?schema=public
       POWERSYNC_URL: ${POWERSYNC_PUBLIC_URL}
       JWT_KEYS_DIR: /app/keys
@@ -45,7 +44,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:3000/'+process.env.API_PREFIX+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:3000/omni-butler/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 15s
       timeout: 5s
@@ -64,7 +63,7 @@ services:
         condition: service_healthy
     environment:
       POWERSYNC_CONFIG_PATH: /config/service.yaml
-      PS_JWKS_URI: http://api:3000/${API_PREFIX:-api/v1}/auth/jwks
+      PS_JWKS_URI: http://api:3000/omni-butler/api/v1/auth/jwks
       NODE_OPTIONS: --max-old-space-size=768
       PS_DATA_SOURCE_URI: postgresql://omni_butler:${POSTGRES_PASSWORD}@postgres:5432/omni_butler
       PS_STORAGE_URI: postgresql://omni_butler:${POSTGRES_PASSWORD}@postgres:5432/powersync_storage

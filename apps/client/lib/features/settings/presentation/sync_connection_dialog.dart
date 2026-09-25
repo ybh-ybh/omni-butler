@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
 import 'package:omni_butler/core/auth/auth_providers.dart';
-import 'package:omni_butler/core/auth/auth_repository.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 显示自托管同步服务连接对话框。
@@ -44,11 +43,6 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
   /// 同步密钥控制器。
   final TextEditingController _syncKeyController = TextEditingController();
 
-  /// 可选的部署 API 路径，默认值与服务端一致。
-  final TextEditingController _apiPrefixController = TextEditingController(
-    text: 'api/v1',
-  );
-
   /// 是否隐藏同步密钥。
   bool _obscureSyncKey = true;
 
@@ -58,7 +52,6 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
     _serverController.dispose();
     _portController.dispose();
     _syncKeyController.dispose();
-    _apiPrefixController.dispose();
     super.dispose();
   }
 
@@ -91,7 +84,7 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
               Text(
-                '填写服务器地址、端口和同步密钥；API 路径通常保持默认即可。',
+                '填写服务器地址、端口和同步密钥。',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: OmniSpacing.lg),
@@ -141,18 +134,6 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
                 autofillHints: const <String>[AutofillHints.password],
                 onFieldSubmitted: isLoading ? null : (_) => _submit(),
                 validator: _validateSyncKey,
-              ),
-              const SizedBox(height: OmniSpacing.md),
-              TextFormField(
-                controller: _apiPrefixController,
-                enabled: !isLoading,
-                decoration: const InputDecoration(
-                  labelText: 'API 路径（可选）',
-                  hintText: 'api/v1',
-                  helperText: '与服务器 API_PREFIX 一致，不加首尾斜杠；留空使用默认值',
-                ),
-                validator: _validateApiPrefix,
-                onFieldSubmitted: isLoading ? null : (_) => _submit(),
               ),
               if (sessionState.hasError) ...<Widget>[
                 const SizedBox(height: OmniSpacing.md),
@@ -215,16 +196,6 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
     return null;
   }
 
-  /// 提交前复用认证仓储的路径校验，避免发送到错误端点。
-  String? _validateApiPrefix(String? value) {
-    try {
-      AuthRepository.normalizeApiPrefix(value ?? '');
-      return null;
-    } on ApiFailure catch (error) {
-      return error.toString();
-    }
-  }
-
   /// 提交同步服务连接表单。
   Future<void> _submit() async {
     if (_formKey.currentState?.validate() != true) {
@@ -236,7 +207,6 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
           apiBaseUrl:
               '${_serverController.text.trim()}:${_portController.text.trim()}',
           syncKey: _syncKeyController.text.trim(),
-          apiPrefix: _apiPrefixController.text,
         );
     if (!mounted) {
       return;

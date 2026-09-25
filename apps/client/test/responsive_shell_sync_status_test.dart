@@ -15,14 +15,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 测试使用的在线设备会话。
 const SyncSession _onlineSession = SyncSession(
   identity: SyncIdentity(id: 'responsive-shell-sync-user'),
-  apiBaseUrl: 'http://127.0.0.1:3000/api/v1',
+  apiBaseUrl: 'http://127.0.0.1:3000/omni-butler/api/v1',
   isOffline: false,
 );
 
 /// 测试使用的离线设备会话。
 const SyncSession _offlineSession = SyncSession(
   identity: SyncIdentity(id: 'responsive-shell-sync-user'),
-  apiBaseUrl: 'http://127.0.0.1:3000/api/v1',
+  apiBaseUrl: 'http://127.0.0.1:3000/omni-butler/api/v1',
   isOffline: true,
 );
 

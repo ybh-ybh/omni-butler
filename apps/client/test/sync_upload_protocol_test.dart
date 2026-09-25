@@ -65,7 +65,7 @@ class _OfflineAuthController extends AuthController {
   @override
   Future<SyncSession?> build() async => const SyncSession(
     identity: SyncIdentity(id: '01990000-7000-8002-8000-000000000099'),
-    apiBaseUrl: 'http://127.0.0.1:3000/api/v1',
+    apiBaseUrl: 'http://127.0.0.1:3000/omni-butler/api/v1',
     isOffline: true,
   );
 }

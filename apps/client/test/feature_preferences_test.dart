@@ -23,7 +23,7 @@ class _ConnectedAuthController extends AuthController {
   @override
   Future<SyncSession?> build() async => const SyncSession(
     identity: SyncIdentity(id: 'settings-sync-test-user'),
-    apiBaseUrl: 'http://127.0.0.1:3000/api/v1',
+    apiBaseUrl: 'http://127.0.0.1:3000/omni-butler/api/v1',
     isOffline: false,
   );
 }

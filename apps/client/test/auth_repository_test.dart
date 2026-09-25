@@ -10,7 +10,7 @@ import 'package:omni_butler/core/auth/auth_repository.dart';
 /// 每个测试的原子会话快照。
 Map<String, String> _savedSession() => <String, String>{
   'sync.device_session': jsonEncode(<String, dynamic>{
-    'baseUrl': 'https://sync.example.com/api/v1',
+    'baseUrl': 'https://sync.example.com/omni-butler/api/v1',
     'accessToken': 'expired-access',
     'refreshToken': 'stable-device-secret',
     'expiresAt': DateTime.now()
@@ -69,40 +69,40 @@ void main() {
     // 无网络需求的地址校验仓储。
     final AuthRepository repository = AuthRepository(storage);
     expect(
-      repository.normalizeBaseUrl('https://sync.example.com/', apiPrefix: ''),
-      'https://sync.example.com/api/v1',
+      repository.normalizeBaseUrl('https://sync.example.com/'),
+      'https://sync.example.com/omni-butler/api/v1',
     );
     expect(
       repository.normalizeBaseUrl('127.0.0.1:3000'),
-      'http://127.0.0.1:3000/api/v1',
+      'http://127.0.0.1:3000/omni-butler/api/v1',
     );
     expect(
       repository.normalizeBaseUrl(' 192.168.1.10:3000 '),
-      'http://192.168.1.10:3000/api/v1',
+      'http://192.168.1.10:3000/omni-butler/api/v1',
     );
     expect(
       repository.normalizeBaseUrl('http://172.16.0.5:3000/'),
-      'http://172.16.0.5:3000/api/v1',
+      'http://172.16.0.5:3000/omni-butler/api/v1',
     );
     expect(
       repository.normalizeBaseUrl('sync.example.com'),
-      'https://sync.example.com/api/v1',
+      'https://sync.example.com/omni-butler/api/v1',
     );
     expect(
       repository.normalizeBaseUrl('sync.example.com:9443'),
-      'https://sync.example.com:9443/api/v1',
+      'https://sync.example.com:9443/omni-butler/api/v1',
     );
     expect(
       repository.normalizeBaseUrl('sync.example.com:80'),
-      'https://sync.example.com:80/api/v1',
+      'https://sync.example.com:80/omni-butler/api/v1',
     );
     expect(
       repository.normalizeBaseUrl('192.168.1.10:443'),
-      'http://192.168.1.10:443/api/v1',
+      'http://192.168.1.10:443/omni-butler/api/v1',
     );
     expect(
       repository.normalizeBaseUrl('https://192.168.1.10:9443'),
-      'https://192.168.1.10:9443/api/v1',
+      'https://192.168.1.10:9443/omni-butler/api/v1',
     );
     expect(
       () => repository.normalizeBaseUrl('http://sync.example.com'),
@@ -117,7 +117,7 @@ void main() {
     for (final String address in <String>[
       '',
       'https://',
-      'https://sync.example.com/api/v1',
+      'https://sync.example.com/omni-butler/api/v1',
       '192.168.1.10:3000/custom',
       'https://sync.example.com?token=value',
       'https://sync.example.com#fragment',
@@ -139,7 +139,7 @@ void main() {
     // 保留完整内部地址的设备会话。
     const SyncSession session = SyncSession(
       identity: SyncIdentity(id: 'owner-id'),
-      apiBaseUrl: 'http://192.168.1.10:9000/api/v1',
+      apiBaseUrl: 'http://192.168.1.10:9000/omni-butler/api/v1',
       isOffline: false,
     );
     expect(session.serverAddress, 'http://192.168.1.10:9000');
@@ -349,12 +349,12 @@ void main() {
     // 完整会话 JSON。
     final Map<String, dynamic> session =
         jsonDecode(saved.values.single) as Map<String, dynamic>;
-    expect(session['baseUrl'], 'https://sync.example.com/api/v1');
+    expect(session['baseUrl'], 'https://sync.example.com/omni-butler/api/v1');
     expect(session['identity'], <String, String>{'sub': 'new-owner'});
     expect(session['refreshToken'], 'stable-device-secret');
   });
 
-  test('连接、恢复、同步和断开请求均使用同一个自定义前缀', () async {
+  test('连接、恢复、同步和断开请求均使用固定前缀', () async {
     FlutterSecureStorage.setMockInitialValues(<String, String>{});
     // 记录真实 Dio 拼接后的请求地址。
     final List<String> urls = <String>[];
@@ -386,7 +386,6 @@ void main() {
     await repository.connect(
       apiBaseUrl: '192.168.1.10:9000',
       syncKey: 'valid-deployment-secret',
-      apiPrefix: 'butler-api/v2_private',
     );
     // 模拟应用重启后访问令牌到期，验证刷新仍使用同一路径。
     final Map<String, dynamic> saved = jsonDecode(
@@ -405,13 +404,13 @@ void main() {
     );
     await repository.disconnect();
     expect(urls, <String>[
-      'http://192.168.1.10:9000/butler-api/v2_private/auth/connect',
-      'http://192.168.1.10:9000/butler-api/v2_private/auth/session',
-      'http://192.168.1.10:9000/butler-api/v2_private/auth/refresh',
-      'http://192.168.1.10:9000/butler-api/v2_private/auth/session',
-      'http://192.168.1.10:9000/butler-api/v2_private/auth/powersync-token',
-      'http://192.168.1.10:9000/butler-api/v2_private/sync/operations',
-      'http://192.168.1.10:9000/butler-api/v2_private/auth/disconnect',
+      'http://192.168.1.10:9000/omni-butler/api/v1/auth/connect',
+      'http://192.168.1.10:9000/omni-butler/api/v1/auth/session',
+      'http://192.168.1.10:9000/omni-butler/api/v1/auth/refresh',
+      'http://192.168.1.10:9000/omni-butler/api/v1/auth/session',
+      'http://192.168.1.10:9000/omni-butler/api/v1/auth/powersync-token',
+      'http://192.168.1.10:9000/omni-butler/api/v1/sync/operations',
+      'http://192.168.1.10:9000/omni-butler/api/v1/auth/disconnect',
     ]);
   });
 }

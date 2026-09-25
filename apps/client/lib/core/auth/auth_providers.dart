@@ -37,17 +37,12 @@ class AuthController extends AsyncNotifier<SyncSession?> {
   Future<void> connect({
     required String apiBaseUrl,
     required String syncKey,
-    String apiPrefix = 'api/v1',
   }) async {
     state = const AsyncLoading<SyncSession?>();
     state = await AsyncValue.guard(
       () => ref
           .read(authRepositoryProvider)
-          .connect(
-            apiBaseUrl: apiBaseUrl,
-            syncKey: syncKey,
-            apiPrefix: apiPrefix,
-          ),
+          .connect(apiBaseUrl: apiBaseUrl, syncKey: syncKey),
     );
   }
 

@@ -74,7 +74,7 @@ Future<void> _showDialog(
   await tester.pumpAndSettle();
 }
 
-/// 验证基础输入、可选路径及实际请求地址，覆盖桌面和紧凑布局。
+/// 验证基础输入及固定路径的实际请求地址，覆盖桌面和紧凑布局。
 void main() {
   setUp(() {
     FlutterSecureStorage.setMockInitialValues(<String, String>{});
@@ -91,11 +91,10 @@ void main() {
       final List<RequestOptions> requests = <RequestOptions>[];
       await _showDialog(tester, requests);
 
-      expect(find.byType(TextFormField), findsNWidgets(4));
+      expect(find.byType(TextFormField), findsNWidgets(3));
       expect(find.text('服务器地址'), findsOneWidget);
       expect(find.text('端口'), findsOneWidget);
       expect(find.text('同步密钥'), findsOneWidget);
-      expect(find.textContaining('/api/v1'), findsNothing);
       await tester.enterText(find.byType(TextFormField).at(0), '192.168.1.10');
       await tester.enterText(find.byType(TextFormField).at(1), '9000');
       await tester.ensureVisible(find.byType(TextFormField).at(2));
@@ -108,8 +107,8 @@ void main() {
 
       expect(find.text('连接自托管同步服务'), findsNothing);
       expect(requests.map((RequestOptions request) => request.uri.toString()), [
-        'http://192.168.1.10:9000/api/v1/auth/connect',
-        'http://192.168.1.10:9000/api/v1/auth/session',
+        'http://192.168.1.10:9000/omni-butler/api/v1/auth/connect',
+        'http://192.168.1.10:9000/omni-butler/api/v1/auth/session',
       ]);
       expect(requests.first.data, <String, String>{
         'syncKey': 'valid-deployment-secret',
@@ -117,33 +116,6 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
-
-  testWidgets('可选 API 路径校验后用于实际连接', (WidgetTester tester) async {
-    // 捕获默认表单修改路径后的真实请求。
-    final List<RequestOptions> requests = <RequestOptions>[];
-    await _showDialog(tester, requests);
-    await tester.enterText(
-      find.byType(TextFormField).at(2),
-      'valid-deployment-secret',
-    );
-    await tester.ensureVisible(find.byType(TextFormField).at(3));
-    await tester.enterText(find.byType(TextFormField).at(3), '../invalid');
-    await tester.tap(find.text('连接'));
-    await tester.pumpAndSettle();
-    expect(requests, isEmpty);
-    expect(find.textContaining('API 路径仅允许'), findsOneWidget);
-    await tester.enterText(
-      find.byType(TextFormField).at(3),
-      'butler-api/v2_private',
-    );
-    await tester.tap(find.text('连接'));
-    await tester.pumpAndSettle();
-    expect(requests.map((RequestOptions request) => request.uri.toString()), [
-      'http://127.0.0.1:3000/butler-api/v2_private/auth/connect',
-      'http://127.0.0.1:3000/butler-api/v2_private/auth/session',
-    ]);
-    expect(tester.takeException(), isNull);
-  });
 
   testWidgets('非法端口或携带路径的地址在提交前提示错误', (WidgetTester tester) async {
     // 不合法的输入不得发送网络请求。
@@ -164,7 +136,7 @@ void main() {
     await tester.enterText(find.byType(TextFormField).at(1), '3000');
     await tester.enterText(
       find.byType(TextFormField).at(0),
-      '192.168.1.10/api/v1',
+      '192.168.1.10/omni-butler/api/v1',
     );
     await tester.tap(find.text('连接'));
     await tester.pumpAndSettle();

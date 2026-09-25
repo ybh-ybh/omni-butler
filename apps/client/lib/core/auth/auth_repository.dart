@@ -4,6 +4,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
 
+/// Omni Butler API 的固定公开路径，用于区分同域名下的其他服务。
+const String fixedApiPath = '/omni-butler/api/v1';
+
 /// 完整设备会话使用同一个安全存储键，避免写入中断造成凭证混搭。
 const String _sessionKey = 'sync.device_session';
 
@@ -124,13 +127,12 @@ class AuthRepository {
   Future<SyncSession> connect({
     required String apiBaseUrl,
     required String syncKey,
-    String apiPrefix = 'api/v1',
   }) async {
     // 本次连接对应新的本机会话代次。
     final int generation = ++_generation;
     _pendingRefresh = null;
-    // 从服务器地址和部署路径生成 API 根地址。
-    final String baseUrl = normalizeBaseUrl(apiBaseUrl, apiPrefix: apiPrefix);
+    // 从服务器地址和固定路径生成 API 根地址。
+    final String baseUrl = normalizeBaseUrl(apiBaseUrl);
     try {
       // 设备连接响应。
       final Response<Map<String, dynamic>> response = await _dio(baseUrl)
@@ -400,8 +402,8 @@ class AuthRepository {
     return next;
   }
 
-  /// 校验服务器地址并拼接部署者配置的 API 路径。
-  String normalizeBaseUrl(String value, {String apiPrefix = 'api/v1'}) {
+  /// 校验服务器地址并拼接固定的 API 路径。
+  String normalizeBaseUrl(String value) {
     // 只清理首尾空格，保留协议分隔符以便识别不完整地址。
     final String normalized = value.trim();
     // 是否明确指定连接协议。
@@ -435,19 +437,7 @@ class AuthRepository {
     final Uri serverUri = Uri.parse(
       hasScheme ? normalized : '$scheme://$normalized',
     );
-    return serverUri
-        .replace(path: '/${normalizeApiPrefix(apiPrefix)}')
-        .toString();
-  }
-
-  /// 校验与服务端一致的字面路径；留空时使用默认前缀。
-  static String normalizeApiPrefix(String value) {
-    // 输入框留空代表采用默认配置。
-    final String prefix = value.trim().isEmpty ? 'api/v1' : value.trim();
-    if (!RegExp(r'^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$').hasMatch(prefix)) {
-      throw const ApiFailure('API 路径仅允许字母、数字、下划线、短横线及层级斜杠，不加首尾斜杠');
-    }
-    return prefix;
+    return serverUri.replace(path: fixedApiPath).toString();
   }
 
   /// 判断主机名是否属于本机或 RFC 1918 私有 IPv4 地址。

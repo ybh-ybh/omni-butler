@@ -6,6 +6,9 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 
+/// Omni Butler 业务 API 的固定全局前缀。
+const API_PATH_PREFIX = 'omni-butler/api/v1';
+
 /// 启动 NestJS HTTP 服务。
 async function bootstrap(): Promise<void> {
   // 应用实例。
@@ -14,10 +17,8 @@ async function bootstrap(): Promise<void> {
   app.useBodyParser('json', { limit: '32mb' });
   // 应用配置服务。
   const config = app.get(ConfigService);
-  // API 全局路径前缀。
-  const prefix = config.getOrThrow<string>('API_PREFIX');
   app.use(helmet());
-  app.setGlobalPrefix(prefix);
+  app.setGlobalPrefix(API_PATH_PREFIX);
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -35,7 +36,7 @@ async function bootstrap(): Promise<void> {
     .build();
   // OpenAPI 文档对象。
   const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup(`${prefix}/docs`, app, document);
+  SwaggerModule.setup(`${API_PATH_PREFIX}/docs`, app, document);
 
   // 服务监听端口。
   const port = config.getOrThrow<number>('PORT');

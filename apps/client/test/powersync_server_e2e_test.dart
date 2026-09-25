@@ -24,12 +24,6 @@ const String _serverAddress = String.fromEnvironment(
   defaultValue: 'http://127.0.0.1:3000',
 );
 
-/// 隔离服务的可配置 API 路径，用于验证非默认部署。
-const String _apiPrefix = String.fromEnvironment(
-  'OMNI_SYNC_API_PREFIX',
-  defaultValue: 'api/v1',
-);
-
 /// 仅供隔离测试环境使用的同步密钥。
 const String _syncKey = String.fromEnvironment(
   'OMNI_SYNC_SECRET',
@@ -113,7 +107,7 @@ Future<_EndToEndAuth> _connectTestDevice() async {
   final Dio api = Dio(
     BaseOptions(
       baseUrl: AuthRepository(const FlutterSecureStorage())
-          .normalizeBaseUrl(_serverAddress, apiPrefix: _apiPrefix),
+          .normalizeBaseUrl(_serverAddress),
     ),
   );
   // 服务端签发的设备令牌组。

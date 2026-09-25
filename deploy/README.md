@@ -12,14 +12,13 @@
 | --- | --- |
 | `POSTGRES_PASSWORD` | 数据库密码，使用较长的随机字母数字串 |
 | `SYNC_SECRET` | 客户端连接密钥，至少 16 个字符 |
-| `API_PREFIX` | API 路径前缀，默认 `api/v1`，例如可改为 `butler/api` |
 | `API_HOST_PORT` | API 的宿主机映射端口，默认 `3000` |
 | `POWERSYNC_HOST_PORT` | PowerSync 的宿主机映射端口，默认 `8080` |
-| `POWERSYNC_PUBLIC_URL` | 客户端访问的同步地址，如 `http://192.168.1.10:8080`；公网反向代理示例为 `https://butler.example.com` |
+| `POWERSYNC_PUBLIC_URL` | 客户端访问的同步地址；公网示例为 `https://butler.example.com/omni-butler/powersync/` |
 
 Compose 自动读取当前目录的 `.env`，容器内部端口固定为 `3000`、`8080`。已有 `.env` 时补上 `API_HOST_PORT=3000`、`POWERSYNC_HOST_PORT=8080`，或填写自己的映射端口。
 
-`API_PREFIX` 不加首尾斜杠，仅允许字母、数字、下划线、短横线和层级斜杠。API 路由、健康检查、OpenAPI 文档和 PowerSync 公钥地址都会跟随它变化；未配置时使用 `api/v1`。
+API 和 PowerSync 的公网路径固定为 `/omni-butler/api/v1/`、`/omni-butler/powersync/`，不需要也不能通过 `.env` 或客户端设置修改。
 
 ## 启动
 
@@ -41,12 +40,12 @@ docker compose up -d --build --wait
 - 安装 Nginx，提前签发有效证书，准备完整证书链和私钥。
 - 在服务器安全组和防火墙中允许访问 `80`、`443`。
 
-在 `.env` 中修改以下三项：
+在 `.env` 中确认或修改以下三项：
 
 ```dotenv
 API_HOST_PORT=127.0.0.1:3000
 POWERSYNC_HOST_PORT=127.0.0.1:8080
-POWERSYNC_PUBLIC_URL=https://butler.example.com
+POWERSYNC_PUBLIC_URL=https://butler.example.com/omni-butler/powersync/
 ```
 
 端口配置支持 `监听地址:端口` 格式。上述配置将后端端口绑定到宿主机回环地址，公网请求统一经过 Nginx。保存后执行同一条 `docker compose up -d --build --wait`。
@@ -55,7 +54,7 @@ POWERSYNC_PUBLIC_URL=https://butler.example.com
 
 将以下内容保存到 `/etc/nginx/conf.d/omni-butler.conf`，确认该目录由 `nginx.conf` 的 `http` 块加载。替换域名和证书路径；示例证书路径不会自动生成证书。
 
-以下示例使用默认 `API_PREFIX=api/v1`。若改为 `butler/api`，将 API 的 `location /api/v1/` 改为 `location /butler/api/`，下方检查和文档地址也替换相同路径。Nginx 不会自动读取项目的 `.env`。
+API 和 PowerSync 分别固定使用 `/omni-butler/api/v1/`、`/omni-butler/powersync/`。两个前缀互不重叠，也不会占用当前域名的根路径，方便同一台 Nginx 继续部署其他服务。公网部署时，`POWERSYNC_PUBLIC_URL` 必须使用这里固定的 PowerSync 路径并保留末尾 `/`。
 
 ```nginx
 # 按请求决定是否升级为 WebSocket。
@@ -92,13 +91,18 @@ server {
     proxy_set_header Connection $omni_connection_upgrade;
 
     # API：保留客户端已经拼接的完整接口路径。
-    location /api/v1/ {
+    location ^~ /omni-butler/api/v1/ {
         proxy_pass http://127.0.0.1:3000;
     }
 
-    # PowerSync：关闭响应缓冲，及时转发同步数据。
-    location / {
-        proxy_pass http://127.0.0.1:8080;
+    # PowerSync 基础路径缺少末尾斜杠时，保留请求方法并补上斜杠。
+    location = /omni-butler/powersync {
+        return 308 /omni-butler/powersync/;
+    }
+
+    # PowerSync：去掉外部路径前缀后转发，并关闭响应缓冲。
+    location ^~ /omni-butler/powersync/ {
+        proxy_pass http://127.0.0.1:8080/;
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 3600s;
@@ -107,7 +111,111 @@ server {
 }
 ```
 
-`proxy_pass` 后不要追加路径；PowerSync 的响应缓冲保持关闭。若修改了后端映射端口，也要修改对应的 `proxy_pass` 端口。Nginx 若运行在另一个容器里，`127.0.0.1` 指向 Nginx 容器自身，不能直接照用此配置。
+API 的 `proxy_pass` 后没有 URI，因此完整 API 路径会原样交给 NestJS。PowerSync 的 `proxy_pass` 末尾必须保留 `/`，Nginx 才会把外部 `/omni-butler/powersync/` 替换成容器能够识别的根路径 `/`。未匹配这两个前缀的请求不会进入 Omni Butler，可继续由其他 `location` 处理；没有其他匹配时由 Nginx 返回默认响应。若修改了后端映射端口，也要修改对应的 `proxy_pass` 端口。Nginx 若运行在另一个容器里，`127.0.0.1` 指向 Nginx 容器自身，不能直接照用此配置。
+
+### 桌面端如何访问公网服务
+
+桌面端设置只填写以下三项，API 路径由应用自动拼接：
+
+| 输入项 | 填写内容 |
+| --- | --- |
+| 服务器地址 | `butler.example.com` |
+| 端口 | `443` |
+| 同步密钥 | 与服务器 `.env` 中的 `SYNC_SECRET` 一致 |
+
+公网域名默认使用 HTTPS，因此客户端会拼出 API 根地址 `https://butler.example.com:443/omni-butler/api/v1`；HTTPS 默认端口为 `443`，URL 中也可以省略。客户端不会直接访问公网的 `3000` 或 `8080`；这两个端口只允许同一台服务器上的 Nginx 访问。
+
+| 网络入口 | 谁访问 | 作用 |
+| --- | --- | --- |
+| 公网 `443` | 桌面端 | 唯一的 HTTPS 业务入口，由 Nginx 监听 |
+| 公网 `80` | 浏览器或误用 HTTP 的客户端 | Nginx 返回 `308`，要求改用 HTTPS；正常桌面端连接不需要先访问它 |
+| `127.0.0.1:3000` | 服务器本机的 Nginx | Docker 映射到 API 容器的 `3000` |
+| `127.0.0.1:8080` | 服务器本机的 Nginx | Docker 映射到 PowerSync 容器的 `8080` |
+
+```mermaid
+flowchart TD
+    A["桌面端设置<br/>域名 butler.example.com<br/>端口 443<br/>同步密钥"] --> B["客户端自动拼接固定 API 路径<br/>/omni-butler/api/v1/"]
+    B --> C["DNS 将域名解析为<br/>公网服务器 IP"]
+    C --> P["桌面端建立 HTTPS 连接<br/>目标端口 443"]
+    P --> D["Nginx 完成 TLS 解密<br/>读取 HTTP 方法、路径和请求头"]
+
+    D --> E{"路径以 /omni-butler/api/v1/ 开头？"}
+    E -->|是| F["保留原始路径并转发<br/>http://127.0.0.1:3000"]
+    E -->|否| G{"路径以 /omni-butler/powersync/ 开头？"}
+    G -->|是| N["去掉 PowerSync 外部前缀<br/>转发到 127.0.0.1:8080"]
+    G -->|否| O["交给同域名的其他 location<br/>或返回 404"]
+
+    F --> H["NestJS API<br/>认证、签发令牌、接收上传事务"]
+    N --> I["PowerSync Service<br/>维持同步连接并下发变化"]
+
+    H --> J["PostgreSQL<br/>业务数据和设备会话"]
+    J -->|逻辑复制| I
+    I -->|需要验证 PowerSync JWT| K["容器内访问<br/>api:3000/omni-butler/api/v1/auth/jwks"]
+    K --> H
+
+    H --> L["响应按原连接返回 Nginx"]
+    I --> L
+    L --> M["Nginx 加密为 HTTPS 响应<br/>返回桌面端"]
+```
+
+一次首次连接和后续同步大致经过以下步骤：
+
+1. 客户端向 `POST https://butler.example.com/omni-butler/api/v1/auth/connect` 发送同步密钥。Nginx 匹配 API 专用 `location`，把原始路径转发到 `127.0.0.1:3000`。
+2. API 校验密钥、在 PostgreSQL 中创建该设备的会话，返回短期访问令牌和设备凭证。
+3. 客户端携带访问令牌请求 `POST /omni-butler/api/v1/auth/powersync-token`。API 返回 PowerSync 短期 JWT，以及 `.env` 中的 `POWERSYNC_PUBLIC_URL`，本例为 `https://butler.example.com/omni-butler/powersync/`。
+4. PowerSync SDK 在这个地址后追加 `sync/stream` 等协议路径。Nginx 匹配 `/omni-butler/powersync/`，去掉外部前缀，再把 `/sync/stream` 转发到 `127.0.0.1:8080`。
+5. PowerSync 从 PostgreSQL 的逻辑复制流获得服务端变化并下发。桌面端的本地修改则由客户端整理成事务，再通过 `POST /omni-butler/api/v1/sync/operations` 上传给 API，最终写入 PostgreSQL。
+
+同步密钥只在首次连接时通过 HTTPS 请求体发送。建立会话后，普通 API 请求改用短期 Bearer Token；设备凭证只用于刷新令牌或断开会话。
+
+Nginx 的分流依据是 URL 路径：`/omni-butler/api/v1/` 交给 API，`/omni-butler/powersync/` 交给 PowerSync，其他路径留给同域名上的其他服务。它不会解析请求 JSON 来选择服务。`Host`、`X-Real-IP`、`X-Forwarded-For`、`X-Forwarded-Proto` 等请求头也会一并传递。
+
+首次连接请求的 HTTP 格式如下，JSON 中的密钥仅为示意：
+
+```http
+POST /omni-butler/api/v1/auth/connect HTTP/1.1
+Host: butler.example.com
+Content-Type: application/json
+
+{
+  "syncKey": "替换为服务器配置的同步密钥"
+}
+```
+
+认证成功后的 API 请求使用 Bearer Token，例如获取 PowerSync 凭证：
+
+```http
+POST /omni-butler/api/v1/auth/powersync-token HTTP/1.1
+Host: butler.example.com
+Authorization: Bearer <accessToken>
+Content-Length: 0
+```
+
+本地数据变更以一个完整事务上传，格式示例如下：
+
+```http
+POST /omni-butler/api/v1/sync/operations HTTP/1.1
+Host: butler.example.com
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+
+{
+  "clientId": "客户端数据库安装 UUID",
+  "transactionId": "本地事务 ID",
+  "operations": [
+    {
+      "op": "PATCH",
+      "table": "todo_items",
+      "id": "待办记录 UUID",
+      "data": {
+        "title": "修改后的标题"
+      }
+    }
+  ]
+}
+```
+
+这两个路径是服务协议的一部分，请保持 Nginx 配置不变。公网部署只需将示例域名替换为自己的域名，并确保 `POWERSYNC_PUBLIC_URL` 以 `/omni-butler/powersync/` 结尾。
 
 检查并加载配置（使用 systemd 的 Linux）：
 
@@ -118,8 +226,8 @@ sudo nginx -t && sudo systemctl reload nginx
 验证两个服务的公网入口：
 
 ```bash
-curl -f https://butler.example.com/api/v1/health
-curl -f https://butler.example.com/probes/liveness
+curl -f https://butler.example.com/omni-butler/api/v1/health
+curl -f https://butler.example.com/omni-butler/powersync/probes/liveness
 ```
 
 证书到期前需要续期并重新加载 Nginx。配置指令可查阅 [Nginx HTTPS](https://nginx.org/en/docs/http/configuring_https_servers.html)、[反向代理](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)及 [WebSocket](https://nginx.org/en/docs/http/websocket.html) 官方文档。
@@ -133,11 +241,8 @@ curl -f https://butler.example.com/probes/liveness
 | 服务器地址 | `192.168.1.10` | `butler.example.com` |
 | 端口 | `3000` | `443` |
 | 同步密钥 | `.env` 中的 `SYNC_SECRET` | `.env` 中的 `SYNC_SECRET` |
-| API 路径（可选） | `api/v1` | `api/v1` |
 
-地址栏只填写 IP 或域名，端口和 API 路径单独填写。API 路径默认 `api/v1`，留空也使用默认值；自定义时与服务器 `API_PREFIX` 一致，客户端会自动拼接。局域网 IP 默认 HTTP，公网地址默认 HTTPS；局域网也使用 HTTPS 时可填写 `https://192.168.1.10`。PowerSync 地址由后端下发。
-
-修改已部署实例的 `API_PREFIX` 后，客户端需断开同步，并填写新路径重新连接；已有会话不会自动发现新路径。
+地址栏只填写 IP 或域名，端口单独填写。客户端会自动拼接固定 API 路径 `/omni-butler/api/v1/`；局域网 IP 默认 HTTP，公网地址默认 HTTPS，局域网也使用 HTTPS 时可填写 `https://192.168.1.10`。PowerSync 完整地址由后端下发，用户无需填写同步路径。
 
 ## 查看、停止与更新
 
@@ -167,4 +272,4 @@ docker compose exec -T postgres pg_dump -U omni_butler omni_butler > backup.sql
 docker compose cp api:/app/keys ./api-keys-backup
 ```
 
-API 文档：局域网为 `http://<服务器IP>:<API端口>/api/v1/docs`，上述公网部署为 `https://butler.example.com/api/v1/docs`。接口细节见 [服务端说明](../apps/server/README.md)。
+API 文档：局域网为 `http://<服务器IP>:<API端口>/omni-butler/api/v1/docs`，上述公网部署为 `https://butler.example.com/omni-butler/api/v1/docs`。接口细节见 [服务端说明](../apps/server/README.md)。

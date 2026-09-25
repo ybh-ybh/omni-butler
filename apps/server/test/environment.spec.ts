@@ -45,7 +45,6 @@ describe('validateEnvironment', () => {
     const environment = validateEnvironment(automaticEnvironment());
 
     expect(environment.PORT).toBe(3000);
-    expect(environment.API_PREFIX).toBe('api/v1');
     expect(environment.JWT_ISSUER).toBe('omni-butler');
     expect(environment.JWT_AUDIENCE).toBe('omni-butler-api');
     expect(environment.POWERSYNC_AUDIENCE).toBe('omni-butler-powersync');
@@ -132,41 +131,35 @@ describe('validateEnvironment', () => {
     expect(environment.JWT_AUDIENCE).toBe('omni-butler-api');
     expect(environment.POWERSYNC_AUDIENCE).toBe('omni-butler-powersync');
     expect(environment.PORT).toBe(3000);
-    expect(environment.API_PREFIX).toBe('api/v1');
     expect(environment).not.toHaveProperty('CORS_ORIGINS');
     expect(environment.REFRESH_TOKEN_TTL_SECONDS).toBe(2592000);
   });
 
-  it('采用配置的 API 路径前缀', () => {
-    // 自定义多级路径应直接用于路由、文档和健康检查。
+  it('接受以斜杠结尾的 PowerSync 反向代理路径', () => {
+    // PowerSync SDK 会在该目录下解析自己的同步接口。
     const environment = validateEnvironment({
       ...automaticEnvironment(),
-      API_PREFIX: 'butler-api/v2_private',
+      POWERSYNC_URL: 'https://butler.example.com/omni-butler/powersync/',
     });
-    expect(environment.API_PREFIX).toBe('butler-api/v2_private');
+    expect(environment.POWERSYNC_URL).toBe(
+      'https://butler.example.com/omni-butler/powersync/',
+    );
   });
 
   it.each([
-    '',
-    '/api/v2',
-    'api/v2/',
-    'api//v2',
-    '../api',
-    'api?x=1',
-    'api#x',
-    'api/*',
-    'api/:id',
-    'api/%2f',
-    ' api',
-    'api/v1\n',
-    42,
-  ])('拒绝非法 API 前缀 %s，且不生成密钥', (apiPrefix) => {
+    'https://butler.example.com/omni-butler/powersync',
+    'https://butler.example.com/custom/powersync/',
+    'ftp://butler.example.com/',
+    'https://user:pass@butler.example.com/',
+    'https://butler.example.com/?token=value',
+    ' https://butler.example.com/',
+  ])('拒绝无法安全解析同步端点的 POWERSYNC_URL：%s', (powerSyncUrl) => {
     expect(() =>
       validateEnvironment({
         ...automaticEnvironment(),
-        API_PREFIX: apiPrefix,
+        POWERSYNC_URL: powerSyncUrl,
       }),
-    ).toThrow('API_PREFIX');
+    ).toThrow('POWERSYNC_URL');
     expect(existsSync(join(keysDirectory, 'jwt-private.pem'))).toBe(false);
   });
 
