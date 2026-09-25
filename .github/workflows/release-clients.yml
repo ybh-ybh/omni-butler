@@ -1,0 +1,255 @@
+name: Release clients
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: "3.47.2"
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release-version.outputs.version }}
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v7
+
+      - name: Read and validate release version
+        id: release-version
+        shell: bash
+        run: |
+          # tag 中供用户识别的语义版本。
+          release_version="${GITHUB_REF_NAME#v}"
+          # Flutter 配置中的完整版本和构建号。
+          pubspec_version="$(awk '/^version:/ { print $2; exit }' apps/client/pubspec.yaml)"
+          # 去除 Android versionCode 后的 Flutter build-name。
+          build_name="${pubspec_version%%+*}"
+          if [[ "$release_version" != "$build_name" ]]; then
+            echo "Tag version $release_version does not match pubspec build name $build_name." >&2
+            exit 1
+          fi
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install Flutter dependencies
+        working-directory: apps/client
+        run: flutter pub get
+
+      - name: Analyze client
+        working-directory: apps/client
+        run: flutter analyze
+
+      - name: Run stable release smoke tests
+        working-directory: apps/client
+        run: >-
+          flutter test
+          test/android_management_navigation_test.dart
+          test/home_window_resize_test.dart
+          test/responsive_shell_sync_status_test.dart
+          test/ui_responsive_smoke_test.dart
+
+  build-android:
+    name: Build Android release
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Restore Android signing material
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          # 发版所需的每项 Android 签名 Secret。
+          for required_value in "$KEYSTORE_BASE64" "$KEYSTORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS"; do
+            if [[ -z "$required_value" ]]; then
+              echo "An Android signing secret is missing." >&2
+              exit 1
+            fi
+          done
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > apps/client/android/app/omni-butler-upload.jks
+          {
+            printf 'storePassword=%s\n' "$KEYSTORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'storeFile=omni-butler-upload.jks\n'
+          } > apps/client/android/key.properties
+
+      - name: Install Flutter dependencies
+        working-directory: apps/client
+        run: flutter pub get
+
+      - name: Build signed APK and app bundle
+        working-directory: apps/client
+        run: |
+          flutter build apk --release
+          flutter build appbundle --release
+
+      - name: Collect Android release files
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          cp apps/client/build/app/outputs/flutter-apk/app-release.apk "release-assets/Omni-Butler-${{ needs.validate.outputs.version }}-android.apk"
+          cp apps/client/build/app/outputs/bundle/release/app-release.aab "release-assets/Omni-Butler-${{ needs.validate.outputs.version }}-android.aab"
+
+      - name: Upload Android release files
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-release
+          path: release-assets/*
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows release
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install Flutter dependencies
+        working-directory: apps/client
+        run: flutter pub get
+
+      - name: Build Windows application
+        working-directory: apps/client
+        run: flutter build windows --release
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --yes --no-progress
+
+      - name: Package portable and installer editions
+        shell: powershell
+        run: |
+          # 当前 tag 对应的应用版本。
+          $version = "${{ needs.validate.outputs.version }}"
+          # Flutter Windows 完整发布目录。
+          $sourceDirectory = (Resolve-Path "apps/client/build/windows/x64/runner/Release").Path
+          # 发版文件统一输出目录。
+          $outputDirectory = Join-Path $PWD "release-assets"
+          # 安装器使用的应用图标。
+          $iconPath = (Resolve-Path "apps/client/windows/runner/resources/app_icon.ico").Path
+          # Visual Studio 安装定位工具。
+          $vswherePath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          # GitHub runner 上包含 C++ 工具链的 Visual Studio 安装目录。
+          $visualStudioPath = & $vswherePath -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $visualStudioPath) {
+            throw "Visual Studio C++ installation was not found."
+          }
+          # 数字版本目录中最新的 Visual C++ Redistributable。
+          $vcRedistVersionDirectory = Get-ChildItem -LiteralPath (Join-Path $visualStudioPath "VC/Redist/MSVC") -Directory |
+            Where-Object { $_.Name -match '^\d+\.' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            Select-Object -First 1
+          # x64 应用本地运行库目录。
+          $vcRuntimeDirectory = Join-Path $vcRedistVersionDirectory.FullName "x64/Microsoft.VC143.CRT"
+          # Flutter 官方 Windows 分发要求的运行库文件名。
+          $vcRuntimeFileNames = @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")
+          foreach ($vcRuntimeFileName in $vcRuntimeFileNames) {
+            Copy-Item -LiteralPath (Join-Path $vcRuntimeDirectory $vcRuntimeFileName) -Destination $sourceDirectory -Force
+          }
+          New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
+          Compress-Archive -Path "$sourceDirectory/*" -DestinationPath "$outputDirectory/Omni-Butler-$version-windows-x64-portable.zip" -Force
+
+          # Inno Setup 在系统级和当前用户安装时的候选路径。
+          $isccCandidatePaths = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          )
+          # 实际存在的 Inno Setup 命令行编译器。
+          $isccPath = $isccCandidatePaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $isccPath) {
+            throw "Inno Setup compiler was not found."
+          }
+          & $isccPath "/DAppVersion=$version" "/DSourceDir=$sourceDirectory" "/DOutputDir=$outputDirectory" "/DIconPath=$iconPath" "installer/windows/omni-butler.iss"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Upload Windows release files
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-release
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - validate
+      - build-android
+      - build-windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Android release files
+        uses: actions/download-artifact@v8
+        with:
+          name: android-release
+          path: release-assets
+
+      - name: Download Windows release files
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-release
+          path: release-assets
+
+      - name: Generate SHA-256 checksums
+        working-directory: release-assets
+        shell: bash
+        run: sha256sum * > SHA256SUMS.txt
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              --verify-tag \
+              --latest
+          fi
