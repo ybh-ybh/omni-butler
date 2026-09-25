@@ -42,7 +42,7 @@ class AttachmentPickerDialog extends ConsumerWidget {
     required String title,
     double? cropAspectRatio,
   }) {
-    return showDialog<void>(
+    return showOmniDialog<void>(
       context: context,
       builder: (BuildContext context) => AttachmentPickerDialog(
         businessType: businessType,

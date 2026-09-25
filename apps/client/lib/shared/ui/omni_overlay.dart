@@ -66,11 +66,20 @@ Future<T?> showOmniSideSheet<T>(
 ///
 /// Windows 使用实验性多窗口能力时，Flutter 的 [showDialog] 会把弹窗提升为
 /// 独立原生窗口；应用内确认框需要直接推入 [DialogRoute]，以保留遮罩、主题和尺寸。
-Future<T?> showOmniDialog<T>(
-  BuildContext context, {
+Future<T?> showOmniDialog<T>({
+  required BuildContext context,
   required WidgetBuilder builder,
   bool barrierDismissible = true,
+  Color? barrierColor,
+  String? barrierLabel,
+  bool useSafeArea = true,
   bool useRootNavigator = true,
+  RouteSettings? routeSettings,
+  Offset? anchorPoint,
+  TraversalEdgeBehavior? traversalEdgeBehavior,
+  bool fullscreenDialog = false,
+  bool? requestFocus,
+  AnimationStyle? animationStyle,
 }) {
   // 承载应用内弹窗的导航器。
   final NavigatorState navigator = Navigator.of(
@@ -83,7 +92,8 @@ Future<T?> showOmniDialog<T>(
     to: navigator.context,
   );
   // 与 Material 默认弹窗一致的遮罩颜色。
-  final Color barrierColor =
+  final Color resolvedBarrierColor =
+      barrierColor ??
       DialogTheme.of(context).barrierColor ??
       Theme.of(context).dialogTheme.barrierColor ??
       Colors.black54;
@@ -93,9 +103,17 @@ Future<T?> showOmniDialog<T>(
       context: context,
       builder: builder,
       themes: themes,
-      barrierColor: barrierColor,
+      barrierColor: resolvedBarrierColor,
       barrierDismissible: barrierDismissible,
-      traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
+      barrierLabel: barrierLabel,
+      useSafeArea: useSafeArea,
+      settings: routeSettings,
+      anchorPoint: anchorPoint,
+      traversalEdgeBehavior:
+          traversalEdgeBehavior ?? TraversalEdgeBehavior.closedLoop,
+      fullscreenDialog: fullscreenDialog,
+      requestFocus: requestFocus,
+      animationStyle: animationStyle,
     ),
   );
 }
@@ -291,7 +309,7 @@ Future<bool> showOmniConfirmDialog(
   bool danger = false,
 }) async {
   // 用户最终确认结果。
-  final bool? confirmed = await showDialog<bool>(
+  final bool? confirmed = await showOmniDialog<bool>(
     context: context,
     builder: (BuildContext dialogContext) => OmniDialogScaffold(
       title: title,

@@ -13,7 +13,7 @@ class QuoteLibraryDialog extends ConsumerWidget {
 
   /// 显示名言库管理弹窗。
   static Future<void> show(BuildContext context) {
-    return showDialog<void>(
+    return showOmniDialog<void>(
       context: context,
       builder: (BuildContext context) => const QuoteLibraryDialog(),
     );

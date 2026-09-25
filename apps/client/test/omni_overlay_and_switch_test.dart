@@ -21,7 +21,7 @@ void main() {
         home: Builder(
           builder: (BuildContext context) => TextButton(
             onPressed: () => showOmniDialog<void>(
-              context,
+              context: context,
               builder: (BuildContext context) => const AlertDialog(
                 title: Text('应用内弹窗'),
                 content: Text('不能创建独立原生窗口'),

@@ -18,7 +18,7 @@ Future<void> showStartTimeEntryDialog(
   BuildContext context, {
   required DateTime day,
 }) async {
-  await showDialog<void>(
+  await showOmniDialog<void>(
     context: context,
     builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
       mode: _TimeEntryEditorMode.startOnly,
@@ -32,7 +32,7 @@ Future<void> showBackfillTimeEntryDialog(
   BuildContext context, {
   required DateTime day,
 }) async {
-  await showDialog<void>(
+  await showOmniDialog<void>(
     context: context,
     builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
       mode: _TimeEntryEditorMode.completed,
@@ -46,7 +46,7 @@ Future<void> showFinishTimeEntryDialog(
   BuildContext context, {
   required TimeEntryRecord record,
 }) async {
-  await showDialog<void>(
+  await showOmniDialog<void>(
     context: context,
     barrierDismissible: false,
     builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
@@ -128,7 +128,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     final DateTime editorDay = DateUtils.dateOnly(
       record?.startedAt ?? day ?? _selectedDay,
     );
-    await showDialog<void>(
+    await showOmniDialog<void>(
       context: context,
       builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
         mode: record?.endedAt == null && record != null

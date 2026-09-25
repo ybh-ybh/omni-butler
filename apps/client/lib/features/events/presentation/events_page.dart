@@ -45,7 +45,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
   /// 打开事件完成历史。
   Future<void> _openHistory(EventRecord event) async {
-    await showDialog<void>(
+    await showOmniDialog<void>(
       context: context,
       builder: (BuildContext context) => _EventHistoryDialog(event: event),
     );
@@ -1717,11 +1717,12 @@ class _EventHistoryDialog extends ConsumerWidget {
     EventCompletionRecord? completion,
   ]) async {
     // 用户提交的历史草稿。
-    final (DateTime, String?)? result = await showDialog<(DateTime, String?)>(
-      context: context,
-      builder: (BuildContext context) =>
-          _EventHistoryEditorDialog(completion: completion),
-    );
+    final (DateTime, String?)? result =
+        await showOmniDialog<(DateTime, String?)>(
+          context: context,
+          builder: (BuildContext context) =>
+              _EventHistoryEditorDialog(completion: completion),
+        );
     if (result == null) {
       return;
     }

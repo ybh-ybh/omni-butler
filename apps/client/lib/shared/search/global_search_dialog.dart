@@ -16,7 +16,7 @@ class GlobalSearchDialog extends ConsumerStatefulWidget {
   /// 显示全局搜索弹窗。
   static Future<void> show(BuildContext context) async {
     // 用户选择的模块路由。
-    final String? route = await showDialog<String>(
+    final String? route = await showOmniDialog<String>(
       context: context,
       builder: (BuildContext context) => const GlobalSearchDialog(),
     );

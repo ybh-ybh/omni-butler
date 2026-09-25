@@ -542,7 +542,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
     if (record?.repeatSeriesId == null) {
       return TodoSeriesScope.single;
     }
-    return showDialog<TodoSeriesScope>(
+    return showOmniDialog<TodoSeriesScope>(
       context: context,
       builder: (BuildContext context) => OmniDialogScaffold(
         title: '修改重复待办',

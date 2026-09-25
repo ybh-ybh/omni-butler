@@ -15,7 +15,7 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 Future<InventoryMoveResult?> showInventoryMoveDialog(
   BuildContext context,
 ) async {
-  return showDialog<InventoryMoveResult>(
+  return showOmniDialog<InventoryMoveResult>(
     context: context,
     barrierDismissible: false,
     builder: (BuildContext dialogContext) => const InventoryMoveDialog(),

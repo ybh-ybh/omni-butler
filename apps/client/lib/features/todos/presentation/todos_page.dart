@@ -751,30 +751,31 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       todo.priorityQuadrant,
     );
     // 用户选择的目标象限。
-    final TodoPriorityQuadrant? target = await showDialog<TodoPriorityQuadrant>(
-      context: context,
-      builder: (BuildContext context) => SimpleDialog(
-        title: const Text('移动到其他象限'),
-        children: <Widget>[
-          for (final TodoPriorityQuadrant quadrant
-              in todoPriorityQuadrantActionOrder)
-            SimpleDialogOption(
-              onPressed: quadrant == current
-                  ? null
-                  : () => Navigator.pop(context, quadrant),
-              child: ListTile(
-                enabled: quadrant != current,
-                leading: Icon(quadrant.icon),
-                title: Text(quadrant.actionLabel),
-                subtitle: Text(quadrant.label),
-                trailing: quadrant == current
-                    ? const Icon(Icons.check_rounded)
-                    : null,
-              ),
-            ),
-        ],
-      ),
-    );
+    final TodoPriorityQuadrant? target =
+        await showOmniDialog<TodoPriorityQuadrant>(
+          context: context,
+          builder: (BuildContext context) => SimpleDialog(
+            title: const Text('移动到其他象限'),
+            children: <Widget>[
+              for (final TodoPriorityQuadrant quadrant
+                  in todoPriorityQuadrantActionOrder)
+                SimpleDialogOption(
+                  onPressed: quadrant == current
+                      ? null
+                      : () => Navigator.pop(context, quadrant),
+                  child: ListTile(
+                    enabled: quadrant != current,
+                    leading: Icon(quadrant.icon),
+                    title: Text(quadrant.actionLabel),
+                    subtitle: Text(quadrant.label),
+                    trailing: quadrant == current
+                        ? const Icon(Icons.check_rounded)
+                        : null,
+                  ),
+                ),
+            ],
+          ),
+        );
     if (target != null && target != current) {
       // 菜单移动默认追加到目标象限末尾。
       await _moveTree(
@@ -792,7 +793,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
   Future<void> _confirmDelete(TodoRecord todo) async {
     // 用户选择的删除范围。
     final TodoSeriesScope? scope = await showOmniDialog<TodoSeriesScope>(
-      context,
+      context: context,
       builder: (BuildContext context) => AlertDialog(
         title: const Text('移入回收站？'),
         content: Text(

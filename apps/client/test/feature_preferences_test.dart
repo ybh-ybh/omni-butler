@@ -6,12 +6,34 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/router/app_router.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
+import 'package:omni_butler/core/auth/auth_models.dart';
+import 'package:omni_butler/core/auth/auth_providers.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/presentation/settings_page.dart';
+import 'package:omni_butler/shared/ui/omni_tag.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// 返回已连接会话，供同步异常界面测试使用。
+class _ConnectedAuthController extends AuthController {
+  /// 构造在线同步会话。
+  @override
+  Future<SyncSession?> build() async => const SyncSession(
+    identity: SyncIdentity(id: 'settings-sync-test-user'),
+    apiBaseUrl: 'http://127.0.0.1:3000/api/v1',
+    isOffline: false,
+  );
+}
+
+/// 在启动时模拟同步异常的控制器。
+class _FailingSyncController extends SyncController {
+  /// 返回可被设置页观察的同步错误。
+  @override
+  Future<void> build() async => throw StateError('测试同步异常');
+}
 
 /// 验证功能开关的持久化、设置界面与导航联动。
 void main() {
@@ -101,6 +123,75 @@ void main() {
           .isEnabled(AppFeature.memberships),
       isFalse,
     );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    container.dispose();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('同步异常标签的背景和文字使用错误色', (WidgetTester tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    tester.view.physicalSize = const Size(1200, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'sync.enabled': true,
+    });
+    // 测试用设备偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 显式管理的测试依赖容器。
+    final ProviderContainer container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(preferences),
+        authControllerProvider.overrideWith(_ConnectedAuthController.new),
+        syncControllerProvider.overrideWith(_FailingSyncController.new),
+      ],
+    );
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: AppTheme.build(brightness: Brightness.light),
+          home: const Scaffold(body: SettingsPage()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('settings-category-sync')),
+    );
+    await tester.pumpAndSettle();
+
+    // 当前主题的错误语义色。
+    final Color danger = AppTheme.build(brightness: Brightness.light)
+        .extension<OmniColors>()!
+        .danger;
+    // 显示同步异常的状态标签。
+    final Finder errorTag = find.byWidgetPredicate(
+      (Widget widget) => widget is OmniTag && widget.label == '同步异常',
+    );
+    // 标签内的文字组件。
+    final Text errorText = tester.widget<Text>(
+      find.descendant(of: errorTag, matching: find.text('同步异常')),
+    );
+    // 标签外层容器的背景装饰。
+    final BoxDecoration decoration =
+        tester
+                .widget<Container>(
+                  find.descendant(
+                    of: errorTag,
+                    matching: find.byType(Container),
+                  ),
+                )
+                .decoration!
+            as BoxDecoration;
+
+    expect(errorTag, findsOneWidget);
+    expect(errorText.style?.color, danger);
+    expect(decoration.color, danger.withValues(alpha: 0.12));
 
     await tester.pumpWidget(const SizedBox.shrink());
     container.dispose();

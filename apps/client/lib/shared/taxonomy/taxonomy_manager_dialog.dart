@@ -43,7 +43,7 @@ class TaxonomyManagerDialog extends ConsumerStatefulWidget {
     final bool desktop = OmniBreakpoint.isDesktopPlatform(
       Theme.of(context).platform,
     );
-    return showDialog<void>(
+    return showOmniDialog<void>(
       context: context,
       animationStyle: desktop ? AnimationStyle.noAnimation : null,
       builder: (BuildContext context) =>

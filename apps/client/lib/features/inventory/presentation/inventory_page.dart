@@ -165,7 +165,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
 
   /// 打开配套物品管理。
   Future<void> _openAccessories(InventoryRecord item) async {
-    await showDialog<void>(
+    await showOmniDialog<void>(
       context: context,
       builder: (BuildContext context) => _AccessoriesDialog(parent: item),
     );

@@ -37,7 +37,7 @@ class AttachmentCropDialog extends StatefulWidget {
     required String title,
     double? aspectRatio,
   }) {
-    return showDialog<String?>(
+    return showOmniDialog<String?>(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) => AttachmentCropDialog(

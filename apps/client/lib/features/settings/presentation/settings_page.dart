@@ -1156,8 +1156,9 @@ class _SyncSettingsCard extends ConsumerWidget {
     );
 
     // 当前同步状态强调色。
-    final Color syncStatusColor =
-        !syncEnabled || session == null || session.isOffline
+    final Color syncStatusColor = syncLabel == '同步异常'
+        ? colors.danger
+        : !syncEnabled || session == null || session.isOffline
         ? colors.muted
         : colors.success;
     // 当前同步状态标题。
@@ -1352,7 +1353,7 @@ class _SyncSettingsCard extends ConsumerWidget {
   /// 确认断开服务器并说明本机数据保留规则。
   Future<void> _confirmDisconnect(BuildContext context, WidgetRef ref) async {
     // 用户选择的本机数据处理方式。
-    final _DisconnectChoice? choice = await showDialog<_DisconnectChoice>(
+    final _DisconnectChoice? choice = await showOmniDialog<_DisconnectChoice>(
       context: context,
       builder: (BuildContext dialogContext) => OmniDialogScaffold(
         title: '断开当前服务器？',

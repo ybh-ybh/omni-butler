@@ -333,16 +333,17 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
                     onDelete: (MembershipRecord membership) =>
                         _delete(context, ref, membership),
                     onHistory: (MembershipRecord membership) =>
-                        showDialog<void>(
+                        showOmniDialog<void>(
                           context: context,
                           builder: (BuildContext context) =>
                               _PaymentHistoryDialog(membership: membership),
                         ),
-                    onRenew: (MembershipRecord membership) => showDialog<void>(
-                      context: context,
-                      builder: (BuildContext context) =>
-                          _PaymentEditorDialog(membership: membership),
-                    ),
+                    onRenew: (MembershipRecord membership) =>
+                        showOmniDialog<void>(
+                          context: context,
+                          builder: (BuildContext context) =>
+                              _PaymentEditorDialog(membership: membership),
+                        ),
                   );
                 },
                 loading: () => const Center(child: CircularProgressIndicator()),
@@ -2578,7 +2579,7 @@ class _PaymentHistoryDialog extends ConsumerWidget {
 
   /// 打开新增支付记录弹窗。
   Future<void> _recordPayment(BuildContext context, WidgetRef ref) async {
-    await showDialog<void>(
+    await showOmniDialog<void>(
       context: context,
       builder: (BuildContext context) =>
           _PaymentEditorDialog(membership: membership),
