@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { JwtService } from '@nestjs/jwt';
 import { generateKeyPairSync } from 'node:crypto';
@@ -47,6 +47,14 @@ function createService(): {
   const owner = { id: '2ef5581f-33d7-4b13-a0f0-743532f5b1c9' };
   // Prisma 操作替身。
   const prisma = {
+    /// 在内存中执行同一个事务回调。
+    async $transaction<T>(
+      callback: (transaction: unknown) => Promise<T>,
+    ): Promise<T> {
+      return callback(prisma);
+    },
+    /// 只观察事务锁调用，不连接数据库。
+    $executeRaw: jest.fn().mockResolvedValue(1),
     syncOwner: { findFirst: jest.fn().mockResolvedValue(owner) },
     deviceSession: {
       create: jest.fn(({ data }: { data: TestSession }) => {
@@ -96,6 +104,17 @@ function createService(): {
 
 /// 覆盖固定会话的重试、并发和撤销边界。
 describe('AuthService 设备会话', () => {
+  it('预期归属改变时拒绝创建设备会话', async () => {
+    // 当前服务与可观察会话集合。
+    const { service, sessions } = createService();
+    await expect(
+      service.connect(
+        'correct-sync-key',
+        '81f5b326-ea65-4e58-a3c4-6d2916e6dba3',
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(sessions.size).toBe(0);
+  });
   it('错误同步密钥不查询所有者', async () => {
     // 当前服务和数据库替身。
     const { service, prisma } = createService();

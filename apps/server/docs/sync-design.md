@@ -32,6 +32,21 @@ RSA 的保留理由是独立服务验签，不是需要一套账号密码体系�
 
 ## 上传协议和冲突语义
 
+### 保留本机数据更换服务器
+
+客户端的本机快照是用户明确选择的迁移来源；普通连接仍执行既有首次 PUT 合并规则，显式覆盖服务器使用独立协议：
+
+- `POST /sync/connection-preview` 使用 `syncKey` 返回 `protocolVersion=1`、`snapshotVersion=1`、`ownerId`、11 张表的 `counts`、回收站 `deletedCount` 及大小限制，不创建设备会话。
+- `POST /sync/migrations` 接收 `syncKey`、持久 `migrationId`、预检 `expectedOwnerId`、`snapshotVersion=1` 与完整 `operations`。所有行必须为 PUT，包含白名单全部同步列（可空列显式传 null）；零行快照合法。未知列、重复同表身份和快照外的外键引用均拒绝。
+- 服务端在与初始化和创建连接共用的全局事务锁内先查询迁移回执，再锁定 expected owner，与普通上传串行。删除 owner 级联清理业务数据、设备会话、普通同步回执、墓碑及日签别名；新 owner 下导入快照并执行既有派生协调，关系最终验证通过后提交独立迁移回执。
+- `sync_migration_receipts` 不关联 owner、不进入 PowerSync publication。原请求摘要包含 expected owner、快照版本及按现有 canonicalize 规范化的操作；同迁移 ID 同摘要重试返回原结果，不再覆盖成功后的新编辑。不同内容拒绝。已被后续重建替代的回执返回 `superseded`。
+- `POST /sync/migrations/status` 使用同步密钥和迁移 ID 查询 `committed`、`superseded` 或 `notFound`；notFound 只说明当前不存在回执，不能证明网络中的原请求永远不会提交。
+- `POST /auth/connect` 可携带 `expectedOwnerId`，事务内核对再创建设备会话。覆盖成功后客户端使用新 owner 建立独立候选会话并重新下载；不能复用旧队列、clientId 和复制检查点。普通上传加锁后发现 owner 已删除返回 `SYNC_OWNER_CHANGED`。
+
+上限为 100000 条操作、32 MB JSON 请求、60 秒数据库事务。超限预检失败或导入错误不提交 owner 变更，也不保存成功回执。数据库最终约束与派生状态协调仍可能拒绝输入，拒绝时整个替换回滚。当前不支持分片大快照。
+
+迁移不清空 PowerSync storage 或复制槽；通过 CDC 传递业务表变化，新 owner 隔离新旧下行流。旧 API session 立即失效；旧 PowerSync JWT 仍有既有最多 15 分钟窗口，只能读取旧 owner 流，不能读取新 owner 数据。客户端应等待上传完成（首次合并）、请求检查点并等待同步完成、再次确认候选 session 归属后激活本地候选库。服务端导入可能补齐旧事件历史或重算派生时间，因此请求摘要是幂等证据，不是最终业务数据逐字相等的承诺。
+
 一次请求包含 `clientId`、`transactionId` 和有序 `operations`：
 
 - `clientId` 对应一份本地数据库的生命周期，保存于本地同步元数据；清空数据库后重新生成。

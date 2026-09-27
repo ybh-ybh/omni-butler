@@ -7,6 +7,7 @@ import 'package:omni_butler/core/notifications/local_notification_service.dart';
 import 'package:omni_butler/core/notifications/notification_preferences.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
+import 'package:omni_butler/core/sync/sync_connection_providers.dart';
 
 /// 本地通知服务提供者，正式启动时由 main 注入原生实现。
 final Provider<LocalNotificationService> localNotificationServiceProvider =
@@ -38,6 +39,15 @@ final StreamProvider<List<TodoRecord>> notificationTodosProvider =
 final Provider<void> notificationCoordinatorProvider = Provider<void>((
   Ref ref,
 ) {
+  // 服务级代次使旧系统调用收尾后不能覆盖新数据源的通知。
+  final LocalNotificationService service = ref.watch(
+    localNotificationServiceProvider,
+  );
+  // 所有窗口和启动恢复共用同一维护状态。
+  final bool suspended = ref.watch(syncMaintenanceProvider);
+  service.setMigrationSuspended(suspended);
+  // 迁移期间不依据旧库重建通知，激活后由新库统一协调。
+  if (suspended) return;
   // 当前设备通知偏好。
   final NotificationPreference preference = ref.watch(
     notificationPreferenceProvider,
@@ -75,10 +85,6 @@ final Provider<void> notificationCoordinatorProvider = Provider<void>((
     memberships: memberships,
     preference: effectivePreference,
     now: DateTime.now(),
-  );
-  // 当前平台通知服务。
-  final LocalNotificationService service = ref.watch(
-    localNotificationServiceProvider,
   );
   unawaited(service.reconcile(plans));
 });

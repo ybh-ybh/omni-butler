@@ -13,11 +13,14 @@ import 'package:omni_butler/core/notifications/notification_preferences.dart';
 import 'package:omni_butler/core/notifications/notification_providers.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/sync/sync_preferences.dart';
+import 'package:omni_butler/core/sync/sync_connection_coordinator.dart';
+import 'package:omni_butler/core/sync/sync_connection_providers.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
 import 'package:omni_butler/features/settings/presentation/sync_connection_dialog.dart';
+import 'package:omni_butler/features/settings/presentation/sync_backup_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:powersync/powersync.dart' show SyncStatus;
 
@@ -1164,6 +1167,8 @@ class _SyncSettingsCard extends ConsumerWidget {
     // 当前同步状态标题。
     final String syncTitle = !syncEnabled
         ? '仅本机模式'
+        : syncController.hasError
+        ? '服务器连接需要处理'
         : session == null
         ? '尚未连接服务器'
         : '已连接自托管服务器';
@@ -1177,6 +1182,12 @@ class _SyncSettingsCard extends ConsumerWidget {
         : '服务器：${session.serverAddress}';
     // 当前同步状态可用操作。
     final List<Widget> syncActions = <Widget>[
+      if (ref.watch(syncConnectionCoordinatorProvider) != null)
+        OmniButton(
+          label: '迁移备份',
+          variant: OmniButtonVariant.text,
+          onPressed: () => showSyncBackupDialog(context),
+        ),
       if (syncEnabled && session == null)
         OmniButton(
           label: '连接服务器',
@@ -1185,6 +1196,14 @@ class _SyncSettingsCard extends ConsumerWidget {
           onPressed: () => _openConnection(context, ref),
         )
       else if (syncEnabled && session != null) ...<Widget>[
+        OmniButton(
+          label: '更换服务器',
+          icon: Icons.dns_outlined,
+          variant: OmniButtonVariant.secondary,
+          onPressed: sessionState.isLoading
+              ? null
+              : () => _openConnection(context, ref),
+        ),
         if (session.isOffline)
           OmniButton(
             label: '重试连接',
@@ -1330,7 +1349,7 @@ class _SyncSettingsCard extends ConsumerWidget {
     if (context.mounted) {
       showOmniMessage(
         context,
-        message: '已连接服务器，正在同步本机结构化数据',
+        message: '服务器连接已完成，将继续自动同步',
         tone: OmniMessageTone.success,
       );
     }
@@ -1345,7 +1364,7 @@ class _SyncSettingsCard extends ConsumerWidget {
     }
     showOmniMessage(
       context,
-      message: '已连接服务器，正在同步本机结构化数据',
+      message: '服务器连接已完成，将继续自动同步',
       tone: OmniMessageTone.success,
     );
   }
@@ -1394,10 +1413,24 @@ class _SyncSettingsCard extends ConsumerWidget {
     if (choice == null) {
       return;
     }
-    if (choice == _DisconnectChoice.delete) {
-      await ref.read(syncControllerProvider.notifier).clearLocalData();
+    // 统一协调器先停止同步，再处理凭证和用户明确选择的数据。
+    final SyncConnectionCoordinator? coordinator = ref.read(
+      syncConnectionCoordinatorProvider,
+    );
+    if (coordinator == null) {
+      if (context.mounted) {
+        showOmniMessage(context, message: '同步连接尚未就绪，请重启应用后重试');
+      }
+      return;
     }
-    await ref.read(authControllerProvider.notifier).disconnect();
+    try {
+      await coordinator.disconnect(
+        clearLocal: choice == _DisconnectChoice.delete,
+      );
+    } on Object catch (error) {
+      if (context.mounted) showOmniMessage(context, message: error.toString());
+      return;
+    }
     if (!context.mounted) {
       return;
     }

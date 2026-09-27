@@ -1,5 +1,6 @@
 import {
   Injectable,
+  ConflictException,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -28,8 +29,8 @@ export class AuthService {
     private readonly config: ConfigService,
   ) {}
 
-  /// 使用部署同步密钥创建一个有固定到期时间的设备会话。
-  async connect(syncKey: string): Promise<TokenPair> {
+  /// 恒定时间验证部署同步密钥，供连接和迁移接口复用。
+  verifySyncKey(syncKey: string): void {
     // 配置密钥的定长摘要。
     const expectedDigest = this.digest(
       this.config.getOrThrow<string>('SYNC_SECRET'),
@@ -39,30 +40,44 @@ export class AuthService {
     if (!timingSafeEqual(expectedDigest, suppliedDigest)) {
       throw new UnauthorizedException('同步密钥错误');
     }
-    // 单人部署对应的内部数据所有者。
-    const owner = await this.prisma.syncOwner.findFirst();
-    if (!owner) {
-      throw new ServiceUnavailableException('同步服务尚未完成初始化');
-    }
-    // 设备会话标识。
-    const id = randomUUID();
-    // 256 位随机凭证，仅摘要进入数据库。
-    const refreshToken = `${id}.${randomBytes(32).toString('base64url')}`;
-    // 设备会话固定到期时间，刷新不会延长。
-    const expiresAt = new Date(
-      Date.now() +
-        this.config.getOrThrow<number>('REFRESH_TOKEN_TTL_SECONDS') * 1000,
-    );
-    // 已持久化的设备会话。
-    const session = await this.prisma.deviceSession.create({
-      data: {
-        id,
-        userId: owner.id,
-        tokenHash: this.digest(refreshToken).toString('hex'),
-        expiresAt,
-      },
+  }
+
+  /// 锁定部署身份并创建会话，确保身份预检与会话创建不会跨越服务器重建。
+  async connect(syncKey: string, expectedOwnerId?: string): Promise<TokenPair> {
+    this.verifySyncKey(syncKey);
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(1573090401)`;
+      // 单人部署对应的内部数据所有者。
+      const owner = await transaction.syncOwner.findFirst();
+      if (!owner) {
+        throw new ServiceUnavailableException('同步服务尚未完成初始化');
+      }
+      if (expectedOwnerId && expectedOwnerId !== owner.id) {
+        throw new ConflictException({
+          code: 'SYNC_OWNER_CHANGED',
+          message: '服务器数据归属已改变，请重新预检',
+        });
+      }
+      // 设备会话标识。
+      const id = randomUUID();
+      // 256 位随机凭证，仅摘要进入数据库。
+      const refreshToken = `${id}.${randomBytes(32).toString('base64url')}`;
+      // 设备会话固定到期时间，刷新不会延长。
+      const expiresAt = new Date(
+        Date.now() +
+          this.config.getOrThrow<number>('REFRESH_TOKEN_TTL_SECONDS') * 1000,
+      );
+      // 已持久化的设备会话。
+      const session = await transaction.deviceSession.create({
+        data: {
+          id,
+          userId: owner.id,
+          tokenHash: this.digest(refreshToken).toString('hex'),
+          expiresAt,
+        },
+      });
+      return this.issueTokenPair(session, refreshToken);
     });
-    return this.issueTokenPair(session, refreshToken);
   }
 
   /// 使用稳定会话凭证刷新访问令牌，重试和并发均不会创建后继会话。

@@ -28,6 +28,12 @@ class _RecordingAuth extends AuthRepository {
   /// 是否模拟服务端处理后响应丢失。
   bool loseResponse = false;
 
+  /// 可选上传开始信号，供会话竞态测试使用。
+  Completer<void>? uploadStarted;
+
+  /// 可选上传响应闸门，供会话竞态测试使用。
+  Completer<void>? uploadRelease;
+
   /// 离线状态下是否已开始请求同步凭证。
   final Completer<void> credentialRequested = Completer<void>();
 
@@ -43,6 +49,8 @@ class _RecordingAuth extends AuthRepository {
     Map<String, dynamic>? queryParameters,
   }) async {
     requests.add(jsonDecode(jsonEncode(data)) as Map<String, dynamic>);
+    uploadStarted?.complete();
+    await uploadRelease?.future;
     if (loseResponse) {
       throw const ApiFailure('模拟响应丢失');
     }
@@ -90,6 +98,49 @@ Future<void> _insertTodo(AppDatabase database, String id) async {
 /// 验证完整事务、幂等重试、初始导入和离线启动行为。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('上传期间会话代次变化时保留队列且旧连接器不可复用', () async {
+    FlutterSecureStorage.setMockInitialValues(<String, String>{});
+    // 本测试独占数据库目录。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_scope_',
+    );
+    // 上传开始和返回由测试控制，模拟用户切换服务器。
+    final _RecordingAuth auth = _RecordingAuth()
+      ..uploadStarted = Completer<void>()
+      ..uploadRelease = Completer<void>();
+    // 真实 SQLite 上传队列。
+    final OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      '${directory.path}${Platform.pathSeparator}db.sqlite',
+    );
+    try {
+      await _insertTodo(
+        runtime.database,
+        '01990000-7000-8002-8000-000000000001',
+      );
+      // 连接器捕获切换前的会话代次。
+      final OmniPowerSyncConnector connector = OmniPowerSyncConnector(auth);
+      // 先订阅错误，防止异步未处理异常。
+      final Future<void> assertion = expectLater(
+        connector.uploadData(runtime.powerSync),
+        throwsA(isA<ApiFailure>()),
+      );
+      await auth.uploadStarted!.future;
+      await auth.clearSession();
+      auth.uploadRelease!.complete();
+      await assertion;
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 1);
+      await expectLater(
+        connector.uploadData(runtime.powerSync),
+        throwsA(isA<ApiFailure>()),
+      );
+      expect(auth.requests, hasLength(1));
+    } finally {
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
 
   test('未绑定旧库用当前快照替换历史队列，避免悬空引用先于完整导入上传', () async {
     // 本测试独占数据库目录。

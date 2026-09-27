@@ -3,6 +3,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
 import 'package:omni_butler/core/auth/auth_repository.dart';
 import 'package:omni_butler/core/sync/sync_preferences.dart';
+import 'package:omni_butler/core/sync/sync_connection_providers.dart';
 
 /// Windows 与 Android 系统安全存储提供者。
 final Provider<FlutterSecureStorage> secureStorageProvider =
@@ -23,6 +24,8 @@ class AuthController extends AsyncNotifier<SyncSession?> {
   /// 应用启动时恢复设备会话，失败时保持本机模式。
   @override
   Future<SyncSession?> build() {
+    // 维护期间不恢复旧会话，候选凭证由协调器独立持有。
+    if (ref.watch(syncMaintenanceProvider)) return Future.value();
     // 当前设备同步总开关。
     final bool syncEnabled = ref.watch(syncPreferenceProvider);
     if (!syncEnabled) {

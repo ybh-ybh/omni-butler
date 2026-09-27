@@ -277,12 +277,26 @@ class LocalNotificationService {
   /// 尚未被根应用消费的启动载荷。
   String? initialPayload;
 
+  /// 数据迁移期间同步关闭通知计划的准入。
+  bool _migrationSuspended = false;
+
+  /// 最新计划或维护切换的代次，阻止旧任务跨数据源继续执行。
+  int _scheduleGeneration = 0;
+
+  /// 原生通知操作串行执行，新数据源必须等待旧调用收尾。
+  Future<void> _scheduleTail = Future<void>.value();
+
+  /// 上次原生计划可能未完整安装，禁止错误复用相同指纹。
+  bool _scheduleDirty = false;
+
   /// 创建可调用原生通知的服务。
-  LocalNotificationService(SharedPreferences preferences)
-    : _preferences = preferences,
-      _plugin = FlutterLocalNotificationsPlugin(),
-      _nativeEnabled = true,
-      availability = NotificationAvailability.unsupported;
+  LocalNotificationService(
+    SharedPreferences preferences, {
+    FlutterLocalNotificationsPlugin? plugin,
+  }) : _preferences = preferences,
+       _plugin = plugin ?? FlutterLocalNotificationsPlugin(),
+       _nativeEnabled = true,
+       availability = NotificationAvailability.unsupported;
 
   /// 创建供测试或不支持平台使用的禁用服务。
   LocalNotificationService.disabled()
@@ -342,8 +356,44 @@ class LocalNotificationService {
     }
   }
 
-  /// 根据最新业务记录重建全部未来提醒。
-  Future<void> reconcile(List<PlannedNotification> plans) async {
+  /// 同步失效所有旧调度；调用方恢复后需重新提交当前数据源计划。
+  void setMigrationSuspended(bool suspended) {
+    if (_migrationSuspended == suspended) return;
+    _migrationSuspended = suspended;
+    _scheduleGeneration++;
+    _scheduleDirty = true;
+  }
+
+  /// 原生操作在每个异步边界后都必须继续属于最新计划。
+  bool _isCurrentSchedule(int generation) =>
+      !_migrationSuspended && generation == _scheduleGeneration;
+
+  /// 根据最新业务记录串行重建提醒，过期排队任务无需再调用原生插件。
+  Future<void> reconcile(List<PlannedNotification> plans) {
+    if (_migrationSuspended) return Future<void>.value();
+    // 复制输入，避免调用方在排队期间改变原计划。
+    final List<PlannedNotification> snapshot = List<PlannedNotification>.of(
+      plans,
+    );
+    // 新计划覆盖尚未完成或排队的历史计划。
+    final int generation = ++_scheduleGeneration;
+    // 当前请求排在所有已发起的原生操作之后。
+    final Future<void> operation = _scheduleTail.then(
+      (_) => _reconcile(snapshot, generation),
+    );
+    _scheduleTail = operation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return operation;
+  }
+
+  /// 安装一个仍然有效的计划，任一原生调用完成后重新检查代次。
+  Future<void> _reconcile(
+    List<PlannedNotification> plans,
+    int generation,
+  ) async {
+    if (!_isCurrentSchedule(generation)) return;
     if (availability != NotificationAvailability.ready ||
         _preferences == null) {
       return;
@@ -359,9 +409,14 @@ class LocalNotificationService {
             ),
           )
           .toString();
-      if (_preferences.getString(_scheduleFingerprintKey) == fingerprint) {
+      if (!_scheduleDirty &&
+          _preferences.getString(_scheduleFingerprintKey) == fingerprint) {
         return;
       }
+      _scheduleDirty = true;
+      // 先移除旧成功指纹，进程若在部分安装后退出，下次必须完整重建。
+      await _preferences.remove(_scheduleFingerprintKey);
+      if (!_isCurrentSchedule(generation)) return;
       // 上一次已调度的通知标识。
       final List<int> previousIds =
           _preferences
@@ -371,12 +426,21 @@ class LocalNotificationService {
           const <int>[];
       for (final int id in previousIds) {
         await _plugin.cancel(id: id);
+        if (!_isCurrentSchedule(generation)) return;
       }
       // 本次已调度的通知标识。
       final List<String> scheduledIds = <String>[];
       for (final PlannedNotification plan in plans) {
         // 当前通知的稳定整数标识。
         final int id = _stableId(plan.key);
+        // 先记录可能触达原生系统的 ID，迟到调用和崩溃后也能被新计划清理。
+        final Set<String> knownIds = <String>{
+          ...previousIds.map((int value) => value.toString()),
+          ...scheduledIds,
+          id.toString(),
+        };
+        await _preferences.setStringList(_scheduledIdsKey, knownIds.toList());
+        if (!_isCurrentSchedule(generation)) return;
         await _plugin.zonedSchedule(
           id: id,
           title: plan.title,
@@ -396,11 +460,16 @@ class LocalNotificationService {
           payload: plan.payload,
         );
         scheduledIds.add(id.toString());
+        if (!_isCurrentSchedule(generation)) return;
       }
       await _preferences.setStringList(_scheduledIdsKey, scheduledIds);
+      if (!_isCurrentSchedule(generation)) return;
       await _preferences.setString(_scheduleFingerprintKey, fingerprint);
+      if (!_isCurrentSchedule(generation)) return;
+      _scheduleDirty = false;
       lastError = null;
     } on Object catch (error) {
+      if (!_isCurrentSchedule(generation)) return;
       availability = NotificationAvailability.failed;
       lastError = error.toString();
     }

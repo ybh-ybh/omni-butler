@@ -54,6 +54,14 @@ class _EndToEndAuth extends AuthRepository {
     required this.ownerId,
   }) : super(const FlutterSecureStorage());
 
+  /// 测试会话保存在适配器中，向固定作用域连接器提供同一身份。
+  @override
+  Future<SyncSession?> loadSession() async => SyncSession(
+    identity: SyncIdentity(id: ownerId),
+    apiBaseUrl: api.options.baseUrl,
+    isOffline: false,
+  );
+
   /// 向真实 API 获取本设备的短期 PowerSync 凭证。
   @override
   Future<PowerSyncCredential> fetchPowerSyncCredential() async {

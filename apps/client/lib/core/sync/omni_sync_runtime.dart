@@ -1,11 +1,17 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:drift/drift.dart' show ApplyInterceptorConnection;
 import 'package:drift_sqlite_async/drift_sqlite_async.dart';
+import 'package:omni_butler/core/auth/auth_models.dart';
 import 'package:omni_butler/core/auth/auth_repository.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/sync/omni_powersync_connector.dart';
 import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 import 'package:omni_butler/core/sync/sync_client_identity.dart';
+import 'package:omni_butler/core/sync/sync_snapshot.dart';
+import 'package:omni_butler/core/sync/sync_write_gate.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:powersync/powersync.dart';
@@ -26,7 +32,7 @@ class SyncOwnerMismatch implements Exception {
 
   /// 返回可向用户展示的冲突说明。
   @override
-  String toString() => '本机同步数据已绑定另一台服务器，请先断开并清理本机同步数据后再切换。';
+  String toString() => '本机数据来自另一台服务器，请选择保留本机数据或使用服务器数据后再连接。';
 }
 
 /// 同时持有 PowerSync 引擎与 Drift 类型安全访问层。
@@ -43,17 +49,32 @@ class OmniSyncRuntime {
   /// Drift 业务数据库。
   final AppDatabase database;
 
-  /// 当前后端连接器。
-  final OmniPowerSyncConnector _connector;
+  /// 当前数据库的完整路径，旧库可直接保留为迁移备份。
+  final String databasePath;
+
+  /// 当前运行时独占的认证仓储。
+  final AuthRepository _auth;
+
+  /// 所有 Drift 业务访问共享的写门禁。
+  final SyncWriteGate _writeGate;
+
+  /// 持有原桥接连接，关闭时释放其表更新订阅。
+  final SqliteAsyncDriftConnection _driftConnection;
 
   /// 当前已发起连接的服务端身份标识。
   String? _connectedUserId;
+
+  /// 断开或冻结立即递增，阻止已在等待中的旧连接重新启动。
+  int _connectionGeneration = 0;
 
   /// 创建已初始化的同步运行时。
   OmniSyncRuntime._({
     required this.powerSync,
     required this.database,
-    required this._connector,
+    required this.databasePath,
+    required this._auth,
+    required this._writeGate,
+    required this._driftConnection,
   });
 
   /// 在原有 Drift 文件上初始化 PowerSync，并安装 Raw Table 变更触发器。
@@ -68,8 +89,9 @@ class OmniSyncRuntime {
   /// 在指定路径初始化同步运行时，便于集成测试验证真实 SQLite 行为。
   static Future<OmniSyncRuntime> openAtPath(
     AuthRepository auth,
-    String databasePath,
-  ) async {
+    String databasePath, {
+    bool initializeUpload = true,
+  }) async {
     // 唯一的 PowerSync 数据库实例。
     final PowerSyncDatabase powerSync = PowerSyncDatabase(
       schema: omniSyncSchema,
@@ -80,18 +102,27 @@ class OmniSyncRuntime {
     final SqliteAsyncDriftConnection driftConnection =
         SqliteAsyncDriftConnection(powerSync);
     // 复用现有仓储所依赖的 Drift 数据库。
-    final AppDatabase database = AppDatabase.withExecutor(driftConnection);
+    final SyncWriteGate writeGate = SyncWriteGate();
+    // 保持同一个订阅状态，但将所有业务 SQL 经过写门禁。
+    final AppDatabase database = AppDatabase.withExecutor(
+      driftConnection.interceptWith(writeGate),
+    );
     await database.customSelect('SELECT 1').get();
     // 已创建表结构的同步运行时。
     final OmniSyncRuntime runtime = OmniSyncRuntime._(
       powerSync: powerSync,
       database: database,
-      connector: OmniPowerSyncConnector(auth),
+      databasePath: databasePath,
+      auth: auth,
+      writeGate: writeGate,
+      driftConnection: driftConnection,
     );
     try {
       await runtime._installRawTableTriggers();
       await runtime._removeLocalOnlyTableTriggers();
-      await runtime._initializeLocalUploadState();
+      if (initializeUpload) {
+        await runtime._initializeLocalUploadState();
+      }
       return runtime;
     } on Object {
       await runtime.close();
@@ -100,12 +131,16 @@ class OmniSyncRuntime {
   }
 
   /// 为指定服务端身份启动后台同步；同一身份重复调用保持幂等。
-  Future<void> connect(String userId) async {
+  Future<void> connect(String userId, {SyncSession? session}) async {
+    // 将连接准入固定到当前运行时代次，退休引用不能重新连接。
+    final int generation = _connectionGeneration;
+    _assertConnectionCurrent(generation);
     if (_connectedUserId == userId && powerSync.connected) {
       return;
     }
     // 当前数据库记录的服务端身份归属。
     final String? localOwnerId = await _loadOwnerId();
+    _assertConnectionCurrent(generation);
     if (localOwnerId != null && localOwnerId != userId) {
       throw SyncOwnerMismatch(
         localOwnerId: localOwnerId,
@@ -118,18 +153,37 @@ class OmniSyncRuntime {
         <Object?>['owner', userId],
       );
     }
-    await powerSync.connect(connector: _connector);
+    _assertConnectionCurrent(generation);
+    await powerSync.connect(
+      connector: OmniPowerSyncConnector(_auth, session: session),
+      // 已固定 PowerSync 2.4 与支持请求检查点的服务端部署版本。
+      // ignore: experimental_member_use
+      options: SyncOptions(checkpointMode: CheckpointMode.requests()),
+    );
+    if (generation != _connectionGeneration || writesFrozen) {
+      await powerSync.disconnect();
+      throw const SyncWritesFrozen();
+    }
     _connectedUserId = userId;
+  }
+
+  /// 每个异步边界后重新核对连接是否仍属于活动运行时。
+  void _assertConnectionCurrent(int generation) {
+    if (generation != _connectionGeneration || writesFrozen) {
+      throw const SyncWritesFrozen();
+    }
   }
 
   /// 停止网络同步但保留全部本机业务数据。
   Future<void> disconnect() async {
+    _connectionGeneration += 1;
     await powerSync.disconnect();
     _connectedUserId = null;
   }
 
   /// 停止同步并清空业务表、上传队列和服务端身份归属。
   Future<void> disconnectAndClear() async {
+    _connectionGeneration += 1;
     await powerSync.disconnectAndClear(clearLocal: true);
     _connectedUserId = null;
     await _initializeLocalUploadState();
@@ -138,7 +192,253 @@ class OmniSyncRuntime {
   /// 关闭 Drift 与 PowerSync 持有的数据库资源。
   Future<void> close() async {
     await database.close();
+    await _driftConnection.close();
     await powerSync.close();
+  }
+
+  /// 当前数据库仍保留的来源身份，与是否存在登录凭证无关。
+  Future<String?> get ownerId => _loadOwnerId();
+
+  /// 当前运行时是否禁止业务写入。
+  bool get writesFrozen => _writeGate.isFrozen;
+
+  /// 立即阻止新业务写入，等在途事务排空，再停掉旧同步。
+  Future<void> freezeWrites() async {
+    _connectionGeneration += 1;
+    await _writeGate.freeze();
+    await disconnect();
+  }
+
+  /// 恢复旧数据库写入，仅用于提交前取消迁移。
+  void resumeWrites() => _writeGate.resume();
+
+  /// 从可信底层连接拍摄单事务快照，不复制任何 PowerSync 内部状态。
+  Future<SyncSnapshot> exportSnapshot() {
+    return powerSync.writeTransaction((transaction) async {
+      // 按受信任白名单逐表保存物理 SQLite 数据。
+      final Map<String, List<Map<String, Object?>>> tables =
+          <String, List<Map<String, Object?>>>{};
+      for (final String table in SyncSnapshot.tableNames) {
+        tables[table] = await transaction.getAll(
+          'SELECT * FROM "$table" ORDER BY id',
+        );
+      }
+      // 队列数量只用于迁移前提示，历史操作不导入候选库。
+      final Map<String, Object?> pending = await transaction.get(
+        'SELECT COUNT(*) AS count FROM ps_crud',
+      );
+      return SyncSnapshot(
+        tables: tables,
+        pendingOperations: pending['count']! as int,
+      );
+    });
+  }
+
+  /// 创建全新候选库，独立生成上传身份并按策略准备业务数据。
+  static Future<OmniSyncRuntime> createCandidate(
+    AuthRepository auth,
+    String databasePath,
+    SyncSnapshot snapshot,
+    String ownerId, {
+    required bool mergeInitial,
+    required bool useLocalData,
+  }) async {
+    if (mergeInitial && !useLocalData) {
+      throw ArgumentError('首次合并必须保留本机业务数据');
+    }
+    if (await File(databasePath).exists()) {
+      throw StateError('候选数据库已存在，请恢复原迁移或使用新的候选路径');
+    }
+    // 不为候选库执行普通启动的初始 PUT 补齐逻辑。
+    final OmniSyncRuntime runtime = await openAtPath(
+      auth,
+      databasePath,
+      initializeUpload: false,
+    );
+    try {
+      await runtime._seedCandidate(
+        snapshot,
+        ownerId,
+        mergeInitial: mergeInitial,
+        useLocalData: useLocalData,
+      );
+      return runtime;
+    } on Object {
+      await runtime.close();
+      rethrow;
+    }
+  }
+
+  /// 原子导入业务快照；触发器在导入期间移除，避免重放旧上传历史。
+  Future<void> _seedCandidate(
+    SyncSnapshot snapshot,
+    String ownerId, {
+    required bool mergeInitial,
+    required bool useLocalData,
+  }) async {
+    await powerSync.writeTransaction((transaction) async {
+      for (final RawTable table in omniSyncSchema.rawTables) {
+        for (final String operation in <String>['insert', 'update', 'delete']) {
+          await transaction.execute(
+            'DROP TRIGGER IF EXISTS "powersync_${table.name}_$operation"',
+          );
+        }
+      }
+      for (final String table in SyncSnapshot.tableNames) {
+        if (!useLocalData &&
+            table != 'banner_settings' &&
+            table != 'attachments') {
+          continue;
+        }
+        // 列白名单来自候选库的本地 schema，禁止快照控制 SQL 标识符。
+        final Set<String> allowedColumns =
+            (await transaction.getAll('PRAGMA table_info("$table")'))
+                .map((Map<String, Object?> column) => column['name']! as String)
+                .toSet();
+        for (final Map<String, Object?> source
+            in snapshot.tables[table] ?? <Map<String, Object?>>[]) {
+          if (!useLocalData &&
+              table == 'attachments' &&
+              source['business_type'] != 'quoteBanner') {
+            continue;
+          }
+          // 副本允许重置本机提示状态，不修改持久化的迁移快照。
+          final Map<String, Object?> row = Map<String, Object?>.from(source);
+          if (row.keys.any(
+            (String column) => !allowedColumns.contains(column),
+          )) {
+            throw FormatException('迁移快照包含当前版本不支持的 $table 字段');
+          }
+          if (row.containsKey('sync_state')) {
+            row['sync_state'] = mergeInitial ? 'localSaved' : 'synced';
+          }
+          await transaction.execute(
+            'INSERT INTO "$table" (${row.keys.map((String column) => '"$column"').join(', ')}) '
+            'VALUES (${List<String>.filled(row.length, '?').join(', ')})',
+            row.values.toList(growable: false),
+          );
+        }
+      }
+      await transaction.execute(
+        'INSERT INTO device_sync_metadata(id, value) VALUES(?, ?), (?, ?), (?, ?)',
+        <Object?>[
+          'owner',
+          ownerId,
+          'initial_upload',
+          '1',
+          AppDatabase.suppressDefaultSeedingMetadataId,
+          '1',
+        ],
+      );
+      if (mergeInitial) {
+        for (final Map<String, Object?> operation in snapshot.operations) {
+          await transaction.execute(
+            'INSERT INTO powersync_crud(op, id, type, data) VALUES(?, ?, ?, ?)',
+            <Object?>[
+              'PUT',
+              operation['id'],
+              operation['table'],
+              jsonEncode(operation['data']),
+            ],
+          );
+        }
+      }
+    });
+    await ensureSyncClientId(powerSync);
+    await _installRawTableTriggers();
+  }
+
+  /// 在完整下行后恢复同业务类型、同记录 ID 的本机图片，不上传附件。
+  Future<void> restoreLocalAttachments(
+    SyncSnapshot snapshot, {
+    required bool matchingOnly,
+  }) async {
+    await powerSync.writeTransaction((transaction) async {
+      // 本机附件类型到拥有图片字段的业务表之间的固定映射。
+      const Map<String, String> imageTables = <String, String>{
+        'inventoryImage': 'inventory_items',
+        'membershipImage': 'memberships',
+      };
+      // 可写附件列由本地 schema 决定，恢复快照不能注入 SQL。
+      final Set<String> attachmentColumns =
+          (await transaction.getAll('PRAGMA table_info("attachments")'))
+              .map((Map<String, Object?> column) => column['name']! as String)
+              .toSet();
+      for (final Map<String, Object?> attachment
+          in snapshot.tables['attachments'] ?? <Map<String, Object?>>[]) {
+        // 只将存在同业务身份的图片恢复到采用服务器数据的候选库。
+        final String? table = imageTables[attachment['business_type']];
+        if (matchingOnly && attachment['business_type'] != 'quoteBanner') {
+          if (table == null ||
+              await transaction.getOptional(
+                    'SELECT id FROM "$table" WHERE id = ?',
+                    <Object?>[attachment['business_id']],
+                  ) ==
+                  null) {
+            continue;
+          }
+        }
+        if (attachment.keys.any(
+          (String column) => !attachmentColumns.contains(column),
+        )) {
+          throw const FormatException('迁移附件包含未知字段');
+        }
+        await transaction.execute(
+          'INSERT OR REPLACE INTO attachments (${attachment.keys.map((String column) => '"$column"').join(', ')}) '
+          'VALUES (${List<String>.filled(attachment.length, '?').join(', ')})',
+          attachment.values.toList(growable: false),
+        );
+        if (table != null) {
+          // 原库中实际选中的附件才恢复为主图，保留其他历史附件元数据。
+          final bool selected =
+              (snapshot.tables[table] ?? <Map<String, Object?>>[]).any(
+                (Map<String, Object?> row) =>
+                    row['id'] == attachment['business_id'] &&
+                    row['image_attachment_id'] == attachment['id'],
+              );
+          if (selected) {
+            await transaction.execute(
+              'UPDATE "$table" SET image_attachment_id = ?, image_local_path = ? WHERE id = ?',
+              <Object?>[
+                attachment['id'],
+                attachment['local_path'],
+                attachment['business_id'],
+              ],
+            );
+          }
+        }
+      }
+    });
+  }
+
+  /// 等待上传全部获确认，再请求服务器检查点并等待其完整落入候选库。
+  Future<void> catchUp({Duration timeout = const Duration(minutes: 3)}) async {
+    // 一个截止时间覆盖上传与下行，避免每阶段各自重置等待上限。
+    final DateTime deadline = DateTime.now().add(timeout);
+    while (await powerSync.getNextCrudTransaction() != null) {
+      if (DateTime.now().isAfter(deadline)) {
+        throw const ApiFailure('等待本机快照上传超时，请重试迁移');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    // 请求发生在上传回执之后，不能仅依赖曾经完成过首次同步。
+    // ignore: experimental_member_use
+    final checkpoint = await powerSync.requestCheckpoint().timeout(
+      deadline.difference(DateTime.now()),
+    );
+    // 超时必须取消 SDK 内部状态监听，避免重试后遗留等待者。
+    final Completer<void> abort = Completer<void>();
+    // 与上传、请求共享同一个总截止时间。
+    final Timer timer = Timer(
+      deadline.difference(DateTime.now()),
+      abort.complete,
+    );
+    try {
+      // ignore: experimental_member_use
+      await checkpoint.waitForSync(abortTrigger: abort.future);
+    } finally {
+      timer.cancel();
+    }
   }
 
   /// 读取本机数据库当前绑定的服务端身份。

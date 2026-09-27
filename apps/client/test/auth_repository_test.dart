@@ -65,6 +65,184 @@ void main() {
     FlutterSecureStorage.setMockInitialValues(_savedSession());
   });
 
+  test('候选连接与预检不改变活动会话，候选断开只删除独立键', () async {
+    // 原活动会话必须完整保留。
+    final String original = (await storage.read(key: 'sync.device_session'))!;
+    // 记录独立候选连接发出的预期身份。
+    final List<RequestOptions> requests = <RequestOptions>[];
+    // 仅内存响应的活动仓储。
+    final AuthRepository repository = AuthRepository(
+      storage,
+      clientFactory: (String url) =>
+          _client(url, (RequestOptions request) async {
+            requests.add(request);
+            if (request.path == '/sync/connection-preview') {
+              return <String, dynamic>{
+                'protocolVersion': 1,
+                'snapshotVersion': 1,
+                'ownerId': 'owner-b',
+              };
+            }
+            if (request.path == '/auth/connect') {
+              return <String, dynamic>{
+                'accessToken': 'access-b',
+                'refreshToken': 'refresh-b',
+                'expiresIn': 900,
+              };
+            }
+            return <String, dynamic>{'sub': 'owner-b'};
+          }),
+    );
+    await repository.previewConnection(
+      apiBaseUrl: 'https://b.example.com',
+      syncKey: 'secret',
+    );
+    expect(await storage.readAll(), <String, String>{
+      'sync.device_session': original,
+    });
+    // 候选仓储拥有单独的安全存储键和会话代次。
+    final AuthRepository candidate = repository.forkForSession(
+      'sync.candidate.test',
+    );
+    await candidate.connect(
+      apiBaseUrl: 'https://b.example.com',
+      syncKey: 'secret',
+      expectedOwnerId: 'owner-b',
+    );
+    expect(candidate.storageKey, 'sync.candidate.test');
+    expect(repository.sessionGeneration, 0);
+    expect(candidate.sessionGeneration, 1);
+    expect((await candidate.loadSession())?.identity.id, 'owner-b');
+    expect(
+      (requests
+              .firstWhere(
+                (RequestOptions value) => value.path == '/auth/connect',
+              )
+              .data
+          as Map)['expectedOwnerId'],
+      'owner-b',
+    );
+    expect(await storage.read(key: 'sync.device_session'), original);
+    await candidate.clearSession();
+    expect(await storage.readAll(), <String, String>{
+      'sync.device_session': original,
+    });
+  });
+
+  test('连接后核对身份不一致时不保存候选会话', () async {
+    // 服务端预检之后被另外一次迁移替换。
+    final AuthRepository candidate = AuthRepository(
+      storage,
+      storageKey: 'sync.candidate.mismatch',
+      clientFactory: (String url) =>
+          _client(url, (RequestOptions request) async {
+            return request.path == '/auth/connect'
+                ? <String, dynamic>{
+                    'accessToken': 'access',
+                    'refreshToken': 'refresh',
+                    'expiresIn': 900,
+                  }
+                : <String, dynamic>{'sub': 'changed-owner'};
+          }),
+    );
+    await expectLater(
+      candidate.connect(
+        apiBaseUrl: 'https://b.example.com',
+        syncKey: 'secret',
+        expectedOwnerId: 'preview-owner',
+      ),
+      throwsA(isA<ApiFailure>()),
+    );
+    expect(await storage.read(key: candidate.storageKey), isNull);
+  });
+
+  test('迁移请求保持原 ID、使用较长超时，预检旧协议提示升级', () async {
+    // 控制是否模拟旧版后端。
+    bool oldServer = false;
+    // 记录迁移请求以核对完整接口契约。
+    final List<RequestOptions> requests = <RequestOptions>[];
+    // 独立于当前设备会话的迁移 API。
+    final AuthRepository repository = AuthRepository(
+      storage,
+      clientFactory: (String url) =>
+          _client(url, (RequestOptions request) async {
+            requests.add(request);
+            if (oldServer) throw _httpError(request, 404);
+            return <String, dynamic>{
+              'status': 'committed',
+              'migrationId': 'migration-1',
+              'ownerId': 'new-owner',
+            };
+          }),
+    );
+    await repository.replaceServerSnapshot(
+      apiBaseUrl: 'https://b.example.com',
+      syncKey: 'secret',
+      migrationId: 'migration-1',
+      expectedOwnerId: 'owner-b',
+      operations: <Map<String, Object?>>[],
+    );
+    expect(requests.single.receiveTimeout, const Duration(seconds: 90));
+    expect(requests.single.sendTimeout, const Duration(seconds: 90));
+    expect((requests.single.data as Map)['migrationId'], 'migration-1');
+    await repository.migrationStatus(
+      apiBaseUrl: 'https://b.example.com',
+      syncKey: 'secret',
+      migrationId: 'migration-1',
+    );
+    expect((requests.last.data as Map)['migrationId'], 'migration-1');
+    oldServer = true;
+    await expectLater(
+      repository.previewConnection(
+        apiBaseUrl: 'https://b.example.com',
+        syncKey: 'secret',
+      ),
+      throwsA(
+        isA<ApiFailure>().having(
+          (ApiFailure error) => error.message,
+          'message',
+          contains('升级'),
+        ),
+      ),
+    );
+  });
+
+  test('旧服务器成功响应晚到时拒绝交给队列确认', () async {
+    // 请求已发出的信号。
+    final Completer<void> started = Completer<void>();
+    // 在断开后才放行的成功响应。
+    final Completer<void> release = Completer<void>();
+    // 固定有效凭证，避免测试进入刷新分支。
+    final Map<String, dynamic> saved =
+        jsonDecode(_savedSession().values.single) as Map<String, dynamic>;
+    saved['expiresAt'] = DateTime.now()
+        .add(const Duration(hours: 1))
+        .toIso8601String();
+    FlutterSecureStorage.setMockInitialValues(<String, String>{
+      'sync.device_session': jsonEncode(saved),
+    });
+    // 可控制请求完成时机的仓储。
+    final AuthRepository repository = AuthRepository(
+      storage,
+      clientFactory: (String url) =>
+          _client(url, (RequestOptions request) async {
+            started.complete();
+            await release.future;
+            return <String, dynamic>{};
+          }),
+    );
+    // 请求调用方必须收到过期会话错误，即使服务器已经成功响应。
+    final Future<void> assertion = expectLater(
+      repository.authorizedRequest<void>('POST', '/sync/operations'),
+      throwsA(isA<ApiFailure>()),
+    );
+    await started.future;
+    await repository.clearSession();
+    release.complete();
+    await assertion;
+    expect(await storage.readAll(), isEmpty);
+  });
+
   test('服务器地址在内部拼接默认路径，并按主机类型选择默认协议', () {
     // 无网络需求的地址校验仓储。
     final AuthRepository repository = AuthRepository(storage);

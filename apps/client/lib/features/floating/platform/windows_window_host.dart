@@ -20,6 +20,7 @@ import 'package:omni_butler/features/floating/platform/floating_window_placement
 import 'package:omni_butler/features/floating/platform/windows_tray_service.dart';
 import 'package:omni_butler/features/floating/presentation/floating_window_page.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
+import 'package:omni_butler/core/sync/sync_maintenance_boundary.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 import 'package:win32/win32.dart' as win32;
 
@@ -838,6 +839,10 @@ class _FloatingWindowSurface extends ConsumerWidget {
         onDragUpdate: onDragUpdate,
         onDragEnd: onDragEnd,
         onPreferredHeightChanged: onPreferredHeightChanged,
+      ),
+      builder: (BuildContext context, Widget? child) => SyncMaintenanceBoundary(
+        compact: true,
+        child: child ?? const SizedBox.shrink(),
       ),
     );
   }

@@ -8,6 +8,17 @@ datasource db {
   provider = "postgresql"
 }
 
+/// 快照替换回执不关联 owner，避免后续重建删除幂等证据。
+model SyncMigrationReceipt {
+  migrationId String @id @map("migration_id") @db.Uuid
+  expectedOwnerId String @map("expected_owner_id") @db.Uuid
+  ownerId String @map("owner_id") @db.Uuid
+  payloadHash String @map("payload_hash") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("sync_migration_receipts")
+}
+
 /// 单人部署的数据归属标识，不是登录账号。
 model SyncOwner {
   id                   String                @id @default(uuid()) @db.Uuid

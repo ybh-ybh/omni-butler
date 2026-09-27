@@ -64,6 +64,9 @@ class AuthRepository {
   /// 系统安全存储。
   final FlutterSecureStorage _storage;
 
+  /// 当前仓储独占的安全存储键，候选会话不覆盖活动会话。
+  final String storageKey;
+
   /// 可选 HTTP 客户端工厂，供测试使用内存传输。
   final Dio Function(String)? clientFactory;
 
@@ -77,7 +80,147 @@ class AuthRepository {
   Future<void> _storageWrites = Future<void>.value();
 
   /// 创建同步服务会话仓储。
-  AuthRepository(this._storage, {this.clientFactory});
+  AuthRepository(
+    this._storage, {
+    this.clientFactory,
+    this.storageKey = _sessionKey,
+  });
+
+  /// 暴露当前代次，供同步连接器拒绝旧请求确认队列。
+  int get sessionGeneration => _generation;
+
+  /// 同步检查代次后立即开始请求，关闭异步作用域校验与请求发起之间的切换窗口。
+  Future<Response<T>> authorizedRequestForGeneration<T>(
+    int generation,
+    String method,
+    String path, {
+    Object? data,
+    Map<String, dynamic>? queryParameters,
+  }) {
+    if (generation != _generation) {
+      throw const ApiFailure('同步会话已变更，请重新建立同步连接');
+    }
+    return authorizedRequest<T>(
+      method,
+      path,
+      data: data,
+      queryParameters: queryParameters,
+    );
+  }
+
+  /// 在固定代次内开始凭证请求，不允许旧连接取得新设备会话的令牌。
+  Future<PowerSyncCredential> fetchPowerSyncCredentialForGeneration(
+    int generation,
+  ) {
+    if (generation != _generation) {
+      throw const ApiFailure('同步会话已变更，请重新建立同步连接');
+    }
+    return fetchPowerSyncCredential();
+  }
+
+  /// 创建共享传输配置、独立凭证和代次的候选会话仓储。
+  AuthRepository forkForSession(String key) {
+    if (key.isEmpty || key == storageKey) {
+      throw const ApiFailure('候选会话必须使用独立的安全存储键');
+    }
+    return AuthRepository(
+      _storage,
+      clientFactory: clientFactory,
+      storageKey: key,
+    );
+  }
+
+  /// 只读取本机会话身份，不发出请求或刷新凭证。
+  Future<SyncSession?> loadSession() async {
+    // 当前安全存储中的完整会话。
+    final _StoredSession? saved = await _readSession();
+    if (saved == null) return null;
+    return SyncSession(
+      identity: saved.identity,
+      apiBaseUrl: saved.baseUrl,
+      isOffline: true,
+    );
+  }
+
+  /// 检查目标数据源和迁移能力，不创建或替换设备会话。
+  Future<Map<String, dynamic>> previewConnection({
+    required String apiBaseUrl,
+    required String syncKey,
+  }) async {
+    // 预检响应用于后续确认和固定 owner。
+    final Map<String, dynamic> result = await _migrationRequest(
+      apiBaseUrl,
+      '/sync/connection-preview',
+      <String, Object?>{'syncKey': syncKey},
+    );
+    if (result['protocolVersion'] != 1 || result['snapshotVersion'] != 1) {
+      throw const ApiFailure('服务器尚不支持当前迁移协议，请先升级后端');
+    }
+    return result;
+  }
+
+  /// 提交完整快照；调用方必须持久保存迁移 ID 并在未知结果时复用。
+  Future<Map<String, dynamic>> replaceServerSnapshot({
+    required String apiBaseUrl,
+    required String syncKey,
+    required String migrationId,
+    required String expectedOwnerId,
+    required List<Map<String, Object?>> operations,
+  }) {
+    // 包含同步密钥的完整编码大小才是服务端请求上限的依据。
+    final Map<String, Object?> payload = <String, Object?>{
+      'syncKey': syncKey,
+      'migrationId': migrationId,
+      'expectedOwnerId': expectedOwnerId,
+      'snapshotVersion': 1,
+      'operations': operations,
+    };
+    if (operations.length > 100000 ||
+        utf8.encode(jsonEncode(payload)).length > 32 * 1024 * 1024) {
+      throw const ApiFailure('完整快照超过 100000 条或 32 MB，服务器数据未提交替换');
+    }
+    return _migrationRequest(apiBaseUrl, '/sync/migrations', payload);
+  }
+
+  /// 按持久迁移 ID 查询提交结果，查询不到不代表原请求已经失败。
+  Future<Map<String, dynamic>> migrationStatus({
+    required String apiBaseUrl,
+    required String syncKey,
+    required String migrationId,
+  }) {
+    return _migrationRequest(
+      apiBaseUrl,
+      '/sync/migrations/status',
+      <String, Object?>{'syncKey': syncKey, 'migrationId': migrationId},
+    );
+  }
+
+  /// 迁移协议使用独立密钥及较长超时，不依赖即将失效的设备会话。
+  Future<Map<String, dynamic>> _migrationRequest(
+    String apiBaseUrl,
+    String path,
+    Map<String, Object?> payload,
+  ) async {
+    try {
+      // 迁移请求需覆盖六十秒数据库事务及网络传输时间。
+      final Response<Map<String, dynamic>> response =
+          await _dio(normalizeBaseUrl(apiBaseUrl)).post<Map<String, dynamic>>(
+            path,
+            data: payload,
+            options: Options(
+              sendTimeout: const Duration(seconds: 90),
+              receiveTimeout: const Duration(seconds: 90),
+            ),
+          );
+      if (response.data == null) throw const ApiFailure('服务器未返回迁移协议响应');
+      return response.data!;
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 404) {
+        throw const ApiFailure('服务器尚不支持数据迁移，请先升级后端');
+      }
+      throw ApiFailure(_messageFor(error, fallback: '服务器请求未完成，请保留当前迁移并重试'));
+    }
+  }
 
   /// 从安全存储与服务端恢复设备同步会话。
   Future<SyncSession?> restoreSession() async {
@@ -127,6 +270,7 @@ class AuthRepository {
   Future<SyncSession> connect({
     required String apiBaseUrl,
     required String syncKey,
+    String? expectedOwnerId,
   }) async {
     // 本次连接对应新的本机会话代次。
     final int generation = ++_generation;
@@ -135,8 +279,13 @@ class AuthRepository {
     final String baseUrl = normalizeBaseUrl(apiBaseUrl);
     try {
       // 设备连接响应。
-      final Response<Map<String, dynamic>> response = await _dio(baseUrl)
-          .post('/auth/connect', data: <String, dynamic>{'syncKey': syncKey});
+      final Response<Map<String, dynamic>> response = await _dio(baseUrl).post(
+        '/auth/connect',
+        data: <String, dynamic>{
+          'syncKey': syncKey,
+          'expectedOwnerId': ?expectedOwnerId,
+        },
+      );
       // 服务端返回的会话令牌。
       final Map<String, dynamic> tokens = response.data ?? <String, dynamic>{};
       // 返回的访问凭证。
@@ -148,6 +297,9 @@ class AuthRepository {
       }
       // 服务端内部身份。
       final SyncIdentity identity = await _loadIdentity(baseUrl, accessToken);
+      if (expectedOwnerId != null && identity.id != expectedOwnerId) {
+        throw const ApiFailure('服务器数据源已变化，请重新检查服务器');
+      }
       await _saveSession(
         _StoredSession(
           baseUrl: baseUrl,
@@ -210,13 +362,17 @@ class AuthRepository {
     Object? data,
     Map<String, dynamic>? queryParameters,
   }) async {
+    // 请求从读取会话起就固定所属代次。
+    final int generation = _generation;
     // 当前服务器会话。
     final _StoredSession? saved = await _readSession();
     if (saved == null) throw const ApiFailure('当前设备尚未连接同步服务器');
     // 当前可用访问令牌。
     final String token = await ensureAccessToken(baseUrl: saved.baseUrl);
+    await _assertUnchangedSession(saved, generation);
     try {
-      return await _performAuthorizedRequest<T>(
+      // 只有原会话仍有效时才将响应交给上传确认逻辑。
+      final Response<T> response = await _performAuthorizedRequest<T>(
         baseUrl: saved.baseUrl,
         token: token,
         method: method,
@@ -224,9 +380,12 @@ class AuthRepository {
         data: data,
         queryParameters: queryParameters,
       );
+      await _assertUnchangedSession(saved, generation);
+      return response;
     } on DioException catch (error) {
       if (error.response?.statusCode == 401) {
         try {
+          await _assertUnchangedSession(saved, generation);
           // 已有请求可能刚刚完成刷新，可直接使用其结果。
           final _StoredSession? current = await _readSession();
           if (current == null || current.refreshToken != saved.refreshToken) {
@@ -236,7 +395,9 @@ class AuthRepository {
           final String refreshed = current.accessToken == token
               ? await _refresh(saved.baseUrl)
               : current.accessToken;
-          return await _performAuthorizedRequest<T>(
+          await _assertUnchangedSession(saved, generation);
+          // 重试也使用原服务器地址和原设备会话的刷新结果。
+          final Response<T> response = await _performAuthorizedRequest<T>(
             baseUrl: saved.baseUrl,
             token: refreshed,
             method: method,
@@ -244,11 +405,32 @@ class AuthRepository {
             data: data,
             queryParameters: queryParameters,
           );
+          await _assertUnchangedSession(saved, generation);
+          return response;
         } on DioException catch (retryError) {
           throw ApiFailure(_messageFor(retryError, fallback: '服务器请求失败'));
         }
       }
       throw ApiFailure(_messageFor(error, fallback: '服务器请求失败'));
+    }
+  }
+
+  /// 防止在途请求读取新会话、跨服务器重试或确认旧队列。
+  Future<void> _assertUnchangedSession(
+    _StoredSession saved,
+    int generation,
+  ) async {
+    if (generation != _generation) {
+      throw const ApiFailure('同步会话已变更，请重试');
+    }
+    // 同一安全存储键可能被应用恢复流程重新激活，需同时核对身份和设备凭证。
+    final _StoredSession? current = await _readSession();
+    if (generation != _generation ||
+        current == null ||
+        current.baseUrl != saved.baseUrl ||
+        current.identity.id != saved.identity.id ||
+        current.refreshToken != saved.refreshToken) {
+      throw const ApiFailure('同步会话已变更，请重试');
     }
   }
 
@@ -292,7 +474,7 @@ class AuthRepository {
   Future<void> clearSession() {
     _generation++;
     _pendingRefresh = null;
-    return _enqueueStorage(() => _storage.delete(key: _sessionKey));
+    return _enqueueStorage(() => _storage.delete(key: storageKey));
   }
 
   /// 合并同一会话的并发刷新请求。
@@ -368,7 +550,7 @@ class AuthRepository {
   Future<_StoredSession?> _readSession() async {
     await _storageWrites;
     // 原子保存的 JSON 文本。
-    final String? value = await _storage.read(key: _sessionKey);
+    final String? value = await _storage.read(key: storageKey);
     if (value == null) return null;
     try {
       return _StoredSession.fromJson(
@@ -384,7 +566,7 @@ class AuthRepository {
     return _enqueueStorage(() async {
       if (generation != _generation) throw const ApiFailure('同步会话已变更，请重试');
       await _storage.write(
-        key: _sessionKey,
+        key: storageKey,
         value: jsonEncode(session.toJson()),
       );
       if (generation != _generation) throw const ApiFailure('同步会话已变更，请重试');

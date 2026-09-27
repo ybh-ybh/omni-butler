@@ -658,6 +658,10 @@ class MembershipPayments extends Table {
   ],
 )
 class AppDatabase extends _$AppDatabase {
+  /// 候选数据源禁止默认业务播种的持久元数据键。
+  static const String suppressDefaultSeedingMetadataId =
+      'suppress_default_seeding';
+
   /// 创建默认持久化数据库。
   AppDatabase() : super(driftDatabase(name: 'omni_butler'));
 
@@ -666,6 +670,24 @@ class AppDatabase extends _$AppDatabase {
 
   /// 创建可注入执行器的数据库用于测试。
   AppDatabase.forTesting(super.executor);
+
+  /// 迁移后的数据集以显式快照或服务器为准，读取页面不得补造业务数据。
+  Future<bool> isDefaultBusinessSeedingDisabled() async {
+    // 纯 Drift 本地库没有 PowerSync 元数据视图，继续沿用旧版初始化行为。
+    final QueryRow? metadata = await customSelect(
+      "SELECT name FROM sqlite_master WHERE name = 'device_sync_metadata' "
+      "AND type IN ('table', 'view')",
+    ).getSingleOrNull();
+    if (metadata == null) return false;
+    // 标志与候选业务快照同时落盘，冷启动后仍阻止默认播种。
+    final QueryRow? flag = await customSelect(
+      'SELECT value FROM device_sync_metadata WHERE id = ?',
+      variables: <Variable<Object>>[
+        const Variable<String>(suppressDefaultSeedingMetadataId),
+      ],
+    ).getSingleOrNull();
+    return flag?.read<String>('value') == '1';
+  }
 
   /// 当前数据库结构版本。
   @override
@@ -1009,6 +1031,9 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
       if (selection != null && selection.quoteId == null) {
         return null;
       }
+      if (selection == null && await isDefaultBusinessSeedingDisabled()) {
+        return null;
+      }
       // 没有可选名言也保留每日身份，避免永久删除后重建同一墓碑记录。
       final DateTime now = DateTime.now();
       await into(dailyQuoteSelections).insertOnConflictUpdate(
@@ -1086,6 +1111,7 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
 
   /// 仅为从未使用过名言的空库生成内置数据，不复活被删除的稳定身份。
   Future<void> _ensureDefaultQuotes() async {
+    if (await isDefaultBusinessSeedingDisabled()) return;
     // 任意现存名言都表示已经初始化，包括停用和软删除记录。
     final int count =
         await (selectOnly(quotes)

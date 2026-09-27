@@ -1,0 +1,51 @@
+name: omni-migration-e2e
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: omni_butler
+      POSTGRES_USER: omni_butler
+      POSTGRES_PASSWORD: migration-e2e-only-password
+    command: [postgres, -c, wal_level=logical, -c, max_replication_slots=10, -c, max_wal_senders=10]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/10-powersync.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U omni_butler -d omni_butler]
+      interval: 2s
+      retries: 30
+    ports: ["127.0.0.1:35439:5432"]
+  api:
+    build:
+      context: ../apps/server
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://omni_butler:migration-e2e-only-password@postgres:5432/omni_butler?schema=public
+      POWERSYNC_URL: http://127.0.0.1:35480
+      JWT_KEYS_DIR: /app/keys
+      SYNC_SECRET: migration-e2e-only-secret-2026
+    volumes: [api-keys:/app/keys]
+    depends_on:
+      postgres: {condition: service_healthy}
+    ports: ["127.0.0.1:35430:3000"]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/omni-butler/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      retries: 30
+  powersync:
+    image: journeyapps/powersync-service@sha256:bf46f66e5dcc8f6a084de02ab51155dfa655bc610aa95009fff1c36f949c0acf
+    command: [start, -r, unified]
+    environment:
+      POWERSYNC_CONFIG_PATH: /config/service.yaml
+      PS_JWKS_URI: http://api:3000/omni-butler/api/v1/auth/jwks
+      NODE_OPTIONS: --max-old-space-size=768
+      PS_DATA_SOURCE_URI: postgresql://omni_butler:migration-e2e-only-password@postgres:5432/omni_butler
+      PS_STORAGE_URI: postgresql://omni_butler:migration-e2e-only-password@postgres:5432/powersync_storage
+    volumes: [./powersync:/config:ro]
+    depends_on:
+      api: {condition: service_healthy}
+    ports: ["127.0.0.1:35480:8080"]
+volumes:
+  postgres-data:
+  api-keys:
+

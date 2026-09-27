@@ -3,6 +3,7 @@ import 'package:omni_butler/core/auth/auth_models.dart';
 import 'package:omni_butler/core/auth/auth_providers.dart';
 import 'package:omni_butler/core/sync/omni_sync_runtime.dart';
 import 'package:omni_butler/core/sync/sync_preferences.dart';
+import 'package:omni_butler/core/sync/sync_connection_providers.dart';
 import 'package:powersync/powersync.dart';
 
 /// 生产环境同步运行时提供者；应用入口必须覆盖该值。
@@ -14,6 +15,8 @@ class SyncController extends AsyncNotifier<void> {
   /// 监听认证状态并应用对应同步连接。
   @override
   Future<void> build() async {
+    // 迁移协调器独占连接控制，防止 Provider 重建将旧库连回服务器。
+    if (ref.watch(syncMaintenanceProvider)) return;
     // 当前生产同步运行时。
     final OmniSyncRuntime? runtime = ref.watch(syncRuntimeProvider);
     if (runtime == null) {
@@ -27,6 +30,12 @@ class SyncController extends AsyncNotifier<void> {
     }
     // 当前已恢复完成的设备同步会话。
     final SyncSession? session = await ref.watch(authControllerProvider.future);
+    if (!ref.mounted ||
+        ref.read(syncMaintenanceProvider) ||
+        !identical(ref.read(syncRuntimeProvider), runtime) ||
+        runtime.writesFrozen) {
+      return;
+    }
     if (session == null) {
       await runtime.disconnect();
       return;

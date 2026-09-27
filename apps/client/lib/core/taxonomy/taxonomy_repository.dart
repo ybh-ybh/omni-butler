@@ -538,6 +538,7 @@ class TaxonomyRepository {
 
   /// 确保内置时间类别存在。
   Future<void> _ensureDefaults() async {
+    if (await _database.isDefaultBusinessSeedingDisabled()) return;
     // 已有时间类别数量。
     final int count =
         await (_database.selectOnly(_database.taxonomyEntries)

@@ -30,7 +30,7 @@ export class AuthController {
   @HttpCode(200)
   @ApiOperation({ summary: '使用同步密钥建立设备会话' })
   connect(@Body() input: ConnectSyncDto): Promise<TokenPair> {
-    return this.auth.connect(input.syncKey);
+    return this.auth.connect(input.syncKey, input.expectedOwnerId);
   }
 
   /// 使用稳定设备凭证刷新访问令牌。

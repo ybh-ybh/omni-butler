@@ -12,6 +12,8 @@ import 'package:omni_butler/core/notifications/notification_providers.dart';
 import 'package:omni_butler/features/memberships/data/membership_repository.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
+import 'package:omni_butler/core/sync/sync_connection_providers.dart';
+import 'package:omni_butler/core/sync/sync_maintenance_boundary.dart';
 
 /// Omni Butler 根应用。
 class OmniButlerApp extends ConsumerStatefulWidget {
@@ -59,6 +61,8 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
 
   /// 执行一次已到期会员的自动续费处理。
   Future<void> _processAutoRenewals() async {
+    // 迁移时不产生自动账单；共享数据库门禁仍负责阻止在途旧引用。
+    if (ref.read(syncMaintenanceProvider)) return;
     // 当前设备功能偏好。
     final FeaturePreference featurePreference = ref.read(
       featurePreferenceProvider,
@@ -121,6 +125,8 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
       themeMode: preference.mode,
       scrollBehavior: const OmniScrollBehavior(),
       routerConfig: router,
+      builder: (BuildContext context, Widget? child) =>
+          SyncMaintenanceBoundary(child: child ?? const SizedBox.shrink()),
     );
   }
 }

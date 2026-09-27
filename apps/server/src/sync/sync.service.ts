@@ -24,7 +24,7 @@ const parentReferences: Readonly<Record<string, Record<string, string>>> = {
 };
 
 /// 对对象键排序，保证不同 JSON 属性顺序不会影响幂等内容校验。
-function canonicalize(value: unknown): unknown {
+export function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
@@ -68,7 +68,16 @@ export class SyncService {
     return this.prisma.$transaction(
       async (transaction) => {
         // 单人多设备事务按归属串行提交，保证派生数据和回执一致。
-        await transaction.$queryRaw`SELECT id FROM sync_owners WHERE id = ${userId}::uuid FOR UPDATE`;
+        // 加锁后再次确认归属，拒绝认证完成之后发生重建的旧请求。
+        const owners = await transaction.$queryRaw<
+          { id: string }[]
+        >`SELECT id FROM sync_owners WHERE id = ${userId}::uuid FOR UPDATE`;
+        if (owners.length === 0) {
+          throw new ConflictException({
+            code: 'SYNC_OWNER_CHANGED',
+            message: '服务器数据归属已改变，请重新连接',
+          });
+        }
         // 同一数据库安装身份与事务编号构成唯一回执。
         const identity = {
           userId,

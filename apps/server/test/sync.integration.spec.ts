@@ -8,6 +8,17 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import type { SyncBatchDto } from '../src/sync/dto/sync-batch.dto';
 import type { SyncOperationDto } from '../src/sync/dto/sync-operation.dto';
 import { SyncService } from '../src/sync/sync.service';
+import type { AuthService } from '../src/auth/auth.service';
+import { SyncMigrationService } from '../src/sync/sync-migration.service';
+import type { SyncMigrationDto } from '../src/sync/dto/sync-migration.dto';
+import type {
+  DeviceSession,
+  Prisma,
+  Quote,
+  SyncMigrationReceipt,
+  SyncOwner,
+  SyncReceipt,
+} from '../src/generated/prisma/client';
 
 /// 仅显式配置隔离测试库时运行，不读取应用 DATABASE_URL 或 .env。
 const databaseUrl = process.env.OMNI_TEST_DATABASE_URL;
@@ -82,6 +93,8 @@ integration('SyncService PostgreSQL 集成', () => {
   let prisma: PrismaService | undefined;
   // 实际同步服务。
   let service: SyncService;
+  // 当前真实快照替换服务，仅密钥验证使用独立替身。
+  let migrations: SyncMigrationService;
   // 当前用例独立所有者。
   let ownerId: string;
   // 只有确认空 schema 后才允许清理由此测试创建的对象。
@@ -164,6 +177,9 @@ integration('SyncService PostgreSQL 集成', () => {
     );
     await prisma.onModuleInit();
     service = new SyncService(prisma);
+    migrations = new SyncMigrationService(prisma, {
+      verifySyncKey: jest.fn(),
+    } as unknown as AuthService);
   });
 
   it('第四份迁移原样保留已部署版本的旧随机日签记录', () => {
@@ -173,9 +189,385 @@ integration('SyncService PostgreSQL 集成', () => {
   beforeEach(async () => {
     if (!ownsSchema) throw new Error('数据库初始化未完成，禁止修改数据');
     await database!.query('TRUNCATE sync_owners CASCADE');
+    await database!.query('TRUNCATE sync_migration_receipts');
     // 每条测试的内部身份均独立随机生成。
     const owner = await prisma!.syncOwner.create({ data: {} });
     ownerId = owner.id;
+  });
+
+  /// 创建包含 nullable 列的严格完整名言快照。
+  function snapshotQuote(
+    content = '迁移名言',
+    id: string = randomUUID(),
+  ): SyncOperationDto {
+    return put(
+      'quotes',
+      { content, source: null, is_enabled: true, deleted_at: null },
+      id,
+    );
+  }
+
+  /// 使用当前预检 owner 构造持久迁移请求。
+  function migration(operations: SyncOperationDto[]): SyncMigrationDto {
+    return {
+      syncKey: 'migration-test-key',
+      migrationId: randomUUID(),
+      expectedOwnerId: ownerId,
+      snapshotVersion: 1,
+      operations,
+    };
+  }
+
+  /// 保存替换前可观察状态，失败后逐字段核对归属、业务与会话回执。
+  async function migrationState(): Promise<{
+    owners: SyncOwner[];
+    quotes: Quote[];
+    sessions: DeviceSession[];
+    receipts: SyncReceipt[];
+    migrations: SyncMigrationReceipt[];
+  }> {
+    return {
+      owners: await prisma!.syncOwner.findMany(),
+      quotes: await prisma!.quote.findMany(),
+      sessions: await prisma!.deviceSession.findMany(),
+      receipts: await prisma!.syncReceipt.findMany(),
+      migrations: await prisma!.syncMigrationReceipt.findMany(),
+    };
+  }
+
+  it('100001 条快照及超过 32 MB 的完整请求均拒绝，旧 owner、业务和回执不变', async () => {
+    await service.applyBatch(ownerId, batch([snapshotQuote('原数据必须保留')]));
+    await prisma!.deviceSession.create({
+      data: {
+        id: randomUUID(),
+        userId: ownerId,
+        tokenHash: 'c'.repeat(64),
+        expiresAt: new Date(Date.now() + 60000),
+      },
+    });
+    await prisma!.syncMigrationReceipt.create({
+      data: {
+        migrationId: randomUUID(),
+        expectedOwnerId: randomUUID(),
+        ownerId,
+        payloadHash: 'd'.repeat(64),
+      },
+    });
+    // 包括已有回执，避免测试仅验证空表仍为空。
+    const before = await migrationState();
+    // 完整合法记录保持独立 ID，请求字节数仍未超过上限，单独验证行数限制。
+    const tooMany = migration(
+      Array.from({ length: 100001 }, () => snapshotQuote('x')),
+    );
+    expect(
+      Buffer.byteLength(JSON.stringify(tooMany), 'utf8'),
+    ).toBeLessThanOrEqual(32 * 1024 * 1024);
+    await expect(migrations.replace(tooMany)).rejects.toMatchObject({
+      response: { code: 'SNAPSHOT_LIMIT_EXCEEDED' },
+    });
+    expect(await migrationState()).toEqual(before);
+    expect(await migrations.status(tooMany)).toEqual({
+      status: 'notFound',
+      migrationId: tooMany.migrationId,
+    });
+    // 一条记录足以验证完整 JSON 请求上限，正文自身恰为 32 MB，编码封装使其超限。
+    const tooLarge = migration([snapshotQuote('x'.repeat(32 * 1024 * 1024))]);
+    expect(tooLarge.operations).toHaveLength(1);
+    expect(Buffer.byteLength(JSON.stringify(tooLarge), 'utf8')).toBeGreaterThan(
+      32 * 1024 * 1024,
+    );
+    await expect(migrations.replace(tooLarge)).rejects.toMatchObject({
+      response: { code: 'SNAPSHOT_LIMIT_EXCEEDED' },
+    });
+    expect(await migrationState()).toEqual(before);
+    expect(await migrations.status(tooLarge)).toEqual({
+      status: 'notFound',
+      migrationId: tooLarge.migrationId,
+    });
+  });
+
+  it('真实 PostgreSQL 插入阻塞触发事务超时，owner、旧会话和业务全部回滚且不产生迁移回执', async () => {
+    await service.applyBatch(ownerId, batch([snapshotQuote('超时前原业务')]));
+    await prisma!.deviceSession.create({
+      data: {
+        id: randomUUID(),
+        userId: ownerId,
+        tokenHash: 'e'.repeat(64),
+        expiresAt: new Date(Date.now() + 60000),
+      },
+    });
+    // 序列递增不会随事务回滚，用于证明真实数据库触发器已执行到睡眠语句。
+    await database!.query(`
+      CREATE SEQUENCE migration_timeout_probe;
+      CREATE FUNCTION migration_timeout_sleep() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.content = 'timeout-probe' THEN
+          PERFORM nextval('migration_timeout_probe');
+          PERFORM pg_sleep(0.6);
+        END IF;
+        RETURN NEW;
+      END $$;
+      CREATE TRIGGER migration_timeout_sleep BEFORE INSERT ON quotes
+      FOR EACH ROW EXECUTE FUNCTION migration_timeout_sleep();
+    `);
+    try {
+      // 仅缩短测试事务的等待时间，其余服务逻辑、Prisma 和 PostgreSQL 均使用真实实现。
+      const timeoutPrisma = {
+        $transaction<T>(
+          action: (transaction: Prisma.TransactionClient) => Promise<T>,
+          options: { maxWait: number; timeout: number },
+        ): Promise<T> {
+          expect(options.timeout).toBe(60000);
+          return prisma!.$transaction(action, { ...options, timeout: 200 });
+        },
+      } as unknown as PrismaService;
+      // 和生产完全相同的替换服务，只注入事务超时边界。
+      const timedMigrations = new SyncMigrationService(timeoutPrisma, {
+        verifySyncKey: jest.fn(),
+      } as unknown as AuthService);
+      // 首条插入已完成后，第二条才在 PostgreSQL 触发器里超时。
+      const input = migration([
+        snapshotQuote('部分新数据必须回滚'),
+        snapshotQuote('timeout-probe'),
+      ]);
+      // 保存真实旧会话和增量回执，覆盖 owner 级联删除后的恢复。
+      const before = await migrationState();
+      await expect(timedMigrations.replace(input)).rejects.toMatchObject({
+        code: 'P2028',
+      });
+      // 已进入数据库执行的证明，不依赖 JavaScript 主动抛错模拟。
+      const probe = await database!.query<{ is_called: boolean }>(
+        'SELECT is_called FROM migration_timeout_probe',
+      );
+      expect(probe.rows[0]?.is_called).toBe(true);
+      expect(await migrationState()).toEqual(before);
+      expect(await migrations.status(input)).toEqual({
+        status: 'notFound',
+        migrationId: input.migrationId,
+      });
+    } finally {
+      await database!.query(`
+        DROP TRIGGER IF EXISTS migration_timeout_sleep ON quotes;
+        DROP FUNCTION IF EXISTS migration_timeout_sleep();
+        DROP SEQUENCE IF EXISTS migration_timeout_probe;
+      `);
+    }
+  });
+
+  it('快照替换清理旧会话、回执、墓碑与同身份旧记录，丢响应重试不再覆盖', async () => {
+    // 同一业务身份的旧值与目标值。
+    const record = snapshotQuote('旧值');
+    await service.applyBatch(ownerId, batch([record]));
+    await prisma!.deviceSession.create({
+      data: {
+        id: randomUUID(),
+        userId: ownerId,
+        tokenHash: 'a'.repeat(64),
+        expiresAt: new Date(Date.now() + 60000),
+      },
+    });
+    await service.applyBatch(
+      ownerId,
+      batch([{ op: 'DELETE', table: 'quotes', id: record.id }]),
+    );
+    // 目标快照可以恢复旧 B 墓碑下的相同 ID。
+    const input = migration([snapshotQuote('快照值', record.id)]);
+    // 首次持久提交结果。
+    const result = await migrations.replace(input);
+    expect(result.status).toBe('committed');
+    expect(result.ownerId).not.toBe(ownerId);
+    expect(await prisma!.deviceSession.count()).toBe(0);
+    expect(await prisma!.syncReceipt.count()).toBe(0);
+    expect(await prisma!.syncTombstone.count()).toBe(0);
+    await service.applyBatch(
+      result.ownerId,
+      batch([
+        {
+          op: 'PATCH',
+          table: 'quotes',
+          id: record.id,
+          data: { content: '提交后的编辑' },
+        },
+      ]),
+    );
+    expect(await migrations.replace(input)).toEqual(result);
+    expect(
+      (await prisma!.quote.findUnique({ where: { id: record.id } }))!.content,
+    ).toBe('提交后的编辑');
+    expect(await migrations.status(input)).toEqual(result);
+    await expect(
+      service.applyBatch(ownerId, batch([snapshotQuote()])),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('并发同身份迁移共用回执；身份复用不同内容和旧目标覆盖均拒绝', async () => {
+    // 两个并发网络请求持有同一持久迁移身份。
+    const input = migration([snapshotQuote()]);
+    // 加锁前同时到达的重复请求。
+    const results = await Promise.all([
+      migrations.replace(input),
+      migrations.replace(input),
+    ]);
+    expect(results[0]).toEqual(results[1]);
+    expect(await prisma!.syncMigrationReceipt.count()).toBe(1);
+    await expect(
+      migrations.replace({ ...input, operations: [] }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    await expect(migrations.replace(migration([]))).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+  });
+
+  it('后续空快照替换使旧回执 superseded，旧请求不能再次清库', async () => {
+    // 首次快照及回执。
+    const input = migration([snapshotQuote()]);
+    const first = await migrations.replace(input);
+    // 第二次明确以空本机库替换。
+    const second = await migrations.replace({
+      ...migration([]),
+      expectedOwnerId: first.ownerId,
+    });
+    expect(second.status).toBe('committed');
+    expect(await prisma!.quote.count()).toBe(0);
+    expect((await migrations.replace(input)).status).toBe('superseded');
+    expect((await migrations.status(input)).status).toBe('superseded');
+    expect((await prisma!.syncOwner.findFirst())!.id).toBe(second.ownerId);
+  });
+
+  it('迁移与旧会话普通上传并发时，旧数据不能进入新 owner', async () => {
+    // 两种请求都必须等待同一个旧 owner 行锁。
+    await database!.query('BEGIN');
+    await database!.query(
+      'SELECT id FROM sync_owners WHERE id = $1::uuid FOR UPDATE',
+      [ownerId],
+    );
+    // 目标完整快照与迟到的普通上传使用不同记录身份。
+    const target = snapshotQuote('迁移后的唯一记录');
+    const late = snapshotQuote('旧设备迟到上传');
+    // 两个已经发起但被行锁阻挡的请求。
+    const replacing = migrations.replace(migration([target]));
+    const uploading = service.applyBatch(ownerId, batch([late]));
+    await database!.query('COMMIT');
+    // 不强制调度顺序；上传可以在替换之前成功，也可以在替换之后被拒绝。
+    const results = await Promise.allSettled([replacing, uploading]);
+    expect(results[0].status).toBe('fulfilled');
+    expect((await prisma!.quote.findMany()).map((row) => row.id)).toEqual([
+      target.id,
+    ]);
+    if (results[1].status === 'rejected')
+      expect(results[1].reason).toBeInstanceOf(ConflictException);
+  });
+
+  it('快照数据库校验失败回滚 owner、会话及业务，不产生完成回执', async () => {
+    await service.applyBatch(ownerId, batch([snapshotQuote('原服务器数据')]));
+    // 失败回滚必须同时保留原有设备授权。
+    const sessionId = randomUUID();
+    await prisma!.deviceSession.create({
+      data: {
+        id: sessionId,
+        userId: ownerId,
+        tokenHash: 'a'.repeat(64),
+        expiresAt: new Date(Date.now() + 60000),
+      },
+    });
+    // 完整列存在但 NOT NULL 事实值非法，只能由真实数据库最终验证。
+    const invalid = snapshotQuote();
+    invalid.data!.content = null;
+    // 错误出现在成功插入第一行之后，覆盖整个事务回滚。
+    const input = migration([snapshotQuote(), invalid]);
+    await expect(migrations.replace(input)).rejects.toThrow();
+    expect((await prisma!.syncOwner.findFirst())!.id).toBe(ownerId);
+    expect((await prisma!.quote.findMany()).map((row) => row.content)).toEqual([
+      '原服务器数据',
+    ]);
+    expect(await migrations.status(input)).toEqual({
+      status: 'notFound',
+      migrationId: input.migrationId,
+    });
+    expect(
+      await prisma!.deviceSession.findUnique({ where: { id: sessionId } }),
+    ).not.toBeNull();
+    // 布尔值和日期值交由 PostgreSQL 的实际列类型校验，失败仍整体回滚。
+    for (const data of [
+      { is_enabled: 'not-a-boolean' },
+      { created_at: 'not-a-date' },
+    ]) {
+      // 每个请求使用独立身份，不能误命中旧回执。
+      const invalidType = snapshotQuote();
+      invalidType.data = { ...invalidType.data, ...data };
+      await expect(
+        migrations.replace(migration([invalidType])),
+      ).rejects.toThrow();
+      expect((await prisma!.syncOwner.findFirst())!.id).toBe(ownerId);
+    }
+  });
+
+  it('快照预检拒绝遗漏列、未知列、重复身份、非PUT和悬空引用', async () => {
+    // 快照完整行基线。
+    const row = snapshotQuote();
+    // 缺少 nullable 列也不是完整快照。
+    const missing = snapshotQuote();
+    delete missing.data!.source;
+    // 完整日签引用快照之外的名言。
+    const dangling = put('daily_quote_selections', {
+      day_key: '2026-09-27',
+      quote_id: randomUUID(),
+    });
+    // 多态引用不受 PostgreSQL 外键保护，服务必须主动验证。
+    const taxonomy = put('taxonomy_entries', {
+      module: 'inventory',
+      kind: 'tag',
+      name: '迁移标签',
+      color_value: null,
+      sort_order: 0,
+      is_enabled: true,
+      deleted_at: null,
+    });
+    const orphanLink = put('record_taxonomy_links', {
+      module: 'inventory',
+      record_id: randomUUID(),
+      taxonomy_id: taxonomy.id,
+      deleted_at: null,
+    });
+    // 各失败输入均不能清除 owner 或创建回执。
+    const invalidSnapshots = [
+      [missing],
+      [{ ...row, data: { ...row.data, user_id: ownerId } }],
+      [row, row],
+      [{ ...row, op: 'PATCH' as const }],
+      [dangling],
+      [taxonomy, orphanLink],
+    ];
+    for (const operations of invalidSnapshots)
+      await expect(
+        migrations.replace(migration(operations)),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    expect((await prisma!.syncOwner.findFirst())!.id).toBe(ownerId);
+    expect(await prisma!.syncMigrationReceipt.count()).toBe(0);
+  });
+
+  it('连接预检返回所有表数量并包含回收站记录', async () => {
+    await service.applyBatch(
+      ownerId,
+      batch([
+        snapshotQuote(),
+        {
+          ...snapshotQuote(),
+          data: { ...snapshotQuote().data, deleted_at: timestamp },
+        },
+      ]),
+    );
+    // 目标归属与业务数量使用同一加锁视图。
+    const preview = await migrations.preview('migration-test-key');
+    expect(preview).toMatchObject({
+      ownerId,
+      protocolVersion: 1,
+      snapshotVersion: 1,
+      deletedCount: 1,
+      counts: { quotes: 2 },
+      limits: { maxOperations: 100000, maxBytes: 33554432 },
+    });
+    expect(Object.keys(preview.counts)).toHaveLength(11);
   });
 
   afterAll(async () => {
