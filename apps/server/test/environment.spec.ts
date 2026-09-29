@@ -45,6 +45,7 @@ describe('validateEnvironment', () => {
     const environment = validateEnvironment(automaticEnvironment());
 
     expect(environment.PORT).toBe(3000);
+    expect(environment.IMAGE_SYNC_ENABLED).toBe(false);
     expect(environment.JWT_ISSUER).toBe('omni-butler');
     expect(environment.JWT_AUDIENCE).toBe('omni-butler-api');
     expect(environment.POWERSYNC_AUDIENCE).toBe('omni-butler-powersync');
@@ -202,6 +203,25 @@ describe('validateEnvironment', () => {
     expect(() =>
       validateEnvironment({ ...automaticEnvironment(), SYNC_SECRET: 'short' }),
     ).toThrow('SYNC_SECRET 至少需要 16 个字符');
+    expect(existsSync(join(keysDirectory, 'jwt-private.pem'))).toBe(false);
+  });
+
+  it('单一图片开关接受true且不要求用户对象存储配置', () => {
+    expect(
+      validateEnvironment({
+        ...automaticEnvironment(),
+        IMAGE_SYNC_ENABLED: 'true',
+      }).IMAGE_SYNC_ENABLED,
+    ).toBe(true);
+  });
+
+  it('图片开关拼写错误时拒绝启动且不生成密钥', () => {
+    expect(() =>
+      validateEnvironment({
+        ...automaticEnvironment(),
+        IMAGE_SYNC_ENABLED: 'yes',
+      }),
+    ).toThrow('IMAGE_SYNC_ENABLED');
     expect(existsSync(join(keysDirectory, 'jwt-private.pem'))).toBe(false);
   });
 });

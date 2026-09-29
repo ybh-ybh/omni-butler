@@ -11,6 +11,7 @@ import 'package:omni_butler/core/sync/sync_connection_models.dart';
 import 'package:omni_butler/core/sync/sync_connection_store.dart';
 import 'package:omni_butler/core/sync/sync_disk_space.dart';
 import 'package:omni_butler/core/sync/sync_snapshot.dart';
+import 'package:omni_butler/core/sync/sync_image_report.dart';
 import 'package:path/path.dart' as path;
 import 'package:uuid/uuid.dart';
 
@@ -70,6 +71,20 @@ class SyncConnectionCoordinator {
   /// 所有变更入口在第一个 await 前同步取得的互斥准入。
   bool _operationActive = false;
 
+  /// 数据库冻结前必须排空的后台传输器。
+  final Set<Future<void> Function()> _backgroundStops = {};
+
+  /// 注册共享数据库的后台任务，并返回注销方法。
+  void Function() registerBackgroundStop(Future<void> Function() stop) {
+    _backgroundStops.add(stop);
+    return () => _backgroundStops.remove(stop);
+  }
+
+  /// 先排空图片网络响应，再获取一致业务快照。
+  Future<void> _stopBackgroundTasks() async {
+    await Future.wait(List.of(_backgroundStops).map((stop) => stop()));
+  }
+
   /// 活动运行时只在持久激活成功后变化。
   OmniSyncRuntime get runtime => _runtime;
 
@@ -85,6 +100,13 @@ class SyncConnectionCoordinator {
   /// 在启动业务 Provider 前恢复持久维护门禁，不自动连接旧服务器。
   Future<void> initialize() async {
     await directory.create(recursive: true);
+    // 已完成迁移的缺图报告与活动数据库引用一起持久化。
+    final Map<String, dynamic>? active = await store.read('active');
+    _publish(
+      missingImages: List<String>.from(
+        active?['missingImages'] as List? ?? const <String>[],
+      ),
+    );
     // 上次尚未完成的迁移日志。
     final Map<String, dynamic>? pending = await store.read('pending');
     if (pending != null) {
@@ -138,6 +160,7 @@ class SyncConnectionCoordinator {
       queuedOperations: local.pendingOperations,
       maxOperations: (limits['maxOperations'] as num).toInt(),
       maxBytes: (limits['maxBytes'] as num).toInt(),
+      missingImages: await findMissingMigrationImages(local),
     );
   }
 
@@ -156,6 +179,7 @@ class SyncConnectionCoordinator {
     _operationActive = true;
     _publish(maintenance: true, busy: true, message: '正在保留本机数据并准备新数据库');
     try {
+      await _stopBackgroundTasks();
       await runtime.disconnect();
       await runtime.freezeWrites();
       if (await runtime.ownerId != preview.localOwnerId) {
@@ -163,6 +187,11 @@ class SyncConnectionCoordinator {
       }
       // 冻结后的完整本机快照，包括本机图片关联。
       final SyncSnapshot snapshot = await runtime.exportSnapshot();
+      // 只有采用本机数据的策略需要把旧主图携带到目标服务器。
+      final List<String> missingImages =
+          strategy == SyncConnectionStrategy.replaceLocal
+          ? const <String>[]
+          : await findMissingMigrationImages(snapshot);
       // 整个操作生命周期固定使用同一迁移身份。
       final String id = const Uuid().v4();
       // 预检完整请求而非只计算行数据大小。
@@ -228,6 +257,7 @@ class SyncConnectionCoordinator {
         'candidateSessionKey': sessionKey,
         'snapshotPath': snapshotPath,
         'snapshotHash': sha256.convert(snapshotBytes).toString(),
+        'missingImages': missingImages,
         'createdAt': DateTime.now().toUtc().toIso8601String(),
       };
       await store.write('pending', journal);
@@ -257,6 +287,7 @@ class SyncConnectionCoordinator {
         _publish();
         return;
       }
+      await _stopBackgroundTasks();
       await runtime.disconnect();
       await runtime.freezeWrites();
       // 只接受应用迁移目录中登记过的文件。
@@ -408,6 +439,7 @@ class SyncConnectionCoordinator {
         'databasePath': _candidate!.databasePath,
         'sessionKey': candidateAuth.storageKey,
         'serverAddress': address,
+        'missingImages': journal['missingImages'] ?? const <String>[],
       },
       migration: journal,
       backup: {
@@ -417,13 +449,20 @@ class SyncConnectionCoordinator {
         'sessionKey': journal['sourceSessionKey'],
         'createdAt': journal['createdAt'],
         'strategy': strategy.name,
+        'missingImages': journal['missingImages'] ?? const <String>[],
       },
     );
     _retired.add(_runtime);
     _runtime = _candidate!;
     _candidate = null;
     _auth = candidateAuth;
-    _publish(message: '服务器连接完成，数据已同步', generation: state.generation + 1);
+    _publish(
+      message: '服务器连接完成，业务数据已同步；本机图片将在目标支持时继续补传',
+      generation: state.generation + 1,
+      missingImages: List<String>.from(
+        journal['missingImages'] as List? ?? const <String>[],
+      ),
+    );
     // 激活已完成，清理临时密钥失败也不能把成功迁移重新标成待提交。
     try {
       await secureStorage.delete(key: 'sync.migration.$id.secret');
@@ -455,6 +494,7 @@ class SyncConnectionCoordinator {
         syncKey: syncKey,
         expectedOwnerId: preview.ownerId,
       );
+      await _stopBackgroundTasks();
       await runtime.disconnect();
       await runtime.freezeWrites();
       // 新运行时复用原库中的队列及检查点。
@@ -467,6 +507,7 @@ class SyncConnectionCoordinator {
         'databasePath': reopened.databasePath,
         'sessionKey': next.storageKey,
         'serverAddress': preview.serverAddress,
+        'missingImages': state.missingImages,
       });
       _retired.add(_runtime);
       _runtime = reopened;
@@ -497,6 +538,7 @@ class SyncConnectionCoordinator {
     _operationActive = true;
     _publish(maintenance: true, busy: true, message: '正在断开服务器');
     try {
+      await _stopBackgroundTasks();
       await runtime.disconnect();
       await runtime.freezeWrites();
       await auth.disconnect();
@@ -638,6 +680,7 @@ class SyncConnectionCoordinator {
     String? error,
     bool canCancel = false,
     int? generation,
+    List<String>? missingImages,
   }) {
     _state = SyncConnectionState(
       generation: generation ?? state.generation,
@@ -646,12 +689,14 @@ class SyncConnectionCoordinator {
       message: message,
       error: error,
       canCancel: canCancel,
+      missingImages: missingImages ?? state.missingImages,
     );
     _changes.add(_state);
   }
 
   /// 测试和应用退出时释放所有连接。
   Future<void> close() async {
+    await _stopBackgroundTasks();
     await _candidate?.close();
     await releaseRetired();
     await runtime.close();

@@ -38,8 +38,46 @@ model SyncOwner {
   timeEntries          TimeEntry[]
   memberships          Membership[]
   membershipPayments   MembershipPayment[]
+  images               BusinessImage[]
+  imageReceipts        ImageOperationReceipt[]
 
   @@map("sync_owners")
+}
+
+/// 图片关联与显式移除标记通过独立接口同步，不进入 PowerSync 业务白名单。
+model BusinessImage {
+  userId String @map("user_id") @db.Uuid
+  businessType String @map("business_type") @db.VarChar(32)
+  businessId String @map("business_id") @db.Uuid
+  attachmentId String? @map("attachment_id") @db.Uuid
+  revision String @db.Uuid
+  objectKey String? @map("object_key")
+  sha256 String? @db.VarChar(64)
+  mimeType String? @map("mime_type") @db.VarChar(32)
+  sizeBytes Int? @map("size_bytes")
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([userId, businessType, businessId])
+  @@unique([objectKey])
+  @@map("business_images")
+}
+
+/// 操作回执与图片修改同事务保存，避免重试覆盖后来的图片。
+model ImageOperationReceipt {
+  userId String @map("user_id") @db.Uuid
+  operationId String @map("operation_id") @db.Uuid
+  payloadHash String @map("payload_hash") @db.VarChar(64)
+  result Json
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([userId, operationId])
+  @@map("image_operation_receipts")
+}
+
+/// 对象清理任务不关联 owner，重建服务器后仍可清理旧对象。
+model ImageObjectGarbage {
+  objectKey String @id @map("object_key")
+  dueAt DateTime @map("due_at") @db.Timestamptz(3)
+  @@index([dueAt])
+  @@map("image_object_garbage")
 }
 
 /// 高熵设备会话凭证只保存摘要；会话删除即撤销。

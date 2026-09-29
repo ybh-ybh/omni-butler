@@ -16,6 +16,7 @@
     "prisma:migrate:deploy": "prisma migrate deploy"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.922.0",
     "@nestjs/common": "11.2.3",
     "@nestjs/config": "4.0.2",
     "@nestjs/core": "11.2.3",
@@ -33,7 +34,8 @@
     "pg": "8.16.3",
     "prisma": "7.10.0",
     "reflect-metadata": "0.2.2",
-    "rxjs": "7.8.2"
+    "rxjs": "7.8.2",
+    "sharp": "0.34.4"
   },
   "devDependencies": {
     "@eslint/eslintrc": "3.3.1",
@@ -64,6 +66,7 @@
     "prisma@7.10.0": true,
     "@prisma/engines@7.10.0": true,
     "unrs-resolver@1.12.2": true,
-    "@scarf/scarf": false
+    "@scarf/scarf": false,
+    "sharp@0.34.4": true
   }
 }

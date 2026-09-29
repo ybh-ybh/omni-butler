@@ -264,6 +264,34 @@ void main() {
     await fixture.close();
   });
 
+  test('断开等待图片任务排空后才冻结和清除会话', () async {
+    // 人为延迟图片响应，确认维护流程不会抢先关闭数据库。
+    final Completer<void> drained = Completer<void>();
+    final Completer<void> stopping = Completer<void>();
+    final unregister = fixture.coordinator.registerBackgroundStop(() {
+      if (!stopping.isCompleted) stopping.complete();
+      return drained.future;
+    });
+    final Future<void> disconnect = fixture.coordinator.disconnect();
+    await stopping.future;
+    expect(fixture.coordinator.state.maintenance, isTrue);
+    expect(fixture.source.writesFrozen, isFalse);
+    expect(await fixture.auth.loadSession(), isNotNull);
+    drained.complete();
+    await disconnect;
+    unregister();
+    expect(await fixture.auth.loadSession(), isNull);
+    expect(fixture.coordinator.state.maintenance, isFalse);
+  });
+
+  test('启动从控制库恢复上次迁移缺图报告', () async {
+    await fixture.store.write('active', <String, dynamic>{
+      'missingImages': <String>['物品：云端相机'],
+    });
+    await fixture.coordinator.initialize();
+    expect(fixture.coordinator.state.missingImages, <String>['物品：云端相机']);
+  });
+
   test('服务器预检只读取数量，不保存会话、不绑定 B、不修改本机队列', () async {
     // 预检前的完整活动会话。
     final Map<String, String> credentials = await fixture.storage.readAll();

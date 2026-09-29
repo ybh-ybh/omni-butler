@@ -16,6 +16,7 @@ class SyncConnectionPreview {
     required this.maxOperations,
     required this.maxBytes,
     this.sourceAddress,
+    this.missingImages = const <String>[],
   });
 
   /// 用户输入的目标地址，不含 API 路径。
@@ -29,6 +30,9 @@ class SyncConnectionPreview {
 
   /// 本机来源地址（历史版本可能未保存）。
   final String? sourceAddress;
+
+  /// 本机没有文件的业务主图，仅提示，不阻止迁移。
+  final List<String> missingImages;
 
   /// 本机各表数量。
   final Map<String, int> localCounts;
@@ -72,6 +76,7 @@ class SyncConnectionState {
     this.message = '',
     this.error,
     this.canCancel = false,
+    this.missingImages = const <String>[],
   });
 
   /// 活动数据库和会话切换代次，供依赖注入重新绑定。
@@ -91,4 +96,7 @@ class SyncConnectionState {
 
   /// 尚未提交远端时允许取消。
   final bool canCancel;
+
+  /// 上次完成迁移时无法携带的图片，重启后仍可查看。
+  final List<String> missingImages;
 }

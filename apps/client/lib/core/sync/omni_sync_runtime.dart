@@ -11,6 +11,7 @@ import 'package:omni_butler/core/sync/omni_powersync_connector.dart';
 import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 import 'package:omni_butler/core/sync/sync_client_identity.dart';
 import 'package:omni_butler/core/sync/sync_snapshot.dart';
+import 'package:omni_butler/core/sync/sync_image_report.dart';
 import 'package:omni_butler/core/sync/sync_write_gate.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -397,15 +398,51 @@ class OmniSyncRuntime {
                     row['image_attachment_id'] == attachment['id'],
               );
           if (selected) {
+            // 报告认为可用的业务路径不能被附件中的过期路径覆盖。
+            final Map<String, Object?> source = snapshot.tables[table]!
+                .firstWhere(
+                  (Map<String, Object?> row) =>
+                      row['id'] == attachment['business_id'],
+                );
+            // 两份引用择其可用者；都缺失时保留旧引用用于后续缺图提示。
+            final String? restoredPath =
+                await findAvailableMigrationImagePath(
+                  businessPath: source['image_local_path'] as String?,
+                  attachmentPath: attachment['local_path'] as String?,
+                ) ??
+                attachment['local_path'] as String?;
+            await transaction.execute(
+              'UPDATE attachments SET local_path = ? WHERE id = ?',
+              <Object?>[restoredPath, attachment['id']],
+            );
             await transaction.execute(
               'UPDATE "$table" SET image_attachment_id = ?, image_local_path = ? WHERE id = ?',
               <Object?>[
                 attachment['id'],
-                attachment['local_path'],
+                restoredPath,
                 attachment['business_id'],
               ],
             );
           }
+        }
+      }
+      // 历史版本可能只有业务路径，没有附件行；恢复同类型同 ID 后由图片服务补建附件。
+      for (final String table in imageTables.values) {
+        for (final Map<String, Object?> row
+            in snapshot.tables[table] ?? <Map<String, Object?>>[]) {
+          if (row['image_attachment_id'] != null ||
+              row['image_local_path'] == null) {
+            continue;
+          }
+          // 有效本机文件是恢复旧路径的前提，SQL 的目标 ID 保证不会创建旧业务数据。
+          final String? localPath = await findAvailableMigrationImagePath(
+            businessPath: row['image_local_path'] as String?,
+          );
+          if (localPath == null) continue;
+          await transaction.execute(
+            'UPDATE "$table" SET image_local_path = ? WHERE id = ?',
+            <Object?>[localPath, row['id']],
+          );
         }
       }
     });

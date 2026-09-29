@@ -96,6 +96,8 @@ class AuthRepository {
     String path, {
     Object? data,
     Map<String, dynamic>? queryParameters,
+    ResponseType? responseType,
+    bool preserveTransportErrors = false,
   }) {
     if (generation != _generation) {
       throw const ApiFailure('同步会话已变更，请重新建立同步连接');
@@ -105,6 +107,8 @@ class AuthRepository {
       path,
       data: data,
       queryParameters: queryParameters,
+      responseType: responseType,
+      preserveTransportErrors: preserveTransportErrors,
     );
   }
 
@@ -361,6 +365,8 @@ class AuthRepository {
     String path, {
     Object? data,
     Map<String, dynamic>? queryParameters,
+    ResponseType? responseType,
+    bool preserveTransportErrors = false,
   }) async {
     // 请求从读取会话起就固定所属代次。
     final int generation = _generation;
@@ -379,6 +385,7 @@ class AuthRepository {
         path: path,
         data: data,
         queryParameters: queryParameters,
+        responseType: responseType,
       );
       await _assertUnchangedSession(saved, generation);
       return response;
@@ -402,15 +409,18 @@ class AuthRepository {
             token: refreshed,
             method: method,
             path: path,
-            data: data,
+            data: data is FormData ? data.clone() : data,
             queryParameters: queryParameters,
+            responseType: responseType,
           );
           await _assertUnchangedSession(saved, generation);
           return response;
         } on DioException catch (retryError) {
+          if (preserveTransportErrors) rethrow;
           throw ApiFailure(_messageFor(retryError, fallback: '服务器请求失败'));
         }
       }
+      if (preserveTransportErrors) rethrow;
       throw ApiFailure(_messageFor(error, fallback: '服务器请求失败'));
     }
   }
@@ -442,6 +452,7 @@ class AuthRepository {
     required String path,
     Object? data,
     Map<String, dynamic>? queryParameters,
+    ResponseType? responseType,
   }) {
     return _dio(baseUrl).request<T>(
       path,
@@ -449,6 +460,7 @@ class AuthRepository {
       queryParameters: queryParameters,
       options: Options(
         method: method,
+        responseType: responseType,
         headers: <String, String>{'Authorization': 'Bearer $token'},
       ),
     );

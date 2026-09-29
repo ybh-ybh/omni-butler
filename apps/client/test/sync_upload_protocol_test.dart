@@ -47,6 +47,8 @@ class _RecordingAuth extends AuthRepository {
     String path, {
     Object? data,
     Map<String, dynamic>? queryParameters,
+    ResponseType? responseType,
+    bool preserveTransportErrors = false,
   }) async {
     requests.add(jsonDecode(jsonEncode(data)) as Map<String, dynamic>);
     uploadStarted?.complete();

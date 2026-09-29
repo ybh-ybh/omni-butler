@@ -3,11 +3,12 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
+import 'package:omni_butler/core/attachments/image_sync_store.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
-/// 第一期附件业务类型。
+/// 本机附件业务类型；首页背景始终仅本机保存。
 enum AttachmentBusinessType {
   /// 首页名言横幅背景。
   quoteBanner,
@@ -19,7 +20,7 @@ enum AttachmentBusinessType {
   membershipImage,
 }
 
-/// 附件保存状态；云端状态保留给下一期附件同步。
+/// 附件缓存状态；持久图片操作另存于 ImageSyncStore。
 enum AttachmentUploadState {
   /// 只保存在当前设备。
   localOnly,
@@ -75,7 +76,7 @@ class AttachmentRepository {
     return query.watchSingleOrNull();
   }
 
-  /// 读取下一期可处理的附件上传任务。
+  /// 监听附件展示状态中的待传记录；传输器使用独立持久操作队列。
   Stream<List<Attachment>> watchUploadQueue() {
     // 待处理附件查询。
     final query = _database.select(_database.attachments)
@@ -167,6 +168,8 @@ class AttachmentRepository {
         localPath: target.path,
         now: now,
       );
+      await ImageSyncStore(_database)
+          .recordIntent(businessType.name, businessId, id);
     });
     return (_database.select(
       _database.attachments,
@@ -189,6 +192,8 @@ class AttachmentRepository {
         localPath: null,
         now: now,
       );
+      await ImageSyncStore(_database)
+          .recordIntent(businessType.name, businessId, null);
     });
   }
 

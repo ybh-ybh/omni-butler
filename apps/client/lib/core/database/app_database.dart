@@ -170,7 +170,7 @@ class BannerSettings extends Table {
   ];
 }
 
-/// 本地附件表；云端字段留待下一期附件同步使用。
+/// 本机附件文件与缓存信息；网络操作另存在本机图片协议状态表。
 class Attachments extends Table {
   /// 附件稳定标识。
   TextColumn get id => text()();
@@ -184,7 +184,7 @@ class Attachments extends Table {
   /// 当前设备私有文件路径。
   TextColumn get localPath => text().nullable()();
 
-  /// 下一期云端对象键。
+  /// 兼容历史附件的对象键；图片访问统一使用业务图片接口。
   TextColumn get objectKey => text().nullable()();
 
   /// 文件 MIME 类型。
@@ -196,7 +196,7 @@ class Attachments extends Table {
   /// 文件 SHA-256 摘要。
   TextColumn get sha256 => text().nullable()();
 
-  /// 本地保存或下一期云端上传状态。
+  /// 本地保存或已同步缓存状态。
   TextColumn get uploadState =>
       text().withDefault(const Constant<String>('localOnly'))();
 
@@ -691,16 +691,18 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   /// 创建数据库并从旧版本安全升级。
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (Migrator migrator) async {
       await migrator.createAll();
+      await _createImageSyncMetadata();
       await _createTodoIndexes();
     },
     onUpgrade: (Migrator migrator, int from, int to) async {
+      if (from < 14) await _createImageSyncMetadata();
       if (from < 2) {
         await migrator.createTable(bannerSettings);
         await migrator.createTable(attachments);
@@ -841,6 +843,12 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         await migrator.alterTable(TableMigration(dailyQuoteSelections));
       }
     },
+  );
+
+  /// 图片传输状态只属于本机，不进入 PowerSync 业务表或迁移快照。
+  Future<void> _createImageSyncMetadata() => customStatement(
+    'CREATE TABLE IF NOT EXISTS image_sync_metadata '
+    '(id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)',
   );
 
   /// 创建待办树、排序和完成历史查询索引。

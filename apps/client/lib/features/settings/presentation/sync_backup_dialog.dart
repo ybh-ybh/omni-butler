@@ -150,6 +150,10 @@ class _SyncBackupDialogState extends ConsumerState<_SyncBackupDialog> {
                     SelectableText(
                       '数据库：${backup['databasePath']}\n快照：${backup['snapshotPath']}',
                     ),
+                    if ((backup['missingImages'] as List?)?.isNotEmpty ?? false)
+                      SelectableText(
+                        '本次迁移缺失的图片：\n${(backup['missingImages'] as List).join('\n')}',
+                      ),
                     Align(
                       alignment: Alignment.centerRight,
                       child: OmniButton(

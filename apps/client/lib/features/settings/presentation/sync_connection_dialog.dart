@@ -95,7 +95,9 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
       if (preview.isReconnect)
         const Text('服务器身份与本机数据来源相同，将继续原有同步，不替换任一侧数据。')
       else if (preview.localOwnerId == null)
-        const Text('首次连接会合并双方数据；相同 ID 使用服务器已有记录。图片和应用设置仍保留在本机。')
+        const Text(
+          '首次连接会合并双方数据；相同 ID 使用服务器已有记录。应用设置保留在本机，物品和会员图片在目标开启图片同步后自动补传。',
+        )
       else ...<Widget>[
         RadioGroup<SyncConnectionStrategy>(
           groupValue: _strategy,
@@ -135,6 +137,13 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
             ),
           ),
         ],
+      ],
+      if (!preview.isReconnect &&
+          _strategy != SyncConnectionStrategy.replaceLocal &&
+          preview.missingImages.isNotEmpty) ...<Widget>[
+        const SizedBox(height: OmniSpacing.md),
+        Text('有 ${preview.missingImages.length} 张图片在本机没有文件，将继续迁移业务数据：'),
+        for (final String image in preview.missingImages) Text(image),
       ],
     ];
   }

@@ -1,6 +1,6 @@
 # 个人多设备同步设计
 
-本文说明当前测试阶段的同步边界、代码取舍和验证要求。目标是让同一个人在多台设备上离线修改结构化数据，再可靠地合并到同一个自托管服务。账号注册、多人权限、图片云存储不属于当前目标。
+本文说明当前测试阶段的同步边界、代码取舍和验证要求。目标是让同一个人在多台设备上离线修改结构化数据，再可靠地合并到同一个自托管服务。图片同步可通过单一开关启用内置 MinIO；账号注册、多人权限不属于当前目标。
 
 ## 从问题确定需要保存的状态
 
@@ -93,7 +93,22 @@ RSA 的保留理由是独立服务验签，不是需要一套账号密码体系�
 
 当前没有注册、邮箱登录、账号角色切换。因此删去账号 `email`、`password_hash`、`role`、`token_version`，保留最小数据归属身份。刷新令牌轮换链、后继令牌关系和 Argon2 随之移除：当前凭证是随机高熵设备密钥，不是需要抗字典攻击的人类密码。
 
-图片现在仅在本机使用，因此删除服务端 COS 模块及依赖、服务端 attachment/banner 表及图片关联字段。客户端的本地图片文件、attachment/banner 元数据和本地图片关联仍用于展示，继续保留；它们不进入同步白名单。这次没有承诺跨设备图片可见。
+默认 `IMAGE_SYNC_ENABLED=false` 时，图片仍仅在本机使用。改为 `true` 并重新部署后，Compose 自动启动内置 MinIO 并持久保存内部凭证与对象。用户不配置 endpoint、bucket 或存储密钥；MinIO 仅在 Docker 内网提供服务，客户端通过现有 API 地址传输图片。
+
+### 可选图片同步协议
+
+- 只同步 `inventoryImage` 和 `membershipImage`。首页背景、缓存路径和本地附件表不进入 PowerSync 的 11 张业务表白名单。
+- 所有图片接口位于 `/omni-butler/api/v1/images`，使用现有设备会话鉴权。`GET /capabilities` 返回 `enabled` 和 `maxBytes=20971520`；关闭时其余图片接口返回 `IMAGE_SYNC_DISABLED`，已有对象和数据库记录继续保留。
+- `GET /images` 返回当前 owner 的完整 `items` 清单。每条含 `businessType/businessId/attachmentId/revision/sha256/mimeType/sizeBytes`。移除后的 `attachmentId` 和文件属性为 null，仍保留新 revision，防止旧设备历史补传复活图片。
+- `PUT /images/:businessType/:businessId` 接收 multipart `file` 与 `operationId/attachmentId/expectedRevision/onlyIfMissing/sha256` 五个字段。空 `expectedRevision` 表示从未设置过图片；历史补传设置 `onlyIfMissing=true`，任何服务端标记均优先。显式修改必须匹配 revision，冲突返回 `409 IMAGE_CONFLICT`。
+- `DELETE` 同一路径接收 `operationId` 和可空 `expectedRevision`，产生持久移除标记。上传与移除均返回 `{status: applied|unchanged, image}`。同 operationId、同内容返回原回执；不同内容返回 `IMAGE_OPERATION_REUSED`。旧回执只返回历史结果，不再写库。
+- `GET /images/:businessType/:businessId/file?revision=...` 只读取当前版本，使用真实 MIME 和私有禁止缓存响应。业务尚未上传时图片写入返回 `404 IMAGE_RECORD_NOT_FOUND`，客户端等待业务同步后重试。
+
+文件先校验 20 MB 大小、SHA-256、真实 PNG/JPEG/WebP/GIF 内容及 4000 万像素限制，再存入私有桶 `omni-butler-images`。每次网络尝试使用独立不可变对象键。对象写入成功后，短 PostgreSQL 事务锁定 owner、有效设备会话和业务记录，复核版本并原子保存图片关联与幂等回执；网络不在业务事务内执行。owner 被替换或会话已撤销的迟到上传不能写入新数据源。
+
+`business_images` 和 `image_operation_receipts` 随 owner 级联清理。独立的 `image_object_garbage` 不随 owner 删除：暂存对象在上传前登记为 24 小时后可回收，成功引用时删除任务；换图、永久删除业务和 owner 替换通过 PostgreSQL 触发器产生 1 小时后的回收任务。软删除继续保留图片。服务每分钟最多处理 20 条回收记录，失败延后 5 分钟重试，删除前再次检查业务引用。存储响应丢失、进程崩溃或数据库回滚不会造成被引用对象误删。
+
+图片真实集成测试位于 `test/images.integration.spec.ts`，必须显式设置 `OMNI_IMAGE_TEST=true` 及隔离库 `OMNI_IMAGE_TEST_DATABASE_URL=postgresql://...@127.0.0.1:35539/omni_images_integration`；只接受空测试 schema，并连接 `omni-image-test-minio-1` 的 loopback 测试端口。默认跳过外部测试不代表验收通过。
 
 没有被调用的 seed 命令不再保留。服务启动只初始化随机内部 owner，PowerSync publication 随数据库迁移创建且只发布业务表，不再每次启动检查/创建全表发布。内部 owner 和设备 session 没有被读取的创建时间也已删除；会话仍保留真正用于授权的失效时间。
 

@@ -5,6 +5,8 @@ const POWERSYNC_PUBLIC_PATH = '/omni-butler/powersync/';
 
 /// 应用启动所需的环境变量结构。
 interface EnvironmentVariables {
+  /// 图片同步开关，默认关闭。
+  IMAGE_SYNC_ENABLED: boolean;
   /// PostgreSQL 连接地址。
   DATABASE_URL: string;
   /// 运行环境。
@@ -84,10 +86,17 @@ export function validateEnvironment(
     typeof source.JWT_KEYS_DIR === 'string' && source.JWT_KEYS_DIR.trim()
       ? source.JWT_KEYS_DIR
       : '.local/keys';
-  // 其他配置校验通过后再读取或生成持久化密钥。
+  // 严格接受布尔开关，避免拼写错误导致意外启用。
+  const imageSyncEnabled = source.IMAGE_SYNC_ENABLED ?? 'false';
+  if (!['true', 'false', true, false].includes(imageSyncEnabled as string)) {
+    throw new Error('IMAGE_SYNC_ENABLED 必须为 true 或 false');
+  }
+  // 所有配置校验通过后再读取或生成持久化密钥。
   const keys = resolveJwtKeys(keysDirectory);
   return {
     ...keys,
+    IMAGE_SYNC_ENABLED:
+      imageSyncEnabled === true || imageSyncEnabled === 'true',
     DATABASE_URL: String(source.DATABASE_URL),
     NODE_ENV:
       typeof source.NODE_ENV === 'string' ? source.NODE_ENV : 'development',

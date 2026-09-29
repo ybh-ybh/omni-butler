@@ -24,6 +24,9 @@ services:
       retries: 12
 
   api:
+    extends:
+      file: ./image-sync/${IMAGE_SYNC_ENABLED:-false}.yml
+      service: api
     build:
       context: ../apps/server
     restart: unless-stopped
@@ -33,8 +36,10 @@ services:
       POWERSYNC_URL: ${POWERSYNC_PUBLIC_URL}
       JWT_KEYS_DIR: /app/keys
       SYNC_SECRET: ${SYNC_SECRET}
+      IMAGE_SYNC_ENABLED: ${IMAGE_SYNC_ENABLED:-false}
     volumes:
       - api-keys:/app/keys
+      - image-storage-credentials:/app/image-storage:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,6 +56,17 @@ services:
       retries: 5
     ports:
       - "${API_HOST_PORT:-3000}:3000"
+
+  # 同名服务在关闭时缩为零副本，重新 up 会停止旧容器且保留卷。
+  image-credentials:
+    extends:
+      file: ./image-sync/${IMAGE_SYNC_ENABLED:-false}.yml
+      service: image-credentials
+
+  minio:
+    extends:
+      file: ./image-sync/${IMAGE_SYNC_ENABLED:-false}.yml
+      service: minio
 
   powersync:
     image: journeyapps/powersync-service@sha256:bf46f66e5dcc8f6a084de02ab51155dfa655bc610aa95009fff1c36f949c0acf
@@ -86,3 +102,5 @@ services:
 volumes:
   postgres-data:
   api-keys:
+  image-storage-credentials:
+  image-storage-data:

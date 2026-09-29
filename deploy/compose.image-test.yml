@@ -1,0 +1,13 @@
+# 只能与 docker-compose.yml 一起用于 omni-image-test 隔离项目。
+# 测试调用方设置固定测试凭证，绝不复用正式 .env。
+services:
+  minio:
+    ports: ["127.0.0.1:35590:9000"]
+  postgres:
+    ports: ["127.0.0.1:35539:5432"]
+  api:
+    ports: !override ["127.0.0.1:35530:3000"]
+    environment:
+      POWERSYNC_URL: http://127.0.0.1:35580
+  powersync:
+    ports: !override ["127.0.0.1:35580:8080"]

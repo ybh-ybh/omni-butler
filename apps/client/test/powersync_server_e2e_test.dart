@@ -87,6 +87,8 @@ class _EndToEndAuth extends AuthRepository {
     String path, {
     Object? data,
     Map<String, dynamic>? queryParameters,
+    ResponseType? responseType,
+    bool preserveTransportErrors = false,
   }) async {
     if (path == '/sync/operations') {
       uploads.add(jsonDecode(jsonEncode(data)) as Map<String, dynamic>);
@@ -98,6 +100,7 @@ class _EndToEndAuth extends AuthRepository {
       queryParameters: queryParameters,
       options: Options(
         method: method,
+        responseType: responseType,
         headers: <String, String>{'Authorization': 'Bearer $accessToken'},
       ),
     );

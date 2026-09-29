@@ -10,6 +10,7 @@ import 'package:omni_butler/core/auth/auth_repository.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/sync/omni_sync_runtime.dart';
 import 'package:omni_butler/core/sync/sync_snapshot.dart';
+import 'package:omni_butler/core/sync/sync_image_report.dart';
 import 'package:omni_butler/core/sync/sync_write_gate.dart';
 import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:powersync/powersync.dart';
@@ -372,6 +373,141 @@ void main() {
     );
     expect(await candidate.powerSync.getNextCrudTransaction(), isNull);
     expect((await source.exportSnapshot()).tables['attachments'], hasLength(4));
+  });
+
+  test('采用服务器恢复真实有效路径，兼容仅业务路径并保留无上传边界', () async {
+    // 业务字段中的文件与附件缓存中的文件分别模拟两种有效来源。
+    final File businessFile = File('${directory.path}/business.png');
+    final File attachmentFile = File('${directory.path}/attachment.png');
+    await businessFile.writeAsBytes(<int>[1, 2, 3]);
+    await attachmentFile.writeAsBytes(<int>[4, 5, 6]);
+    for (final String id in <String>['business-path', 'attachment-path']) {
+      await source.database
+          .into(source.database.inventoryItems)
+          .insert(
+            InventoryItemsCompanion.insert(
+              id: id,
+              name: id,
+              imageAttachmentId: Value<String?>('$id-image'),
+              imageLocalPath: Value<String?>(
+                id == 'business-path'
+                    ? businessFile.path
+                    : '${directory.path}/lost.png',
+              ),
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+      await source.database
+          .into(source.database.attachments)
+          .insert(
+            AttachmentsCompanion.insert(
+              id: '$id-image',
+              businessType: 'inventoryImage',
+              businessId: id,
+              localPath: Value<String?>(
+                id == 'business-path' ? null : attachmentFile.path,
+              ),
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+    }
+    for (final String id in <String>['legacy', 'different-type']) {
+      await source.database
+          .into(source.database.memberships)
+          .insert(
+            MembershipsCompanion.insert(
+              id: id,
+              name: id,
+              imageLocalPath: Value<String?>(businessFile.path),
+              purchaseDate: now,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+    }
+    // 报告判定的有效文件必须在采用服务器的候选库真正恢复。
+    final SyncSnapshot snapshot = await source.exportSnapshot();
+    expect(await findMissingMigrationImages(snapshot), isEmpty);
+    final OmniSyncRuntime candidate = await OmniSyncRuntime.createCandidate(
+      auth,
+      '${directory.path}/paths.sqlite',
+      snapshot,
+      'B',
+      mergeInitial: false,
+      useLocalData: false,
+    );
+    candidates.add(candidate);
+    for (final String id in <String>[
+      'business-path',
+      'attachment-path',
+      'different-type',
+    ]) {
+      await candidate.database
+          .into(candidate.database.inventoryItems)
+          .insert(
+            InventoryItemsCompanion.insert(
+              id: id,
+              name: id,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+    }
+    await candidate.database
+        .into(candidate.database.memberships)
+        .insert(
+          MembershipsCompanion.insert(
+            id: 'legacy',
+            name: 'B会员',
+            purchaseDate: now,
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    // 清理用于模拟服务器下行的测试插入事务。
+    while (true) {
+      // 测试插入的待确认批次。
+      final batch = await candidate.powerSync.getCrudBatch();
+      if (batch == null) break;
+      await batch.complete();
+    }
+    await candidate.restoreLocalAttachments(snapshot, matchingOnly: true);
+    for (final MapEntry<String, String> expected in <String, String>{
+      'business-path': businessFile.path,
+      'attachment-path': attachmentFile.path,
+    }.entries) {
+      // 两个业务路径均与报告选中的现存文件一致。
+      final Map<String, Object?> row = await candidate.powerSync.get(
+        'SELECT image_local_path FROM inventory_items WHERE id = ?',
+        <Object?>[expected.key],
+      );
+      expect(row['image_local_path'], expected.value);
+      final Map<String, Object?> attachment = await candidate.powerSync.get(
+        'SELECT local_path FROM attachments WHERE id = ?',
+        <Object?>['${expected.key}-image'],
+      );
+      expect(attachment['local_path'], expected.value);
+    }
+    expect(
+      await candidate.powerSync.get(
+        'SELECT image_attachment_id,image_local_path FROM memberships WHERE id = ?',
+        <Object?>['legacy'],
+      ),
+      <String, Object?>{
+        'image_attachment_id': null,
+        'image_local_path': businessFile.path,
+      },
+    );
+    expect(
+      (await candidate.powerSync.get(
+        'SELECT image_local_path FROM inventory_items WHERE id = ?',
+        <Object?>['different-type'],
+      ))['image_local_path'],
+      isNull,
+    );
+    expect(await candidate.powerSync.getNextCrudTransaction(), isNull);
   });
 
   test('候选文件重开不生成初始上传，重复创建不会覆盖已存在文件', () async {

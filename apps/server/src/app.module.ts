@@ -5,6 +5,7 @@ import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { SyncModule } from './sync/sync.module';
 import { validateEnvironment } from './config/environment';
+import { ImagesModule } from './images/images.module';
 
 /// Omni Butler 服务端根模块。
 @Module({
@@ -18,6 +19,7 @@ import { validateEnvironment } from './config/environment';
     HealthModule,
     AuthModule,
     SyncModule,
+    ImagesModule,
   ],
 })
 export class AppModule {}

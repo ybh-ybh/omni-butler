@@ -12,6 +12,7 @@ import 'package:omni_butler/core/notifications/notification_providers.dart';
 import 'package:omni_butler/features/memberships/data/membership_repository.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
+import 'package:omni_butler/core/sync/image_sync_providers.dart';
 import 'package:omni_butler/core/sync/sync_connection_providers.dart';
 import 'package:omni_butler/core/sync/sync_maintenance_boundary.dart';
 
@@ -112,6 +113,7 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
   Widget build(BuildContext context) {
     ref.watch(notificationCoordinatorProvider);
     ref.watch(syncControllerProvider);
+    ref.watch(imageSyncServiceProvider);
     // 当前主题偏好。
     final ThemePreference preference = ref.watch(themeControllerProvider);
     // 应用路由器。

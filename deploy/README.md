@@ -4,7 +4,7 @@
 
 ## 准备
 
-安装 Docker 和 Compose 插件。首次部署将 `.env.example` 复制为 `.env`（PowerShell 使用 `Copy-Item .env.example .env`，CMD 使用 `copy .env.example .env`，Bash 使用 `cp .env.example .env`），已有 `.env` 时直接编辑，不要覆盖。
+安装 Docker 和 Compose 插件（建议 v2.24.4 或更新版本；不要使用旧版 Python `docker-compose`）。首次部署将 `.env.example` 复制为 `.env`（PowerShell 使用 `Copy-Item .env.example .env`，CMD 使用 `copy .env.example .env`，Bash 使用 `cp .env.example .env`），已有 `.env` 时直接编辑，不要覆盖。
 
 配置统一填写在 `.env` 中：
 
@@ -15,6 +15,7 @@
 | `API_HOST_PORT` | API 的宿主机映射端口，默认 `3000` |
 | `POWERSYNC_HOST_PORT` | PowerSync 的宿主机映射端口，默认 `8080` |
 | `POWERSYNC_PUBLIC_URL` | 客户端访问的同步地址；公网示例为 `https://butler.example.com/omni-butler/powersync/` |
+| `IMAGE_SYNC_ENABLED` | 图片同步开关，默认 `false`；改为 `true` 后自动启动内置 MinIO |
 
 Compose 自动读取当前目录的 `.env`，容器内部端口固定为 `3000`、`8080`。已有 `.env` 时补上 `API_HOST_PORT=3000`、`POWERSYNC_HOST_PORT=8080`，或填写自己的映射端口。
 
@@ -31,6 +32,20 @@ docker compose up -d --build --wait
 局域网直连时，例如在 `.env` 中将两个端口分别改为 `9000`、`9080`，客户端端口填写 `9000`，`POWERSYNC_PUBLIC_URL` 改为 `http://<服务器IP>:9080`。端口映射不会自动修改对外 URL。公网部署先按下面的 Nginx 章节调整 `.env`。
 
 如果之前在终端设置过同名端口变量，请清除它们或打开一个未设置这些变量的新终端；终端环境变量的优先级高于 `.env`。
+
+## 可选图片同步
+
+只需在 `.env` 中设置 `IMAGE_SYNC_ENABLED=true`，再执行上面的 `docker compose up -d --build --wait`。只接受小写 `true` 或 `false`，已有部署未填写该项时默认关闭。首次开启会从固定源码编译 MinIO，因此比普通更新耗时；默认关闭时不构建、不运行 MinIO。
+
+Compose 自动生成随机内部凭证并保存在 `image-storage-credentials` 卷，启动 MinIO 后由 API 创建私有桶 `omni-butler-images`。图片文件保存在 `image-storage-data` 卷。无需填写存储密钥、域名、端口、profile 或额外启动参数；客户端通过原有 API 地址上传下载，MinIO 不映射宿主机端口，浏览器管理界面关闭。
+
+同步范围为物品和会员图片，首页背景仍只保存在各自设备。开启后客户端会补传本机已有图片，服务端已有的图片优先；新设备下载后的缓存离线仍可查看。图片传输失败可重试，不影响业务记录保存。服务器迁移只复制当前设备实际持有的图片，缺失文件会提示，不阻止业务数据迁移。
+
+改回 `IMAGE_SYNC_ENABLED=false` 并执行相同启动命令，会停止 MinIO 和图片传输，保留服务器图片卷、凭证卷及客户端本机图片。再次改为 `true` 会复用原凭证和图片。无需 `--remove-orphans`；两个辅助服务以相同服务名缩为零副本。不要手动删除凭证卷，否则现有存储身份无法自动恢复。
+
+MinIO 社区版已经转为源码分发并归档；本项目固定源码提交 `9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a`，构建时验证提交和依赖，并禁用不需要的 Snowball 解压接口。它只面向容器内的 API，不应额外公开 S3 端口或控制台。源码和许可证见 [MinIO 官方仓库](https://github.com/minio/minio)；构建修改保存在 `minio/Dockerfile`。
+
+构建也拒绝应用不需要的 `STREAMING-UNSIGNED-PAYLOAD-TRAILER` 请求，避免最终社区版本已知的未签名流式写入路径。此限制不影响 API 使用标准签名上传图片。
 
 ## 公网部署：Nginx + HTTPS
 
@@ -270,6 +285,16 @@ docker compose stop
 `compose.migration-test.yml` 仅供开发隔离测试，使用固定公开测试凭证、回环端口 35430/35480/35439 和 `omni-migration-e2e` 项目名，不可作为正式部署配置。
 
 业务库和同步状态保存在 `postgres-data` 卷，签名私钥保存在 `api-keys` 卷。实际卷名带 Compose 项目前缀；保持部署目录和项目名不变，不要使用 `docker compose down -v` 删除数据卷。
+
+开启图片同步时，备份还需包含 `image-storage-data` 和 `image-storage-credentials` 两个卷。应停止写入后将数据库、图片卷、凭证卷作为同一批备份保存；只备份 PostgreSQL 无法恢复图片。图片和凭证均由非 root 用户读取，凭证文件权限为 `0600`，不要把凭证内容放入日志或提交仓库。
+
+`compose.image-test.yml` 为图片同步隔离测试覆盖配置，只能使用 `-p omni-image-test` 并同时传入 `-f docker-compose.yml -f compose.image-test.yml`；使用回环测试端口 35530/35580/35539，MinIO 仅在测试覆盖配置中映射 35590，调用方必须显式提供测试密码和同步密钥，禁止复用正式 `.env`。
+
+从仓库根目录启动隔离环境（`.env.image-test.example` 仅含公开测试凭证）：
+
+```text
+docker compose -p omni-image-test --env-file deploy/.env.image-test.example -f deploy/docker-compose.yml -f deploy/compose.image-test.yml up -d --build --wait
+```
 
 单独备份业务库和私钥（Bash）：
 

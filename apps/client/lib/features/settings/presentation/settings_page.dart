@@ -16,6 +16,8 @@ import 'package:omni_butler/core/sync/sync_preferences.dart';
 import 'package:omni_butler/core/sync/sync_connection_coordinator.dart';
 import 'package:omni_butler/core/sync/sync_connection_providers.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
+import 'package:omni_butler/core/sync/image_sync_providers.dart';
+import 'package:omni_butler/core/attachments/image_sync_service.dart';
 import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
@@ -1146,6 +1148,13 @@ class _SyncSettingsCard extends ConsumerWidget {
     final AsyncValue<void> syncController = ref.watch(syncControllerProvider);
     // PowerSync 实时状态。
     final SyncStatus? syncStatus = ref.watch(syncStatusProvider).value;
+    // 图片能力由服务器开关决定，独立展示传输失败。
+    final ImageSyncState images =
+        ref.watch(imageSyncStateProvider).value ?? const ImageSyncState();
+    // 上次迁移记录中的缺图列表不会因重新打开客户端而丢失。
+    final List<String> missingImages =
+        ref.watch(syncConnectionStateProvider).value?.missingImages ??
+        const <String>[];
     // 本机待上传操作数量。
     final int queuedOperations =
         ref.watch(syncUploadQueueCountProvider).value ?? 0;
@@ -1174,9 +1183,9 @@ class _SyncSettingsCard extends ConsumerWidget {
         : '已连接自托管服务器';
     // 当前同步状态说明。
     final String syncDescription = !syncEnabled
-        ? '服务器连接已停止；重新开启后，本机产生的结构化数据会进入同步。图片仍只保存在本机。'
+        ? '服务器连接已停止，本机数据和已下载图片仍可使用。重新开启后继续同步。'
         : session == null
-        ? '请连接自己部署的 Omni Butler 后端。当前不接入第三方同步服务和腾讯云 COS。'
+        ? '请连接自己部署的 Omni Butler 后端；图片同步由服务器配置决定。'
         : session.isOffline
         ? '当前离线，业务编辑仍会正常保存；联网后会继续同步。'
         : '服务器：${session.serverAddress}';
@@ -1258,6 +1267,16 @@ class _SyncSettingsCard extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(syncDescription),
+              const SizedBox(height: OmniSpacing.xxs),
+              Text(_imageSyncLabel(syncEnabled, session, images)),
+              if (missingImages.isNotEmpty) ...<Widget>[
+                const SizedBox(height: OmniSpacing.xxs),
+                Text(
+                  '上次迁移有 ${missingImages.length} 张图片未在本机找到：'
+                  '${missingImages.join('、')}。业务数据迁移不受影响。',
+                  style: TextStyle(color: colors.muted),
+                ),
+              ],
               if (sessionState.hasError) ...<Widget>[
                 const SizedBox(height: OmniSpacing.xxs),
                 Text(
@@ -1285,6 +1304,21 @@ class _SyncSettingsCard extends ConsumerWidget {
         ),
       ],
     );
+  }
+
+  /// 根据设备会话、连接和队列状态生成紧凑状态标签。
+  String _imageSyncLabel(
+    bool enabled,
+    SyncSession? session,
+    ImageSyncState images,
+  ) {
+    if (!enabled || session == null) return '图片：仅使用本机文件；首页背景始终保留在本机。';
+    if (images.error != null) return '图片同步待重试：${images.error}';
+    if (images.enabled == null) return '图片：正在检查服务器能力。';
+    if (images.enabled == false) return '服务器未开启图片同步，本机图片继续保留。';
+    if (images.busy) return '图片同步中，待处理 ${images.pending} 项。';
+    return '物品与会员图片自动同步，待处理 ${images.pending} 项'
+        '${images.missing > 0 ? '，缺少本机文件 ${images.missing} 张' : ''}；首页背景仅保存在本机。';
   }
 
   /// 根据设备会话、连接和队列状态生成紧凑状态标签。
@@ -1328,8 +1362,13 @@ class _SyncSettingsCard extends ConsumerWidget {
     WidgetRef ref,
     bool enabled,
   ) async {
+    // 关闭提示之前排空当前图片请求；操作和缓存仍留在本机。
+    final ImageSyncService? images = enabled
+        ? null
+        : ref.read(imageSyncServiceProvider);
     await ref.read(syncPreferenceProvider.notifier).setEnabled(enabled);
     if (!enabled) {
+      await images?.stop();
       if (context.mounted) {
         showOmniMessage(context, message: '多端同步已关闭，当前只保存到本机');
       }
