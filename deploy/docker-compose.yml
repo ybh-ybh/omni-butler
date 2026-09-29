@@ -1,3 +1,5 @@
+name: omni-butler
+
 services:
   postgres:
     image: postgres:17-bookworm
