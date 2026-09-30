@@ -940,7 +940,7 @@ class _FeatureManagementCard extends ConsumerWidget {
               onChanged: floatingContentAvailable || floatingPreference.enabled
                   ? (bool enabled) => ref
                         .read(floatingWindowPreferenceProvider.notifier)
-                        .setEnabled(enabled)
+                        .setEnabledFromSettings(enabled)
                   : null,
             ),
           ),

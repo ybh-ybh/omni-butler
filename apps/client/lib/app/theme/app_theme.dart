@@ -275,6 +275,26 @@ abstract final class AppTheme {
       focusColor: colors.brand.withValues(alpha: 0.16),
       splashFactory: NoSplash.splashFactory,
       visualDensity: VisualDensity.compact,
+      scrollbarTheme: ScrollbarThemeData(
+        thickness: const WidgetStatePropertyAll<double>(4),
+        radius: const Radius.circular(999),
+        thumbColor: WidgetStateProperty.resolveWith<Color?>((
+          Set<WidgetState> states,
+        ) {
+          if (states.contains(WidgetState.dragged)) {
+            return colors.muted.withValues(alpha: 0.72);
+          }
+          if (states.contains(WidgetState.hovered)) {
+            return colors.muted.withValues(alpha: 0.56);
+          }
+          return colors.muted.withValues(alpha: 0.38);
+        }),
+        trackVisibility: const WidgetStatePropertyAll<bool>(false),
+        crossAxisMargin: 2,
+        mainAxisMargin: 4,
+        minThumbLength: 48,
+        interactive: true,
+      ),
       dividerTheme: DividerThemeData(
         color: colors.line,
         thickness: 1,

@@ -27,6 +27,9 @@ void main() {
     await firstContainer
         .read(floatingWindowPreferenceProvider.notifier)
         .savePlacement(displayId: 'display-2', positionX: 120, positionY: 64);
+    await firstContainer
+        .read(floatingWindowPreferenceProvider.notifier)
+        .saveSize(width: 520, height: 680);
     firstContainer.dispose();
 
     // 模拟应用重启后的偏好容器。
@@ -41,7 +44,51 @@ void main() {
     expect(restored.displayId, 'display-2');
     expect(restored.positionX, 120);
     expect(restored.positionY, 64);
+    expect(restored.width, 520);
+    expect(restored.height, 680);
+    await restoredContainer
+        .read(floatingWindowPreferenceProvider.notifier)
+        .setEnabledFromSettings(false);
+    await restoredContainer
+        .read(floatingWindowPreferenceProvider.notifier)
+        .setEnabledFromSettings(true);
+    // 设置页关闭再开启后恢复默认尺寸，但继续保留原来的窗口位置。
+    final FloatingWindowPreference resetFromSettings = restoredContainer.read(
+      floatingWindowPreferenceProvider,
+    );
+    expect(resetFromSettings.enabled, true);
+    expect(resetFromSettings.hasSize, false);
+    expect(resetFromSettings.displayId, 'display-2');
     restoredContainer.dispose();
+
+    // 再次重启后不应恢复已经由设置页清除的尺寸。
+    final ProviderContainer resetContainer = ProviderContainer(
+      overrides: [sharedPreferencesProvider.overrideWithValue(preferences)],
+    );
+    expect(
+      resetContainer.read(floatingWindowPreferenceProvider).hasSize,
+      false,
+    );
+    resetContainer.dispose();
+  });
+
+  test('左下角调整尺寸保持顶部和右边缘并限制最小宽高', () {
+    expect(
+      resizeFloatingRectFromBottomLeft(
+        initialRect: const Rect.fromLTWH(600, 100, 294, 500),
+        pointerDelta: const Offset(-106, 80),
+        minimumSize: const Size(294, 500),
+      ),
+      const Rect.fromLTWH(494, 100, 400, 580),
+    );
+    expect(
+      resizeFloatingRectFromBottomLeft(
+        initialRect: const Rect.fromLTWH(600, 100, 400, 580),
+        pointerDelta: const Offset(300, -300),
+        minimumSize: const Size(294, 500),
+      ),
+      const Rect.fromLTWH(706, 100, 294, 500),
+    );
   });
 
   test('窗口位置会被约束在带边距的工作区内', () {

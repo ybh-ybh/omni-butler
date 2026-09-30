@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +9,7 @@ import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/features/floating/presentation/floating_window_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -16,6 +20,108 @@ void main() {
     expect(calculateFloatingTodoViewportHeight(1), 32);
     expect(calculateFloatingTodoViewportHeight(3), 96);
     expect(calculateFloatingTodoViewportHeight(8), 160);
+  });
+
+  testWidgets('远端同步表更新后悬浮窗重新读取业务数据', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(294, 500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 测试用设备偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    addTearDown(database.close);
+    // 模拟 PowerSync 下行事务的表更新流。
+    final StreamController<Set<String>> tableUpdates =
+        StreamController<Set<String>>.broadcast();
+    addTearDown(tableUpdates.close);
+    // 当前模拟同步到本机的进行中时间记录。
+    List<TimeEntryRecord> synchronizedRecords = <TimeEntryRecord>[];
+    // 测试用 Riverpod 容器。
+    final ProviderContainer container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(preferences),
+        appDatabaseProvider.overrideWithValue(database),
+        nowProvider.overrideWithValue(DateTime(2026, 9, 24, 9, 30)),
+        ongoingTimeEntriesProvider.overrideWith(
+          (Ref ref) => Stream<List<TimeEntryRecord>>.value(synchronizedRecords),
+        ),
+        syncTableUpdatesProvider.overrideWith((Ref ref) => tableUpdates.stream),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: AppTheme.build(brightness: Brightness.light),
+          home: FloatingWindowPage(
+            onClose: () async {},
+            onOpenRoute: (String location) async {},
+            onDragStart: () {},
+            onDragUpdate: () {},
+            onDragEnd: () async {},
+            onResizeStart: () {},
+            onResizeUpdate: () {},
+            onResizeEnd: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('多端同步进行中记录'), findsNothing);
+    // 默认最小尺寸下的悬浮窗内容区域。
+    final Finder contentScrollable = find.descendant(
+      of: find.byKey(const ValueKey<String>('floating-window-content-scroll')),
+      matching: find.byType(Scrollable),
+    );
+    // 默认最小尺寸下的内容滚动位置。
+    final ScrollPosition contentScrollPosition = tester
+        .state<ScrollableState>(contentScrollable)
+        .position;
+    // 空数据状态应在增高后的默认窗口中完整显示，无需额外滚动。
+    expect(contentScrollPosition.maxScrollExtent, 0);
+
+    // 模拟远端事务直接下发到本地数据库的跨日期活动待办。
+    final DateTime synchronizedAt = DateTime(2026, 9, 24, 9, 35);
+    await database
+        .into(database.todoItems)
+        .insert(
+          TodoItemsCompanion.insert(
+            id: 'remote-todo',
+            title: '多端同步待办',
+            scheduledDate: DateTime(2026, 9, 19),
+            priorityQuadrant: const Value<int>(3),
+            syncState: const Value<String>('synced'),
+            createdAt: synchronizedAt,
+            updatedAt: synchronizedAt,
+          ),
+        );
+    // 远端事务完成后数据库已经包含的新时间记录。
+    synchronizedRecords = <TimeEntryRecord>[
+      TimeEntryRecord(
+        id: 'remote-time-entry',
+        entryDate: DateTime(2026, 9, 24),
+        startMinute: 540,
+        endMinute: 540,
+        startedAt: DateTime(2026, 9, 24, 9),
+        activity: '多端同步进行中记录',
+        syncState: 'synced',
+        createdAt: DateTime(2026, 9, 24, 9),
+        updatedAt: DateTime(2026, 9, 24, 9),
+      ),
+    ];
+    tableUpdates.add(<String>{'todo_items', 'time_entries'});
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('多端同步待办'), findsOneWidget);
+    expect(find.text('多端同步进行中记录'), findsOneWidget);
   });
 
   testWidgets('悬浮窗可直接新增待办、补记和开始时间记录', (WidgetTester tester) async {
@@ -42,8 +148,12 @@ void main() {
     addTearDown(container.dispose);
     // 用户请求跳转到主窗口的目标路由。
     String? openedRoute;
-    // 悬浮窗内容上报的自然高度。
-    double? preferredHeight;
+    // 左下角尺寸调整开始次数。
+    int resizeStartCount = 0;
+    // 左下角尺寸调整更新次数。
+    int resizeUpdateCount = 0;
+    // 左下角尺寸调整结束次数。
+    int resizeEndCount = 0;
 
     await tester.pumpWidget(
       UncontrolledProviderScope(
@@ -56,8 +166,10 @@ void main() {
             onDragStart: () {},
             onDragUpdate: () {},
             onDragEnd: () async {},
-            onPreferredHeightChanged: (double value) {
-              preferredHeight = value;
+            onResizeStart: () => resizeStartCount += 1,
+            onResizeUpdate: () => resizeUpdateCount += 1,
+            onResizeEnd: () async {
+              resizeEndCount += 1;
             },
           ),
         ),
@@ -76,6 +188,17 @@ void main() {
     );
     expect(find.text('新增'), findsNothing);
     expect(find.byIcon(Icons.add_rounded), findsOneWidget);
+    // 悬浮窗左下角尺寸调整手柄。
+    final Finder resizeHandle = find.byKey(
+      const ValueKey<String>('floating-window-resize-handle'),
+    );
+    expect(resizeHandle, findsOneWidget);
+    expect(tester.getSize(resizeHandle), const Size.square(28));
+    await tester.drag(resizeHandle, const Offset(-24, 36));
+    await tester.pump();
+    expect(resizeStartCount, 1);
+    expect(resizeUpdateCount, greaterThan(0));
+    expect(resizeEndCount, 1);
     // 新增入口中的加号旋转动画。
     final Finder createIconRotation = find.descendant(
       of: find.byKey(const ValueKey<String>('floating-todo-create')),
@@ -121,9 +244,6 @@ void main() {
           .height,
       30,
     );
-    expect(preferredHeight, isNotNull);
-    expect(preferredHeight!, lessThan(760));
-
     await tester.tap(
       find.byKey(const ValueKey<String>('floating-todo-create')),
     );

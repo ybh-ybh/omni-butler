@@ -2,6 +2,30 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
+/// 为指定面板提供内部滚动控制器。
+class OmniPanelScrollScope extends InheritedWidget {
+  /// 面板内容使用的滚动控制器。
+  final ScrollController controller;
+
+  /// 创建面板内部滚动作用域。
+  const OmniPanelScrollScope({
+    required this.controller,
+    required super.child,
+    super.key,
+  });
+
+  /// 从当前上下文读取可选的面板滚动作用域。
+  static OmniPanelScrollScope? maybeOf(BuildContext context) {
+    return context.dependOnInheritedWidgetOfExactType<OmniPanelScrollScope>();
+  }
+
+  /// 仅在控制器实例变化时通知面板重建。
+  @override
+  bool updateShouldNotify(OmniPanelScrollScope oldWidget) {
+    return controller != oldWidget.controller;
+  }
+}
+
 /// 统一的飞书式内容面板。
 class OmniPanel extends StatelessWidget {
   /// 面板内容。
@@ -34,6 +58,21 @@ class OmniPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
+    // 当前卡片可选的内部滚动控制器。
+    final ScrollController? scrollController = OmniPanelScrollScope.maybeOf(
+      context,
+    )?.controller;
+    // 面板内保持边框固定的内容区域。
+    final Widget panelContent = scrollController == null
+        ? child
+        : Scrollbar(
+            controller: scrollController,
+            child: SingleChildScrollView(
+              controller: scrollController,
+              primary: false,
+              child: child,
+            ),
+          );
     // 面板主体。
     final Widget panel = Material(
       color: colors.paper,
@@ -45,7 +84,7 @@ class OmniPanel extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         hoverColor: colors.ink.withValues(alpha: 0.04),
-        child: Padding(padding: padding, child: child),
+        child: Padding(padding: padding, child: panelContent),
       ),
     );
 

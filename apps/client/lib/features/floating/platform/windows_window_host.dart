@@ -24,17 +24,17 @@ import 'package:omni_butler/core/sync/sync_maintenance_boundary.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 import 'package:win32/win32.dart' as win32;
 
-/// 悬浮窗缩窄后的固定逻辑宽度。
+/// 悬浮窗默认逻辑宽度。
 const double _floatingWindowWidth = 294;
 
-/// 悬浮窗首次创建时的逻辑尺寸。
-const Size _floatingWindowInitialSize = Size(_floatingWindowWidth, 420);
+/// 悬浮窗默认及最小逻辑高度。
+const double _floatingWindowMinHeight = 500;
 
-/// 悬浮窗允许的最小逻辑高度。
-const double _floatingWindowMinHeight = 240;
-
-/// 悬浮窗允许的最大逻辑高度。
-const double _floatingWindowMaxHeight = floatingWindowMaxContentHeight;
+/// 悬浮窗默认尺寸，同时也是允许的最小尺寸。
+const Size _floatingWindowInitialSize = Size(
+  _floatingWindowWidth,
+  _floatingWindowMinHeight,
+);
 
 /// 悬浮窗与工作区边缘的默认间距。
 const double _floatingWindowMargin = 24;
@@ -334,13 +334,13 @@ class _WindowsWindowCoordinatorState
       onClose: _disableFloatingFromCard,
       onDestroyed: () => _handleFloatingWindowDestroyed(controller),
     );
+    // 按应用重启前保存的值恢复，首次或设置重置后使用默认尺寸。
+    final Size initialSize = _resolveFloatingSize(preference);
     controller = RegularWindowController(
-      size: _floatingWindowInitialSize,
+      size: initialSize,
       constraints: const BoxConstraints(
         minWidth: _floatingWindowWidth,
-        maxWidth: _floatingWindowWidth,
         minHeight: _floatingWindowMinHeight,
-        maxHeight: _floatingWindowMaxHeight,
       ),
       title: 'Omni Butler · 今日',
       delegate: delegate,
@@ -355,7 +355,9 @@ class _WindowsWindowCoordinatorState
         onDragStart: _handleFloatingDragStart,
         onDragUpdate: _handleFloatingDragUpdate,
         onDragEnd: _handleFloatingDragEnd,
-        onPreferredHeightChanged: _handleFloatingPreferredHeightChanged,
+        onResizeStart: _handleFloatingResizeStart,
+        onResizeUpdate: _handleFloatingResizeUpdate,
+        onResizeEnd: _handleFloatingResizeEnd,
       ),
     );
     _floatingController = controller;
@@ -374,6 +376,23 @@ class _WindowsWindowCoordinatorState
     _floatingNative = native;
     native.configureAsDesktopCard();
     await _restoreFloatingPlacement(preference: preference);
+  }
+
+  /// 返回满足最小约束的已保存尺寸，缺失时使用默认尺寸。
+  Size _resolveFloatingSize(FloatingWindowPreference preference) {
+    if (!preference.hasSize) {
+      return _floatingWindowInitialSize;
+    }
+    return Size(
+      preference.width!.clamp(
+        _floatingWindowInitialSize.width,
+        double.infinity,
+      ),
+      preference.height!.clamp(
+        _floatingWindowInitialSize.height,
+        double.infinity,
+      ),
+    );
   }
 
   /// 销毁当前悬浮窗口。
@@ -448,10 +467,12 @@ class _WindowsWindowCoordinatorState
       resolvedPreference.displayId,
       primaryDisplay,
     );
+    // 本次需要恢复的悬浮窗逻辑尺寸。
+    final Size targetSize = _resolveFloatingSize(resolvedPreference);
     // 恢复目标的逻辑坐标。
     final Offset desiredPosition = resolvedPreference.hasPlacement
         ? Offset(resolvedPreference.positionX!, resolvedPreference.positionY!)
-        : _defaultPlacement(display);
+        : _defaultPlacement(display, targetSize);
     // 已保存位置贴边恢复，首次位置保留默认呼吸间距。
     final double placementMargin = resolvedPreference.hasPlacement
         ? 0
@@ -460,11 +481,12 @@ class _WindowsWindowCoordinatorState
     final Offset clampedPosition = snapFloatingPlacement(
       desiredPosition: desiredPosition,
       workAreaSize: display.visibleSize ?? display.size,
-      windowSize: native.logicalSize,
+      windowSize: targetSize,
       threshold: _floatingWindowSnapThreshold,
       margin: placementMargin,
     );
     native.moveToDisplayPosition(display, clampedPosition);
+    native.resizeToLogicalSize(targetSize);
     await ref
         .read(floatingWindowPreferenceProvider.notifier)
         .savePlacement(
@@ -489,16 +511,12 @@ class _WindowsWindowCoordinatorState
   }
 
   /// 计算默认的右下角位置。
-  Offset _defaultPlacement(Display display) {
+  Offset _defaultPlacement(Display display, Size windowSize) {
     // 显示器可用工作区尺寸。
     final Size workAreaSize = display.visibleSize ?? display.size;
     return Offset(
-      workAreaSize.width -
-          _floatingWindowInitialSize.width -
-          _floatingWindowMargin,
-      workAreaSize.height -
-          _floatingWindowInitialSize.height -
-          _floatingWindowMargin,
+      workAreaSize.width - windowSize.width - _floatingWindowMargin,
+      workAreaSize.height - windowSize.height - _floatingWindowMargin,
     );
   }
 
@@ -514,50 +532,27 @@ class _WindowsWindowCoordinatorState
 
   /// 结束拖动并保存新位置。
   Future<void> _handleFloatingDragEnd() async {
-    await _saveCurrentFloatingPlacement();
+    await _saveCurrentFloatingState();
   }
 
-  /// 按页面实际内容高度调整悬浮窗，并保持窗口位于工作区内。
-  void _handleFloatingPreferredHeightChanged(double preferredHeight) {
-    _queueOperation(() => _resizeFloatingWindow(preferredHeight));
+  /// 开始从左下角调整悬浮窗尺寸。
+  void _handleFloatingResizeStart() {
+    _floatingNative?.beginResizeFromBottomLeft();
   }
 
-  /// 将悬浮窗调整为目标内容高度。
-  Future<void> _resizeFloatingWindow(double preferredHeight) async {
-    // 当前悬浮窗控制器。
-    final RegularWindowController? controller = _floatingController;
-    if (controller == null) {
-      return;
-    }
-    // 受窗口约束限制后的目标高度。
-    final double targetHeight = preferredHeight.clamp(
-      _floatingWindowMinHeight,
-      _floatingWindowMaxHeight,
-    );
-    // 当前原生悬浮窗操作器。
-    final _WindowsFloatingWindowNative? native = _floatingNative;
-    // 当前悬浮窗内容尺寸。
-    final Size currentSize = native?.logicalSize ?? controller.contentSize;
-    if ((currentSize.width - _floatingWindowWidth).abs() < 0.5 &&
-        (currentSize.height - targetHeight).abs() < 0.5) {
-      return;
-    }
-    // 目标悬浮窗逻辑尺寸。
-    final Size targetSize = Size(_floatingWindowWidth, targetHeight);
-    if (native == null) {
-      controller.setSize(targetSize);
-    } else {
-      native.resizeToLogicalSize(targetSize);
-    }
-    await WidgetsBinding.instance.endOfFrame;
-    if (!mounted || _floatingController != controller) {
-      return;
-    }
-    await _saveCurrentFloatingPlacement();
+  /// 按鼠标当前位置持续调整悬浮窗尺寸。
+  void _handleFloatingResizeUpdate() {
+    _floatingNative?.updateResizeFromBottomLeft();
   }
 
-  /// 保存当前悬浮窗口所在显示器及相对位置。
-  Future<void> _saveCurrentFloatingPlacement() async {
+  /// 结束调整并保存悬浮窗的位置与尺寸。
+  Future<void> _handleFloatingResizeEnd() async {
+    _floatingNative?.endResizeFromBottomLeft();
+    await _saveCurrentFloatingState();
+  }
+
+  /// 保存当前悬浮窗口所在显示器、相对位置与尺寸。
+  Future<void> _saveCurrentFloatingState() async {
     // 当前原生悬浮窗操作器。
     final _WindowsFloatingWindowNative? native = _floatingNative;
     if (native == null) {
@@ -605,6 +600,11 @@ class _WindowsWindowCoordinatorState
           positionX: clampedPosition.dx,
           positionY: clampedPosition.dy,
         );
+    // 当前悬浮窗最终逻辑尺寸。
+    final Size logicalSize = native.logicalSize;
+    await ref
+        .read(floatingWindowPreferenceProvider.notifier)
+        .saveSize(width: logicalSize.width, height: logicalSize.height);
   }
 
   /// 查找包含给定物理坐标的显示器。
@@ -732,6 +732,7 @@ class _WindowsWindowCoordinatorState
       return;
     }
     _isExiting = true;
+    await _saveCurrentFloatingState();
     await _hideFloatingWindow();
     await _disposeTray();
     widget.mainWindowController.destroy();
@@ -802,7 +803,9 @@ class _FloatingWindowSurface extends ConsumerWidget {
     required this.onDragStart,
     required this.onDragUpdate,
     required this.onDragEnd,
-    required this.onPreferredHeightChanged,
+    required this.onResizeStart,
+    required this.onResizeUpdate,
+    required this.onResizeEnd,
   });
 
   /// 关闭悬浮窗回调。
@@ -820,8 +823,14 @@ class _FloatingWindowSurface extends ConsumerWidget {
   /// 结束拖动回调。
   final Future<void> Function() onDragEnd;
 
-  /// 内容期望高度变化回调。
-  final ValueChanged<double> onPreferredHeightChanged;
+  /// 开始调整窗口尺寸回调。
+  final VoidCallback onResizeStart;
+
+  /// 持续调整窗口尺寸回调。
+  final VoidCallback onResizeUpdate;
+
+  /// 结束调整窗口尺寸回调。
+  final Future<void> Function() onResizeEnd;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -838,7 +847,9 @@ class _FloatingWindowSurface extends ConsumerWidget {
         onDragStart: onDragStart,
         onDragUpdate: onDragUpdate,
         onDragEnd: onDragEnd,
-        onPreferredHeightChanged: onPreferredHeightChanged,
+        onResizeStart: onResizeStart,
+        onResizeUpdate: onResizeUpdate,
+        onResizeEnd: onResizeEnd,
       ),
       builder: (BuildContext context, Widget? child) => SyncMaintenanceBoundary(
         compact: true,
@@ -867,6 +878,12 @@ class _WindowsFloatingWindowNative {
 
   /// 开始拖动时窗口物理坐标。
   Offset? _dragWindowOrigin;
+
+  /// 开始调整尺寸时鼠标物理坐标。
+  Offset? _resizeCursorOrigin;
+
+  /// 开始调整尺寸时窗口物理矩形。
+  Rect? _resizeWindowRect;
 
   /// 当前窗口所在显示器的缩放比例。
   double _currentScaleFactor = 1;
@@ -1108,6 +1125,51 @@ class _WindowsFloatingWindowNative {
     _moveToScreenPosition(windowOrigin + currentCursor - cursorOrigin);
   }
 
+  /// 记录左下角尺寸调整开始时的鼠标和窗口矩形。
+  void beginResizeFromBottomLeft() {
+    // 当前鼠标物理坐标。
+    final Offset? cursorPosition = _readCursorPosition();
+    if (cursorPosition == null) {
+      return;
+    }
+    // 当前窗口物理位置。
+    final Offset currentPosition = screenPosition;
+    // 当前窗口物理尺寸。
+    final Size currentSize = physicalSize;
+    _resizeCursorOrigin = cursorPosition;
+    _resizeWindowRect = currentPosition & currentSize;
+  }
+
+  /// 根据当前鼠标位置从左下角调整窗口宽高。
+  void updateResizeFromBottomLeft() {
+    // 调整尺寸起始鼠标坐标。
+    final Offset? cursorOrigin = _resizeCursorOrigin;
+    // 调整尺寸起始窗口矩形。
+    final Rect? initialRect = _resizeWindowRect;
+    // 当前鼠标坐标。
+    final Offset? currentCursor = _readCursorPosition();
+    if (cursorOrigin == null || initialRect == null || currentCursor == null) {
+      return;
+    }
+    // 当前显示器缩放后的最小物理尺寸。
+    final Size minimumPhysicalSize =
+        _floatingWindowInitialSize * _currentScaleFactor;
+    // 左下角拖动后的目标物理矩形。
+    final Rect targetRect = resizeFloatingRectFromBottomLeft(
+      initialRect: initialRect,
+      pointerDelta: currentCursor - cursorOrigin,
+      minimumSize: minimumPhysicalSize,
+    );
+    _setBoundsAtScreenRect(targetRect);
+  }
+
+  /// 应用最后一次尺寸变化并清理拖拽起点。
+  void endResizeFromBottomLeft() {
+    updateResizeFromBottomLeft();
+    _resizeCursorOrigin = null;
+    _resizeWindowRect = null;
+  }
+
   /// 读取当前鼠标的屏幕物理坐标。
   Offset? _readCursorPosition() {
     // 鼠标原生坐标。
@@ -1124,25 +1186,30 @@ class _WindowsFloatingWindowNative {
 
   /// 将桌面子窗口移动到指定屏幕物理坐标。
   void _moveToScreenPosition(Offset screenPosition) {
+    // 移动时需要保持的当前窗口物理尺寸。
+    final Size currentPhysicalSize = physicalSize;
+    _setBoundsAtScreenRect(screenPosition & currentPhysicalSize);
+  }
+
+  /// 按屏幕物理矩形同时移动并调整桌面子窗口。
+  void _setBoundsAtScreenRect(Rect screenRect) {
     // 桌面宿主句柄。
     final win32.HWND? desktopHandle = _desktopHandle;
     // 目标原生坐标。
     final Pointer<win32.POINT> point = calloc<win32.POINT>();
     try {
-      point.ref.x = screenPosition.dx.round();
-      point.ref.y = screenPosition.dy.round();
+      point.ref.x = screenRect.left.round();
+      point.ref.y = screenRect.top.round();
       if (desktopHandle != null) {
         win32.ScreenToClient(desktopHandle, point);
       }
-      // 移动时需要保持的当前窗口物理尺寸。
-      final Size currentPhysicalSize = physicalSize;
       win32.SetWindowPos(
         _windowHandle,
         win32.HWND_TOP,
         point.ref.x,
         point.ref.y,
-        currentPhysicalSize.width.round(),
-        currentPhysicalSize.height.round(),
+        screenRect.width.round(),
+        screenRect.height.round(),
         win32.SWP_NOACTIVATE,
       );
     } finally {

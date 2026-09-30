@@ -62,6 +62,20 @@ void main() {
     expect(inputRadius.x, OmniRadius.control);
   });
 
+  test('默认滚动条使用细长样式', () {
+    // 浅色应用主题。
+    final ThemeData theme = AppTheme.build(brightness: Brightness.light);
+    // 默认状态下的滚动条宽度。
+    final double? thickness = theme.scrollbarTheme.thickness?.resolve(
+      const <WidgetState>{},
+    );
+
+    expect(thickness, 4);
+    expect(theme.scrollbarTheme.radius, const Radius.circular(999));
+    expect(theme.scrollbarTheme.minThumbLength, 48);
+    expect(theme.scrollbarTheme.trackVisibility?.resolve({}), isFalse);
+  });
+
   test('输入框使用白底并仅在禁用时显示次级灰底', () {
     // 浅色应用主题。
     final ThemeData theme = AppTheme.build(brightness: Brightness.light);

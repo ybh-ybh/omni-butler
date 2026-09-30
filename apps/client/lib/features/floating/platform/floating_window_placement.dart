@@ -1,5 +1,29 @@
 import 'package:flutter/material.dart';
 
+/// 根据左下角拖拽量计算悬浮窗的新矩形。
+Rect resizeFloatingRectFromBottomLeft({
+  required Rect initialRect,
+  required Offset pointerDelta,
+  required Size minimumSize,
+}) {
+  // 保持右边缘不动后的目标宽度。
+  final double targetWidth = (initialRect.width - pointerDelta.dx).clamp(
+    minimumSize.width,
+    double.infinity,
+  );
+  // 保持顶部不动后的目标高度。
+  final double targetHeight = (initialRect.height + pointerDelta.dy).clamp(
+    minimumSize.height,
+    double.infinity,
+  );
+  return Rect.fromLTWH(
+    initialRect.right - targetWidth,
+    initialRect.top,
+    targetWidth,
+    targetHeight,
+  );
+}
+
 /// 将悬浮窗位置约束在显示器工作区范围内。
 Offset clampFloatingPlacement({
   required Offset desiredPosition,

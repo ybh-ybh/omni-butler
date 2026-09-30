@@ -262,7 +262,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         OmniPageHeader(
           title: '每日待办',
           description: _pageView == _TodoPageView.active
-              ? '${trees.length} 个主任务 · $pendingCount 项未完成，跨计划日期常驻显示'
+              ? '${trees.length} 个主任务 · $pendingCount 项未完成'
               : '${DateFormat('yyyy 年 M 月 d 日').format(_selectedDay)}完成的任务',
           actions: _pageView == _TodoPageView.history
               ? const <Widget>[]
@@ -415,46 +415,61 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     // 桌面端四象限按两行两列排列。
     final List<TodoPriorityQuadrant> quadrants =
         todoPriorityQuadrantMatrixOrder;
-    return SingleChildScrollView(
-      key: const ValueKey<String>('todo-quadrant-grid'),
-      child: Column(
-        children: <Widget>[
-          for (int index = 0; index < quadrants.length; index += 2) ...<Widget>[
-            if (index > 0) const SizedBox(height: OmniSpacing.xs),
-            IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  Expanded(
-                    child: _buildQuadrant(
-                      context,
-                      quadrants[index],
-                      grouped[quadrants[index]]!,
-                      now: now,
-                      allowFocus: true,
-                      allowDrag: true,
-                    ),
-                  ),
-                  const SizedBox(width: OmniSpacing.xs),
-                  if (index + 1 < quadrants.length)
-                    Expanded(
-                      child: _buildQuadrant(
-                        context,
-                        quadrants[index + 1],
-                        grouped[quadrants[index + 1]]!,
-                        now: now,
-                        allowFocus: true,
-                        allowDrag: true,
+    return LayoutBuilder(
+      key: const ValueKey<String>('todo-quadrant-grid-layout'),
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 每个象限最多占用当前待办主体的完整可用高度。
+        final double? maxQuadrantHeight = constraints.hasBoundedHeight
+            ? constraints.maxHeight
+            : null;
+        return SingleChildScrollView(
+          key: const ValueKey<String>('todo-quadrant-grid'),
+          child: Column(
+            children: <Widget>[
+              for (
+                int index = 0;
+                index < quadrants.length;
+                index += 2
+              ) ...<Widget>[
+                if (index > 0) const SizedBox(height: OmniSpacing.xs),
+                IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      Expanded(
+                        child: _buildQuadrant(
+                          context,
+                          quadrants[index],
+                          grouped[quadrants[index]]!,
+                          now: now,
+                          allowFocus: true,
+                          allowDrag: true,
+                          maxHeight: maxQuadrantHeight,
+                        ),
                       ),
-                    )
-                  else
-                    const Spacer(),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
+                      const SizedBox(width: OmniSpacing.xs),
+                      if (index + 1 < quadrants.length)
+                        Expanded(
+                          child: _buildQuadrant(
+                            context,
+                            quadrants[index + 1],
+                            grouped[quadrants[index + 1]]!,
+                            now: now,
+                            allowFocus: true,
+                            allowDrag: true,
+                            maxHeight: maxQuadrantHeight,
+                          ),
+                        )
+                      else
+                        const Spacer(),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -474,56 +489,74 @@ class _TodosPageState extends ConsumerState<TodosPage> {
               (TodoPriorityQuadrant quadrant) => quadrant != focusedQuadrant,
             )
             .toList(growable: false);
-    // 当前聚焦的主象限卡片。
-    final Widget primaryQuadrant = _buildQuadrant(
-      context,
-      focusedQuadrant,
-      grouped[focusedQuadrant]!,
-      now: now,
-      allowFocus: true,
-      allowDrag: true,
-    );
-    // 对侧纵向排列的象限列。
-    final Widget secondaryColumn = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        for (
-          int index = 0;
-          index < secondaryQuadrants.length;
-          index += 1
-        ) ...<Widget>[
-          if (index > 0) const SizedBox(height: OmniSpacing.xs),
-          _buildQuadrant(
-            context,
-            secondaryQuadrants[index],
-            grouped[secondaryQuadrants[index]]!,
-            now: now,
-            allowFocus: true,
-            allowDrag: true,
-          ),
-        ],
-      ],
-    );
     // 聚焦象限和其余象限之间的水平间距。
     const Widget horizontalGap = SizedBox(width: OmniSpacing.xs);
-    return SingleChildScrollView(
-      key: ValueKey<String>('todo-quadrant-focus-${focusedQuadrant.value}'),
-      child: IntrinsicHeight(
-        child: Row(
+    return LayoutBuilder(
+      key: ValueKey<String>(
+        'todo-quadrant-focus-layout-${focusedQuadrant.value}',
+      ),
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 聚焦布局中的每个象限同样不得超过当前页面主体高度。
+        final double? maxQuadrantHeight = constraints.hasBoundedHeight
+            ? constraints.maxHeight
+            : null;
+        // 当前聚焦的主象限卡片。
+        final Widget primaryQuadrantCard = _buildQuadrant(
+          context,
+          focusedQuadrant,
+          grouped[focusedQuadrant]!,
+          now: now,
+          allowFocus: true,
+          allowDrag: true,
+          maxHeight: maxQuadrantHeight,
+        );
+        // 参与整行高度对齐但不拉伸内部卡片的主象限列。
+        final Widget primaryQuadrant = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[primaryQuadrantCard],
+        );
+        // 对侧纵向排列的象限列。
+        final Widget secondaryColumn = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            if (focusedOnLeft) ...<Widget>[
-              Expanded(flex: 2, child: primaryQuadrant),
-              horizontalGap,
-              Expanded(child: secondaryColumn),
-            ] else ...<Widget>[
-              Expanded(child: secondaryColumn),
-              horizontalGap,
-              Expanded(flex: 2, child: primaryQuadrant),
+            for (
+              int index = 0;
+              index < secondaryQuadrants.length;
+              index += 1
+            ) ...<Widget>[
+              if (index > 0) const SizedBox(height: OmniSpacing.xs),
+              _buildQuadrant(
+                context,
+                secondaryQuadrants[index],
+                grouped[secondaryQuadrants[index]]!,
+                now: now,
+                allowFocus: true,
+                allowDrag: true,
+                maxHeight: maxQuadrantHeight,
+              ),
             ],
           ],
-        ),
-      ),
+        );
+        return SingleChildScrollView(
+          key: ValueKey<String>('todo-quadrant-focus-${focusedQuadrant.value}'),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                if (focusedOnLeft) ...<Widget>[
+                  Expanded(flex: 2, child: primaryQuadrant),
+                  horizontalGap,
+                  Expanded(child: secondaryColumn),
+                ] else ...<Widget>[
+                  Expanded(child: secondaryColumn),
+                  horizontalGap,
+                  Expanded(flex: 2, child: primaryQuadrant),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -575,8 +608,10 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     required DateTime now,
     required bool allowFocus,
     required bool allowDrag,
+    double? maxHeight,
   }) {
-    return _TodoQuadrantDropZone(
+    // 当前象限卡片及其独立滚动内容。
+    final Widget quadrantCard = _TodoQuadrantDropZone(
       quadrant: quadrant,
       trees: trees,
       now: now,
@@ -604,6 +639,13 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       ),
       onMove: _moveTodoByDialog,
       onDelete: _confirmDelete,
+    );
+    if (maxHeight == null) {
+      return quadrantCard;
+    }
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      child: quadrantCard,
     );
   }
 
@@ -1369,6 +1411,7 @@ class _TodoQuadrantDropZone extends StatelessWidget {
               ),
               clipBehavior: Clip.antiAlias,
               child: Column(
+                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
                   Material(
@@ -1420,41 +1463,111 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                     ),
                   ),
                   Divider(color: colors.line),
-                  if (trees.isEmpty)
-                    _QuadrantEmptyState(onCreate: onCreate)
-                  else
-                    for (
-                      int index = 0;
-                      index < trees.length;
-                      index += 1
-                    ) ...<Widget>[
-                      if (index > 0) const Divider(indent: OmniSpacing.md),
-                      if (allowDrag)
-                        _TodoInsertTarget(
-                          quadrant: quadrant,
-                          beforeRootId: trees[index].root.id,
-                          onDrop: onDrop,
-                        ),
-                      _TodoTreeCard(
-                        key: ValueKey<String>(
-                          'todo-tree-card-${trees[index].root.id}',
-                        ),
-                        tree: trees[index],
-                        now: now,
-                        completingTodoIds: completingTodoIds,
-                        allowDrag: allowDrag,
-                        quadrant: quadrant,
-                        onCompletedChanged: onCompletedChanged,
-                        onEdit: onEdit,
-                        onAddChild: onAddChild,
-                        onMove: onMove,
-                        onDelete: onDelete,
-                      ),
-                    ],
+                  _TodoQuadrantScrollViewport(
+                    quadrant: quadrant,
+                    enabled: allowDrag,
+                    child: trees.isEmpty
+                        ? _QuadrantEmptyState(onCreate: onCreate)
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: <Widget>[
+                              for (
+                                int index = 0;
+                                index < trees.length;
+                                index += 1
+                              ) ...<Widget>[
+                                if (index > 0)
+                                  const Divider(indent: OmniSpacing.md),
+                                if (allowDrag)
+                                  _TodoInsertTarget(
+                                    quadrant: quadrant,
+                                    beforeRootId: trees[index].root.id,
+                                    onDrop: onDrop,
+                                  ),
+                                _TodoTreeCard(
+                                  key: ValueKey<String>(
+                                    'todo-tree-card-${trees[index].root.id}',
+                                  ),
+                                  tree: trees[index],
+                                  now: now,
+                                  completingTodoIds: completingTodoIds,
+                                  allowDrag: allowDrag,
+                                  quadrant: quadrant,
+                                  onCompletedChanged: onCompletedChanged,
+                                  onEdit: onEdit,
+                                  onAddChild: onAddChild,
+                                  onMove: onMove,
+                                  onDelete: onDelete,
+                                ),
+                              ],
+                            ],
+                          ),
+                  ),
                 ],
               ),
             );
           },
+    );
+  }
+}
+
+/// 单个象限卡片内部的独立滚动视口。
+class _TodoQuadrantScrollViewport extends StatefulWidget {
+  /// 当前象限。
+  final TodoPriorityQuadrant quadrant;
+
+  /// 桌面端是否启用卡片内部滚动。
+  final bool enabled;
+
+  /// 象限任务内容。
+  final Widget child;
+
+  /// 创建象限内部滚动视口。
+  const _TodoQuadrantScrollViewport({
+    required this.quadrant,
+    required this.enabled,
+    required this.child,
+  });
+
+  /// 创建象限滚动状态。
+  @override
+  State<_TodoQuadrantScrollViewport> createState() =>
+      _TodoQuadrantScrollViewportState();
+}
+
+/// 管理单个象限自己的滚动位置。
+class _TodoQuadrantScrollViewportState
+    extends State<_TodoQuadrantScrollViewport> {
+  /// 当前象限专用滚动控制器。
+  final ScrollController _scrollController = ScrollController();
+
+  /// 释放象限滚动控制器。
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  /// 桌面端在剩余空间内滚动，移动端继续交给页面整体滚动。
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.enabled) {
+      return widget.child;
+    }
+    return Flexible(
+      fit: FlexFit.loose,
+      child: Scrollbar(
+        controller: _scrollController,
+        child: SingleChildScrollView(
+          key: ValueKey<String>(
+            'todo-quadrant-scroll-${widget.quadrant.value}',
+          ),
+          controller: _scrollController,
+          primary: false,
+          child: widget.child,
+        ),
+      ),
     );
   }
 }

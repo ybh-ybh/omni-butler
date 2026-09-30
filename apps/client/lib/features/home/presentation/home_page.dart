@@ -190,6 +190,9 @@ class _HomeDashboard extends StatelessWidget {
                     child: _FillRemainingCardGrid(
                       gap: gap,
                       fillLastRow: !compact,
+                      maxGridHeight: compact || !Platform.isWindows
+                          ? double.infinity
+                          : minimumGridHeight,
                       children: _buildGridRows(
                         compact: compact,
                         columnCount: columnCount,
@@ -249,6 +252,8 @@ class _HomeDashboard extends StatelessWidget {
               compact: compact,
               columnWidth: columnWidth,
               gap: gap,
+              scrollable:
+                  Platform.isWindows && !compact && rowIndex == rows.length - 1,
             ),
         ],
       );
@@ -263,11 +268,16 @@ class _HomeDashboard extends StatelessWidget {
     required bool compact,
     required double columnWidth,
     required double gap,
+    required bool scrollable,
   }) {
     // 当前卡片占用的列数。
     final int span = _cardSpan(card: card, compact: compact);
     // 当前卡片完整宽度。
     final double width = columnWidth * span + gap * (span - 1);
+    // 最后一排卡片在 Windows 视口内独立滚动，避免内容继续撑高整张卡片。
+    final Widget cardContent = scrollable
+        ? _HomeCardScrollViewport(card: card, child: cards[card]!)
+        : cards[card]!;
     return SizedBox(
       key: ValueKey<String>('home-dashboard-card-${card.name}'),
       width: width,
@@ -275,7 +285,7 @@ class _HomeDashboard extends StatelessWidget {
           !compact && (card == HomeCardId.quote || card == HomeCardId.dayRuler)
           ? 156
           : null,
-      child: cards[card]!,
+      child: cardContent,
     );
   }
 
@@ -291,6 +301,46 @@ class _HomeDashboard extends StatelessWidget {
   }
 }
 
+/// Windows 首页最下一排卡片的独立滚动视口。
+class _HomeCardScrollViewport extends StatefulWidget {
+  /// 当前卡片标识。
+  final HomeCardId card;
+
+  /// 卡片完整内容。
+  final Widget child;
+
+  /// 创建卡片内滚动视口。
+  const _HomeCardScrollViewport({required this.card, required this.child});
+
+  /// 创建卡片内滚动状态。
+  @override
+  State<_HomeCardScrollViewport> createState() =>
+      _HomeCardScrollViewportState();
+}
+
+/// 管理首页卡片自己的滚动位置。
+class _HomeCardScrollViewportState extends State<_HomeCardScrollViewport> {
+  /// 当前卡片专用滚动控制器，避免同排卡片争用主滚动控制器。
+  final ScrollController _scrollController = ScrollController();
+
+  /// 释放卡片滚动控制器。
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  /// 构建带细滚动条的卡片内视口。
+  @override
+  Widget build(BuildContext context) {
+    return OmniPanelScrollScope(
+      key: ValueKey<String>('home-card-scroll-${widget.card.name}'),
+      controller: _scrollController,
+      child: widget.child,
+    );
+  }
+}
+
 /// 在内容不足时让最后一排卡片填满网格剩余高度。
 class _FillRemainingCardGrid extends MultiChildRenderObjectWidget {
   /// 相邻网格行间距。
@@ -299,17 +349,21 @@ class _FillRemainingCardGrid extends MultiChildRenderObjectWidget {
   /// 是否拉伸最后一排。
   final bool fillLastRow;
 
+  /// 当前页面内卡片网格可占用的最大高度。
+  final double maxGridHeight;
+
   /// 创建可填满剩余高度的首页网格。
   const _FillRemainingCardGrid({
     required this.gap,
     required this.fillLastRow,
+    required this.maxGridHeight,
     required super.children,
   });
 
   /// 创建纵向网格渲染对象。
   @override
   RenderObject createRenderObject(BuildContext context) {
-    return _RenderFillRemainingCardGrid(gap, fillLastRow);
+    return _RenderFillRemainingCardGrid(gap, fillLastRow, maxGridHeight);
   }
 
   /// 更新网格间距与最后一排填充策略。
@@ -320,7 +374,8 @@ class _FillRemainingCardGrid extends MultiChildRenderObjectWidget {
   ) {
     renderObject
       ..gap = gap
-      ..fillLastRow = fillLastRow;
+      ..fillLastRow = fillLastRow
+      ..maxGridHeight = maxGridHeight;
   }
 }
 
@@ -342,8 +397,15 @@ class _RenderFillRemainingCardGrid extends RenderBox
   /// 是否拉伸最后一排。
   bool _fillLastRow;
 
+  /// 当前页面内卡片网格可占用的最大高度。
+  double _maxGridHeight;
+
   /// 创建可填满剩余高度的网格渲染对象。
-  _RenderFillRemainingCardGrid(this._gap, this._fillLastRow);
+  _RenderFillRemainingCardGrid(
+    this._gap,
+    this._fillLastRow,
+    this._maxGridHeight,
+  );
 
   /// 当前相邻网格行间距。
   double get gap => _gap;
@@ -366,6 +428,18 @@ class _RenderFillRemainingCardGrid extends RenderBox
       return;
     }
     _fillLastRow = value;
+    markNeedsLayout();
+  }
+
+  /// 当前页面内卡片网格可占用的最大高度。
+  double get maxGridHeight => _maxGridHeight;
+
+  /// 更新卡片网格高度上限并触发布局。
+  set maxGridHeight(double value) {
+    if (_maxGridHeight == value) {
+      return;
+    }
+    _maxGridHeight = value;
     markNeedsLayout();
   }
 
@@ -396,7 +470,17 @@ class _RenderFillRemainingCardGrid extends RenderBox
     // 当前待测量网格行。
     RenderBox? child = firstChild;
     while (child != null) {
-      child.layout(rowConstraints, parentUsesSize: true);
+      // 最后一排从当前页面剩余空间中计算高度上限。
+      final double remainingGridHeight = maxGridHeight - naturalHeight;
+      // 若前面各排已经超过一页，最后一排滚入视口后最多占满一页。
+      final double lastRowHeightLimit = remainingGridHeight > 0
+          ? remainingGridHeight
+          : maxGridHeight;
+      // 只有最后一排需要限制高度，其余排继续按自然高度参与页面滚动。
+      final BoxConstraints effectiveRowConstraints = child == lastChild
+          ? rowConstraints.copyWith(maxHeight: lastRowHeightLimit)
+          : rowConstraints;
+      child.layout(effectiveRowConstraints, parentUsesSize: true);
       naturalHeight += child.size.height;
       if (child.size.width > naturalWidth) {
         naturalWidth = child.size.width;
@@ -414,12 +498,15 @@ class _RenderFillRemainingCardGrid extends RenderBox
         : 0;
     if (remainingHeight > 0 && lastChild != null) {
       // 最后一排扩展后的目标高度。
-      final double lastRowHeight = lastChild!.size.height + remainingHeight;
+      final double lastRowHeight = (lastChild!.size.height + remainingHeight)
+          .clamp(0, maxGridHeight)
+          .toDouble();
       lastChild!.layout(
         BoxConstraints(
           minWidth: constraints.minWidth,
           maxWidth: constraints.maxWidth,
           minHeight: lastRowHeight,
+          maxHeight: lastRowHeight,
         ),
         parentUsesSize: true,
       );

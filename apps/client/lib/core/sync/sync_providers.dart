@@ -71,6 +71,21 @@ final StreamProvider<SyncStatus?> syncStatusProvider =
       yield* runtime.powerSync.statusStream;
     });
 
+/// PowerSync 实际落库的业务表更新，用于补偿长期驻留窗口的数据刷新。
+final StreamProvider<Set<String>> syncTableUpdatesProvider =
+    StreamProvider<Set<String>>((Ref ref) async* {
+      // 当前生产同步运行时。
+      final OmniSyncRuntime? runtime = ref.watch(syncRuntimeProvider);
+      if (runtime == null) {
+        return;
+      }
+      await for (final update in runtime.powerSync.updates) {
+        // 本次事务真实发生变化的业务表。
+        final Set<String> tables = Set<String>.unmodifiable(update.tables);
+        yield tables;
+      }
+    });
+
 /// 当前本地待上传操作数量。
 final StreamProvider<int> syncUploadQueueCountProvider = StreamProvider<int>((
   Ref ref,

@@ -8,6 +8,7 @@ import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
 import 'package:omni_butler/features/timeline/presentation/timeline_page.dart';
@@ -38,9 +39,6 @@ const double floatingTodoRowHeight = 32;
 /// 悬浮窗单个象限最多直接展示的待办项数量。
 const int floatingTodoMaxVisibleRows = 5;
 
-/// 悬浮窗内容允许增长到的最大逻辑高度。
-const double floatingWindowMaxContentHeight = 900;
-
 /// 根据任务项数量计算象限列表视口高度。
 double calculateFloatingTodoViewportHeight(int taskRowCount) {
   // 至少展示一个任务项、最多展示五个任务项。
@@ -65,8 +63,14 @@ class FloatingWindowPage extends ConsumerStatefulWidget {
   /// 结束拖动并保存位置的回调。
   final Future<void> Function() onDragEnd;
 
-  /// 内容期望高度变化回调。
-  final ValueChanged<double> onPreferredHeightChanged;
+  /// 开始从左下角调整窗口尺寸的回调。
+  final VoidCallback onResizeStart;
+
+  /// 持续调整窗口尺寸的回调。
+  final VoidCallback onResizeUpdate;
+
+  /// 结束调整并保存窗口尺寸的回调。
+  final Future<void> Function() onResizeEnd;
 
   /// 创建 Windows 桌面悬浮框。
   const FloatingWindowPage({
@@ -75,7 +79,9 @@ class FloatingWindowPage extends ConsumerStatefulWidget {
     required this.onDragStart,
     required this.onDragUpdate,
     required this.onDragEnd,
-    required this.onPreferredHeightChanged,
+    required this.onResizeStart,
+    required this.onResizeUpdate,
+    required this.onResizeEnd,
     super.key,
   });
 
@@ -89,12 +95,6 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
   /// 当前撤销浮动消息。
   OmniMessageHandle? _undoMessage;
 
-  /// 用于测量玻璃主体自然高度的全局键。
-  final GlobalKey _contentKey = GlobalKey();
-
-  /// 最近一次上报的内容高度。
-  double? _lastReportedHeight;
-
   /// 当前展开的快速录入区。
   _FloatingComposerMode? _composerMode;
 
@@ -106,24 +106,6 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
   /// 收起当前快速录入区。
   void _closeComposer() {
     setState(() => _composerMode = null);
-  }
-
-  /// 在布局完成后上报玻璃主体的自然高度。
-  void _reportPreferredHeight() {
-    // 当前玻璃主体渲染对象。
-    final RenderBox? renderBox =
-        _contentKey.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox == null || !renderBox.hasSize) {
-      return;
-    }
-    // 向上取整后的期望窗口高度。
-    final double preferredHeight = renderBox.size.height.ceilToDouble();
-    if (_lastReportedHeight != null &&
-        (_lastReportedHeight! - preferredHeight).abs() < 0.5) {
-      return;
-    }
-    _lastReportedHeight = preferredHeight;
-    widget.onPreferredHeightChanged(preferredHeight);
   }
 
   /// 完成指定待办并提供六秒撤销入口。
@@ -177,6 +159,22 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
     final DateTime now = ref.watch(nowProvider);
     // 今日自然日。
     final DateTime today = DateUtils.dateOnly(now);
+    ref.listen<AsyncValue<Set<String>>>(syncTableUpdatesProvider, (
+      AsyncValue<Set<String>>? previous,
+      AsyncValue<Set<String>> next,
+    ) {
+      // 当前远端同步事务落库后变化的业务表。
+      final Set<String>? tables = next.asData?.value;
+      if (tables == null || tables.isEmpty) {
+        return;
+      }
+      if (tables.contains('todo_items')) {
+        ref.invalidate(activeTodoTreesProvider(today));
+      }
+      if (tables.contains('time_entries')) {
+        ref.invalidate(ongoingTimeEntriesProvider);
+      }
+    });
     // 今日待办功能是否可用。
     final bool todoEnabled = featurePreference.isEnabled(AppFeature.todos);
     // 时间管理功能是否可用。
@@ -194,25 +192,11 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
         ? Colors.white.withValues(alpha: 0.18)
         : Colors.white.withValues(alpha: 0.72);
 
-    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
-      if (mounted) {
-        _reportPreferredHeight();
-      }
-    });
-
     return Material(
       type: MaterialType.transparency,
-      child: OverflowBox(
-        alignment: Alignment.topCenter,
-        minHeight: 0,
-        maxHeight: double.infinity,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(
-            maxHeight: floatingWindowMaxContentHeight,
-          ),
-          child: SingleChildScrollView(
-            key: _contentKey,
-            primary: false,
+      child: Stack(
+        children: <Widget>[
+          Positioned.fill(
             child: Padding(
               padding: const EdgeInsets.all(OmniSpacing.xs),
               child: DecoratedBox(
@@ -236,7 +220,6 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
                   child: BackdropFilter(
                     filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                     child: Column(
-                      mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: <Widget>[
                         _FloatingTitleBar(
@@ -250,84 +233,157 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
                           height: 1,
                           color: colors.line.withValues(alpha: 0.72),
                         ),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(
-                            OmniSpacing.md,
-                            OmniSpacing.sm,
-                            OmniSpacing.md,
-                            OmniSpacing.md,
-                          ),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: <Widget>[
-                              if (todoEnabled)
-                                _FloatingTodos(
-                                  today: today,
-                                  onComplete: _completeTodo,
-                                  onOpenRoute: widget.onOpenRoute,
-                                  onToggleComposer:
-                                      _composerMode ==
-                                          _FloatingComposerMode.todo
-                                      ? _closeComposer
-                                      : () => _openComposer(
-                                          _FloatingComposerMode.todo,
-                                        ),
-                                  composer:
-                                      _composerMode ==
-                                          _FloatingComposerMode.todo
-                                      ? _FloatingTodoComposer(
-                                          today: today,
-                                          onClose: _closeComposer,
-                                        )
-                                      : null,
-                                ),
-                              if (todoEnabled && timelineEnabled) ...<Widget>[
-                                const SizedBox(height: OmniSpacing.sm),
-                                Divider(
-                                  height: 1,
-                                  color: colors.line.withValues(alpha: 0.64),
-                                ),
-                                const SizedBox(height: OmniSpacing.sm),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            key: const ValueKey<String>(
+                              'floating-window-content-scroll',
+                            ),
+                            primary: false,
+                            padding: const EdgeInsets.fromLTRB(
+                              OmniSpacing.md,
+                              OmniSpacing.sm,
+                              OmniSpacing.md,
+                              OmniSpacing.md,
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: <Widget>[
+                                if (todoEnabled)
+                                  _FloatingTodos(
+                                    today: today,
+                                    onComplete: _completeTodo,
+                                    onOpenRoute: widget.onOpenRoute,
+                                    onToggleComposer:
+                                        _composerMode ==
+                                            _FloatingComposerMode.todo
+                                        ? _closeComposer
+                                        : () => _openComposer(
+                                            _FloatingComposerMode.todo,
+                                          ),
+                                    composer:
+                                        _composerMode ==
+                                            _FloatingComposerMode.todo
+                                        ? _FloatingTodoComposer(
+                                            today: today,
+                                            onClose: _closeComposer,
+                                          )
+                                        : null,
+                                  ),
+                                if (todoEnabled && timelineEnabled) ...<Widget>[
+                                  const SizedBox(height: OmniSpacing.sm),
+                                  Divider(
+                                    height: 1,
+                                    color: colors.line.withValues(alpha: 0.64),
+                                  ),
+                                  const SizedBox(height: OmniSpacing.sm),
+                                ],
+                                if (timelineEnabled)
+                                  _FloatingTimeStatus(
+                                    onOpenRoute: widget.onOpenRoute,
+                                    onStart: () => _openComposer(
+                                      _FloatingComposerMode.startTime,
+                                    ),
+                                    onBackfill: () => _openComposer(
+                                      _FloatingComposerMode.backfillTime,
+                                    ),
+                                    composer:
+                                        _composerMode ==
+                                            _FloatingComposerMode.startTime
+                                        ? _FloatingTimeComposer(
+                                            key: const ValueKey<String>(
+                                              'floating-start-composer',
+                                            ),
+                                            mode:
+                                                _FloatingTimeComposerMode.start,
+                                            day: now,
+                                            onClose: _closeComposer,
+                                          )
+                                        : _composerMode ==
+                                              _FloatingComposerMode.backfillTime
+                                        ? _FloatingTimeComposer(
+                                            key: const ValueKey<String>(
+                                              'floating-backfill-composer',
+                                            ),
+                                            mode: _FloatingTimeComposerMode
+                                                .backfill,
+                                            day: now,
+                                            onClose: _closeComposer,
+                                          )
+                                        : null,
+                                  ),
                               ],
-                              if (timelineEnabled)
-                                _FloatingTimeStatus(
-                                  onOpenRoute: widget.onOpenRoute,
-                                  onStart: () => _openComposer(
-                                    _FloatingComposerMode.startTime,
-                                  ),
-                                  onBackfill: () => _openComposer(
-                                    _FloatingComposerMode.backfillTime,
-                                  ),
-                                  composer:
-                                      _composerMode ==
-                                          _FloatingComposerMode.startTime
-                                      ? _FloatingTimeComposer(
-                                          key: const ValueKey<String>(
-                                            'floating-start-composer',
-                                          ),
-                                          mode: _FloatingTimeComposerMode.start,
-                                          day: now,
-                                          onClose: _closeComposer,
-                                        )
-                                      : _composerMode ==
-                                            _FloatingComposerMode.backfillTime
-                                      ? _FloatingTimeComposer(
-                                          key: const ValueKey<String>(
-                                            'floating-backfill-composer',
-                                          ),
-                                          mode: _FloatingTimeComposerMode
-                                              .backfill,
-                                          day: now,
-                                          onClose: _closeComposer,
-                                        )
-                                      : null,
-                                ),
-                            ],
+                            ),
                           ),
                         ),
                       ],
                     ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            bottom: 0,
+            child: _FloatingResizeHandle(
+              onResizeStart: widget.onResizeStart,
+              onResizeUpdate: widget.onResizeUpdate,
+              onResizeEnd: widget.onResizeEnd,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 悬浮框左下角的窗口尺寸调整手柄。
+class _FloatingResizeHandle extends StatelessWidget {
+  /// 开始调整窗口尺寸的回调。
+  final VoidCallback onResizeStart;
+
+  /// 持续调整窗口尺寸的回调。
+  final VoidCallback onResizeUpdate;
+
+  /// 结束调整并保存窗口尺寸的回调。
+  final Future<void> Function() onResizeEnd;
+
+  /// 创建窗口尺寸调整手柄。
+  const _FloatingResizeHandle({
+    required this.onResizeStart,
+    required this.onResizeUpdate,
+    required this.onResizeEnd,
+  });
+
+  /// 构建左下角热区与直角视觉提示。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    return Tooltip(
+      message: '拖动调整悬浮窗大小',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.resizeUpRightDownLeft,
+        child: GestureDetector(
+          key: const ValueKey<String>('floating-window-resize-handle'),
+          behavior: HitTestBehavior.opaque,
+          onPanStart: (_) => onResizeStart(),
+          onPanUpdate: (_) => onResizeUpdate(),
+          onPanEnd: (_) => unawaited(onResizeEnd()),
+          child: SizedBox(
+            width: 28,
+            height: 28,
+            child: Align(
+              alignment: Alignment.bottomLeft,
+              child: Container(
+                width: 12,
+                height: 12,
+                margin: const EdgeInsets.only(left: 7, bottom: 7),
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(color: colors.muted, width: 1.5),
+                    bottom: BorderSide(color: colors.muted, width: 1.5),
                   ),
                 ),
               ),
@@ -448,27 +504,22 @@ class _FloatingTodos extends ConsumerWidget {
     final AsyncValue<List<TodoTreeNode>> todoTreesAsync = ref.watch(
       activeTodoTreesProvider(today),
     );
-    // 今日仍有未完成内容的待办树。
-    final List<TodoTreeNode> todayTrees =
-        (todoTreesAsync.asData?.value ?? const <TodoTreeNode>[])
-            .where(
-              (TodoTreeNode tree) =>
-                  DateUtils.isSameDay(tree.root.scheduledDate, today),
-            )
-            .toList(growable: false);
+    // 与每日待办和首页共享的全部进行中待办树，不再按计划日期过滤。
+    final List<TodoTreeNode> activeTrees =
+        todoTreesAsync.asData?.value ?? const <TodoTreeNode>[];
     // 三个重点象限的固定顺序。
     const List<TodoPriorityQuadrant> focusQuadrants = <TodoPriorityQuadrant>[
       TodoPriorityQuadrant.urgentImportant,
       TodoPriorityQuadrant.importantNotUrgent,
       TodoPriorityQuadrant.urgentNotImportant,
     ];
-    // 按重点象限分组的今日根任务树。
+    // 按重点象限分组的进行中根任务树。
     final Map<TodoPriorityQuadrant, List<TodoTreeNode>> groupedTrees =
         <TodoPriorityQuadrant, List<TodoTreeNode>>{
           for (final TodoPriorityQuadrant quadrant in focusQuadrants)
             quadrant: <TodoTreeNode>[],
         };
-    for (final TodoTreeNode tree in todayTrees) {
+    for (final TodoTreeNode tree in activeTrees) {
       // 当前根任务所属象限。
       final TodoPriorityQuadrant quadrant = TodoPriorityQuadrant.fromValue(
         tree.root.priorityQuadrant,

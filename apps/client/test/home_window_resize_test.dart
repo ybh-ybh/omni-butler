@@ -7,6 +7,7 @@ import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/features/events/data/event_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证 Windows 窗口实时缩放时的卡片重排与完整保留规则。
@@ -26,6 +27,20 @@ void main() {
     final AppDatabase database = AppDatabase.forTesting(
       NativeDatabase.memory(),
     );
+    // 用足量临近事件制造超过单页高度的最下方卡片内容。
+    final EventRepository eventRepository = EventRepository(database);
+    for (int index = 0; index < 16; index += 1) {
+      await eventRepository.save(
+        EventDraft(
+          name: '窗口高度回归事件 $index',
+          intervalValue: 1,
+          intervalUnit: EventIntervalUnit.day,
+          lastCompletedAt: DateTime(2026, 9, 1),
+          reminderEnabled: true,
+          reminderDaysBefore: 1,
+        ),
+      );
+    }
     // 显式管理的测试依赖容器。
     final ProviderContainer container = ProviderContainer(
       overrides: [
@@ -47,10 +62,46 @@ void main() {
     final double wideTodoWidth = tester
         .getSize(find.byKey(const ValueKey<String>('home-todo-card')))
         .width;
+    // 宽窗口下最后一排卡片的底部位置。
+    final double wideContextCardBottom = tester
+        .getBottomRight(
+          find.byKey(
+            const ValueKey<String>('home-dashboard-card-todayContext'),
+          ),
+        )
+        .dy;
+    expect(wideContextCardBottom, lessThanOrEqualTo(900));
     expect(
       find.byKey(const ValueKey<String>('home-context-card')),
       findsOneWidget,
     );
+
+    tester.view.physicalSize = const Size(1728, 969);
+    await tester.pumpAndSettle();
+
+    // 用户截图尺寸下最后一排卡片的底部位置。
+    final double screenshotContextCardBottom = tester
+        .getBottomRight(
+          find.byKey(
+            const ValueKey<String>('home-dashboard-card-todayContext'),
+          ),
+        )
+        .dy;
+    // 用户截图尺寸下今日脉络卡片专属滚动视口。
+    final Finder screenshotContextCardScroll = find.byKey(
+      const ValueKey<String>('home-card-scroll-todayContext'),
+    );
+    // 用户截图尺寸下卡片内实际可滚动组件。
+    final Finder screenshotContextScrollable = find.descendant(
+      of: screenshotContextCardScroll,
+      matching: find.byType(Scrollable),
+    );
+    // 用户截图尺寸下卡片内滚动位置。
+    final ScrollPosition screenshotContextScrollPosition = tester
+        .state<ScrollableState>(screenshotContextScrollable)
+        .position;
+    expect(screenshotContextCardBottom, lessThanOrEqualTo(969));
+    expect(screenshotContextScrollPosition.maxScrollExtent, greaterThan(0));
 
     tester.view.physicalSize = const Size(1024, 768);
     await tester.pumpAndSettle();
@@ -96,6 +147,21 @@ void main() {
       find.byKey(const ValueKey<String>('home-context-card')),
       findsOneWidget,
     );
+    // 今日脉络卡片专属滚动视口。
+    final Finder contextCardScroll = find.byKey(
+      const ValueKey<String>('home-card-scroll-todayContext'),
+    );
+    // 卡片内实际可滚动组件。
+    final Finder contextScrollable = find.descendant(
+      of: contextCardScroll,
+      matching: find.byType(Scrollable),
+    );
+    // 卡片内滚动位置。
+    final ScrollPosition contextScrollPosition = tester
+        .state<ScrollableState>(contextScrollable)
+        .position;
+    expect(tester.getSize(contextCardScroll).height, lessThan(500));
+    expect(contextScrollPosition.maxScrollExtent, greaterThan(0));
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());

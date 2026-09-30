@@ -479,6 +479,131 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('每日待办每个象限限制高度并在卡片内独立滚动', (WidgetTester tester) async {
+    // 桌面测试视口。
+    const Size viewport = Size(1440, 900);
+    tester.view.physicalSize = viewport;
+    tester.view.devicePixelRatio = 1;
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'appearance.theme_mode': 'light',
+    });
+    // 测试用主题偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 测试用待办仓储。
+    final TodoRepository repository = TodoRepository(database);
+    // 测试使用的固定自然日。
+    final DateTime today = DateTime(2026, 9, 6);
+    for (final TodoPriorityQuadrant quadrant
+        in todoPriorityQuadrantMatrixOrder) {
+      for (int index = 1; index <= 18; index += 1) {
+        await repository.save(
+          TodoDraft(
+            title: '${quadrant.label}长列表任务$index',
+            scheduledDate: today,
+            priorityQuadrant: quadrant,
+          ),
+        );
+      }
+    }
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(preferences),
+          appDatabaseProvider.overrideWithValue(database),
+          nowProvider.overrideWithValue(today.add(const Duration(hours: 10))),
+        ],
+        child: const OmniButlerApp(),
+      ),
+    );
+    // 根组件下的 Provider 容器。
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(OmniButlerApp)),
+    );
+    container.read(appRouterProvider).go('/todos');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    // 普通四象限布局的可用高度。
+    final double gridAvailableHeight = tester
+        .getSize(
+          find.byKey(const ValueKey<String>('todo-quadrant-grid-layout')),
+        )
+        .height;
+    for (final TodoPriorityQuadrant quadrant
+        in todoPriorityQuadrantMatrixOrder) {
+      // 当前象限卡片。
+      final Finder quadrantCard = find.byKey(
+        ValueKey<String>('todo-quadrant-card-${quadrant.value}'),
+      );
+      // 当前象限的独立滚动视口。
+      final Finder quadrantScroll = find.byKey(
+        ValueKey<String>('todo-quadrant-scroll-${quadrant.value}'),
+      );
+      // 当前象限的独立滚动控制器。
+      final ScrollController scrollController = tester
+          .widget<SingleChildScrollView>(quadrantScroll)
+          .controller!;
+      expect(
+        tester.getSize(quadrantCard).height,
+        lessThanOrEqualTo(gridAvailableHeight),
+      );
+      expect(scrollController.position.maxScrollExtent, greaterThan(0));
+    }
+
+    await tester.tap(
+      find.byKey(
+        ValueKey<String>(
+          'todo-quadrant-heading-${TodoPriorityQuadrant.urgentImportant.value}',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 聚焦布局的可用高度。
+    final double focusedAvailableHeight = tester
+        .getSize(
+          find.byKey(
+            ValueKey<String>(
+              'todo-quadrant-focus-layout-${TodoPriorityQuadrant.urgentImportant.value}',
+            ),
+          ),
+        )
+        .height;
+    for (final TodoPriorityQuadrant quadrant
+        in todoPriorityQuadrantMatrixOrder) {
+      // 聚焦布局中的当前象限卡片。
+      final Finder focusedQuadrantCard = find.byKey(
+        ValueKey<String>('todo-quadrant-card-${quadrant.value}'),
+      );
+      // 聚焦布局中的当前象限滚动视口。
+      final Finder focusedQuadrantScroll = find.byKey(
+        ValueKey<String>('todo-quadrant-scroll-${quadrant.value}'),
+      );
+      // 聚焦布局中的当前象限滚动控制器。
+      final ScrollController focusedScrollController = tester
+          .widget<SingleChildScrollView>(focusedQuadrantScroll)
+          .controller!;
+      expect(
+        tester.getSize(focusedQuadrantCard).height,
+        lessThanOrEqualTo(focusedAvailableHeight),
+      );
+      expect(focusedScrollController.position.maxScrollExtent, greaterThan(0));
+    }
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+    await database.close();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('每日待办完成任务后右滑并提供浮动撤销消息', (WidgetTester tester) async {
     // 桌面测试视口。
     const Size viewport = Size(1440, 900);
@@ -856,7 +981,6 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('每日待办'), findsNothing);
-    expect(find.textContaining('跨计划日期常驻显示'), findsNothing);
     expect(find.byType(ChoiceChip), findsNothing);
     expect(
       find.byType(OmniSlidingSegmentedControl<TodoPriorityQuadrant?>),
