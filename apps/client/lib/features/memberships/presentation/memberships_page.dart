@@ -256,6 +256,7 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
             ),
             const SizedBox(height: OmniSpacing.xs),
             _MembershipToolbar(
+              compact: compact,
               embeddedInManagement: widget.embeddedInManagement,
               memberships:
                   memberships.asData?.value ?? const <MembershipRecord>[],
@@ -568,7 +569,7 @@ class _MembershipSpendingSummary extends ConsumerWidget {
     if (useCarousel) {
       return OmniStatisticsCarousel(
         key: const ValueKey<String>('membership-statistics-carousel'),
-        cardHeight: 160,
+        cardHeight: 144,
         children: cards,
       );
     }
@@ -649,7 +650,7 @@ class _MembershipMetricCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       key: ValueKey<String>('membership-metric-$label'),
-      height: 160,
+      height: 144,
       child: OmniPanel(
         padding: const EdgeInsets.all(OmniSpacing.sm),
         child: Column(
@@ -669,50 +670,53 @@ class _MembershipMetricCard extends StatelessWidget {
                 ),
                 const SizedBox(width: OmniSpacing.xs),
                 Text(label, style: Theme.of(context).textTheme.titleSmall),
-              ],
-            ),
-            const SizedBox(height: OmniSpacing.xs),
-            Text(value, style: Theme.of(context).textTheme.displaySmall),
-            const Spacer(),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: Text(
-                    hint,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
                 const SizedBox(width: OmniSpacing.xs),
-                Flexible(
-                  flex: 2,
-                  child: Tooltip(
-                    message: badge,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: OmniSpacing.xs,
-                        vertical: OmniSpacing.xxs,
-                      ),
-                      decoration: BoxDecoration(
-                        color: badgeAccent.withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(OmniRadius.pill),
-                      ),
-                      child: Text(
-                        badge,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: badgeAccent,
-                          fontWeight: FontWeight.w600,
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: <Widget>[
+                      Tooltip(
+                        message: badge,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: OmniSpacing.xs,
+                            vertical: OmniSpacing.xxs,
+                          ),
+                          decoration: BoxDecoration(
+                            color: badgeAccent.withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(
+                              OmniRadius.pill,
+                            ),
+                          ),
+                          child: Text(
+                            badge,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: badgeAccent,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 2),
+                      Text(
+                        hint,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.end,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: OmniSpacing.xs),
+            const SizedBox(height: OmniSpacing.xxs),
+            Text(value, style: Theme.of(context).textTheme.displaySmall),
+            const Spacer(),
             _MembershipMiniBarChart(
               key: ValueKey<String>('membership-metric-chart-$label'),
               values: chartValues,
@@ -788,6 +792,9 @@ class _MembershipMiniBarChart extends StatelessWidget {
 
 /// 会员列表上方的快捷筛选与布局工具栏。
 class _MembershipToolbar extends StatelessWidget {
+  /// 当前是否为紧凑布局。
+  final bool compact;
+
   /// 是否使用 Android 管理页紧凑工具栏。
   final bool embeddedInManagement;
 
@@ -844,6 +851,7 @@ class _MembershipToolbar extends StatelessWidget {
 
   /// 创建会员工具栏。
   const _MembershipToolbar({
+    required this.compact,
     required this.embeddedInManagement,
     required this.memberships,
     required this.repository,
@@ -948,12 +956,68 @@ class _MembershipToolbar extends StatelessWidget {
       quickFilter != _MembershipQuickFilter.all,
       categoryFilter != null,
     ].where((bool active) => active).length;
-    // Android 搜索栏左侧的筛选开关。
+    // 搜索栏左侧的筛选开关。
     final Widget filterButton = _MembershipFilterButton(
       expanded: filtersExpanded,
       activeCount: activeFilterCount,
       onPressed: onFiltersToggled,
     );
+    // 桌面筛选按钮与搜索输入组。
+    final Widget desktopSearchGroup = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        filterButton,
+        const SizedBox(width: OmniSpacing.xs),
+        desktopSearchField,
+      ],
+    );
+    // 构建状态与分类筛选的统一折叠区域。
+    Widget buildFilterPanel({
+      required Widget quickFilters,
+      required bool useTouchHeight,
+    }) {
+      return AnimatedSwitcher(
+        duration: OmniMotion.normal,
+        reverseDuration: OmniMotion.fast,
+        switchInCurve: OmniMotion.standardCurve,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (Widget child, Animation<double> animation) {
+          // 同步高度与透明度，让两类筛选自然展开和收起。
+          return FadeTransition(
+            opacity: animation,
+            child: SizeTransition(
+              sizeFactor: animation,
+              alignment: Alignment.topCenter,
+              child: child,
+            ),
+          );
+        },
+        child: filtersExpanded
+            ? Padding(
+                key: const ValueKey<String>('membership-filter-panel'),
+                padding: const EdgeInsets.only(top: OmniSpacing.xs),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    quickFilters,
+                    const SizedBox(height: OmniSpacing.xxs),
+                    _MembershipCategoryFilters(
+                      categories: categories,
+                      categoryCounts: categoryCounts,
+                      membershipsCount: memberships.length,
+                      selectedCategory: categoryFilter,
+                      useTouchHeight: useTouchHeight,
+                      onChanged: onCategoryFilterChanged,
+                    ),
+                  ],
+                ),
+              )
+            : const SizedBox(
+                key: ValueKey<String>('membership-filter-panel-collapsed'),
+              ),
+      );
+    }
+
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         if (embeddedInManagement) {
@@ -983,43 +1047,9 @@ class _MembershipToolbar extends StatelessWidget {
             ],
           );
           // Android 状态与分类筛选的统一折叠区域。
-          final Widget mobileFilterPanel = AnimatedSwitcher(
-            duration: OmniMotion.normal,
-            reverseDuration: OmniMotion.fast,
-            switchInCurve: OmniMotion.standardCurve,
-            switchOutCurve: Curves.easeInCubic,
-            transitionBuilder: (Widget child, Animation<double> animation) {
-              return FadeTransition(
-                opacity: animation,
-                child: SizeTransition(
-                  sizeFactor: animation,
-                  alignment: Alignment.topCenter,
-                  child: child,
-                ),
-              );
-            },
-            child: filtersExpanded
-                ? Padding(
-                    key: const ValueKey<String>('membership-filter-panel'),
-                    padding: const EdgeInsets.only(top: OmniSpacing.xs),
-                    child: Column(
-                      children: <Widget>[
-                        mobileQuickFilters,
-                        const SizedBox(height: OmniSpacing.xxs),
-                        _MembershipCategoryFilters(
-                          categories: categories,
-                          categoryCounts: categoryCounts,
-                          membershipsCount: memberships.length,
-                          selectedCategory: categoryFilter,
-                          useTouchHeight: true,
-                          onChanged: onCategoryFilterChanged,
-                        ),
-                      ],
-                    ),
-                  )
-                : const SizedBox(
-                    key: ValueKey<String>('membership-filter-panel-collapsed'),
-                  ),
+          final Widget mobileFilterPanel = buildFilterPanel(
+            quickFilters: mobileQuickFilters,
+            useTouchHeight: true,
           );
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1028,86 +1058,62 @@ class _MembershipToolbar extends StatelessWidget {
         }
         // 当前宽度是否允许双列会员卡片。
         final bool canUseTwoColumns = constraints.maxWidth >= 780;
+        // 桌面管理与布局操作高度。
+        final double desktopActionHeight = compact
+            ? OmniSize.touch
+            : OmniSize.control;
         // 右侧工具栏操作。
         final Widget actions = Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            OmniButton(
-              key: const ValueKey<String>('membership-layout-toggle'),
-              label: canUseTwoColumns
-                  ? useTwoColumns
-                        ? '单列'
-                        : '双列'
-                  : '单列',
-              icon: useTwoColumns && canUseTwoColumns
-                  ? Icons.view_agenda_outlined
-                  : Icons.grid_view_outlined,
-              variant: OmniButtonVariant.secondary,
-              onPressed: canUseTwoColumns ? onToggleLayout : null,
+            SizedBox(
+              height: desktopActionHeight,
+              child: OmniButton(
+                key: const ValueKey<String>('membership-manage-category'),
+                label: '管理分类',
+                icon: Icons.category_outlined,
+                variant: OmniButtonVariant.secondary,
+                onPressed: () => _openCategoryManager(context),
+              ),
             ),
             const SizedBox(width: OmniSpacing.xs),
-            OmniButton(
-              key: const ValueKey<String>('membership-manage-category'),
-              label: '管理分类',
-              icon: Icons.category_outlined,
-              variant: OmniButtonVariant.secondary,
-              onPressed: () => _openCategoryManager(context),
+            SizedBox(
+              height: desktopActionHeight,
+              child: OmniButton(
+                key: const ValueKey<String>('membership-layout-toggle'),
+                label: canUseTwoColumns
+                    ? useTwoColumns
+                          ? '单列'
+                          : '双列'
+                    : '单列',
+                icon: useTwoColumns && canUseTwoColumns
+                    ? Icons.view_agenda_outlined
+                    : Icons.grid_view_outlined,
+                variant: OmniButtonVariant.secondary,
+                onPressed: canUseTwoColumns ? onToggleLayout : null,
+              ),
             ),
           ],
         );
-        // 根据可用宽度组合快捷筛选、搜索和操作按钮。
-        final Widget primaryToolbar;
-        if (constraints.maxWidth < 700) {
-          primaryToolbar = Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              desktopQuickFilters,
-              const SizedBox(height: OmniSpacing.xs),
-              desktopSearchField,
-              const SizedBox(height: OmniSpacing.xs),
-              actions,
-            ],
-          );
-        } else if (constraints.maxWidth < 900) {
-          primaryToolbar = Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  desktopQuickFilters,
-                  const SizedBox(width: OmniSpacing.xs),
-                  desktopSearchField,
-                ],
-              ),
-              const SizedBox(height: OmniSpacing.xs),
-              actions,
-            ],
-          );
-        } else {
-          primaryToolbar = Row(
-            children: <Widget>[
-              desktopQuickFilters,
-              const SizedBox(width: OmniSpacing.xs),
-              desktopSearchField,
-              const Spacer(),
-              const SizedBox(width: OmniSpacing.xs),
-              actions,
-            ],
-          );
-        }
+        // 宽屏将操作固定在搜索框右侧，窄屏自动换行。
+        final Widget primaryToolbar = constraints.maxWidth >= 760
+            ? Row(
+                children: <Widget>[desktopSearchGroup, const Spacer(), actions],
+              )
+            : Wrap(
+                spacing: OmniSpacing.xs,
+                runSpacing: OmniSpacing.xs,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[desktopSearchGroup, actions],
+              );
+        // Windows 状态与分类筛选的统一折叠区域。
+        final Widget desktopFilterPanel = buildFilterPanel(
+          quickFilters: desktopQuickFilters,
+          useTouchHeight: false,
+        );
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            primaryToolbar,
-            const SizedBox(height: OmniSpacing.xs),
-            _MembershipCategoryFilters(
-              categories: categories,
-              categoryCounts: categoryCounts,
-              membershipsCount: memberships.length,
-              selectedCategory: categoryFilter,
-              onChanged: onCategoryFilterChanged,
-            ),
-          ],
+          children: <Widget>[primaryToolbar, desktopFilterPanel],
         );
       },
     );
@@ -1283,7 +1289,7 @@ class _MembershipCategoryFilters extends StatelessWidget {
   }
 }
 
-/// Android 会员页搜索框左侧的筛选展开按钮。
+/// 会员页搜索框左侧的筛选展开按钮。
 class _MembershipFilterButton extends StatelessWidget {
   /// 筛选区当前是否展开。
   final bool expanded;
@@ -1306,9 +1312,15 @@ class _MembershipFilterButton extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题的会员与中性色。
     final OmniColors colors = OmniColors.of(context);
+    // 移动端使用更大的触控尺寸。
+    final bool compact = OmniBreakpoint.isCompact(
+      MediaQuery.sizeOf(context).width,
+    );
+    // 与相邻搜索框匹配的按钮尺寸。
+    final double size = compact ? OmniSize.touch : OmniSize.pageAction;
     return SizedBox.square(
       key: const ValueKey<String>('membership-filter-toggle'),
-      dimension: OmniSize.touch,
+      dimension: size,
       child: IconButton(
         tooltip: expanded ? '收起筛选' : '展开筛选',
         onPressed: onPressed,

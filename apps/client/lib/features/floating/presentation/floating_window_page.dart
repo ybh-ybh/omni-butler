@@ -1462,6 +1462,9 @@ class _FloatingTodoTreeState extends State<_FloatingTodoTree> {
           todo: widget.tree.root,
           accent: widget.accent,
           onComplete: widget.onComplete,
+          pendingChildCount: widget.tree.children.isEmpty
+              ? null
+              : pendingChildren.length,
           expanded: hasChildren ? _expanded : null,
           onToggleExpanded: hasChildren ? _toggleExpanded : null,
         ),
@@ -1495,6 +1498,9 @@ class _FloatingTodoRow extends StatelessWidget {
   /// 当前行是否为直属子任务。
   final bool child;
 
+  /// 父任务当前未完成的直属子任务数量。
+  final int? pendingChildCount;
+
   /// 可选子任务展开状态。
   final bool? expanded;
 
@@ -1507,6 +1513,7 @@ class _FloatingTodoRow extends StatelessWidget {
     required this.accent,
     required this.onComplete,
     this.child = false,
+    this.pendingChildCount,
     this.expanded,
     this.onToggleExpanded,
   });
@@ -1556,19 +1563,52 @@ class _FloatingTodoRow extends StatelessWidget {
                 key: ValueKey<String>('floating-todo-edit-${todo.id}'),
                 borderRadius: BorderRadius.circular(OmniRadius.control),
                 onTap: () => TodoEditorDialog.show(context, record: todo),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    todo.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: todo.isCompleted ? colors.muted : colors.ink,
-                      decoration: todo.isCompleted
-                          ? TextDecoration.lineThrough
-                          : TextDecoration.none,
+                child: Row(
+                  children: <Widget>[
+                    Flexible(
+                      child: Text(
+                        todo.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: todo.isCompleted ? colors.muted : colors.ink,
+                          decoration: todo.isCompleted
+                              ? TextDecoration.lineThrough
+                              : TextDecoration.none,
+                        ),
+                      ),
                     ),
-                  ),
+                    if (pendingChildCount != null) ...<Widget>[
+                      const SizedBox(width: OmniSpacing.xxs),
+                      Semantics(
+                        label: '$pendingChildCount 个未完成子任务',
+                        child: ExcludeSemantics(
+                          child: Container(
+                            key: ValueKey<String>(
+                              'floating-todo-pending-count-${todo.id}',
+                            ),
+                            constraints: const BoxConstraints(minWidth: 18),
+                            padding: const EdgeInsets.symmetric(horizontal: 5),
+                            decoration: BoxDecoration(
+                              color: accent.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(9),
+                            ),
+                            child: Text(
+                              '$pendingChildCount',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    color: accent,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.6,
+                                  ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),

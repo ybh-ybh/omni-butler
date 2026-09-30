@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/router/app_router.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
@@ -134,6 +135,11 @@ void main() {
     await tester.pumpAndSettle();
     container.read(appRouterProvider).go('/events');
     await tester.pumpAndSettle();
+
+    // 单双列切换按钮。
+    final Finder layoutToggle = find.byKey(
+      const ValueKey<String>('event-layout-toggle'),
+    );
 
     // 已开始计时的事件卡片。
     final Finder activeCard = find.byKey(
@@ -350,7 +356,7 @@ void main() {
       matchesGoldenFile('goldens/events_light_1440x900.png'),
     );
 
-    await tester.tap(find.byKey(const ValueKey<String>('event-layout-toggle')));
+    await tester.tap(layoutToggle);
     await tester.pumpAndSettle();
 
     // 单列时两张卡片的坐标。
@@ -409,6 +415,84 @@ void main() {
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('桌面事件工具栏尺寸与物品管理一致', (WidgetTester tester) async {
+    // 固定 Windows 桌面测试视口。
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'appearance.theme_mode': 'light',
+    });
+    // 测试用主题偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 显式管理的测试依赖容器。
+    final ProviderContainer container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(preferences),
+        appDatabaseProvider.overrideWithValue(database),
+        nowProvider.overrideWithValue(DateTime(2026, 9, 6, 10)),
+      ],
+    );
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const OmniButlerApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    container.read(appRouterProvider).go('/events');
+    await tester.pumpAndSettle();
+
+    // 桌面状态筛选控件。
+    final Finder statusSelector = find.byKey(
+      const ValueKey<String>('event-status-selector'),
+    );
+    // 桌面单双列切换按钮。
+    final Finder layoutToggle = find.byKey(
+      const ValueKey<String>('event-layout-toggle'),
+    );
+    expect(
+      tester.getRect(statusSelector).height,
+      closeTo(OmniSize.control, 0.1),
+    );
+    expect(tester.getRect(layoutToggle).height, closeTo(OmniSize.control, 0.1));
+    // 事件统计卡与物品统计卡等高，状态与说明填充标题行右上角。
+    final Finder activeMetric = find.byKey(
+      const ValueKey<String>('event-metric-进行中事件'),
+    );
+    // 空数据时的统计状态徽标。
+    final Finder activeBadge = find.descendant(
+      of: activeMetric,
+      matching: find.text('暂无进行中事件'),
+    );
+    expect(tester.getRect(activeMetric).height, closeTo(144, 0.1));
+    expect(
+      tester.getRect(activeBadge).left,
+      greaterThan(
+        tester
+            .getRect(
+              find.descendant(of: activeMetric, matching: find.text('进行中事件')),
+            )
+            .right,
+      ),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    container.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+    await database.close();
     debugDefaultTargetPlatformOverride = null;
   });
 }

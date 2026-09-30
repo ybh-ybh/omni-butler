@@ -174,6 +174,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
             ),
             const SizedBox(height: OmniSpacing.xs),
             _EventToolbar(
+              compact: compact,
               showArchived: _showArchived,
               useTwoColumns: _useTwoColumns,
               onArchivedChanged: (bool value) {
@@ -439,7 +440,7 @@ class _EventStatistics extends ConsumerWidget {
     if (useCarousel) {
       return OmniStatisticsCarousel(
         key: const ValueKey<String>('event-statistics-carousel'),
-        cardHeight: 160,
+        cardHeight: 144,
         children: cards,
       );
     }
@@ -521,7 +522,7 @@ class _EventMetricCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       key: ValueKey<String>('event-metric-$label'),
-      height: 160,
+      height: 144,
       child: OmniPanel(
         padding: const EdgeInsets.all(OmniSpacing.sm),
         child: Column(
@@ -541,50 +542,53 @@ class _EventMetricCard extends StatelessWidget {
                 ),
                 const SizedBox(width: OmniSpacing.xs),
                 Text(label, style: Theme.of(context).textTheme.titleSmall),
-              ],
-            ),
-            const SizedBox(height: OmniSpacing.xs),
-            Text(value, style: Theme.of(context).textTheme.displaySmall),
-            const Spacer(),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: Text(
-                    hint,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
                 const SizedBox(width: OmniSpacing.xs),
-                Flexible(
-                  flex: 2,
-                  child: Tooltip(
-                    message: badge,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: OmniSpacing.xs,
-                        vertical: OmniSpacing.xxs,
-                      ),
-                      decoration: BoxDecoration(
-                        color: badgeAccent.withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(OmniRadius.pill),
-                      ),
-                      child: Text(
-                        badge,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: badgeAccent,
-                          fontWeight: FontWeight.w600,
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: <Widget>[
+                      Tooltip(
+                        message: badge,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: OmniSpacing.xs,
+                            vertical: OmniSpacing.xxs,
+                          ),
+                          decoration: BoxDecoration(
+                            color: badgeAccent.withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(
+                              OmniRadius.pill,
+                            ),
+                          ),
+                          child: Text(
+                            badge,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: badgeAccent,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 2),
+                      Text(
+                        hint,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.end,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: OmniSpacing.xs),
+            const SizedBox(height: OmniSpacing.xxs),
+            Text(value, style: Theme.of(context).textTheme.displaySmall),
+            const Spacer(),
             chart,
           ],
         ),
@@ -731,6 +735,9 @@ class _EventMiniBarChart extends StatelessWidget {
 
 /// 事件状态筛选与布局操作栏。
 class _EventToolbar extends StatelessWidget {
+  /// 当前是否为紧凑布局。
+  final bool compact;
+
   /// 是否显示归档事件。
   final bool showArchived;
 
@@ -745,6 +752,7 @@ class _EventToolbar extends StatelessWidget {
 
   /// 创建事件工具栏。
   const _EventToolbar({
+    required this.compact,
     required this.showArchived,
     required this.useTwoColumns,
     required this.onArchivedChanged,
@@ -758,32 +766,41 @@ class _EventToolbar extends StatelessWidget {
       builder: (BuildContext context, BoxConstraints constraints) {
         // 当前宽度是否允许双列事件卡片。
         final bool canUseTwoColumns = constraints.maxWidth >= 780;
+        // 与物品管理工具栏一致的操作控件高度。
+        final double actionHeight = compact ? OmniSize.touch : OmniSize.control;
         return OmniToolbar(
           alignment: WrapAlignment.spaceBetween,
           children: <Widget>[
-            SegmentedButton<bool>(
-              showSelectedIcon: false,
-              segments: const <ButtonSegment<bool>>[
-                ButtonSegment<bool>(value: false, label: Text('进行中')),
-                ButtonSegment<bool>(value: true, label: Text('已归档')),
-              ],
-              selected: <bool>{showArchived},
-              onSelectionChanged: (Set<bool> selection) {
-                onArchivedChanged(selection.first);
-              },
+            SizedBox(
+              key: const ValueKey<String>('event-status-selector'),
+              height: actionHeight,
+              child: SegmentedButton<bool>(
+                showSelectedIcon: false,
+                segments: const <ButtonSegment<bool>>[
+                  ButtonSegment<bool>(value: false, label: Text('进行中')),
+                  ButtonSegment<bool>(value: true, label: Text('已归档')),
+                ],
+                selected: <bool>{showArchived},
+                onSelectionChanged: (Set<bool> selection) {
+                  onArchivedChanged(selection.first);
+                },
+              ),
             ),
-            OmniButton(
-              key: const ValueKey<String>('event-layout-toggle'),
-              label: canUseTwoColumns
-                  ? useTwoColumns
-                        ? '单列'
-                        : '双列'
-                  : '单列',
-              icon: useTwoColumns && canUseTwoColumns
-                  ? Icons.view_agenda_outlined
-                  : Icons.grid_view_outlined,
-              variant: OmniButtonVariant.secondary,
-              onPressed: canUseTwoColumns ? onToggleLayout : null,
+            SizedBox(
+              height: actionHeight,
+              child: OmniButton(
+                key: const ValueKey<String>('event-layout-toggle'),
+                label: canUseTwoColumns
+                    ? useTwoColumns
+                          ? '单列'
+                          : '双列'
+                    : '单列',
+                icon: useTwoColumns && canUseTwoColumns
+                    ? Icons.view_agenda_outlined
+                    : Icons.grid_view_outlined,
+                variant: OmniButtonVariant.secondary,
+                onPressed: canUseTwoColumns ? onToggleLayout : null,
+              ),
             ),
           ],
         );

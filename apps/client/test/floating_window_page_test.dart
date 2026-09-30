@@ -11,6 +11,7 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/features/floating/presentation/floating_window_page.dart';
+import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证悬浮窗的核心待办和时间操作入口。
@@ -122,6 +123,87 @@ void main() {
 
     expect(find.text('多端同步待办'), findsOneWidget);
     expect(find.text('多端同步进行中记录'), findsOneWidget);
+  });
+
+  testWidgets('悬浮窗父任务标题右侧显示未完成子任务数量', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(294, 500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 测试用设备偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    addTearDown(database.close);
+    // 测试用待办仓储。
+    final TodoRepository repository = TodoRepository(database);
+    // 当前测试自然日。
+    final DateTime today = DateTime(2026, 9, 24);
+    await repository.save(TodoDraft(title: '带子任务的父任务', scheduledDate: today));
+    // 新增后的父任务记录。
+    final TodoRecord root = await database
+        .select(database.todoItems)
+        .getSingle();
+    await repository.save(
+      TodoDraft(title: '未完成子任务', parentId: root.id, scheduledDate: today),
+    );
+    await repository.save(
+      TodoDraft(title: '已完成子任务', parentId: root.id, scheduledDate: today),
+    );
+    // 父任务下的两个子任务。
+    final List<TodoRecord> children = await (database.select(
+      database.todoItems,
+    )..where((TodoItems table) => table.parentId.equals(root.id))).get();
+    // 需要预先完成的子任务记录。
+    final TodoRecord completedChild = children.singleWhere(
+      (TodoRecord child) => child.title == '已完成子任务',
+    );
+    await repository.setCompleted(completedChild.id, true);
+    // 测试用 Riverpod 容器。
+    final ProviderContainer container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(preferences),
+        appDatabaseProvider.overrideWithValue(database),
+        nowProvider.overrideWithValue(today.add(const Duration(hours: 9))),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: AppTheme.build(brightness: Brightness.light),
+          home: FloatingWindowPage(
+            onClose: () async {},
+            onOpenRoute: (String location) async {},
+            onDragStart: () {},
+            onDragUpdate: () {},
+            onDragEnd: () async {},
+            onResizeStart: () {},
+            onResizeUpdate: () {},
+            onResizeEnd: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 父任务标题后的未完成子任务数量标签。
+    final Finder pendingCount = find.byKey(
+      ValueKey<String>('floating-todo-pending-count-${root.id}'),
+    );
+    expect(find.text('带子任务的父任务'), findsOneWidget);
+    expect(pendingCount, findsOneWidget);
+    expect(
+      find.descendant(of: pendingCount, matching: find.text('1')),
+      findsOneWidget,
+    );
+    expect(find.text('未完成子任务'), findsOneWidget);
+    expect(find.text('已完成子任务'), findsNothing);
   });
 
   testWidgets('悬浮窗可直接新增待办、补记和开始时间记录', (WidgetTester tester) async {

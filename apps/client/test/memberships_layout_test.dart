@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/router/app_router.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
@@ -135,6 +136,21 @@ void main() {
       const ValueKey<String>('membership-metric-本月支出'),
     );
     expect(monthChart, findsOneWidget);
+    expect(tester.getRect(monthMetric).height, closeTo(144, 0.1));
+    expect(
+      tester
+          .getRect(
+            find.descendant(of: monthMetric, matching: find.text('当前月份')),
+          )
+          .left,
+      greaterThan(
+        tester
+            .getRect(
+              find.descendant(of: monthMetric, matching: find.text('本月支出')),
+            )
+            .right,
+      ),
+    );
     expect(
       tester.getRect(monthChart).top,
       greaterThan(tester.getRect(find.text('当前月份')).bottom),
@@ -144,20 +160,61 @@ void main() {
       lessThanOrEqualTo(tester.getRect(monthMetric).bottom),
     );
 
-    // 位于自动续费快捷筛选右侧的常驻搜索框。
+    // 默认收起两类筛选，搜索框左侧提供独立筛选按钮。
     final Finder searchField = find.byKey(
       const ValueKey<String>('membership-search-field'),
     );
-    // 自动续费快捷筛选标签。
-    final Finder autoRenewFilter = find.text('自动续费');
-    expect(searchField, findsOneWidget);
-    expect(
-      tester.getRect(searchField).left,
-      greaterThan(tester.getRect(autoRenewFilter).right),
+    // 筛选展开按钮。
+    final Finder filterToggle = find.byKey(
+      const ValueKey<String>('membership-filter-toggle'),
     );
+    expect(searchField, findsOneWidget);
+    expect(filterToggle, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('membership-quick-filters')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('membership-category-filters')),
+      findsNothing,
+    );
+    expect(
+      tester.getRect(filterToggle).right,
+      lessThan(tester.getRect(searchField).left),
+    );
+    // 管理分类和单双列按钮与物品页保持相同高度，且单双列位于最右侧。
+    final Finder categoryAction = find.byKey(
+      const ValueKey<String>('membership-manage-category'),
+    );
+    // 单双列切换按钮。
+    final Finder layoutAction = find.byKey(
+      const ValueKey<String>('membership-layout-toggle'),
+    );
+    final Rect categoryActionRect = tester.getRect(categoryAction);
+    final Rect layoutActionRect = tester.getRect(layoutAction);
+    expect(categoryActionRect.height, closeTo(OmniSize.control, 0.1));
+    expect(layoutActionRect.height, closeTo(OmniSize.control, 0.1));
+    expect(categoryActionRect.right, lessThan(layoutActionRect.left));
+
+    // 点击筛选按钮后同时展开快捷状态和分类筛选。
+    await tester.tap(filterToggle);
+    await tester.pump();
+    expect(find.byType(SizeTransition), findsWidgets);
+    await tester.pumpAndSettle();
     // 快捷筛选轨道与内部滑块。
     final Finder quickFilters = find.byKey(
       const ValueKey<String>('membership-quick-filters'),
+    );
+    // 自动续费快捷筛选标签。
+    final Finder autoRenewFilter = find.text('自动续费');
+    expect(quickFilters, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('membership-category-filters')),
+      findsOneWidget,
+    );
+    expect(
+      tester.getRect(quickFilters).left,
+      closeTo(tester.getRect(filterToggle).left, 0.1),
     );
     // 自动续费快捷筛选项。
     final Finder quickAutoRenew = find.byKey(
@@ -281,6 +338,15 @@ void main() {
     expect(
       (secondGridPosition.dx - firstGridPosition.dx).abs(),
       greaterThan(100),
+    );
+
+    // 收起筛选后保留默认条件，并固化 Windows 默认视觉基线。
+    await tester.tap(filterToggle);
+    await tester.pumpAndSettle();
+    expect(quickFilters, findsNothing);
+    expect(
+      find.byKey(const ValueKey<String>('membership-category-filters')),
+      findsNothing,
     );
 
     await expectLater(
@@ -417,6 +483,11 @@ void main() {
     container.read(appRouterProvider).go('/memberships');
     await tester.pumpAndSettle();
 
+    // 桌面筛选默认收起，先从搜索栏左侧展开。
+    await tester.tap(
+      find.byKey(const ValueKey<String>('membership-filter-toggle')),
+    );
+    await tester.pumpAndSettle();
     // 重命名后的筛选项和卡片使用同一个关联 ID 对应的新名称。
     expect(
       find.byKey(const ValueKey<String>('membership-category-效率工具1')),
