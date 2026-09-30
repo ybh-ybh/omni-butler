@@ -35,7 +35,7 @@ docker compose up -d --build --wait
 
 ## 可选图片同步
 
-只需在 `.env` 中设置 `IMAGE_SYNC_ENABLED=true`，再执行上面的 `docker compose up -d --build --wait`。只接受小写 `true` 或 `false`，已有部署未填写该项时默认关闭。首次开启会从固定源码编译 MinIO，因此比普通更新耗时；默认关闭时不构建、不运行 MinIO。
+只需在 `.env` 中设置 `IMAGE_SYNC_ENABLED=true`，再执行上面的 `docker compose up -d --build --wait`。只接受小写 `true` 或 `false`，已有部署未填写该项时默认关闭。首次开启会启动固定版本的 MinIO 官方镜像；默认关闭时不拉取、不运行 MinIO。
 
 Compose 自动生成随机内部凭证并保存在 `image-storage-credentials` 卷，启动 MinIO 后由 API 创建私有桶 `omni-butler-images`。图片文件保存在 `image-storage-data` 卷。无需填写存储密钥、域名、端口、profile 或额外启动参数；客户端通过原有 API 地址上传下载，MinIO 不映射宿主机端口，浏览器管理界面关闭。
 
@@ -43,9 +43,15 @@ Compose 自动生成随机内部凭证并保存在 `image-storage-credentials` �
 
 改回 `IMAGE_SYNC_ENABLED=false` 并执行相同启动命令，会停止 MinIO 和图片传输，保留服务器图片卷、凭证卷及客户端本机图片。再次改为 `true` 会复用原凭证和图片。无需 `--remove-orphans`；两个辅助服务以相同服务名缩为零副本。不要手动删除凭证卷，否则现有存储身份无法自动恢复。
 
-MinIO 社区版已经转为源码分发并归档；本项目固定源码提交 `9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a`，构建时验证提交和依赖，并禁用不需要的 Snowball 解压接口。它只面向容器内的 API，不应额外公开 S3 端口或控制台。源码和许可证见 [MinIO 官方仓库](https://github.com/minio/minio)；构建修改保存在 `minio/Dockerfile`。
+本项目固定使用 MinIO 官方镜像 `minio/minio:RELEASE.2025-09-07T16-13-09Z`，并同时固定镜像摘要 `sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e`。它只面向容器内的 API，不额外公开 S3 端口或控制台。该版本存在未签名流式请求相关的已知风险；本项目的 API 只使用带签名的 S3 请求，当前使用场景接受该风险。
 
-构建也拒绝应用不需要的 `STREAMING-UNSIGNED-PAYLOAD-TRAILER` 请求，避免最终社区版本已知的未签名流式写入路径。此限制不影响 API 使用标准签名上传图片。
+Docker Hub 当前已无法重新拉取 `minio/minio` 仓库。新服务器部署前，需要从已持有该官方镜像的可信机器导出并导入固定版本；不要改回 `latest`，也不要使用来源不明的同名镜像：
+
+```text
+docker tag minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e minio/minio:RELEASE.2025-09-07T16-13-09Z
+docker save -o minio-RELEASE.2025-09-07T16-13-09Z.tar minio/minio:RELEASE.2025-09-07T16-13-09Z
+docker load -i minio-RELEASE.2025-09-07T16-13-09Z.tar
+```
 
 ## 公网部署：Nginx + HTTPS
 

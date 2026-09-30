@@ -2,7 +2,7 @@ services:
   api:
     environment:
       IMAGE_SYNC_ENABLED: "false"
-  # 不提供 build，默认关闭时无需下载或编译 MinIO 源码。
+  # 默认关闭时不拉取或启动 MinIO 镜像。
   image-credentials:
     image: node:24-bookworm-slim
     deploy:
