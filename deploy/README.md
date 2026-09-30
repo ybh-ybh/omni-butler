@@ -37,11 +37,11 @@ docker compose up -d --build --wait
 
 只需在 `.env` 中设置 `IMAGE_SYNC_ENABLED=true`，再执行上面的 `docker compose up -d --build --wait`。只接受小写 `true` 或 `false`，已有部署未填写该项时默认关闭。首次开启会启动固定版本的 MinIO 官方镜像；默认关闭时不拉取、不运行 MinIO。
 
-Compose 自动生成随机内部凭证并保存在 `image-storage-credentials` 卷，启动 MinIO 后由 API 创建私有桶 `omni-butler-images`。图片文件保存在 `image-storage-data` 卷。无需填写存储密钥、域名、端口、profile 或额外启动参数；客户端通过原有 API 地址上传下载，MinIO 不映射宿主机端口，浏览器管理界面关闭。
+MinIO 启动时自动生成随机内部凭证并保存在 `image-storage-credentials` 卷，随后由 API 创建私有桶 `omni-butler-images`。图片文件保存在 `image-storage-data` 卷。无需填写存储密钥、域名、端口、profile 或额外启动参数；客户端通过原有 API 地址上传下载，MinIO 不映射宿主机端口，浏览器管理界面关闭。
 
 同步范围为物品和会员图片，首页背景仍只保存在各自设备。开启后客户端会补传本机已有图片，服务端已有的图片优先；新设备下载后的缓存离线仍可查看。图片传输失败可重试，不影响业务记录保存。服务器迁移只复制当前设备实际持有的图片，缺失文件会提示，不阻止业务数据迁移。
 
-改回 `IMAGE_SYNC_ENABLED=false` 并执行相同启动命令，会停止 MinIO 和图片传输，保留服务器图片卷、凭证卷及客户端本机图片。再次改为 `true` 会复用原凭证和图片。无需 `--remove-orphans`；两个辅助服务以相同服务名缩为零副本。不要手动删除凭证卷，否则现有存储身份无法自动恢复。
+改回 `IMAGE_SYNC_ENABLED=false` 并执行相同启动命令，会停止 MinIO 和图片传输，保留服务器图片卷、凭证卷及客户端本机图片。再次改为 `true` 会复用原凭证和图片。首次从带 `image-credentials` 辅助容器的旧版本升级时，执行 `docker compose up -d --build --wait --remove-orphans` 删除已停用的旧容器；后续无需该参数。关闭图片同步时 MinIO 服务会缩为零副本。不要手动删除凭证卷，否则现有存储身份无法自动恢复。
 
 本项目固定使用 MinIO 官方镜像 `minio/minio:RELEASE.2025-09-07T16-13-09Z`，并同时固定镜像摘要 `sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e`。它只面向容器内的 API，不额外公开 S3 端口或控制台。该版本存在未签名流式请求相关的已知风险；本项目的 API 只使用带签名的 S3 请求，当前使用场景接受该风险。
 
@@ -292,7 +292,7 @@ docker compose stop
 
 业务库和同步状态保存在 `postgres-data` 卷，签名私钥保存在 `api-keys` 卷。实际卷名带 Compose 项目前缀；保持部署目录和项目名不变，不要使用 `docker compose down -v` 删除数据卷。
 
-开启图片同步时，备份还需包含 `image-storage-data` 和 `image-storage-credentials` 两个卷。应停止写入后将数据库、图片卷、凭证卷作为同一批备份保存；只备份 PostgreSQL 无法恢复图片。图片和凭证均由非 root 用户读取，凭证文件权限为 `0600`，不要把凭证内容放入日志或提交仓库。
+开启图片同步时，备份还需包含 `image-storage-data` 和 `image-storage-credentials` 两个卷。应停止写入后将数据库、图片卷、凭证卷作为同一批备份保存；只备份 PostgreSQL 无法恢复图片。凭证文件权限为 `0600`，只允许 API 用户和 MinIO 的 root 进程读取；不要把凭证内容放入日志或提交仓库。
 
 `compose.image-test.yml` 为图片同步隔离测试覆盖配置，只能使用 `-p omni-image-test` 并同时传入 `-f docker-compose.yml -f compose.image-test.yml`；使用回环测试端口 35530/35580/35539，MinIO 仅在测试覆盖配置中映射 35590，调用方必须显式提供测试密码和同步密钥，禁止复用正式 `.env`。
 

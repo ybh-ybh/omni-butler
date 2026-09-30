@@ -59,12 +59,7 @@ services:
     ports:
       - "${API_HOST_PORT:-3000}:3000"
 
-  # 同名服务在关闭时缩为零副本，重新 up 会停止旧容器且保留卷。
-  image-credentials:
-    extends:
-      file: ./image-sync/${IMAGE_SYNC_ENABLED:-false}.yml
-      service: image-credentials
-
+  # 图片同步关闭时 MinIO 缩为零副本，重新开启后复用凭证和数据卷。
   minio:
     extends:
       file: ./image-sync/${IMAGE_SYNC_ENABLED:-false}.yml
