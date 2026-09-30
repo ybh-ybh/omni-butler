@@ -9,7 +9,7 @@ Flutter 客户端，当前支持 Windows 桌面布局和 Android 紧凑布局。
 - 单一飞书蓝语义主题，支持跟随系统、浅色和深色。
 - 物品与会员主图在服务器开启图片同步后自动补传、下载到本机缓存；首页背景始终仅保存在本机。图片通过已认证 API 传输，不进入 PowerSync Schema。
 - 设置中的服务器连接先预检，再选择首次合并、以本机覆盖服务器或使用服务器数据；跨数据源时保留旧库，候选库确认同步检查点后才启用。
-- Windows 与 Android 本地通知框架；发布包与真机验收状态见根目录 `未完成任务.md`。
+- Windows 与 Android 本地通知框架；发布包与真机验收状态见根目录 `剩余功能与验收清单.md`。
 
 ## 常用命令
 
@@ -21,7 +21,7 @@ flutter run -d windows
 flutter build windows --release
 ```
 
-需要真实同步链路的测试依赖根目录 `deploy/` 中的 PostgreSQL、NestJS 与 PowerSync 服务。项目范围、架构和剩余工作分别见根目录 `需求书.md`、`系统架构设计.md` 与 `未完成任务.md`。
+需要真实同步链路的测试依赖根目录 `deploy/` 中的 PostgreSQL、NestJS 与 PowerSync 服务。项目范围、架构和剩余工作分别见根目录 `需求书.md`、`系统架构设计.md` 与 `剩余功能与验收清单.md`。
 
 ## 更换服务器与迁移恢复
 
@@ -49,7 +49,7 @@ flutter build windows --release
 
 2026-09-29 图片同步验证：静态分析、图片/认证/数据库/迁移及主窗口与悬浮页定向回归通过；显式开启的三客户端真实 SQLite + PostgreSQL + PowerSync + MinIO 测试通过，包含传输、丢响应幂等重试、任务重启、离线缓存与清图后历史图片不复活。服务端 49 项单元/HTTP 测试、31 项真实 PostgreSQL 回归和16项真实 PostgreSQL + MinIO 图片集成通过。隔离部署验证默认关闭及 true → false → true 的能力切换、图片和凭证保留；未部署正式环境或覆盖用户客户端。Android 真机和 Windows 原生窗口人工验收仍待执行。
 
-Windows Release 与 Android Debug APK 构建通过；未安装到用户设备。Windows Debug 的打包复制阶段受到正在运行的旧客户端文件占用，因此以独立 Release 产物完成 Windows 构建验证。
+2026-09-30 已通过发布流水线生成 v0.3.1 的签名 Android APK/AAB、Windows Inno Setup 安装包和便携包，并发布 SHA-256 清单；这些产物尚未完成用户设备和目标服务器人工验收。
 
 ## 迁移回归
 

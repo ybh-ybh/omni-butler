@@ -30,4 +30,4 @@ NestJS 11 + Prisma 7 + PowerSync 的个人自托管同步 API。服务不提供�
 - `npm run test:integration`：先将 `OMNI_TEST_DATABASE_URL` 指向独立空库（库名以 `_test` 或 `_integration` 结尾），执行真实 PostgreSQL 回归；测试会创建并清理该库的测试表。
 - Flutter 真实双设备测试见 `apps/client/test/powersync_server_e2e_test.dart`。
 
-完整 Docker 部署步骤见 `deploy/README.md`；保留/删除依据、字段审计、15 项修复映射见 [同步设计说明](docs/sync-design.md)。图片仍只保存在客户端本机，服务器 COS 实现已删除。
+完整 Docker 部署步骤见 `deploy/README.md`；保留/删除依据、字段审计和同步一致性修复见 [同步设计说明](docs/sync-design.md)。服务器启用 `IMAGE_SYNC_ENABLED=true` 后，物品和会员主图通过认证 API 与内置私有 MinIO 同步；首页横幅仍只保存在客户端本机。
