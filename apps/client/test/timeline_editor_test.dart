@@ -80,7 +80,7 @@ void main() {
 
     expect(find.byType(Dialog), findsOneWidget);
     expect(find.text('结束时间'), findsNothing);
-    expect(find.textContaining('关闭应用也不会丢失'), findsOneWidget);
+    expect(find.textContaining('关闭应用也不会丢失'), findsNothing);
     await tester.tap(find.text('开始记录').last);
     await tester.pumpAndSettle();
 

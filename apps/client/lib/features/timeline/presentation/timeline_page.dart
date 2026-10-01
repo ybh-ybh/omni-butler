@@ -2192,9 +2192,6 @@ class _AbsoluteTimeEntryDialogState
                   ),
                   const SizedBox(height: OmniSpacing.sm),
                   _TimeSpanHint(startedAt: _startedAt, endedAt: _endedAt),
-                ] else ...<Widget>[
-                  const SizedBox(height: OmniSpacing.sm),
-                  const Text('保存后计时会持续运行，关闭应用也不会丢失；结束时再补充活动内容。'),
                 ],
               ],
               const SizedBox(height: OmniSpacing.lg),

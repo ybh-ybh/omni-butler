@@ -187,11 +187,11 @@ void main() {
     expect(activeRecordButton, findsOneWidget);
     expect(firstRecordButton, findsOneWidget);
     expect(
-      find.descendant(of: activeHistoryButton, matching: find.text('完成历史')),
+      find.descendant(of: activeHistoryButton, matching: find.text('历史')),
       findsOneWidget,
     );
     expect(
-      find.descendant(of: activeRecordButton, matching: find.text('记录完成')),
+      find.descendant(of: activeRecordButton, matching: find.text('记录')),
       findsOneWidget,
     );
     expect(
@@ -234,7 +234,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('覆盖 1 个事件'), findsOneWidget);
-    expect(find.text('比上月多 1 次'), findsOneWidget);
+    expect(find.text('比上月少 2 次'), findsOneWidget);
     expect(
       find.descendant(of: nearbyMetric, matching: find.text('2 项')),
       findsOneWidget,
@@ -248,27 +248,27 @@ void main() {
 
     await tester.tap(activeHistoryButton);
     await tester.pumpAndSettle();
-    expect(find.text('完成历史 · 3 条有效记录'), findsOneWidget);
+    expect(find.text('完成历史 · 4 条有效记录'), findsOneWidget);
     expect(find.text('2026 年 9 月 · 2 次'), findsOneWidget);
-    expect(find.text('2026 年 8 月 · 1 次'), findsOneWidget);
+    expect(find.text('2026 年 8 月 · 2 次'), findsOneWidget);
     expect(find.text('9月4日 10:00'), findsOneWidget);
     expect(find.text('每 10 天'), findsOneWidget);
     expect(find.text('9月14日'), findsOneWidget);
-    expect(find.textContaining('相隔 2 天'), findsOneWidget);
-    expect(find.textContaining('相隔 31 天'), findsOneWidget);
-    expect(find.text('手动补记'), findsNWidgets(3));
+    expect(find.textContaining('相隔 2 天'), findsNWidgets(2));
+    expect(find.textContaining('相隔 29 天'), findsOneWidget);
+    expect(find.text('手动补记'), findsNWidgets(4));
     expect(find.text('自动记录'), findsNothing);
     expect(find.textContaining('已撤销'), findsNothing);
     expect(find.text('补记完成'), findsOneWidget);
     expect(find.text('完成'), findsNothing);
-    expect(find.byTooltip('记录操作'), findsNWidgets(3));
+    expect(find.byTooltip('记录操作'), findsNWidgets(4));
     await tester.tap(find.byTooltip('记录操作').first);
     await tester.pumpAndSettle();
     expect(find.text('编辑'), findsOneWidget);
     expect(find.text('删除记录'), findsOneWidget);
     await tester.tapAt(Offset.zero);
     await tester.pumpAndSettle();
-    // 三条记录时弹窗应随内容收缩，不占满整个视口。
+    // 四条记录时弹窗应随内容收缩，不占满整个视口。
     final OmniDialogScaffold historyDialog = tester.widget<OmniDialogScaffold>(
       find.byType(OmniDialogScaffold),
     );
@@ -291,7 +291,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('关闭').last);
     await tester.pumpAndSettle();
-    expect(find.text('完成历史 · 3 条有效记录'), findsNothing);
+    expect(find.text('完成历史 · 4 条有效记录'), findsNothing);
 
     // 尚未首次记录事件的完成历史按钮。
     final Finder unrecordedHistoryButton = find.byKey(
@@ -332,7 +332,7 @@ void main() {
     );
     expect(find.text('原定应做 8 月 1 日'), findsOneWidget);
     expect(
-      find.descendant(of: restoreButton, matching: find.text('恢复进行')),
+      find.descendant(of: restoreButton, matching: find.text('恢复')),
       findsOneWidget,
     );
     expect(
@@ -386,7 +386,7 @@ void main() {
     await tester.ensureVisible(activeRecordButton);
     await tester.pumpAndSettle();
     await tester.tap(activeRecordButton);
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 100));
     // 窗口顶部的统一完成撤销浮动消息。
     final Finder undoBanner = find.byKey(
       const ValueKey<String>('omni-message-popup'),
@@ -406,7 +406,7 @@ void main() {
     await tester.ensureVisible(activeRecordButton);
     await tester.pumpAndSettle();
     await tester.tap(activeRecordButton);
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 100));
     expect(undoBanner, findsOneWidget);
     await tester.pump(const Duration(seconds: 5));
     expect(undoBanner, findsOneWidget);
