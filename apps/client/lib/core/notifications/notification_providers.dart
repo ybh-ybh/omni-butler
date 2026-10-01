@@ -32,7 +32,15 @@ final StreamProvider<List<TodoRecord>> notificationTodosProvider =
           (TodoItems table) =>
               table.deletedAt.isNull() & table.isCompleted.equals(false),
         );
-      return query.watch();
+      return query.watch().map(
+        (List<TodoRecord> records) => records
+            .map(
+              (TodoRecord record) => record.copyWith(
+                reminderAt: Value<DateTime?>(record.reminderAt?.toLocal()),
+              ),
+            )
+            .toList(growable: false),
+      );
     });
 
 /// 监听提醒相关数据并同步原生通知计划。

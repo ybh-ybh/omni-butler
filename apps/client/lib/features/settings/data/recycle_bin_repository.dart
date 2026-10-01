@@ -85,7 +85,7 @@ class RecycleBinRepository {
           type: RecycleEntityType.todo,
           id: record.id,
           title: record.title,
-          deletedAt: record.deletedAt!,
+          deletedAt: record.deletedAt!.toLocal(),
         ),
       ),
     );
@@ -99,7 +99,7 @@ class RecycleBinRepository {
           type: RecycleEntityType.event,
           id: record.id,
           title: record.name,
-          deletedAt: record.deletedAt!,
+          deletedAt: record.deletedAt!.toLocal(),
         ),
       ),
     );
@@ -116,7 +116,7 @@ class RecycleBinRepository {
           type: RecycleEntityType.inventory,
           id: record.id,
           title: record.name,
-          deletedAt: record.deletedAt!,
+          deletedAt: record.deletedAt!.toLocal(),
         ),
       ),
     );
@@ -130,7 +130,7 @@ class RecycleBinRepository {
           type: RecycleEntityType.timeEntry,
           id: record.id,
           title: record.activity ?? '未命名记录',
-          deletedAt: record.deletedAt!,
+          deletedAt: record.deletedAt!.toLocal(),
         ),
       ),
     );
@@ -144,7 +144,7 @@ class RecycleBinRepository {
           type: RecycleEntityType.membership,
           id: record.id,
           title: record.name,
-          deletedAt: record.deletedAt!,
+          deletedAt: record.deletedAt!.toLocal(),
         ),
       ),
     );
@@ -158,7 +158,7 @@ class RecycleBinRepository {
           type: RecycleEntityType.quote,
           id: record.id,
           title: record.content,
-          deletedAt: record.deletedAt!,
+          deletedAt: record.deletedAt!.toLocal(),
         ),
       ),
     );

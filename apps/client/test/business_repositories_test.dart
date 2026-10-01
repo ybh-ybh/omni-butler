@@ -358,7 +358,7 @@ void main() {
     await repository.recordPayment(
       membershipId: membership.id,
       amountCents: 12000,
-      startDate: DateTime(2027, 9, 1),
+      paidAt: DateTime(2027, 9, 1),
       notes: '年度续费',
     );
     // 新增续费后的支付记录。
@@ -367,10 +367,190 @@ void main() {
         .first;
     expect(payments, hasLength(2));
     expect(payments.first.notes, '年度续费');
+    expect(repository.summarizeSpending(payments, year: 2027, month: 9), 12000);
     final MembershipRecord renewedMembership =
         (await repository.watchAll().first).single;
     expect(renewedMembership.expirationDate, DateTime(2028, 9, 1));
     expect(renewedMembership.renewalDate, DateTime(2028, 9, 1));
+
+    // 删除人工续费后的回退结果。
+    final PaymentDeletionResult deletionResult = await repository.deletePayment(
+      membershipId: membership.id,
+      paymentId: payments.first.id,
+    );
+    expect(deletionResult.deductedDays, 366);
+    expect(deletionResult.autoRenewDisabled, isFalse);
+    expect(deletionResult.initialPurchase, isFalse);
+    // 删除续费后的有效支付记录。
+    final List<MembershipPaymentRecord> remainingPayments = await repository
+        .watchPayments(membership.id)
+        .first;
+    expect(remainingPayments, hasLength(1));
+    expect(
+      repository.summarizeSpending(remainingPayments, year: 2027, month: 9),
+      0,
+    );
+    // 删除续费后同步回退会员当前到期时间和续费日期。
+    final MembershipRecord membershipAfterPaymentDeletion =
+        (await repository.watchAll().first).single;
+    expect(membershipAfterPaymentDeletion.expirationDate, DateTime(2027, 9, 1));
+    expect(membershipAfterPaymentDeletion.renewalDate, DateTime(2027, 9, 1));
+    expect(membershipAfterPaymentDeletion.autoRenew, isTrue);
+
+    // 剩余记录即新增会员时生成的首笔购买记录。
+    final MembershipPaymentRecord initialPayment = remainingPayments.single;
+    // 删除首笔购买记录后的结果。
+    final PaymentDeletionResult initialDeletion = await repository
+        .deletePayment(
+          membershipId: membership.id,
+          paymentId: initialPayment.id,
+        );
+    expect(initialDeletion.initialPurchase, isTrue);
+    expect(initialDeletion.deductedDays, 0);
+    expect(await repository.watchPayments(membership.id).first, isEmpty);
+    expect(
+      (await repository.watchAll().first).single.expirationDate,
+      DateTime(2027, 9, 1),
+    );
+  });
+
+  test('会员支出按付费自然日统计月初跨时区的续费', () async {
+    // 测试会员仓储。
+    final MembershipRepository repository = MembershipRepository(database);
+    // 不自动创建首笔支付的会员标识。
+    final String membershipId = await repository.save(
+      MembershipDraft(
+        name: '跨时区续费会员',
+        priceCents: 0,
+        purchaseDate: DateTime(2026, 9, 1),
+        expirationDate: DateTime(2026, 10, 1),
+        isPermanent: false,
+        autoRenew: false,
+      ),
+    );
+    await database
+        .into(database.membershipPayments)
+        .insert(
+          MembershipPaymentsCompanion.insert(
+            id: 'month-boundary-payment',
+            membershipId: membershipId,
+            amountCents: 3600,
+            paidAt: DateTime.utc(2026, 9, 30, 16),
+            validFrom: Value<DateTime>(DateTime(2026, 10, 1)),
+            validUntil: Value<DateTime>(DateTime(2027, 4, 1)),
+            createdAt: DateTime.utc(2026, 10, 1, 15),
+          ),
+        );
+    // 数据库回读后的跨月支付记录。
+    final MembershipPaymentRecord payment =
+        (await repository.watchPayments(membershipId).first).single;
+
+    expect(repository.paymentDateFor(payment), DateTime(2026, 10, 1));
+    expect(
+      repository.summarizeSpending(
+        <MembershipPaymentRecord>[payment],
+        year: 2026,
+        month: 10,
+      ),
+      3600,
+    );
+    expect(
+      repository.summarizeSpending(
+        <MembershipPaymentRecord>[payment],
+        year: 2026,
+        month: 9,
+      ),
+      0,
+    );
+    expect(payment.paidAt.isUtc, isFalse);
+  });
+
+  test('首笔购买在时间戳跨日前仍按付费自然日识别', () async {
+    // 测试会员仓储。
+    final MembershipRepository repository = MembershipRepository(database);
+    // 月初购买的会员标识。
+    final String membershipId = await repository.save(
+      MembershipDraft(
+        name: '月初购买会员',
+        priceCents: 3600,
+        purchaseDate: DateTime(2026, 10, 1),
+        expirationDate: DateTime(2027, 4, 1),
+        isPermanent: false,
+        autoRenew: false,
+      ),
+    );
+    // 自动创建的首笔购买记录。
+    final MembershipPaymentRecord payment =
+        (await repository.watchPayments(membershipId).first).single;
+    await (database.update(
+      database.membershipPayments,
+    )..where((MembershipPayments table) => table.id.equals(payment.id))).write(
+      MembershipPaymentsCompanion(
+        paidAt: Value<DateTime>(DateTime.utc(2026, 9, 30, 16)),
+      ),
+    );
+
+    // 删除首笔购买后的业务结果。
+    final PaymentDeletionResult result = await repository.deletePayment(
+      membershipId: membershipId,
+      paymentId: payment.id,
+    );
+    // 删除后的会员记录。
+    final MembershipRecord membership =
+        (await repository.watchAll().first).single;
+    expect(result.initialPurchase, isTrue);
+    expect(result.deductedDays, 0);
+    expect(membership.expirationDate, DateTime(2027, 4, 1));
+  });
+
+  test('删除中间续费只扣除该笔有效天数并保留其他记录', () async {
+    // 测试会员仓储。
+    final MembershipRepository repository = MembershipRepository(database);
+    await repository.save(
+      MembershipDraft(
+        name: '周度会员',
+        priceCents: 700,
+        billingCycle: BillingCycle.week,
+        purchaseDate: DateTime(2026, 1, 1),
+        expirationDate: DateTime(2026, 1, 8),
+        isPermanent: false,
+        autoRenew: false,
+      ),
+    );
+    // 新增后的会员。
+    final MembershipRecord membership =
+        (await repository.watchAll().first).single;
+    await repository.recordPayment(
+      membershipId: membership.id,
+      amountCents: 700,
+      paidAt: DateTime(2026, 1, 8),
+      billingCycle: BillingCycle.week,
+    );
+    await repository.recordPayment(
+      membershipId: membership.id,
+      amountCents: 700,
+      paidAt: DateTime(2026, 1, 15),
+      billingCycle: BillingCycle.week,
+    );
+    // 需要删除的中间续费记录。
+    final MembershipPaymentRecord middlePayment =
+        (await repository.watchPayments(membership.id).first).singleWhere(
+          (MembershipPaymentRecord payment) =>
+              payment.paidAt == DateTime(2026, 1, 8),
+        );
+
+    // 删除中间续费后的回退结果。
+    final PaymentDeletionResult result = await repository.deletePayment(
+      membershipId: membership.id,
+      paymentId: middlePayment.id,
+    );
+
+    expect(result.deductedDays, 7);
+    expect(await repository.watchPayments(membership.id).first, hasLength(2));
+    expect(
+      (await repository.watchAll().first).single.expirationDate,
+      DateTime(2026, 1, 15),
+    );
   });
 
   test('自动续费到期后生成支付记录并且重复检查不会重复续费', () async {
@@ -385,6 +565,7 @@ void main() {
         isPermanent: false,
         autoRenew: true,
         renewalDate: DateTime(2026, 2, 1),
+        renewalReminderEnabled: true,
       ),
     );
     final MembershipRecord membership =
@@ -403,5 +584,68 @@ void main() {
     expect(renewed.renewalDate, DateTime(2026, 3, 1));
     expect(await repository.processAutoRenewals(DateTime(2026, 2, 15)), 0);
     expect(await repository.watchPayments(membership.id).first, hasLength(2));
+
+    // 删除自动续费后的回退结果。
+    final PaymentDeletionResult result = await repository.deletePayment(
+      membershipId: membership.id,
+      paymentId: payments.first.id,
+    );
+    expect(result.deductedDays, 28);
+    expect(result.autoRenewDisabled, isTrue);
+    // 删除自动续费后的会员状态。
+    final MembershipRecord reverted =
+        (await repository.watchAll().first).single;
+    expect(reverted.expirationDate, DateTime(2026, 2, 1));
+    expect(reverted.autoRenew, isFalse);
+    expect(reverted.renewalDate, isNull);
+    expect(reverted.renewalReminderEnabled, isFalse);
+    expect(await repository.processAutoRenewals(DateTime(2026, 2, 15)), 0);
+    expect(await repository.watchPayments(membership.id).first, hasLength(1));
+  });
+
+  test('续费有效期无效时拒绝删除并完整保留原数据', () async {
+    // 测试会员仓储。
+    final MembershipRepository repository = MembershipRepository(database);
+    await repository.save(
+      MembershipDraft(
+        name: '异常续费会员',
+        priceCents: 1000,
+        billingCycle: BillingCycle.month,
+        purchaseDate: DateTime(2026, 1, 1),
+        expirationDate: DateTime(2026, 2, 1),
+        isPermanent: false,
+        autoRenew: false,
+      ),
+    );
+    // 新增后的会员。
+    final MembershipRecord membership =
+        (await repository.watchAll().first).single;
+    await repository.recordPayment(
+      membershipId: membership.id,
+      amountCents: 1000,
+      paidAt: DateTime(2026, 2, 1),
+      billingCycle: BillingCycle.month,
+    );
+    // 人工续费记录。
+    final MembershipPaymentRecord renewal =
+        (await repository.watchPayments(membership.id).first).first;
+    await (database.update(
+      database.membershipPayments,
+    )..where((MembershipPayments table) => table.id.equals(renewal.id))).write(
+      const MembershipPaymentsCompanion(validUntil: Value<DateTime?>(null)),
+    );
+
+    await expectLater(
+      repository.deletePayment(
+        membershipId: membership.id,
+        paymentId: renewal.id,
+      ),
+      throwsA(isA<FormatException>()),
+    );
+    expect(await repository.watchPayments(membership.id).first, hasLength(2));
+    expect(
+      (await repository.watchAll().first).single.expirationDate,
+      DateTime(2026, 3, 1),
+    );
   });
 }

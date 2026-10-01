@@ -86,6 +86,35 @@ describe('sync consistency', () => {
     ).toEqual(operation.data);
   });
 
+  it('删除自动续费账单时允许会员日期回退', async () => {
+    // 带软删除时间的自动续费付款。
+    const deletedPayment: SyncOperationDto = {
+      ...payment,
+      data: {
+        ...payment.data,
+        deleted_at: '2026-05-02T00:00:00.000Z',
+      },
+    };
+    // 删除续费时同步回退会员日期并关闭自动续费。
+    const operation: SyncOperationDto = {
+      op: 'PATCH',
+      table: 'memberships',
+      id: recordId,
+      data: {
+        expiration_date: '2026-04-01',
+        renewal_date: null,
+        auto_renew: false,
+      },
+    };
+    expect(
+      await normalizeAutomaticRenewalPatch(transaction, userId, operation, [
+        deletedPayment,
+        operation,
+      ]),
+    ).toBe(operation);
+    expect(findMembership).not.toHaveBeenCalled();
+  });
+
   it('备注伪装成自动续费的普通支付不会改变人工日期编辑语义', async () => {
     // 普通随机身份即使备注包含自动续费也不能被识别为自动账单。
     const manual: SyncOperationDto = {

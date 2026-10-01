@@ -56,7 +56,8 @@ export async function normalizeAutomaticRenewalPatch(
     if (
       candidate.table !== 'membership_payments' ||
       candidate.op !== 'PUT' ||
-      candidate.data?.membership_id !== operation.id
+      candidate.data?.membership_id !== operation.id ||
+      candidate.data?.deleted_at != null
     ) {
       return false;
     }

@@ -863,6 +863,18 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
     );
   }
 
+  /// 将待办中的真实时间点转换为当前设备本地时间，日期字段保持原值。
+  TodoRecord _localizeTodoRecord(TodoRecord record) {
+    return record.copyWith(
+      dueAt: Value<DateTime?>(record.dueAt?.toLocal()),
+      completedAt: Value<DateTime?>(record.completedAt?.toLocal()),
+      reminderAt: Value<DateTime?>(record.reminderAt?.toLocal()),
+      createdAt: record.createdAt.toLocal(),
+      updatedAt: record.updatedAt.toLocal(),
+      deletedAt: Value<DateTime?>(record.deletedAt?.toLocal()),
+    );
+  }
+
   /// 监听全部未删除待办，用于在仓储层组装进行中的任务树。
   Stream<List<TodoRecord>> watchAllTodos() {
     // 全部有效待办查询。
@@ -873,7 +885,10 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         (TodoItems table) => OrderingTerm.asc(table.sortOrder),
         (TodoItems table) => OrderingTerm.asc(table.createdAt),
       ]);
-    return query.watch();
+    return query.watch().map(
+      (List<TodoRecord> records) =>
+          records.map(_localizeTodoRecord).toList(growable: false),
+    );
   }
 
   /// 监听指定完成日期的历史待办。
@@ -895,7 +910,10 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         (TodoItems table) => OrderingTerm.desc(table.completedAt),
         (TodoItems table) => OrderingTerm.asc(table.createdAt),
       ]);
-    return query.watch();
+    return query.watch().map(
+      (List<TodoRecord> records) =>
+          records.map(_localizeTodoRecord).toList(growable: false),
+    );
   }
 
   /// 按 PRD 排序规则监听指定自然日的有效待办。
@@ -919,7 +937,10 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         (TodoItems table) => OrderingTerm.asc(table.sortOrder),
         (TodoItems table) => OrderingTerm.asc(table.createdAt),
       ]);
-    return query.watch();
+    return query.watch().map(
+      (List<TodoRecord> records) =>
+          records.map(_localizeTodoRecord).toList(growable: false),
+    );
   }
 
   /// 监听全部回收站待办。
@@ -930,7 +951,10 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
       ..orderBy(<OrderingTerm Function(TodoItems)>[
         (TodoItems table) => OrderingTerm.desc(table.deletedAt),
       ]);
-    return query.watch();
+    return query.watch().map(
+      (List<TodoRecord> records) =>
+          records.map(_localizeTodoRecord).toList(growable: false),
+    );
   }
 
   /// 新增一条待办。

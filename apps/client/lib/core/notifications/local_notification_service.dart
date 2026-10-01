@@ -215,11 +215,13 @@ class NotificationPlanBuilder {
     if (last == null) {
       return null;
     }
+    // 最近完成时间对应的当前设备本地时间。
+    final DateTime localLast = last.toLocal();
     return switch (event.intervalUnit) {
-      'day' => last.add(Duration(days: event.intervalValue)),
-      'week' => last.add(Duration(days: event.intervalValue * 7)),
-      'year' => _addMonths(last, event.intervalValue * 12),
-      _ => _addMonths(last, event.intervalValue),
+      'day' => localLast.add(Duration(days: event.intervalValue)),
+      'week' => localLast.add(Duration(days: event.intervalValue * 7)),
+      'year' => _addMonths(localLast, event.intervalValue * 12),
+      _ => _addMonths(localLast, event.intervalValue),
     };
   }
 

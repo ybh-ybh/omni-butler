@@ -68,6 +68,25 @@ enum BillingCycle {
   custom,
 }
 
+/// 支付记录删除结果。
+class PaymentDeletionResult {
+  /// 实际从会员有效期扣除的自然日数。
+  final int deductedDays;
+
+  /// 是否因删除自动续费记录而关闭了自动续费。
+  final bool autoRenewDisabled;
+
+  /// 删除的是否为新增会员时生成的首笔购买记录。
+  final bool initialPurchase;
+
+  /// 创建支付记录删除结果。
+  const PaymentDeletionResult({
+    required this.deductedDays,
+    required this.autoRenewDisabled,
+    required this.initialPurchase,
+  });
+}
+
 /// 会员编辑草稿。
 class MembershipDraft {
   /// 可选现有会员标识。
@@ -248,7 +267,10 @@ class MembershipRepository {
       ..orderBy(<OrderingTerm Function(MembershipPayments)>[
         (MembershipPayments table) => OrderingTerm.desc(table.paidAt),
       ]);
-    return query.watch();
+    return query.watch().map(
+      (List<MembershipPaymentRecord> records) =>
+          records.map(_localizePaymentRecord).toList(growable: false),
+    );
   }
 
   /// 监听全部有效会员的支付历史用于支出统计。
@@ -268,7 +290,11 @@ class MembershipRepository {
         );
     return query.watch().map(
       (List<TypedResult> rows) => rows
-          .map((TypedResult row) => row.readTable(_database.membershipPayments))
+          .map(
+            (TypedResult row) => _localizePaymentRecord(
+              row.readTable(_database.membershipPayments),
+            ),
+          )
           .toList(growable: false),
     );
   }
@@ -417,9 +443,8 @@ class MembershipRepository {
   Future<void> recordPayment({
     required String membershipId,
     required int amountCents,
-    required DateTime startDate,
+    required DateTime paidAt,
     BillingCycle? billingCycle,
-    DateTime? validFrom,
     DateTime? validUntil,
     String? notes,
     bool isAutomatic = false,
@@ -434,7 +459,7 @@ class MembershipRepository {
       final String paymentId = isAutomatic
           ? stableBusinessId('auto-renewal', <String>[
               membershipId,
-              businessDayKey(startDate),
+              businessDayKey(paidAt),
             ])
           : _uuid.v7();
       if (isAutomatic) {
@@ -469,14 +494,14 @@ class MembershipRepository {
           ? null
           : effectiveCycle == BillingCycle.custom
           ? validUntil
-          : _addBillingCycle(startDate, effectiveCycle);
+          : _addBillingCycle(paidAt, effectiveCycle);
       // 标准周期从当前到期日继续叠加；自定义周期使用手工有效期。
       final DateTime? updatedExpirationDate = membership.isPermanent
           ? null
           : effectiveCycle == BillingCycle.custom
           ? validUntil
           : _addBillingCycle(
-              membership.expirationDate ?? startDate,
+              membership.expirationDate ?? paidAt,
               effectiveCycle,
             );
       await _database
@@ -486,8 +511,8 @@ class MembershipRepository {
               id: paymentId,
               membershipId: membershipId,
               amountCents: amountCents,
-              paidAt: startDate,
-              validFrom: Value<DateTime?>(startDate),
+              paidAt: paidAt,
+              validFrom: Value<DateTime?>(paidAt),
               validUntil: Value<DateTime?>(paymentExpirationDate),
               notes: Value<String?>(_cleanOptional(notes)),
               createdAt: now,
@@ -552,7 +577,7 @@ class MembershipRepository {
         await recordPayment(
           membershipId: current.id,
           amountCents: current.priceCents,
-          startDate: expirationDate,
+          paidAt: expirationDate,
           billingCycle: cycle,
           validUntil: customEndDate,
           notes: '自动续费',
@@ -567,6 +592,160 @@ class MembershipRepository {
       }
     }
     return processedCount;
+  }
+
+  /// 软删除支付记录，并同步回退续费增加的会员有效期。
+  Future<PaymentDeletionResult> deletePayment({
+    required String membershipId,
+    required String paymentId,
+  }) async {
+    return _database.transaction(() async {
+      // 当前会员记录。
+      final MembershipRecord membership = await _loadMembership(membershipId);
+      // 待删除的有效支付记录。
+      final MembershipPaymentRecord? payment =
+          await (_database.select(_database.membershipPayments)..where(
+                (MembershipPayments table) =>
+                    table.id.equals(paymentId) &
+                    table.membershipId.equals(membershipId) &
+                    table.deletedAt.isNull(),
+              ))
+              .getSingleOrNull();
+      if (payment == null) {
+        throw StateError('支付记录不存在或已删除');
+      }
+      // 包含已删除记录的完整支付历史，用于稳定识别最初购买记录。
+      final List<MembershipPaymentRecord> paymentHistory =
+          await (_database.select(_database.membershipPayments)..where(
+                (MembershipPayments table) =>
+                    table.membershipId.equals(membershipId),
+              ))
+              .get();
+      paymentHistory.sort((
+        MembershipPaymentRecord left,
+        MembershipPaymentRecord right,
+      ) {
+        // 创建时间比较结果。
+        final int createdComparison = left.createdAt.compareTo(right.createdAt);
+        return createdComparison != 0
+            ? createdComparison
+            : left.id.compareTo(right.id);
+      });
+      // 最早创建的支付记录。
+      final MembershipPaymentRecord earliestPayment = paymentHistory.first;
+      // 当前记录是否为新增会员时生成的首笔购买记录。
+      final bool initialPurchase =
+          earliestPayment.id == payment.id &&
+          _isSameCalendarDay(paymentDateFor(payment), membership.purchaseDate);
+      // 当前记录是否由系统自动续费生成。
+      final bool automaticRenewal = _isAutomaticRenewalPayment(payment);
+      // 实际需要扣除的续费自然日数。
+      int deductedDays = 0;
+      // 删除续费后新的会员到期日。
+      DateTime? updatedExpirationDate;
+      if (!initialPurchase && !membership.isPermanent) {
+        // 本次续费有效期开始日期。
+        final DateTime? validFrom = payment.validFrom;
+        // 本次续费有效期结束日期。
+        final DateTime? validUntil = payment.validUntil;
+        if (validFrom == null || validUntil == null) {
+          throw const FormatException('续费记录缺少有效期，无法安全回退会员到期日');
+        }
+        deductedDays = _calendarDayDifference(validFrom, validUntil);
+        if (deductedDays <= 0) {
+          throw const FormatException('续费记录的结束日期必须晚于开始日期');
+        }
+        // 删除前的会员到期日。
+        final DateTime? expirationDate = membership.expirationDate;
+        if (expirationDate == null) {
+          throw const FormatException('会员缺少到期日，无法安全删除续费记录');
+        }
+        updatedExpirationDate = _subtractCalendarDays(
+          expirationDate,
+          deductedDays,
+        );
+        if (_calendarDay(updatedExpirationDate)
+            .isBefore(_calendarDay(membership.purchaseDate))) {
+          throw const FormatException('删除后到期日将早于购买日期，已取消删除');
+        }
+      }
+      // 当前删除时间。
+      final DateTime now = DateTime.now();
+      await (_database.update(_database.membershipPayments)..where(
+            (MembershipPayments table) =>
+                table.id.equals(paymentId) &
+                table.membershipId.equals(membershipId) &
+                table.deletedAt.isNull(),
+          ))
+          .write(MembershipPaymentsCompanion(deletedAt: Value<DateTime>(now)));
+      if (updatedExpirationDate != null || automaticRenewal) {
+        await (_database.update(
+          _database.memberships,
+        )..where((Memberships table) => table.id.equals(membershipId))).write(
+          MembershipsCompanion(
+            expirationDate: updatedExpirationDate == null
+                ? const Value<DateTime?>.absent()
+                : Value<DateTime?>(updatedExpirationDate),
+            autoRenew: automaticRenewal
+                ? const Value<bool>(false)
+                : const Value<bool>.absent(),
+            renewalDate: automaticRenewal
+                ? const Value<DateTime?>(null)
+                : membership.autoRenew && updatedExpirationDate != null
+                ? Value<DateTime?>(updatedExpirationDate)
+                : const Value<DateTime?>.absent(),
+            renewalReminderEnabled: automaticRenewal
+                ? const Value<bool>(false)
+                : const Value<bool>.absent(),
+            updatedAt: Value<DateTime>(now),
+            syncState: const Value<String>('localSaved'),
+          ),
+        );
+      }
+      return PaymentDeletionResult(
+        deductedDays: deductedDays,
+        autoRenewDisabled: automaticRenewal,
+        initialPurchase: initialPurchase,
+      );
+    });
+  }
+
+  /// 判断支付记录是否为系统自动续费生成的稳定业务记录。
+  bool _isAutomaticRenewalPayment(MembershipPaymentRecord payment) {
+    // 自动续费业务身份使用的账期日期。
+    final DateTime identityDate = paymentDateFor(payment);
+    // 根据会员和账期推导出的自动续费稳定标识。
+    final String automaticId = stableBusinessId('auto-renewal', <String>[
+      payment.membershipId,
+      businessDayKey(identityDate),
+    ]);
+    return payment.id == automaticId;
+  }
+
+  /// 判断两个时间是否位于同一个自然日。
+  bool _isSameCalendarDay(DateTime left, DateTime right) {
+    return left.year == right.year &&
+        left.month == right.month &&
+        left.day == right.day;
+  }
+
+  /// 将时间规范为只用于自然日运算的 UTC 日期。
+  DateTime _calendarDay(DateTime value) {
+    return DateTime.utc(value.year, value.month, value.day);
+  }
+
+  /// 计算两个日期之间的自然日数。
+  int _calendarDayDifference(DateTime from, DateTime until) {
+    return _calendarDay(until).difference(_calendarDay(from)).inDays;
+  }
+
+  /// 从日期中扣除指定自然日数，并保留原时间的 UTC 属性。
+  DateTime _subtractCalendarDays(DateTime value, int days) {
+    // 扣减后的 UTC 自然日。
+    final DateTime result = _calendarDay(value).subtract(Duration(days: days));
+    return value.isUtc
+        ? DateTime.utc(result.year, result.month, result.day)
+        : DateTime(result.year, result.month, result.day);
   }
 
   /// 将会员移入回收站。
@@ -653,16 +832,33 @@ class MembershipRepository {
     int? month,
   }) {
     return payments
-        .where(
-          (MembershipPaymentRecord payment) =>
-              payment.paidAt.year == year &&
-              (month == null || payment.paidAt.month == month),
-        )
+        .where((MembershipPaymentRecord payment) {
+          // 用户输入的付费自然日，避免带时区时间跨月后被归入上个月。
+          final DateTime paymentDate = paymentDateFor(payment);
+          return paymentDate.year == year &&
+              (month == null || paymentDate.month == month);
+        })
         .fold<int>(
           0,
           (int total, MembershipPaymentRecord payment) =>
               total + payment.amountCents,
         );
+  }
+
+  /// 返回支付记录用于业务统计的付费自然日。
+  DateTime paymentDateFor(MembershipPaymentRecord payment) {
+    return payment.validFrom ?? payment.paidAt.toLocal();
+  }
+
+  /// 将支付记录中的真实时间点转换为当前设备本地时间。
+  MembershipPaymentRecord _localizePaymentRecord(
+    MembershipPaymentRecord record,
+  ) {
+    return record.copyWith(
+      paidAt: record.paidAt.toLocal(),
+      createdAt: record.createdAt.toLocal(),
+      deletedAt: Value<DateTime?>(record.deletedAt?.toLocal()),
+    );
   }
 
   /// 校验并清理可选 HTTP(S) 链接。

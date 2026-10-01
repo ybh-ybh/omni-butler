@@ -415,16 +415,20 @@ class _MembershipSpendingSummary extends ConsumerWidget {
   });
 
   /// 按自然周汇总本月支付金额。
-  List<int> _monthWeeklySpending(List<MembershipPaymentRecord> records) {
+  List<int> _monthWeeklySpending(
+    MembershipRepository repository,
+    List<MembershipPaymentRecord> records,
+  ) {
     // 本月最多五个自然周桶。
     final List<int> weeklyCents = List<int>.filled(5, 0);
     for (final MembershipPaymentRecord payment in records) {
-      if (payment.paidAt.year != now.year ||
-          payment.paidAt.month != now.month) {
+      // 用户输入的付费自然日，避免 UTC 时间在月初落入上个月。
+      final DateTime paymentDate = repository.paymentDateFor(payment);
+      if (paymentDate.year != now.year || paymentDate.month != now.month) {
         continue;
       }
       // 当前支付记录所属的周序号。
-      final int weekIndex = (payment.paidAt.day - 1) ~/ 7;
+      final int weekIndex = (paymentDate.day - 1) ~/ 7;
       // 月末不足一周的日期并入第五个周桶。
       final int safeIndex = weekIndex > 4 ? 4 : weekIndex;
       weeklyCents[safeIndex] += payment.amountCents;
@@ -493,13 +497,13 @@ class _MembershipSpendingSummary extends ConsumerWidget {
     // 本月与上月支出差额。
     final int monthDifference = monthCents - previousMonthCents;
     // 本月支付记录数量。
-    final int monthPaymentCount = records
-        .where(
-          (MembershipPaymentRecord payment) =>
-              payment.paidAt.year == now.year &&
-              payment.paidAt.month == now.month,
-        )
-        .length;
+    final int monthPaymentCount = records.where((
+      MembershipPaymentRecord payment,
+    ) {
+      // 用户输入的付费自然日。
+      final DateTime paymentDate = repository.paymentDateFor(payment);
+      return paymentDate.year == now.year && paymentDate.month == now.month;
+    }).length;
     // 今天的日期部分。
     final DateTime today = DateUtils.dateOnly(now);
     // 三天统计窗口的结束日期，不包含该日期。
@@ -549,7 +553,7 @@ class _MembershipSpendingSummary extends ConsumerWidget {
         icon: Icons.account_balance_wallet_outlined,
         accent: colors.member,
         badgeAccent: colors.member,
-        chartValues: _monthWeeklySpending(records),
+        chartValues: _monthWeeklySpending(repository, records),
       ),
       _MembershipMetricCard(
         label: '年度累计',
@@ -1628,8 +1632,9 @@ class _MembershipCard extends ConsumerWidget {
       membership.billingCycle,
     );
     // 时间条使用的最近购买或续费日期。
-    final DateTime timelineStartDate =
-        latestPayment?.paidAt ?? membership.purchaseDate;
+    final DateTime timelineStartDate = latestPayment == null
+        ? membership.purchaseDate
+        : repository.paymentDateFor(latestPayment!);
     // 时间条是否从续费日期开始。
     final bool timelineStartsFromRenewal = DateUtils.dateOnly(timelineStartDate)
         .isAfter(DateUtils.dateOnly(membership.purchaseDate));
@@ -2613,6 +2618,52 @@ class _PaymentHistoryDialog extends ConsumerWidget {
     );
   }
 
+  /// 二次确认并删除一条支付记录。
+  Future<void> _deletePayment(
+    BuildContext context,
+    WidgetRef ref,
+    MembershipPaymentRecord payment,
+  ) async {
+    // 用户是否确认删除。
+    final bool confirmed = await showOmniConfirmDialog(
+      context,
+      title: '删除这条支付记录？',
+      message: '首笔购买记录只影响支付历史和统计；续费记录还会从当前到期日扣除对应有效天数。删除自动续费记录将同时关闭自动续费。',
+      confirmLabel: '删除',
+      danger: true,
+    );
+    if (!confirmed || !context.mounted) {
+      return;
+    }
+    try {
+      // 支付记录删除及有效期回退结果。
+      final PaymentDeletionResult result = await ref
+          .read(membershipRepositoryProvider)
+          .deletePayment(membershipId: membership.id, paymentId: payment.id);
+      if (context.mounted) {
+        // 根据实际删除语义生成成功提示。
+        final String message = result.initialPurchase
+            ? '首笔购买记录已删除，会员到期日未调整'
+            : result.deductedDays > 0
+            ? '支付记录已删除，会员有效期已减少 ${result.deductedDays} 天${result.autoRenewDisabled ? '，自动续费已关闭' : ''}'
+            : '支付记录已删除${result.autoRenewDisabled ? '，自动续费已关闭' : ''}';
+        showOmniMessage(
+          context,
+          message: message,
+          tone: OmniMessageTone.success,
+        );
+      }
+    } on Object catch (error) {
+      if (context.mounted) {
+        showOmniMessage(
+          context,
+          message: '支付记录删除失败：$error',
+          tone: OmniMessageTone.error,
+        );
+      }
+    }
+  }
+
   /// 构建支付历史弹窗。
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -2655,7 +2706,31 @@ class _PaymentHistoryDialog extends ConsumerWidget {
                     DateFormat('yyyy-MM-dd')
                         .format(payment.validFrom ?? payment.paidAt),
                   ),
-                  trailing: payment.notes == null ? null : Text(payment.notes!),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      if (payment.notes != null) ...<Widget>[
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 120),
+                          child: Text(
+                            payment.notes!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: OmniSpacing.xxs),
+                      ],
+                      IconButton(
+                        key: ValueKey<String>(
+                          'membership-payment-delete-${payment.id}',
+                        ),
+                        tooltip: '删除支付记录',
+                        color: OmniColors.of(context).danger,
+                        onPressed: () => _deletePayment(context, ref, payment),
+                        icon: const Icon(Icons.delete_outline_rounded),
+                      ),
+                    ],
+                  ),
                 );
               },
             );
@@ -2691,8 +2766,8 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
   /// 备注控制器。
   final TextEditingController _notesController = TextEditingController();
 
-  /// 支付日期。
-  DateTime _startDate = DateUtils.dateOnly(DateTime.now());
+  /// 实际付费日期，同时作为本次有效期开始日期。
+  DateTime _paidAt = DateUtils.dateOnly(DateTime.now());
 
   /// 本次计费周期。
   late BillingCycle _billingCycle;
@@ -2742,7 +2817,7 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
         .recordPayment(
           membershipId: widget.membership.id,
           amountCents: (amount * 100).round(),
-          startDate: _startDate,
+          paidAt: _paidAt,
           billingCycle: _billingCycle,
           validUntil: _validUntil,
           notes: _notesController.text,
@@ -2811,14 +2886,14 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
           ),
           const SizedBox(height: 14),
           OmniDatePickerButton(
-            value: _startDate,
-            initialDate: _startDate,
+            value: _paidAt,
+            initialDate: _paidAt,
             firstDate: DateTime(1970),
             lastDate: DateTime(2100),
-            label: '开始 ${DateFormat('yyyy-MM-dd').format(_startDate)}',
+            label: '付费 ${DateFormat('yyyy-MM-dd').format(_paidAt)}',
             onChanged: (DateTime selected) {
               setState(() {
-                _startDate = selected;
+                _paidAt = selected;
                 _validUntil = _calculateExpirationDate();
               });
             },
@@ -2827,7 +2902,7 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
             const SizedBox(height: 14),
             OmniDatePickerButton(
               value: _validUntil,
-              initialDate: _validUntil ?? _startDate,
+              initialDate: _validUntil ?? _paidAt,
               firstDate: DateTime(1970),
               lastDate: DateTime(2100),
               label: _validUntil == null
@@ -2878,14 +2953,14 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
       BillingCycle.week || BillingCycle.permanent || BillingCycle.custom => 0,
     };
     if (_billingCycle == BillingCycle.week) {
-      return _startDate.add(const Duration(days: 7));
+      return _paidAt.add(const Duration(days: 7));
     }
     if (months == 0) {
       return null;
     }
     final DateTime targetMonth = DateTime(
-      _startDate.year,
-      _startDate.month + months,
+      _paidAt.year,
+      _paidAt.month + months,
       1,
     );
     final int lastDay = DateTime(
@@ -2896,7 +2971,7 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
     return DateTime(
       targetMonth.year,
       targetMonth.month,
-      _startDate.day > lastDay ? lastDay : _startDate.day,
+      _paidAt.day > lastDay ? lastDay : _paidAt.day,
     );
   }
 }

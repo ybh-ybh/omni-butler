@@ -126,6 +126,30 @@ void main() {
     );
   });
 
+  test('重复待办复制数据库 UTC 时间对应的本地时刻', () async {
+    // 重复系列起始日。
+    final DateTime firstDay = DateTime(2026, 10, 1);
+    // 模拟 PowerSync 下行的 UTC 截止时间。
+    final DateTime storedDueAt = DateTime.utc(2026, 9, 30, 16, 30);
+    await repository.save(
+      TodoDraft(
+        title: '跨时区每日任务',
+        scheduledDate: firstDay,
+        dueAt: storedDueAt,
+        repeatRule: TodoRepeatRule.daily,
+      ),
+    );
+
+    // 次日按需生成的独立实例。
+    final TodoRecord next =
+        (await repository.watchForDay(DateTime(2026, 10, 2)).first).single;
+    // UTC 时间在当前设备上的本地时刻。
+    final DateTime expectedLocalTime = storedDueAt.toLocal();
+    expect(next.dueAt!.isUtc, isFalse);
+    expect(next.dueAt!.hour, expectedLocalTime.hour);
+    expect(next.dueAt!.minute, expectedLocalTime.minute);
+  });
+
   test('每月 31 日在短月份回退到月末', () async {
     await repository.save(
       TodoDraft(

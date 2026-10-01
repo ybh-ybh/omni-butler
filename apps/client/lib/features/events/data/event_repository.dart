@@ -119,7 +119,9 @@ class EventRepository {
       );
     return query.watch().map((List<EventRecord> records) {
       // 按应做时间排序的副本。
-      final List<EventRecord> sorted = List<EventRecord>.of(records);
+      final List<EventRecord> sorted = records
+          .map(_localizeEventRecord)
+          .toList(growable: false);
       sorted.sort((EventRecord left, EventRecord right) {
         // 左侧应做时间。
         final DateTime? leftDue = nextDueAt(left);
@@ -151,7 +153,10 @@ class EventRepository {
       ..orderBy(<OrderingTerm Function(Events)>[
         (Events table) => OrderingTerm.desc(table.updatedAt),
       ]);
-    return query.watch();
+    return query.watch().map(
+      (List<EventRecord> records) =>
+          records.map(_localizeEventRecord).toList(growable: false),
+    );
   }
 
   /// 监听全部未删除事件的有效完成历史用于顶部统计。
@@ -170,7 +175,11 @@ class EventRepository {
         );
     return query.watch().map(
       (List<TypedResult> rows) => rows
-          .map((TypedResult row) => row.readTable(_database.eventCompletions))
+          .map(
+            (TypedResult row) => _localizeCompletionRecord(
+              row.readTable(_database.eventCompletions),
+            ),
+          )
           .toList(growable: false),
     );
   }
@@ -186,7 +195,10 @@ class EventRepository {
       ..orderBy(<OrderingTerm Function(EventCompletions)>[
         (EventCompletions table) => OrderingTerm.desc(table.completedAt),
       ]);
-    return query.watch();
+    return query.watch().map(
+      (List<EventCompletionRecord> records) =>
+          records.map(_localizeCompletionRecord).toList(growable: false),
+    );
   }
 
   /// 新增一条可追溯的事件完成历史。
@@ -409,10 +421,7 @@ class EventRepository {
           );
       await _recalculateLastCompleted(event.id, now);
     });
-    return EventCompletionUndo(
-      eventId: event.id,
-      completionId: completionId,
-    );
+    return EventCompletionUndo(eventId: event.id, completionId: completionId);
   }
 
   /// 撤销最近一次记录操作。
@@ -473,12 +482,36 @@ class EventRepository {
 
   /// 根据指定完成时间计算下一次应做时间。
   DateTime dueAtAfterCompletion(EventRecord event, DateTime completedAt) {
+    // 完成时间对应的当前设备本地时间。
+    final DateTime localCompletedAt = completedAt.toLocal();
     return switch (event.intervalUnit) {
-      'day' => completedAt.add(Duration(days: event.intervalValue)),
-      'week' => completedAt.add(Duration(days: event.intervalValue * 7)),
-      'year' => _addMonths(completedAt, event.intervalValue * 12),
-      _ => _addMonths(completedAt, event.intervalValue),
+      'day' => localCompletedAt.add(Duration(days: event.intervalValue)),
+      'week' => localCompletedAt.add(Duration(days: event.intervalValue * 7)),
+      'year' => _addMonths(localCompletedAt, event.intervalValue * 12),
+      _ => _addMonths(localCompletedAt, event.intervalValue),
     };
+  }
+
+  /// 将事件中的真实时间点转换为当前设备本地时间。
+  EventRecord _localizeEventRecord(EventRecord record) {
+    return record.copyWith(
+      lastCompletedAt: Value<DateTime?>(record.lastCompletedAt?.toLocal()),
+      archivedAt: Value<DateTime?>(record.archivedAt?.toLocal()),
+      createdAt: record.createdAt.toLocal(),
+      updatedAt: record.updatedAt.toLocal(),
+      deletedAt: Value<DateTime?>(record.deletedAt?.toLocal()),
+    );
+  }
+
+  /// 将事件完成历史中的真实时间点转换为当前设备本地时间。
+  EventCompletionRecord _localizeCompletionRecord(
+    EventCompletionRecord record,
+  ) {
+    return record.copyWith(
+      completedAt: record.completedAt.toLocal(),
+      createdAt: record.createdAt.toLocal(),
+      deletedAt: Value<DateTime?>(record.deletedAt?.toLocal()),
+    );
   }
 
   /// 根据全部有效历史重新计算最近完成时间。

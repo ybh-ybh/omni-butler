@@ -337,7 +337,7 @@ void main() {
     await left.recordPayment(
       membershipId: membership.id,
       amountCents: 2000,
-      startDate: DateTime(2026, 2, 1),
+      paidAt: DateTime(2026, 2, 1),
     );
     expect(
       (await left.watchPayments(membership.id).first)

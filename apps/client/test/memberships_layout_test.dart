@@ -17,6 +17,94 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证会员管理页的摘要与单双列布局切换。
 void main() {
+  testWidgets('月初续费按付费自然日实时计入本月支出', (WidgetTester tester) async {
+    // 固定桌面测试视口。
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'appearance.theme_mode': 'light',
+    });
+    // 测试用主题偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 测试用会员仓储。
+    final MembershipRepository repository = MembershipRepository(database);
+    // 不自动创建首笔支付的会员标识。
+    final String membershipId = await repository.save(
+      MembershipDraft(
+        name: '跨时区续费会员',
+        priceCents: 0,
+        purchaseDate: DateTime(2026, 9, 1),
+        expirationDate: DateTime(2026, 10, 1),
+        isPermanent: false,
+        autoRenew: false,
+      ),
+    );
+    // 显式管理的测试依赖容器。
+    final ProviderContainer container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(preferences),
+        appDatabaseProvider.overrideWithValue(database),
+        nowProvider.overrideWithValue(DateTime(2026, 10, 2, 10)),
+      ],
+    );
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const OmniButlerApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    container.read(appRouterProvider).go('/memberships');
+    await tester.pumpAndSettle();
+    // 本月支出卡片。
+    final Finder monthMetric = find.byKey(
+      const ValueKey<String>('membership-metric-本月支出'),
+    );
+    expect(
+      find.descendant(of: monthMetric, matching: find.text('¥ 0.00')),
+      findsOneWidget,
+    );
+
+    await database
+        .into(database.membershipPayments)
+        .insert(
+          MembershipPaymentsCompanion.insert(
+            id: 'month-boundary-live-payment',
+            membershipId: membershipId,
+            amountCents: 3600,
+            paidAt: DateTime.utc(2026, 9, 30, 16),
+            validFrom: Value<DateTime>(DateTime(2026, 10, 1)),
+            validUntil: Value<DateTime>(DateTime(2027, 4, 1)),
+            createdAt: DateTime.utc(2026, 10, 1, 15),
+          ),
+        );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(of: monthMetric, matching: find.text('¥ 36.00')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: monthMetric, matching: find.text('1 笔支付')),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    container.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+    await database.close();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('宽屏默认双列并可切换为单列', (WidgetTester tester) async {
     // 固定的业务当前时间。
     final DateTime now = DateTime(2026, 9, 6, 10);
@@ -68,9 +156,8 @@ void main() {
     await repository.recordPayment(
       membershipId: secondId,
       amountCents: 1800,
-      startDate: DateTime(2026, 9, 5),
+      paidAt: DateTime(2026, 9, 5),
       billingCycle: BillingCycle.year,
-      validFrom: DateTime(2026, 9, 5),
       validUntil: DateTime(2027, 8, 1),
     );
     // 分类管理器顺序故意与名称顺序相反，验证筛选行沿用 sortOrder。
@@ -360,17 +447,6 @@ void main() {
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
 
-    // 第一张会员卡的更多菜单。
-    final Finder firstCardMenu = find.descendant(
-      of: firstCard,
-      matching: find.byType(OmniPopupMenuButton<String>),
-    );
-    await tester.tap(firstCardMenu);
-    await tester.pumpAndSettle();
-    expect(find.text('支付记录'), findsOneWidget);
-    await tester.tapAt(const Offset(1200, 700));
-    await tester.pumpAndSettle();
-
     await tester.tap(
       find.byKey(const ValueKey<String>('membership-layout-toggle')),
     );
@@ -386,6 +462,116 @@ void main() {
       greaterThan(40),
     );
     expect(find.text('双列'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    container.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+    await database.close();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('支付记录弹窗删除续费并同步回退会员有效期', (WidgetTester tester) async {
+    // 固定桌面测试视口。
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'appearance.theme_mode': 'light',
+    });
+    // 测试用主题偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 测试用会员仓储。
+    final MembershipRepository repository = MembershipRepository(database);
+    // 待测试会员标识。
+    final String membershipId = await repository.save(
+      MembershipDraft(
+        name: '月度工具会员',
+        priceCents: 1000,
+        billingCycle: BillingCycle.month,
+        purchaseDate: DateTime(2026, 9, 1),
+        expirationDate: DateTime(2026, 10, 1),
+        isPermanent: false,
+        autoRenew: false,
+      ),
+    );
+    await repository.recordPayment(
+      membershipId: membershipId,
+      amountCents: 1000,
+      paidAt: DateTime(2026, 10, 1),
+      billingCycle: BillingCycle.month,
+      notes: '测试续费',
+    );
+    // 待删除的续费记录。
+    final MembershipPaymentRecord renewal =
+        await (database.select(database.membershipPayments)..where(
+              (MembershipPayments table) =>
+                  table.membershipId.equals(membershipId) &
+                  table.notes.equals('测试续费'),
+            ))
+            .getSingle();
+    // 显式管理的测试依赖容器。
+    final ProviderContainer container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(preferences),
+        appDatabaseProvider.overrideWithValue(database),
+        nowProvider.overrideWithValue(DateTime(2026, 10, 2, 10)),
+      ],
+    );
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const OmniButlerApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    container.read(appRouterProvider).go('/memberships');
+    await tester.pumpAndSettle();
+
+    // 会员卡片的更多菜单。
+    final Finder cardMenu = find.descendant(
+      of: find.byKey(ValueKey<String>('membership-card-$membershipId')),
+      matching: find.byType(OmniPopupMenuButton<String>),
+    );
+    await tester.tap(cardMenu);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('支付记录'));
+    await tester.pumpAndSettle();
+    // 续费记录对应的删除按钮。
+    final Finder deleteButton = find.byKey(
+      ValueKey<String>('membership-payment-delete-${renewal.id}'),
+    );
+    expect(deleteButton, findsOneWidget);
+    await tester.tap(deleteButton);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('扣除对应有效天数'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(deleteButton, findsOneWidget);
+
+    await tester.tap(deleteButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(deleteButton, findsNothing);
+    expect(find.textContaining('会员有效期已减少 31 天'), findsOneWidget);
+    expect(find.byTooltip('删除支付记录'), findsOneWidget);
+    // 界面流刷新后的会员记录。
+    final MembershipRecord updatedMembership = container
+        .read(membershipsProvider)
+        .asData!
+        .value
+        .single;
+    expect(updatedMembership.expirationDate, DateTime(2026, 10, 1));
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();

@@ -110,7 +110,10 @@ class TimeEntryRepository {
       ..orderBy(<OrderingTerm Function(TimeEntries)>[
         (TimeEntries table) => OrderingTerm.asc(table.startedAt),
       ]);
-    return query.watch();
+    return query.watch().map(
+      (List<TimeEntryRecord> records) =>
+          records.map(_localizeTimeEntryRecord).toList(growable: false),
+    );
   }
 
   /// 监听当前设备上的全部进行中记录。
@@ -124,7 +127,10 @@ class TimeEntryRepository {
       ..orderBy(<OrderingTerm Function(TimeEntries)>[
         (TimeEntries table) => OrderingTerm.asc(table.startedAt),
       ]);
-    return query.watch();
+    return query.watch().map(
+      (List<TimeEntryRecord> records) =>
+          records.map(_localizeTimeEntryRecord).toList(growable: false),
+    );
   }
 
   /// 保存补录、编辑或进行中时间记录，并阻止区间重叠。
@@ -323,11 +329,13 @@ List<TimeEntryRecord> splitTimeEntriesForRange({
   // 拆分后的自然日分段。
   final List<TimeEntryRecord> segments = <TimeEntryRecord>[];
   for (final TimeEntryRecord record in records) {
+    // 当前设备本地时间表示的记录。
+    final TimeEntryRecord localRecord = _localizeTimeEntryRecord(record);
     // 进行中记录以当前时刻作为临时结束时间。
-    final DateTime effectiveEnd = record.endedAt ?? now;
+    final DateTime effectiveEnd = localRecord.endedAt ?? now.toLocal();
     // 当前记录在范围内的裁切起点。
-    final DateTime clippedStart = record.startedAt.isAfter(normalizedStart)
-        ? record.startedAt
+    final DateTime clippedStart = localRecord.startedAt.isAfter(normalizedStart)
+        ? localRecord.startedAt
         : normalizedStart;
     // 当前记录在范围内的裁切终点。
     final DateTime clippedEnd = effectiveEnd.isBefore(normalizedEnd)
@@ -351,7 +359,7 @@ List<TimeEntryRecord> splitTimeEntriesForRange({
           : nextDay;
       if (segmentEnd.isAfter(segmentStart)) {
         segments.add(
-          record.copyWith(
+          localRecord.copyWith(
             entryDate: day,
             startMinute: segmentStart.difference(day).inMinutes,
             endMinute: segmentEnd.difference(day).inMinutes,
@@ -369,6 +377,17 @@ List<TimeEntryRecord> splitTimeEntriesForRange({
         : left.startMinute.compareTo(right.startMinute);
   });
   return segments;
+}
+
+/// 将时间记录中的真实时间点转换为当前设备本地时间。
+TimeEntryRecord _localizeTimeEntryRecord(TimeEntryRecord record) {
+  return record.copyWith(
+    startedAt: record.startedAt.toLocal(),
+    endedAt: Value<DateTime?>(record.endedAt?.toLocal()),
+    createdAt: record.createdAt.toLocal(),
+    updatedAt: record.updatedAt.toLocal(),
+    deletedAt: Value<DateTime?>(record.deletedAt?.toLocal()),
+  );
 }
 
 /// 返回记录的展示活动名称。

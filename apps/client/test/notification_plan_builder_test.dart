@@ -62,6 +62,45 @@ void main() {
       expect(plans.single.scheduledAt, DateTime(2026, 9, 12, 9, 30));
     });
 
+    test('周期事件按数据库 UTC 时间对应的本地日期推算提醒', () {
+      // 模拟 PowerSync 下行的 UTC 完成时间。
+      final DateTime storedCompletedAt = DateTime.utc(2026, 9, 30, 16, 30);
+      // 当前设备上的本地完成时间。
+      final DateTime localCompletedAt = storedCompletedAt.toLocal();
+      // 本地完成日下一月的到期日期。
+      final DateTime expectedDueDate = DateTime(
+        localCompletedAt.year,
+        localCompletedAt.month + 1,
+        localCompletedAt.day,
+      );
+      // 提醒之前的固定当前时间。
+      final DateTime now = expectedDueDate.subtract(const Duration(days: 10));
+      // 不提前且固定上午九点半提醒的周期事件。
+      final EventRecord event = _event(lastCompletedAt: storedCompletedAt)
+          .copyWith(reminderDaysBefore: 0);
+      // 事件通知计划。
+      final List<PlannedNotification> plans = const NotificationPlanBuilder()
+          .build(
+            todos: const <TodoRecord>[],
+            events: <EventRecord>[event],
+            memberships: const <MembershipRecord>[],
+            preference: _enabledPreference,
+            now: now,
+          );
+
+      expect(plans, hasLength(1));
+      expect(
+        plans.single.scheduledAt,
+        DateTime(
+          expectedDueDate.year,
+          expectedDueDate.month,
+          expectedDueDate.day,
+          9,
+          30,
+        ),
+      );
+    });
+
     test('到期与自动续费使用各自提前天数生成两条提醒', () {
       // 固定当前时间。
       final DateTime now = DateTime(2026, 9, 1);

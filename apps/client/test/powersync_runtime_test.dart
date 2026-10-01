@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:drift/drift.dart' show Value;
@@ -8,11 +9,219 @@ import 'package:omni_butler/core/auth/auth_repository.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/sync/omni_sync_runtime.dart';
 import 'package:omni_butler/core/sync/omni_sync_schema.dart';
+import 'package:omni_butler/features/events/data/event_repository.dart';
+import 'package:omni_butler/features/memberships/data/membership_repository.dart';
+import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
+import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
+import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:powersync/powersync.dart';
 
 /// 验证 PowerSync Raw Table 与 Drift 业务表共用同一 SQLite 文件。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('真实 PowerSync 下支付统计流会收到订阅后的续费记录', () async {
+    // 当前测试独占的真实 SQLite 文件目录。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_membership_payment_watch_',
+    );
+    // 真实 PowerSync 与 Drift 共用的 SQLite 文件路径。
+    final String databasePath =
+        '${directory.path}${Platform.pathSeparator}runtime.sqlite';
+    // 无需真正读写安全存储的认证仓储。
+    final AuthRepository auth = AuthRepository(const FlutterSecureStorage());
+    // 生产路径使用的真实 PowerSync 运行时。
+    final OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      databasePath,
+      initializeUpload: false,
+    );
+    // 通过生产数据库创建的会员仓储。
+    final MembershipRepository repository = MembershipRepository(
+      runtime.database,
+    );
+    // 支付统计流迭代器，模拟会员页面持续订阅。
+    final StreamIterator<List<MembershipPaymentRecord>> paymentEvents =
+        StreamIterator<List<MembershipPaymentRecord>>(
+          repository.watchActivePayments(),
+        );
+    try {
+      // 待续费的会员标识。
+      final String membershipId = await repository.save(
+        MembershipDraft(
+          name: '支付统计流回归会员',
+          priceCents: 1000,
+          billingCycle: BillingCycle.month,
+          purchaseDate: DateTime(2026, 9, 1),
+          expirationDate: DateTime(2026, 10, 1),
+          isPermanent: false,
+          autoRenew: false,
+        ),
+      );
+      expect(await paymentEvents.moveNext(), isTrue);
+      expect(paymentEvents.current, hasLength(1));
+
+      await repository.recordPayment(
+        membershipId: membershipId,
+        amountCents: 1000,
+        paidAt: DateTime(2026, 10, 1),
+        billingCycle: BillingCycle.month,
+      );
+
+      expect(
+        await paymentEvents.moveNext().timeout(const Duration(seconds: 5)),
+        isTrue,
+      );
+      expect(paymentEvents.current, hasLength(2));
+      expect(
+        repository.summarizeSpending(
+          paymentEvents.current,
+          year: 2026,
+          month: 10,
+        ),
+        1000,
+      );
+    } finally {
+      await paymentEvents.cancel();
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('真实 PowerSync 下业务时间点统一转换为设备本地时间', () async {
+    // 当前测试独占的真实 SQLite 文件目录。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_local_timestamp_read_',
+    );
+    // 真实 PowerSync 与 Drift 共用的 SQLite 文件路径。
+    final String databasePath =
+        '${directory.path}${Platform.pathSeparator}runtime.sqlite';
+    // 无需真正读写安全存储的认证仓储。
+    final AuthRepository auth = AuthRepository(const FlutterSecureStorage());
+    // 生产路径使用的真实 PowerSync 运行时。
+    final OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      databasePath,
+      initializeUpload: false,
+    );
+    // 模拟服务端下行的 UTC 时间点。
+    final DateTime storedInstant = DateTime.utc(2026, 9, 30, 16, 30);
+    // 当前设备对应的本地时间点。
+    final DateTime localInstant = storedInstant.toLocal();
+    // 当前设备对应的本地自然日。
+    final DateTime localDay = DateTime(
+      localInstant.year,
+      localInstant.month,
+      localInstant.day,
+    );
+    // 固定记录创建时间。
+    final DateTime createdAt = DateTime.utc(2026, 9, 30, 15);
+    try {
+      await runtime.database
+          .into(runtime.database.todoItems)
+          .insert(
+            TodoItemsCompanion.insert(
+              id: '01990000-7000-8002-8000-000000000201',
+              title: '跨时区完成待办',
+              scheduledDate: localDay,
+              dueAt: Value<DateTime?>(storedInstant),
+              isCompleted: const Value<bool>(true),
+              completedAt: Value<DateTime?>(storedInstant),
+              createdAt: createdAt,
+              updatedAt: createdAt,
+            ),
+          );
+      // 生产待办仓储。
+      final TodoRepository todoRepository = TodoRepository(runtime.database);
+      // 本地自然日内的完成历史。
+      final TodoHistoryEntry todoHistory =
+          (await todoRepository.watchCompletedForDay(localDay).first).single;
+      expect(todoHistory.todo.completedAt, localInstant);
+      expect(todoHistory.todo.dueAt, localInstant);
+      expect(todoHistory.todo.completedAt!.isUtc, isFalse);
+
+      await runtime.database
+          .into(runtime.database.events)
+          .insert(
+            EventsCompanion.insert(
+              id: '01990000-7000-8002-8000-000000000202',
+              name: '跨时区周期事件',
+              intervalValue: const Value<int>(1),
+              intervalUnit: const Value<String>('month'),
+              lastCompletedAt: Value<DateTime?>(storedInstant),
+              createdAt: createdAt,
+              updatedAt: createdAt,
+            ),
+          );
+      await runtime.database
+          .into(runtime.database.eventCompletions)
+          .insert(
+            EventCompletionsCompanion.insert(
+              id: '01990000-7000-8002-8000-000000000203',
+              eventId: '01990000-7000-8002-8000-000000000202',
+              completedAt: storedInstant,
+              createdAt: createdAt,
+            ),
+          );
+      // 生产事件仓储。
+      final EventRepository eventRepository = EventRepository(runtime.database);
+      // 本地化后的事件记录。
+      final EventRecord event = (await eventRepository.watchActive().first)
+          .singleWhere((EventRecord record) => record.name == '跨时区周期事件');
+      // 本地化后的事件完成记录。
+      final EventCompletionRecord completion =
+          (await eventRepository.watchActiveHistory().first).single;
+      expect(event.lastCompletedAt, localInstant);
+      expect(completion.completedAt, localInstant);
+      expect(completion.completedAt.isUtc, isFalse);
+
+      await runtime.database
+          .into(runtime.database.timeEntries)
+          .insert(
+            TimeEntriesCompanion.insert(
+              id: '01990000-7000-8002-8000-000000000204',
+              entryDate: localDay,
+              startMinute: localInstant.hour * 60 + localInstant.minute,
+              endMinute: localInstant.hour * 60 + localInstant.minute + 60,
+              startedAt: storedInstant,
+              endedAt: Value<DateTime?>(
+                storedInstant.add(const Duration(hours: 1)),
+              ),
+              activity: const Value<String?>('跨时区时间记录'),
+              createdAt: createdAt,
+              updatedAt: createdAt,
+            ),
+          );
+      // 生产时间记录仓储。
+      final TimeEntryRepository timeRepository = TimeEntryRepository(
+        runtime.database,
+      );
+      // 本地自然日内的时间记录。
+      final TimeEntryRecord timeEntry =
+          (await timeRepository.watchForDay(localDay).first).single;
+      expect(timeEntry.startedAt, localInstant);
+      expect(timeEntry.startedAt.isUtc, isFalse);
+
+      await (runtime.database.update(runtime.database.todoItems)
+            ..where((TodoItems table) => table.id.equals(todoHistory.todo.id)))
+          .write(
+            TodoItemsCompanion(deletedAt: Value<DateTime?>(storedInstant)),
+          );
+      // 生产回收站仓储。
+      final RecycleBinRepository recycleRepository = RecycleBinRepository(
+        runtime.database,
+        todoRepository,
+      );
+      // 回收站内的待办记录。
+      final RecycleBinItem recycleItem = (await recycleRepository.loadItems())
+          .singleWhere((RecycleBinItem item) => item.id == todoHistory.todo.id);
+      expect(recycleItem.deletedAt, localInstant);
+      expect(recycleItem.deletedAt.isUtc, isFalse);
+    } finally {
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
 
   test('每日选择下行 SQL 归并旧身份且旧身份删除不影响后续正常上传', () async {
     // 当前用例独占的真实 SQLite 文件目录。

@@ -893,15 +893,17 @@ class TodoRepository {
     if (source == null) {
       return null;
     }
+    // 数据库时间点对应的当前设备本地时间。
+    final DateTime localSource = source.toLocal();
     return DateTime(
       day.year,
       day.month,
       day.day,
-      source.hour,
-      source.minute,
-      source.second,
-      source.millisecond,
-      source.microsecond,
+      localSource.hour,
+      localSource.minute,
+      localSource.second,
+      localSource.millisecond,
+      localSource.microsecond,
     );
   }
 
