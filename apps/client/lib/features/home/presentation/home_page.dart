@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -255,7 +256,9 @@ class _HomeDashboard extends StatelessWidget {
                     child: _FillRemainingCardGrid(
                       gap: gap,
                       fillLastRow: !compact,
-                      maxGridHeight: compact || !Platform.isWindows
+                      maxGridHeight:
+                          compact ||
+                              defaultTargetPlatform != TargetPlatform.windows
                           ? double.infinity
                           : minimumGridHeight,
                       children: _buildGridRows(
@@ -319,7 +322,9 @@ class _HomeDashboard extends StatelessWidget {
               columnWidth: columnWidth,
               gap: gap,
               scrollable:
-                  Platform.isWindows && !compact && rowIndex == rows.length - 1,
+                  defaultTargetPlatform == TargetPlatform.windows &&
+                  !compact &&
+                  rowIndex == rows.length - 1,
             ),
         ],
       );
