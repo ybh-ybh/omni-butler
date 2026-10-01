@@ -39,11 +39,84 @@ const double floatingTodoRowHeight = 32;
 /// 悬浮窗单个象限最多直接展示的待办项数量。
 const int floatingTodoMaxVisibleRows = 5;
 
+/// 悬浮窗默认及最小逻辑高度。
+const double floatingWindowDefaultHeight = 500;
+
 /// 根据任务项数量计算象限列表视口高度。
 double calculateFloatingTodoViewportHeight(int taskRowCount) {
   // 至少展示一个任务项、最多展示五个任务项。
   final int visibleRows = taskRowCount.clamp(1, floatingTodoMaxVisibleRows);
   return visibleRows * floatingTodoRowHeight;
+}
+
+/// 将窗口增加的高度公平分配给仍有隐藏任务行的象限。
+List<double> calculateFloatingTodoViewportHeights({
+  required List<int> taskRowCounts,
+  required double additionalHeight,
+}) {
+  // 每个象限在默认窗口高度下的基础视口高度。
+  final List<double> viewportHeights = taskRowCounts
+      .map(calculateFloatingTodoViewportHeight)
+      .toList(growable: false);
+  // 每个象限距离完整展示全部任务行还可增加的高度。
+  final List<double> remainingCapacities = <double>[
+    for (int index = 0; index < taskRowCounts.length; index += 1)
+      ((taskRowCounts[index] * floatingTodoRowHeight) - viewportHeights[index])
+          .clamp(0, double.infinity)
+          .toDouble(),
+  ];
+  // 尚未分配的非负窗口增量。
+  double remainingHeight = additionalHeight
+      .clamp(0, double.infinity)
+      .toDouble();
+  // 当前仍有隐藏任务行的象限索引。
+  List<int> expandableIndexes = <int>[
+    for (int index = 0; index < remainingCapacities.length; index += 1)
+      if (remainingCapacities[index] > 0) index,
+  ];
+  while (remainingHeight > 0.01 && expandableIndexes.isNotEmpty) {
+    // 本轮每个溢出象限可以公平获得的高度。
+    final double equalShare = remainingHeight / expandableIndexes.length;
+    // 本轮实际使用的额外高度。
+    double distributedHeight = 0;
+    // 本轮后仍未完整显示的象限索引。
+    final List<int> nextExpandableIndexes = <int>[];
+    for (final int index in expandableIndexes) {
+      // 当前象限本轮实际可以增加的高度。
+      final double allocatedHeight = equalShare < remainingCapacities[index]
+          ? equalShare
+          : remainingCapacities[index];
+      viewportHeights[index] += allocatedHeight;
+      remainingCapacities[index] -= allocatedHeight;
+      distributedHeight += allocatedHeight;
+      if (remainingCapacities[index] > 0.01) {
+        nextExpandableIndexes.add(index);
+      }
+    }
+    if (distributedHeight <= 0.01) {
+      break;
+    }
+    remainingHeight -= distributedHeight;
+    expandableIndexes = nextExpandableIndexes;
+  }
+  return List<double>.unmodifiable(viewportHeights);
+}
+
+/// 统计一个象限内父任务和当前展开的未完成直属子任务占用的总行数。
+int _countFloatingTodoRows(
+  List<TodoTreeNode> todoTrees,
+  Set<String> collapsedTreeIds,
+) {
+  return todoTrees.fold<int>(0, (int count, TodoTreeNode tree) {
+    if (collapsedTreeIds.contains(tree.root.id)) {
+      return count + 1;
+    }
+    // 当前根任务仍未完成的直属子任务数量。
+    final int pendingChildCount = tree.children
+        .where((TodoRecord child) => !child.isCompleted)
+        .length;
+    return count + 1 + pendingChildCount;
+  });
 }
 
 /// Windows 桌面悬浮框的业务内容。
@@ -95,8 +168,23 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
   /// 当前撤销浮动消息。
   OmniMessageHandle? _undoMessage;
 
+  /// 用于测量待办和时间状态完整内容高度的键。
+  final GlobalKey _contentBodyKey = GlobalKey();
+
   /// 当前展开的快速录入区。
   _FloatingComposerMode? _composerMode;
+
+  /// 可以分配给溢出待办象限的额外高度。
+  double _todoExpansionBudget = 0;
+
+  /// 当前三个待办象限实际使用的额外高度。
+  double _appliedTodoExpansion = 0;
+
+  /// 当前内容滚动区扣除上下内边距后的可用高度。
+  double _availableContentBodyHeight = 0;
+
+  /// 当前是否已经安排下一帧重新计算象限高度预算。
+  bool _todoBudgetUpdateScheduled = false;
 
   /// 展开指定快速录入区。
   void _openComposer(_FloatingComposerMode mode) {
@@ -106,6 +194,44 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
   /// 收起当前快速录入区。
   void _closeComposer() {
     setState(() => _composerMode = null);
+  }
+
+  /// 记录待办象限本帧实际使用的扩展高度。
+  void _recordAppliedTodoExpansion(double value) {
+    _appliedTodoExpansion = value;
+  }
+
+  /// 在布局结束后按完整内容实测高度更新象限扩展预算。
+  void _scheduleTodoExpansionBudgetUpdate(double availableHeight) {
+    _availableContentBodyHeight = availableHeight;
+    if (_todoBudgetUpdateScheduled) {
+      return;
+    }
+    _todoBudgetUpdateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      _todoBudgetUpdateScheduled = false;
+      if (!mounted) {
+        return;
+      }
+      // 当前完整内容的渲染对象。
+      final RenderBox? contentBox =
+          _contentBodyKey.currentContext?.findRenderObject() as RenderBox?;
+      if (contentBox == null || !contentBox.hasSize) {
+        return;
+      }
+      // 扣除当前象限扩展量后的固定内容自然高度，包含下方时间状态。
+      final double baseContentHeight =
+          contentBox.size.height - _appliedTodoExpansion;
+      // 保证全部固定内容可见后仍能分给溢出象限的剩余高度。
+      final double targetBudget =
+          (_availableContentBodyHeight - baseContentHeight)
+              .clamp(0, double.infinity)
+              .toDouble();
+      if ((_todoExpansionBudget - targetBudget).abs() <= 0.5) {
+        return;
+      }
+      setState(() => _todoExpansionBudget = targetBudget);
+    });
   }
 
   /// 完成指定待办并提供六秒撤销入口。
@@ -225,6 +351,8 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
                         _FloatingTitleBar(
                           now: now,
                           onClose: widget.onClose,
+                          onOpenTodos: () =>
+                              unawaited(widget.onOpenRoute('/todos')),
                           onDragStart: widget.onDragStart,
                           onDragUpdate: widget.onDragUpdate,
                           onDragEnd: widget.onDragEnd,
@@ -234,86 +362,121 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
                           color: colors.line.withValues(alpha: 0.72),
                         ),
                         Expanded(
-                          child: SingleChildScrollView(
-                            key: const ValueKey<String>(
-                              'floating-window-content-scroll',
-                            ),
-                            primary: false,
-                            padding: const EdgeInsets.fromLTRB(
-                              OmniSpacing.md,
-                              OmniSpacing.sm,
-                              OmniSpacing.md,
-                              OmniSpacing.md,
-                            ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: <Widget>[
-                                if (todoEnabled)
-                                  _FloatingTodos(
-                                    today: today,
-                                    onComplete: _completeTodo,
-                                    onOpenRoute: widget.onOpenRoute,
-                                    onToggleComposer:
-                                        _composerMode ==
-                                            _FloatingComposerMode.todo
-                                        ? _closeComposer
-                                        : () => _openComposer(
-                                            _FloatingComposerMode.todo,
-                                          ),
-                                    composer:
-                                        _composerMode ==
-                                            _FloatingComposerMode.todo
-                                        ? _FloatingTodoComposer(
+                          child: LayoutBuilder(
+                            builder:
+                                (
+                                  BuildContext context,
+                                  BoxConstraints constraints,
+                                ) {
+                                  // 滚动区扣除上下内容边距后的实际可用高度。
+                                  final double availableBodyHeight =
+                                      (constraints.maxHeight -
+                                              OmniSpacing.sm -
+                                              OmniSpacing.md)
+                                          .clamp(0, double.infinity)
+                                          .toDouble();
+                                  _scheduleTodoExpansionBudgetUpdate(
+                                    availableBodyHeight,
+                                  );
+                                  return SingleChildScrollView(
+                                    key: const ValueKey<String>(
+                                      'floating-window-content-scroll',
+                                    ),
+                                    primary: false,
+                                    padding: const EdgeInsets.fromLTRB(
+                                      OmniSpacing.md,
+                                      OmniSpacing.sm,
+                                      OmniSpacing.md,
+                                      OmniSpacing.md,
+                                    ),
+                                    child: Column(
+                                      key: _contentBodyKey,
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: <Widget>[
+                                        if (todoEnabled)
+                                          _FloatingTodos(
                                             today: today,
-                                            onClose: _closeComposer,
-                                          )
-                                        : null,
-                                  ),
-                                if (todoEnabled && timelineEnabled) ...<Widget>[
-                                  const SizedBox(height: OmniSpacing.sm),
-                                  Divider(
-                                    height: 1,
-                                    color: colors.line.withValues(alpha: 0.64),
-                                  ),
-                                  const SizedBox(height: OmniSpacing.sm),
-                                ],
-                                if (timelineEnabled)
-                                  _FloatingTimeStatus(
-                                    onOpenRoute: widget.onOpenRoute,
-                                    onStart: () => _openComposer(
-                                      _FloatingComposerMode.startTime,
-                                    ),
-                                    onBackfill: () => _openComposer(
-                                      _FloatingComposerMode.backfillTime,
-                                    ),
-                                    composer:
-                                        _composerMode ==
-                                            _FloatingComposerMode.startTime
-                                        ? _FloatingTimeComposer(
-                                            key: const ValueKey<String>(
-                                              'floating-start-composer',
+                                            onComplete: _completeTodo,
+                                            expansionBudget:
+                                                _todoExpansionBudget,
+                                            onAppliedExpansionChanged:
+                                                _recordAppliedTodoExpansion,
+                                            onToggleComposer:
+                                                _composerMode ==
+                                                    _FloatingComposerMode.todo
+                                                ? _closeComposer
+                                                : () => _openComposer(
+                                                    _FloatingComposerMode.todo,
+                                                  ),
+                                            composer:
+                                                _composerMode ==
+                                                    _FloatingComposerMode.todo
+                                                ? _FloatingTodoComposer(
+                                                    today: today,
+                                                    onClose: _closeComposer,
+                                                  )
+                                                : null,
+                                          ),
+                                        if (todoEnabled &&
+                                            timelineEnabled) ...<Widget>[
+                                          const SizedBox(
+                                            height: OmniSpacing.sm,
+                                          ),
+                                          Divider(
+                                            height: 1,
+                                            color: colors.line.withValues(
+                                              alpha: 0.64,
                                             ),
-                                            mode:
-                                                _FloatingTimeComposerMode.start,
-                                            day: now,
-                                            onClose: _closeComposer,
-                                          )
-                                        : _composerMode ==
-                                              _FloatingComposerMode.backfillTime
-                                        ? _FloatingTimeComposer(
-                                            key: const ValueKey<String>(
-                                              'floating-backfill-composer',
+                                          ),
+                                          const SizedBox(
+                                            height: OmniSpacing.sm,
+                                          ),
+                                        ],
+                                        if (timelineEnabled)
+                                          _FloatingTimeStatus(
+                                            onOpenRoute: widget.onOpenRoute,
+                                            onStart: () => _openComposer(
+                                              _FloatingComposerMode.startTime,
                                             ),
-                                            mode: _FloatingTimeComposerMode
-                                                .backfill,
-                                            day: now,
-                                            onClose: _closeComposer,
-                                          )
-                                        : null,
-                                  ),
-                              ],
-                            ),
+                                            onBackfill: () => _openComposer(
+                                              _FloatingComposerMode
+                                                  .backfillTime,
+                                            ),
+                                            composer:
+                                                _composerMode ==
+                                                    _FloatingComposerMode
+                                                        .startTime
+                                                ? _FloatingTimeComposer(
+                                                    key: const ValueKey<String>(
+                                                      'floating-start-composer',
+                                                    ),
+                                                    mode:
+                                                        _FloatingTimeComposerMode
+                                                            .start,
+                                                    day: now,
+                                                    onClose: _closeComposer,
+                                                  )
+                                                : _composerMode ==
+                                                      _FloatingComposerMode
+                                                          .backfillTime
+                                                ? _FloatingTimeComposer(
+                                                    key: const ValueKey<String>(
+                                                      'floating-backfill-composer',
+                                                    ),
+                                                    mode:
+                                                        _FloatingTimeComposerMode
+                                                            .backfill,
+                                                    day: now,
+                                                    onClose: _closeComposer,
+                                                  )
+                                                : null,
+                                          ),
+                                      ],
+                                    ),
+                                  );
+                                },
                           ),
                         ),
                       ],
@@ -403,6 +566,9 @@ class _FloatingTitleBar extends StatelessWidget {
   /// 关闭悬浮框功能的回调。
   final Future<void> Function() onClose;
 
+  /// 打开主程序每日待办页面的回调。
+  final VoidCallback onOpenTodos;
+
   /// 开始拖动窗口的回调。
   final VoidCallback onDragStart;
 
@@ -416,6 +582,7 @@ class _FloatingTitleBar extends StatelessWidget {
   const _FloatingTitleBar({
     required this.now,
     required this.onClose,
+    required this.onOpenTodos,
     required this.onDragStart,
     required this.onDragUpdate,
     required this.onDragEnd,
@@ -459,6 +626,12 @@ class _FloatingTitleBar extends StatelessWidget {
             ),
           ),
           IconButton(
+            key: const ValueKey<String>('floating-window-open-todos'),
+            tooltip: '打开每日待办',
+            onPressed: onOpenTodos,
+            icon: const Icon(Icons.checklist_rounded, size: OmniSize.icon),
+          ),
+          IconButton(
             key: const ValueKey<String>('floating-window-close-button'),
             tooltip: '关闭桌面悬浮框',
             onPressed: () => unawaited(onClose()),
@@ -472,15 +645,18 @@ class _FloatingTitleBar extends StatelessWidget {
 }
 
 /// 悬浮框中的今日待办分区。
-class _FloatingTodos extends ConsumerWidget {
+class _FloatingTodos extends ConsumerStatefulWidget {
   /// 今日自然日。
   final DateTime today;
 
   /// 完成指定待办的回调。
   final Future<void> Function(TodoRecord todo) onComplete;
 
-  /// 显示主窗口指定路由的回调。
-  final FloatingRouteCallback onOpenRoute;
+  /// 当前布局允许分配给内部滚动象限的额外高度。
+  final double expansionBudget;
+
+  /// 上报象限实际使用扩展高度的回调。
+  final ValueChanged<double> onAppliedExpansionChanged;
 
   /// 切换新增待办快速录入区的回调。
   final VoidCallback onToggleComposer;
@@ -492,17 +668,48 @@ class _FloatingTodos extends ConsumerWidget {
   const _FloatingTodos({
     required this.today,
     required this.onComplete,
-    required this.onOpenRoute,
+    required this.expansionBudget,
+    required this.onAppliedExpansionChanged,
     required this.onToggleComposer,
     required this.composer,
   });
 
-  /// 构建标题、三个独立象限列表和查看全部入口。
+  /// 创建悬浮窗待办分区状态。
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_FloatingTodos> createState() => _FloatingTodosState();
+}
+
+/// 管理悬浮窗父任务的单独与批量展开状态。
+class _FloatingTodosState extends ConsumerState<_FloatingTodos> {
+  /// 当前已经折叠子任务的父任务标识。
+  final Set<String> _collapsedTreeIds = <String>{};
+
+  /// 切换指定父任务的子任务展开状态。
+  void _toggleTree(String rootId) {
+    setState(() {
+      if (!_collapsedTreeIds.remove(rootId)) {
+        _collapsedTreeIds.add(rootId);
+      }
+    });
+  }
+
+  /// 根据当前整体状态收起或展开全部可展示子任务。
+  void _toggleAllTrees(Set<String> expandableTreeIds, bool allCollapsed) {
+    setState(() {
+      if (allCollapsed) {
+        _collapsedTreeIds.removeAll(expandableTreeIds);
+      } else {
+        _collapsedTreeIds.addAll(expandableTreeIds);
+      }
+    });
+  }
+
+  /// 构建标题、批量折叠入口和三个独立象限列表。
+  @override
+  Widget build(BuildContext context) {
     // 全部进行中待办树异步状态。
     final AsyncValue<List<TodoTreeNode>> todoTreesAsync = ref.watch(
-      activeTodoTreesProvider(today),
+      activeTodoTreesProvider(widget.today),
     );
     // 与每日待办和首页共享的全部进行中待办树，不再按计划日期过滤。
     final List<TodoTreeNode> activeTrees =
@@ -529,8 +736,42 @@ class _FloatingTodos extends ConsumerWidget {
     for (final List<TodoTreeNode> trees in groupedTrees.values) {
       trees.sort(_compareFloatingTodoTrees);
     }
+    // 当前三个重点象限内包含未完成子任务的父任务标识。
+    final Set<String> expandableTreeIds = <String>{
+      for (final TodoPriorityQuadrant quadrant in focusQuadrants)
+        for (final TodoTreeNode tree in groupedTrees[quadrant]!)
+          if (tree.children.any((TodoRecord child) => !child.isCompleted))
+            tree.root.id,
+    };
+    // 当前是否所有可展示的父任务都已折叠子任务。
+    final bool allTreesCollapsed =
+        expandableTreeIds.isNotEmpty &&
+        expandableTreeIds.every(_collapsedTreeIds.contains);
+    // 三个重点象限各自占用的任务总行数。
+    final List<int> taskRowCounts = <int>[
+      for (final TodoPriorityQuadrant quadrant in focusQuadrants)
+        _countFloatingTodoRows(groupedTrees[quadrant]!, _collapsedTreeIds),
+    ];
+    // 默认窗口高度下三个象限各自的基础视口高度。
+    final List<double> baseQuadrantViewportHeights = taskRowCounts
+        .map(calculateFloatingTodoViewportHeight)
+        .toList(growable: false);
+    // 使用固定内容之外剩余空间扩展后的三个象限视口高度。
+    final List<double> quadrantViewportHeights =
+        calculateFloatingTodoViewportHeights(
+          taskRowCounts: taskRowCounts,
+          additionalHeight: widget.expansionBudget,
+        );
+    // 三个象限本帧实际使用的扩展高度。
+    final double appliedExpansionHeight = List<double>.generate(
+      quadrantViewportHeights.length,
+      (int index) =>
+          quadrantViewportHeights[index] - baseQuadrantViewportHeights[index],
+      growable: false,
+    ).fold<double>(0, (double total, double height) => total + height);
+    widget.onAppliedExpansionChanged(appliedExpansionHeight);
     // 新增待办录入区当前是否展开。
-    final bool composerOpen = composer != null;
+    final bool composerOpen = widget.composer != null;
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     // 系统是否要求关闭动画。
@@ -548,6 +789,56 @@ class _FloatingTodos extends ConsumerWidget {
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
+            SizedBox.square(
+              dimension: OmniSize.control,
+              child: IconButton(
+                key: const ValueKey<String>('floating-todo-toggle-all'),
+                tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
+                padding: EdgeInsets.zero,
+                iconSize: 18,
+                style: ButtonStyle(
+                  foregroundColor: WidgetStateProperty.resolveWith<Color?>((
+                    Set<WidgetState> states,
+                  ) {
+                    if (states.contains(WidgetState.disabled)) {
+                      return colors.muted.withValues(alpha: 0.45);
+                    }
+                    if (states.contains(WidgetState.hovered) ||
+                        states.contains(WidgetState.focused)) {
+                      return colors.brand;
+                    }
+                    return colors.muted;
+                  }),
+                  backgroundColor: WidgetStateProperty.resolveWith<Color?>((
+                    Set<WidgetState> states,
+                  ) {
+                    if (states.contains(WidgetState.pressed)) {
+                      return colors.brandSoft.withValues(alpha: 0.78);
+                    }
+                    if (states.contains(WidgetState.hovered)) {
+                      return colors.brandSoft.withValues(alpha: 0.52);
+                    }
+                    return Colors.transparent;
+                  }),
+                  shape: WidgetStatePropertyAll<OutlinedBorder>(
+                    RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(OmniRadius.control),
+                    ),
+                  ),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: expandableTreeIds.isEmpty
+                    ? null
+                    : () =>
+                          _toggleAllTrees(expandableTreeIds, allTreesCollapsed),
+                icon: Icon(
+                  allTreesCollapsed
+                      ? Icons.unfold_more_rounded
+                      : Icons.unfold_less_rounded,
+                ),
+              ),
+            ),
+            const SizedBox(width: OmniSpacing.xxs),
             SizedBox.square(
               dimension: OmniSize.control,
               child: IconButton(
@@ -584,7 +875,7 @@ class _FloatingTodos extends ConsumerWidget {
                   ),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                onPressed: onToggleComposer,
+                onPressed: widget.onToggleComposer,
                 icon: AnimatedRotation(
                   turns: composerOpen ? 0.125 : 0,
                   duration: disableAnimations ? Duration.zero : OmniMotion.fast,
@@ -596,8 +887,8 @@ class _FloatingTodos extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: OmniSpacing.xs),
-        if (composer != null) ...<Widget>[
-          composer!,
+        if (widget.composer != null) ...<Widget>[
+          widget.composer!,
           const SizedBox(height: OmniSpacing.xs),
         ],
         if (todoTreesAsync.isLoading)
@@ -608,27 +899,26 @@ class _FloatingTodos extends ConsumerWidget {
         else if (todoTreesAsync.hasError)
           _FloatingErrorState(
             message: '待办暂时无法读取',
-            onRetry: () => ref.invalidate(activeTodoTreesProvider(today)),
+            onRetry: () =>
+                ref.invalidate(activeTodoTreesProvider(widget.today)),
           )
         else
-          for (final TodoPriorityQuadrant quadrant
-              in focusQuadrants) ...<Widget>[
+          for (
+            int quadrantIndex = 0;
+            quadrantIndex < focusQuadrants.length;
+            quadrantIndex += 1
+          ) ...<Widget>[
             _FloatingTodoQuadrant(
-              quadrant: quadrant,
-              todoTrees: groupedTrees[quadrant]!,
-              onComplete: onComplete,
+              quadrant: focusQuadrants[quadrantIndex],
+              todoTrees: groupedTrees[focusQuadrants[quadrantIndex]]!,
+              viewportHeight: quadrantViewportHeights[quadrantIndex],
+              collapsedTreeIds: _collapsedTreeIds,
+              onToggleTree: _toggleTree,
+              onComplete: widget.onComplete,
             ),
-            if (quadrant != focusQuadrants.last)
+            if (quadrantIndex != focusQuadrants.length - 1)
               const SizedBox(height: OmniSpacing.xs),
           ],
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton(
-            key: const ValueKey<String>('floating-todo-view-all'),
-            onPressed: () => unawaited(onOpenRoute('/todos')),
-            child: const Text('查看全部'),
-          ),
-        ),
       ],
     );
   }
@@ -1312,12 +1602,21 @@ int _compareFloatingTodoTrees(TodoTreeNode left, TodoTreeNode right) {
 }
 
 /// 悬浮框中的单个重点象限。
-class _FloatingTodoQuadrant extends StatelessWidget {
+class _FloatingTodoQuadrant extends StatefulWidget {
   /// 当前重点象限。
   final TodoPriorityQuadrant quadrant;
 
-  /// 当前象限全部今日根任务树。
+  /// 当前象限全部进行中根任务树。
   final List<TodoTreeNode> todoTrees;
+
+  /// 当前窗口尺寸下的象限列表视口高度。
+  final double viewportHeight;
+
+  /// 当前已经折叠子任务的父任务标识。
+  final Set<String> collapsedTreeIds;
+
+  /// 切换指定父任务展开状态的回调。
+  final ValueChanged<String> onToggleTree;
 
   /// 完成指定待办的回调。
   final Future<void> Function(TodoRecord todo) onComplete;
@@ -1326,39 +1625,44 @@ class _FloatingTodoQuadrant extends StatelessWidget {
   const _FloatingTodoQuadrant({
     required this.quadrant,
     required this.todoTrees,
+    required this.viewportHeight,
+    required this.collapsedTreeIds,
+    required this.onToggleTree,
     required this.onComplete,
   });
 
-  /// 构建象限标题和固定五行高度的独立滚动列表。
+  /// 创建象限独立滚动状态。
+  @override
+  State<_FloatingTodoQuadrant> createState() => _FloatingTodoQuadrantState();
+}
+
+/// 管理单个悬浮窗象限的独立滚动控制器。
+class _FloatingTodoQuadrantState extends State<_FloatingTodoQuadrant> {
+  /// 当前象限列表与滚动条共享的控制器。
+  final ScrollController _scrollController = ScrollController();
+
+  /// 释放当前象限的滚动控制器。
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  /// 构建象限标题和随窗口高度扩展的独立滚动列表。
   @override
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     // 当前象限强调色。
-    final Color accent = quadrant.color(colors);
-    // 当前象限包含的根任务与未完成直属子任务总行数。
-    final int taskRowCount = todoTrees.fold<int>(0, (
-      int count,
-      TodoTreeNode tree,
-    ) {
-      // 当前根任务仍未完成的直属子任务数量。
-      final int pendingChildCount = tree.children
-          .where((TodoRecord child) => !child.isCompleted)
-          .length;
-      return count + 1 + pendingChildCount;
-    });
-    // 当前象限列表视口高度。
-    final double viewportHeight = calculateFloatingTodoViewportHeight(
-      taskRowCount,
-    );
+    final Color accent = widget.quadrant.color(colors);
     return Column(
-      key: ValueKey<String>('floating-todo-quadrant-${quadrant.value}'),
+      key: ValueKey<String>('floating-todo-quadrant-${widget.quadrant.value}'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Row(
           children: <Widget>[
             Text(
-              quadrant.label,
+              widget.quadrant.label,
               style: Theme.of(context).textTheme.labelSmall
                   ?.copyWith(color: accent, fontWeight: FontWeight.w600),
             ),
@@ -1366,7 +1670,7 @@ class _FloatingTodoQuadrant extends StatelessWidget {
             Expanded(child: Divider(color: accent.withValues(alpha: 0.58))),
             const SizedBox(width: OmniSpacing.xs),
             Text(
-              '${todoTrees.length}',
+              '${widget.todoTrees.length}',
               style: Theme.of(context).textTheme.labelSmall
                   ?.copyWith(color: colors.muted),
             ),
@@ -1374,9 +1678,11 @@ class _FloatingTodoQuadrant extends StatelessWidget {
         ),
         const SizedBox(height: OmniSpacing.xxs),
         SizedBox(
-          key: ValueKey<String>('floating-todo-viewport-${quadrant.value}'),
-          height: viewportHeight,
-          child: todoTrees.isEmpty
+          key: ValueKey<String>(
+            'floating-todo-viewport-${widget.quadrant.value}',
+          ),
+          height: widget.viewportHeight,
+          child: widget.todoTrees.isEmpty
               ? Align(
                   alignment: Alignment.centerLeft,
                   child: Padding(
@@ -1385,23 +1691,30 @@ class _FloatingTodoQuadrant extends StatelessWidget {
                   ),
                 )
               : Scrollbar(
+                  controller: _scrollController,
                   child: ListView.builder(
                     key: PageStorageKey<String>(
-                      'floating-quadrant-${quadrant.value}',
+                      'floating-quadrant-${widget.quadrant.value}',
                     ),
+                    controller: _scrollController,
                     primary: false,
                     padding: EdgeInsets.zero,
-                    itemCount: todoTrees.length,
+                    itemCount: widget.todoTrees.length,
                     itemBuilder: (BuildContext context, int index) {
                       // 当前滚动位置对应的根任务树。
-                      final TodoTreeNode tree = todoTrees[index];
+                      final TodoTreeNode tree = widget.todoTrees[index];
                       return _FloatingTodoTree(
                         key: ValueKey<String>(
                           'floating-todo-tree-${tree.root.id}',
                         ),
                         tree: tree,
                         accent: accent,
-                        onComplete: onComplete,
+                        expanded: !widget.collapsedTreeIds.contains(
+                          tree.root.id,
+                        ),
+                        onToggleExpanded: () =>
+                            widget.onToggleTree(tree.root.id),
+                        onComplete: widget.onComplete,
                       );
                     },
                   ),
@@ -1413,12 +1726,18 @@ class _FloatingTodoQuadrant extends StatelessWidget {
 }
 
 /// 悬浮框中可以展开直属子任务的根任务树。
-class _FloatingTodoTree extends StatefulWidget {
+class _FloatingTodoTree extends StatelessWidget {
   /// 当前根任务树。
   final TodoTreeNode tree;
 
   /// 当前象限强调色。
   final Color accent;
+
+  /// 当前父任务的子任务是否展开。
+  final bool expanded;
+
+  /// 切换当前父任务展开状态的回调。
+  final VoidCallback onToggleExpanded;
 
   /// 完成指定待办的回调。
   final Future<void> Function(TodoRecord todo) onComplete;
@@ -1427,30 +1746,17 @@ class _FloatingTodoTree extends StatefulWidget {
   const _FloatingTodoTree({
     required this.tree,
     required this.accent,
+    required this.expanded,
+    required this.onToggleExpanded,
     required this.onComplete,
     super.key,
   });
-
-  /// 创建任务树展开状态。
-  @override
-  State<_FloatingTodoTree> createState() => _FloatingTodoTreeState();
-}
-
-/// 管理悬浮框根任务的子任务展开状态。
-class _FloatingTodoTreeState extends State<_FloatingTodoTree> {
-  /// 子任务是否展开。
-  bool _expanded = true;
-
-  /// 切换直属子任务展开状态。
-  void _toggleExpanded() {
-    setState(() => _expanded = !_expanded);
-  }
 
   /// 构建根任务和未完成直属子任务。
   @override
   Widget build(BuildContext context) {
     // 当前仍未完成的直属子任务。
-    final List<TodoRecord> pendingChildren = widget.tree.children
+    final List<TodoRecord> pendingChildren = tree.children
         .where((TodoRecord child) => !child.isCompleted)
         .toList(growable: false);
     // 当前根任务是否存在可展示子任务。
@@ -1459,23 +1765,23 @@ class _FloatingTodoTreeState extends State<_FloatingTodoTree> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         _FloatingTodoRow(
-          todo: widget.tree.root,
-          accent: widget.accent,
-          onComplete: widget.onComplete,
-          pendingChildCount: widget.tree.children.isEmpty
+          todo: tree.root,
+          accent: accent,
+          onComplete: onComplete,
+          pendingChildCount: tree.children.isEmpty
               ? null
               : pendingChildren.length,
-          expanded: hasChildren ? _expanded : null,
-          onToggleExpanded: hasChildren ? _toggleExpanded : null,
+          expanded: hasChildren ? expanded : null,
+          onToggleExpanded: hasChildren ? onToggleExpanded : null,
         ),
-        if (_expanded && hasChildren)
+        if (expanded && hasChildren)
           for (final TodoRecord child in pendingChildren)
             Padding(
               padding: const EdgeInsets.only(left: OmniSpacing.lg),
               child: _FloatingTodoRow(
                 todo: child,
-                accent: widget.accent,
-                onComplete: widget.onComplete,
+                accent: accent,
+                onComplete: onComplete,
                 child: true,
               ),
             ),
@@ -1674,6 +1980,7 @@ class _FloatingTimeStatus extends ConsumerWidget {
       ongoingTimeEntriesProvider,
     );
     return Column(
+      key: const ValueKey<String>('floating-time-status'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         const Text('时间状态', style: TextStyle(fontWeight: FontWeight.w600)),

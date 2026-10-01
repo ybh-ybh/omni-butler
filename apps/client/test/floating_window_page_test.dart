@@ -23,6 +23,113 @@ void main() {
     expect(calculateFloatingTodoViewportHeight(8), 160);
   });
 
+  test('增加的窗口高度只在存在内部滚动的象限之间分配', () {
+    expect(
+      calculateFloatingTodoViewportHeights(
+        taskRowCounts: <int>[12, 8, 1],
+        additionalHeight: 300,
+      ),
+      <double>[364, 256, 32],
+    );
+  });
+
+  testWidgets('悬浮窗增高后有内部滚动的象限同步增高', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(294, 500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 测试用设备偏好存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    addTearDown(database.close);
+    // 测试用待办仓储。
+    final TodoRepository repository = TodoRepository(database);
+    // 当前测试自然日。
+    final DateTime today = DateTime(2026, 9, 24);
+    for (int index = 0; index < 12; index += 1) {
+      await repository.save(
+        TodoDraft(title: '可扩展任务 $index', scheduledDate: today),
+      );
+    }
+    // 测试用 Riverpod 容器。
+    final ProviderContainer container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(preferences),
+        appDatabaseProvider.overrideWithValue(database),
+        nowProvider.overrideWithValue(today.add(const Duration(hours: 9))),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: AppTheme.build(brightness: Brightness.light),
+          home: FloatingWindowPage(
+            onClose: () async {},
+            onOpenRoute: (String location) async {},
+            onDragStart: () {},
+            onDragUpdate: () {},
+            onDragEnd: () async {},
+            onResizeStart: () {},
+            onResizeUpdate: () {},
+            onResizeEnd: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 默认高度下仍按五行限制象限视口。
+    final Finder viewport = find.byKey(
+      const ValueKey<String>('floating-todo-viewport-2'),
+    );
+    expect(tester.getSize(viewport).height, 160);
+    // 溢出象限中的滚动条。
+    final Scrollbar quadrantScrollbar = tester.widget<Scrollbar>(
+      find.descendant(of: viewport, matching: find.byType(Scrollbar)),
+    );
+    // 溢出象限中的任务列表。
+    final ListView quadrantList = tester.widget<ListView>(
+      find.descendant(of: viewport, matching: find.byType(ListView)),
+    );
+    expect(quadrantScrollbar.controller, same(quadrantList.controller));
+    expect(quadrantScrollbar.controller!.hasClients, true);
+    await tester.drag(viewport, const Offset(0, -80));
+    await tester.pumpAndSettle();
+    expect(quadrantScrollbar.controller!.offset, greaterThan(0));
+    expect(tester.takeException(), isNull);
+
+    tester.view.physicalSize = const Size(294, 700);
+    await tester.pumpAndSettle();
+
+    // 先为下方时间状态保留完整空间，再扩展仍有隐藏任务的象限。
+    expect(tester.getSize(viewport).height, greaterThan(160));
+    expect(tester.getSize(viewport).height, lessThan(360));
+    // 悬浮窗整窗内容滚动位置。
+    final Finder contentScrollable = find
+        .descendant(
+          of: find.byKey(
+            const ValueKey<String>('floating-window-content-scroll'),
+          ),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    // 增高后的整窗内容已经完整容纳时间状态，无需外层继续滚动。
+    expect(
+      tester.state<ScrollableState>(contentScrollable).position.maxScrollExtent,
+      0,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('floating-time-status')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('远端同步表更新后悬浮窗重新读取业务数据', (WidgetTester tester) async {
     tester.view.physicalSize = const Size(294, 500);
     tester.view.devicePixelRatio = 1;
@@ -204,6 +311,30 @@ void main() {
     );
     expect(find.text('未完成子任务'), findsOneWidget);
     expect(find.text('已完成子任务'), findsNothing);
+    // 父任务批量展开状态按钮。
+    final Finder toggleAll = find.byKey(
+      const ValueKey<String>('floating-todo-toggle-all'),
+    );
+    expect(toggleAll, findsOneWidget);
+    expect(find.byTooltip('收起全部子任务'), findsOneWidget);
+
+    await tester.tap(toggleAll);
+    await tester.pump();
+    expect(find.text('未完成子任务'), findsNothing);
+    expect(find.byTooltip('展开全部子任务'), findsOneWidget);
+
+    await tester.tap(toggleAll);
+    await tester.pump();
+    expect(find.text('未完成子任务'), findsOneWidget);
+    expect(find.byTooltip('收起全部子任务'), findsOneWidget);
+
+    // 逐个折叠到全部折叠时，批量按钮也应切换成展开全部。
+    await tester.tap(
+      find.byKey(ValueKey<String>('floating-todo-expand-${root.id}')),
+    );
+    await tester.pump();
+    expect(find.text('未完成子任务'), findsNothing);
+    expect(find.byTooltip('展开全部子任务'), findsOneWidget);
   });
 
   testWidgets('悬浮窗可直接新增待办、补记和开始时间记录', (WidgetTester tester) async {
@@ -270,6 +401,36 @@ void main() {
     );
     expect(find.text('新增'), findsNothing);
     expect(find.byIcon(Icons.add_rounded), findsOneWidget);
+    // 标题栏中位于关闭按钮左侧的每日待办入口。
+    final Finder openTodosButton = find.byKey(
+      const ValueKey<String>('floating-window-open-todos'),
+    );
+    // 标题栏关闭按钮。
+    final Finder closeButton = find.byKey(
+      const ValueKey<String>('floating-window-close-button'),
+    );
+    expect(openTodosButton, findsOneWidget);
+    expect(closeButton, findsOneWidget);
+    expect(
+      tester.getCenter(openTodosButton).dx,
+      lessThan(tester.getCenter(closeButton).dx),
+    );
+    await tester.tap(openTodosButton);
+    await tester.pump();
+    expect(openedRoute, '/todos');
+    // 待办标题栏中的批量按钮位于新增按钮左侧。
+    final Finder toggleAllButton = find.byKey(
+      const ValueKey<String>('floating-todo-toggle-all'),
+    );
+    // 待办新增按钮。
+    final Finder createButton = find.byKey(
+      const ValueKey<String>('floating-todo-create'),
+    );
+    expect(toggleAllButton, findsOneWidget);
+    expect(
+      tester.getCenter(toggleAllButton).dx,
+      lessThan(tester.getCenter(createButton).dx),
+    );
     // 悬浮窗左下角尺寸调整手柄。
     final Finder resizeHandle = find.byKey(
       const ValueKey<String>('floating-window-resize-handle'),
@@ -457,13 +618,9 @@ void main() {
       hasLength(1),
     );
 
-    await tester.ensureVisible(
+    expect(
       find.byKey(const ValueKey<String>('floating-todo-view-all')),
+      findsNothing,
     );
-    await tester.tap(
-      find.byKey(const ValueKey<String>('floating-todo-view-all')),
-    );
-    await tester.pump();
-    expect(openedRoute, '/todos');
   });
 }

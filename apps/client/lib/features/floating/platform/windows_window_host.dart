@@ -28,7 +28,7 @@ import 'package:win32/win32.dart' as win32;
 const double _floatingWindowWidth = 294;
 
 /// 悬浮窗默认及最小逻辑高度。
-const double _floatingWindowMinHeight = 500;
+const double _floatingWindowMinHeight = floatingWindowDefaultHeight;
 
 /// 悬浮窗默认尺寸，同时也是允许的最小尺寸。
 const Size _floatingWindowInitialSize = Size(
