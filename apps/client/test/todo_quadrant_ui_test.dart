@@ -13,6 +13,7 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
+import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_panel.dart';
 import 'package:omni_butler/shared/ui/omni_sliding_segmented_control.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -1062,7 +1063,57 @@ void main() {
         ),
         findsOneWidget,
       );
+      // 当前移动端象限标题行。
+      final Finder mobileHeading = find.byKey(
+        ValueKey<String>('todo-quadrant-heading-${quadrant.value}'),
+      );
+      // 当前移动端象限批量折叠按钮。
+      final Finder mobileToggleAll = find.byKey(
+        ValueKey<String>('todo-quadrant-toggle-all-${quadrant.value}'),
+      );
+      // 当前移动端象限新增按钮。
+      final Finder mobileCreate = find.byKey(
+        ValueKey<String>('todo-quadrant-create-${quadrant.value}'),
+      );
+      expect(tester.getSize(mobileHeading).height, OmniSize.control);
+      expect(tester.getSize(mobileToggleAll), const Size.square(32));
+      expect(tester.getSize(mobileCreate), const Size.square(32));
+      expect(
+        find.descendant(
+          of: mobileHeading,
+          matching: find.text(quadrant.actionLabel),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: mobileHeading, matching: find.text(quadrant.label)),
+        findsNothing,
+      );
     }
+    // 有子任务象限的移动端批量折叠按钮。
+    final Finder mobileToggleAll = find.byKey(
+      ValueKey<String>(
+        'todo-quadrant-toggle-all-${TodoPriorityQuadrant.urgentImportant.value}',
+      ),
+    );
+    await tester.tap(mobileToggleAll);
+    await tester.pump();
+    expect(find.text('移动端展开子任务'), findsNothing);
+    await tester.tap(mobileToggleAll);
+    await tester.pump();
+    expect(find.text('移动端展开子任务'), findsOneWidget);
+    // 有子任务象限的移动端新增按钮。
+    final Finder mobileCreate = find.byKey(
+      ValueKey<String>(
+        'todo-quadrant-create-${TodoPriorityQuadrant.urgentImportant.value}',
+      ),
+    );
+    await tester.tap(mobileCreate);
+    await tester.pumpAndSettle();
+    expect(find.byType(TodoEditorDialog), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TodoEditorDialog), findsNothing);
     expect(
       find.byKey(ValueKey<String>('todo-tree-toggle-${mobileRoot.id}')),
       findsNothing,
@@ -1142,6 +1193,11 @@ void main() {
         expect(filterRect.left, greaterThanOrEqualTo(navigationRect.left));
         expect(filterRect.right, lessThanOrEqualTo(navigationRect.right));
       }
+      // 当前窄屏聚焦象限的标题行。
+      final Finder focusedMobileHeading = find.byKey(
+        const ValueKey<String>('todo-quadrant-heading-1'),
+      );
+      expect(tester.getSize(focusedMobileHeading).height, OmniSize.control);
       expect(tester.takeException(), isNull);
     }
 

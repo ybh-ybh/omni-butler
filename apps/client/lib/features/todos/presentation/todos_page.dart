@@ -1619,6 +1619,14 @@ class _TodoQuadrantDropZone extends StatelessWidget {
     final bool allTreesCollapsed =
         expandableTreeIds.isNotEmpty &&
         expandableTreeIds.every(collapsedTreeIds.contains);
+    // 移动端标题操作使用固定 32 像素紧凑按钮，避免撑高标题行。
+    final ButtonStyle? mobileHeadingActionStyle = mobile
+        ? IconButton.styleFrom(
+            fixedSize: const Size.square(OmniSize.control),
+            padding: EdgeInsets.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          )
+        : null;
     return DragTarget<_TodoDragPayload>(
       key: ValueKey<String>('todo-drop-quadrant-${quadrant.value}'),
       onWillAcceptWithDetails: (DragTargetDetails<_TodoDragPayload> details) =>
@@ -1660,18 +1668,28 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                       ),
                       onTap: onFocus,
                       child: Padding(
-                        padding: const EdgeInsets.fromLTRB(
-                          OmniSpacing.md,
-                          OmniSpacing.xs,
-                          OmniSpacing.xs,
-                          OmniSpacing.xs,
-                        ),
+                        padding: mobile
+                            ? const EdgeInsets.fromLTRB(
+                                OmniSpacing.md,
+                                0,
+                                OmniSpacing.xs,
+                                0,
+                              )
+                            : const EdgeInsets.fromLTRB(
+                                OmniSpacing.md,
+                                OmniSpacing.xs,
+                                OmniSpacing.xs,
+                                OmniSpacing.xs,
+                              ),
                         child: Row(
                           children: <Widget>[
                             Icon(quadrant.icon, size: 18, color: accent),
                             const SizedBox(width: OmniSpacing.xs),
                             Expanded(
                               child: Column(
+                                mainAxisSize: mobile
+                                    ? MainAxisSize.min
+                                    : MainAxisSize.max,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: <Widget>[
                                   Row(
@@ -1705,11 +1723,14 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                                       ),
                                     ],
                                   ),
-                                  Text(
-                                    quadrant.label,
-                                    style: Theme.of(context).textTheme.bodySmall
-                                        ?.copyWith(color: accent),
-                                  ),
+                                  if (!mobile)
+                                    Text(
+                                      quadrant.label,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(color: accent),
+                                    ),
                                 ],
                               ),
                             ),
@@ -1720,6 +1741,7 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                               tooltip: allTreesCollapsed
                                   ? '展开全部子任务'
                                   : '收起全部子任务',
+                              style: mobileHeadingActionStyle,
                               onPressed: expandableTreeIds.isEmpty
                                   ? null
                                   : () => onAllTreeExpansionChanged(
@@ -1737,6 +1759,7 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                                 'todo-quadrant-create-${quadrant.value}',
                               ),
                               tooltip: '添加到${quadrant.label}',
+                              style: mobileHeadingActionStyle,
                               onPressed: onCreate,
                               icon: const Icon(Icons.add_rounded),
                             ),
