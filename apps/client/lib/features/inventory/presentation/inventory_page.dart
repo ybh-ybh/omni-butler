@@ -48,6 +48,9 @@ class InventoryPage extends ConsumerStatefulWidget {
 
 /// 物品管理页面状态。
 class _InventoryPageState extends ConsumerState<InventoryPage> {
+  /// Android 悬浮操作按钮需要避让的滚动内容高度。
+  static const double _mobileActionClearance = 88;
+
   /// 当前搜索词。
   String _query = '';
 
@@ -380,7 +383,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                 OmniSpacing.xs,
                 OmniSpacing.xs,
                 OmniSpacing.xs,
-                widget.embeddedInManagement ? 88 : OmniSpacing.md,
+                widget.embeddedInManagement ? 0 : OmniSpacing.md,
               )
             : const EdgeInsets.symmetric(
                 horizontal: 14,
@@ -473,6 +476,12 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                               .clamp(1, maxColumns)
                               .toInt();
                           return GridView.builder(
+                            key: const ValueKey<String>('inventory-card-grid'),
+                            padding: widget.embeddedInManagement
+                                ? const EdgeInsets.only(
+                                    bottom: _mobileActionClearance,
+                                  )
+                                : null,
                             gridDelegate:
                                 SliverGridDelegateWithFixedCrossAxisCount(
                                   crossAxisCount: columns,
@@ -1646,6 +1655,7 @@ class _InventoryStatistics extends StatelessWidget {
       metrics: statusMetrics,
       accessories: accessories,
       loading: items.isLoading && !items.hasValue,
+      compactHeader: useCarousel,
     );
     // 当前分类价值内容。
     final Widget valuePanel = _InventoryValuePanel(
@@ -1795,12 +1805,16 @@ class _InventoryStatusPanel extends StatelessWidget {
   /// 是否正在加载数据。
   final bool loading;
 
+  /// 是否允许顶部数量徽标在紧凑轮播中自适应缩小。
+  final bool compactHeader;
+
   /// 创建物品状态统计面板。
   const _InventoryStatusPanel({
     required this.total,
     required this.metrics,
     required this.accessories,
     required this.loading,
+    required this.compactHeader,
   });
 
   /// 构建物品状态统计面板。
@@ -1853,27 +1867,19 @@ class _InventoryStatusPanel extends StatelessWidget {
                     ),
                   ],
                 ),
-                Wrap(
-                  spacing: OmniSpacing.xxs,
-                  children: <Widget>[
-                    _InventoryCountBadge(
-                      label: '总物品数',
-                      value: loading ? '...' : '$total 条',
-                      valueKey: const ValueKey<String>('inventory-total-count'),
-                      color: colors.item,
-                    ),
-                    _InventoryCountBadge(
-                      label: '配套物品数',
-                      value: accessories.isLoading && !accessories.hasValue
-                          ? '...'
-                          : '$accessoryCount 条',
-                      valueKey: const ValueKey<String>(
-                        'inventory-accessory-count',
+                if (compactHeader)
+                  Flexible(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: _buildCountBadges(
+                        colors,
+                        accessoryCount: accessoryCount,
                       ),
-                      color: colors.item,
                     ),
-                  ],
-                ),
+                  )
+                else
+                  _buildCountBadges(colors, accessoryCount: accessoryCount),
               ],
             ),
             const SizedBox(height: OmniSpacing.sm),
@@ -1897,6 +1903,29 @@ class _InventoryStatusPanel extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  /// 构建主物品与配套物品数量徽标。
+  Widget _buildCountBadges(OmniColors colors, {required int accessoryCount}) {
+    return Wrap(
+      spacing: OmniSpacing.xxs,
+      children: <Widget>[
+        _InventoryCountBadge(
+          label: '总物品数',
+          value: loading ? '...' : '$total 条',
+          valueKey: const ValueKey<String>('inventory-total-count'),
+          color: colors.item,
+        ),
+        _InventoryCountBadge(
+          label: '配套物品数',
+          value: accessories.isLoading && !accessories.hasValue
+              ? '...'
+              : '$accessoryCount 条',
+          valueKey: const ValueKey<String>('inventory-accessory-count'),
+          color: colors.item,
+        ),
+      ],
     );
   }
 }

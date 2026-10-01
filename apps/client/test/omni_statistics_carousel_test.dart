@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/shared/ui/omni_statistics_carousel.dart';
 
 /// 验证统计卡片轮播的分页、指示点与无障碍状态。
@@ -11,9 +12,21 @@ void main() {
         child: OmniStatisticsCarousel(
           cardHeight: 144,
           children: const <Widget>[
-            ColoredBox(color: Colors.red, child: Text('第一张')),
-            ColoredBox(color: Colors.green, child: Text('第二张')),
-            ColoredBox(color: Colors.blue, child: Text('第三张')),
+            ColoredBox(
+              key: ValueKey<String>('statistics-card-0'),
+              color: Colors.red,
+              child: Text('第一张'),
+            ),
+            ColoredBox(
+              key: ValueKey<String>('statistics-card-1'),
+              color: Colors.green,
+              child: Text('第二张'),
+            ),
+            ColoredBox(
+              key: ValueKey<String>('statistics-card-2'),
+              color: Colors.blue,
+              child: Text('第三张'),
+            ),
           ],
         ),
       ),
@@ -40,6 +53,30 @@ void main() {
     );
     expect(indicatorRect.top, greaterThan(carouselRect.top));
     expect(indicatorRect.bottom, lessThan(carouselRect.bottom));
+
+    // 将相邻两页停在视口中间，确认卡片之间保留标准紧凑间距。
+    final TestGesture pageGesture = await tester.startGesture(
+      tester.getCenter(
+        find.byKey(const ValueKey<String>('statistics-carousel-pages')),
+      ),
+    );
+    await pageGesture.moveBy(const Offset(-195, 0));
+    await tester.pump();
+    // 第一张统计卡片的实际位置。
+    final Rect firstCardRect = tester.getRect(
+      find.byKey(const ValueKey<String>('statistics-card-0')),
+    );
+    // 第二张统计卡片的实际位置。
+    final Rect secondCardRect = tester.getRect(
+      find.byKey(const ValueKey<String>('statistics-card-1')),
+    );
+    expect(
+      secondCardRect.left - firstCardRect.right,
+      closeTo(OmniSpacing.xs, 0.1),
+    );
+    await pageGesture.moveBy(const Offset(195, 0));
+    await pageGesture.up();
+    await tester.pumpAndSettle();
 
     await tester.drag(
       find.byKey(const ValueKey<String>('statistics-carousel-pages')),

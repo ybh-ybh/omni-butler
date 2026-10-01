@@ -9,6 +9,7 @@ import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/features/events/data/event_repository.dart';
 import 'package:omni_butler/features/inventory/data/inventory_repository.dart';
 import 'package:omni_butler/features/management/presentation/android_management_shell.dart';
 import 'package:omni_butler/features/memberships/data/membership_repository.dart';
@@ -186,6 +187,14 @@ void main() {
     final AppDatabase database = AppDatabase.forTesting(
       NativeDatabase.memory(),
     );
+    // 保证事件分区生成可验证到底部高度的滚动列表。
+    await EventRepository(database).save(
+      const EventDraft(
+        name: '测试事件',
+        intervalValue: 1,
+        intervalUnit: EventIntervalUnit.day,
+      ),
+    );
     // 显式管理的依赖容器。
     final ProviderContainer container = ProviderContainer(
       overrides: [
@@ -320,6 +329,10 @@ void main() {
     expect(
       find.byKey(const ValueKey<String>('event-statistics-carousel')),
       findsOneWidget,
+    );
+    _expectManagementScrollableLayout(
+      tester,
+      find.byKey(const ValueKey<String>('event-card-grid')),
     );
     expect(
       find.byKey(const ValueKey<String>('statistics-carousel-indicator-2')),
@@ -556,6 +569,10 @@ void main() {
     expect(find.text('新增'), findsOneWidget);
     expect(find.bySemanticsLabel('新增物品'), findsOneWidget);
     expect(find.bySemanticsLabel(RegExp('更多物品操作')), findsOneWidget);
+    _expectManagementScrollableLayout(
+      tester,
+      find.byKey(const ValueKey<String>('inventory-card-grid')),
+    );
     expect(
       find.byKey(const ValueKey<String>('inventory-move-button')),
       findsNothing,
@@ -856,6 +873,10 @@ void main() {
       find.byKey(const ValueKey<String>('membership-manage-category')),
       findsNothing,
     );
+    _expectManagementScrollableLayout(
+      tester,
+      find.byKey(const ValueKey<String>('membership-card-grid')),
+    );
 
     await tester.tap(filterToggle);
     await tester.pumpAndSettle();
@@ -1119,4 +1140,23 @@ Future<void> _dragManagementPage(WidgetTester tester, double deltaX) async {
     surfaceRect.bottom - 200,
   );
   await tester.dragFrom(start, Offset(deltaX, 0));
+}
+
+/// 验证管理页滚动视口铺到底栏上方，内容末尾保留悬浮按钮避让空间。
+void _expectManagementScrollableLayout(WidgetTester tester, Finder scrollable) {
+  // Android 底部导航栏。
+  final Finder compactNavigation = find.byKey(
+    const ValueKey<String>('compact-navigation'),
+  );
+  // 当前管理分区的滚动视图配置。
+  final BoxScrollView scrollView = tester.widget<BoxScrollView>(scrollable);
+  // 当前滚动内容的解析后边距。
+  final EdgeInsets contentPadding = scrollView.padding!.resolve(
+    TextDirection.ltr,
+  );
+  expect(
+    tester.getRect(scrollable).bottom,
+    closeTo(tester.getRect(compactNavigation).top, 0.1),
+  );
+  expect(contentPadding.bottom, 88);
 }

@@ -26,6 +26,9 @@ class EventsPage extends ConsumerStatefulWidget {
 
 /// 周期事件页面状态。
 class _EventsPageState extends ConsumerState<EventsPage> {
+  /// Android 悬浮操作按钮需要避让的滚动内容高度。
+  static const double _mobileActionClearance = 88;
+
   /// 是否显示归档事件。
   bool _showArchived = false;
 
@@ -143,7 +146,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                 OmniSpacing.xs,
                 OmniSpacing.xs,
                 OmniSpacing.xs,
-                widget.embeddedInManagement ? 88 : OmniSpacing.md,
+                widget.embeddedInManagement ? 0 : OmniSpacing.md,
               )
             : const EdgeInsets.symmetric(
                 horizontal: 14,
@@ -195,6 +198,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                     events: records,
                     archived: _showArchived,
                     useTwoColumns: _useTwoColumns,
+                    safeBottomPadding: widget.embeddedInManagement
+                        ? _mobileActionClearance
+                        : 0,
                     onRecord: _recordNow,
                     onHistory: _openHistory,
                     onEdit: _openEditor,
@@ -820,6 +826,9 @@ class _EventCardGrid extends StatelessWidget {
   /// 是否优先使用双列布局。
   final bool useTwoColumns;
 
+  /// 滚动到底部时为悬浮操作按钮保留的安全间距。
+  final double safeBottomPadding;
+
   /// 记录完成回调。
   final ValueChanged<EventRecord> onRecord;
 
@@ -840,6 +849,7 @@ class _EventCardGrid extends StatelessWidget {
     required this.events,
     required this.archived,
     required this.useTwoColumns,
+    required this.safeBottomPadding,
     required this.onRecord,
     required this.onHistory,
     required this.onEdit,
@@ -851,6 +861,10 @@ class _EventCardGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
+      key: const ValueKey<String>('event-card-grid'),
+      padding: safeBottomPadding > 0
+          ? EdgeInsets.only(bottom: safeBottomPadding)
+          : null,
       children: <Widget>[
         LayoutBuilder(
           builder: (BuildContext context, BoxConstraints constraints) {

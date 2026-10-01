@@ -74,8 +74,13 @@ class _OmniStatisticsCarouselState extends State<OmniStatisticsCarousel> {
         pageSnapping: true,
         physics: const PageScrollPhysics(),
         onPageChanged: _selectPage,
-        itemBuilder: (BuildContext context, int index) =>
-            widget.children[index],
+        itemBuilder: (BuildContext context, int index) => Padding(
+          key: ValueKey<String>('statistics-carousel-page-$index'),
+          padding: EdgeInsets.symmetric(
+            horizontal: pageCount > 1 ? OmniSpacing.xxs : 0,
+          ),
+          child: widget.children[index],
+        ),
       ),
     );
     if (pageCount == 1) {

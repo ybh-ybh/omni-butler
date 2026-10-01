@@ -29,6 +29,9 @@ class MembershipsPage extends ConsumerStatefulWidget {
 
 /// 会员管理页面状态。
 class _MembershipsPageState extends ConsumerState<MembershipsPage> {
+  /// Android 悬浮操作按钮需要避让的滚动内容高度。
+  static const double _mobileActionClearance = 88;
+
   /// 搜索控制器。
   final TextEditingController _searchController = TextEditingController();
 
@@ -225,7 +228,7 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
                 OmniSpacing.xs,
                 OmniSpacing.xs,
                 OmniSpacing.xs,
-                widget.embeddedInManagement ? 88 : OmniSpacing.md,
+                widget.embeddedInManagement ? 0 : OmniSpacing.md,
               )
             : const EdgeInsets.symmetric(
                 horizontal: 14,
@@ -321,6 +324,9 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
                         payments.asData?.value ??
                         const <MembershipPaymentRecord>[],
                     useTwoColumns: _useTwoColumns,
+                    safeBottomPadding: widget.embeddedInManagement
+                        ? _mobileActionClearance
+                        : 0,
                     categoryLabels: <String, String>{
                       for (final MembershipRecord item in records)
                         item.id: _categoryLabelForMembership(
@@ -1463,6 +1469,9 @@ class _MembershipCardGrid extends StatelessWidget {
   /// 是否优先使用双列布局。
   final bool useTwoColumns;
 
+  /// 滚动到底部时为悬浮操作按钮保留的安全间距。
+  final double safeBottomPadding;
+
   /// 编辑会员回调。
   final ValueChanged<MembershipRecord> onEdit;
 
@@ -1481,6 +1490,7 @@ class _MembershipCardGrid extends StatelessWidget {
     required this.payments,
     required this.categoryLabels,
     required this.useTwoColumns,
+    required this.safeBottomPadding,
     required this.onEdit,
     required this.onDelete,
     required this.onHistory,
@@ -1502,6 +1512,10 @@ class _MembershipCardGrid extends StatelessWidget {
       }
     }
     return ListView(
+      key: const ValueKey<String>('membership-card-grid'),
+      padding: safeBottomPadding > 0
+          ? EdgeInsets.only(bottom: safeBottomPadding)
+          : null,
       children: <Widget>[
         LayoutBuilder(
           builder: (BuildContext context, BoxConstraints constraints) {
