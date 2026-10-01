@@ -531,17 +531,23 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
 
+    // 普通四象限布局区域。
+    final Finder gridLayout = find.byKey(
+      const ValueKey<String>('todo-quadrant-grid-layout'),
+    );
+    // 普通四象限布局的窗口内边界。
+    final Rect gridBounds = tester.getRect(gridLayout);
     // 普通四象限布局的可用高度。
-    final double gridAvailableHeight = tester
-        .getSize(
-          find.byKey(const ValueKey<String>('todo-quadrant-grid-layout')),
-        )
-        .height;
+    final double gridAvailableHeight = gridBounds.height;
     for (final TodoPriorityQuadrant quadrant
         in todoPriorityQuadrantMatrixOrder) {
       // 当前象限卡片。
       final Finder quadrantCard = find.byKey(
         ValueKey<String>('todo-quadrant-card-${quadrant.value}'),
+      );
+      // 当前象限的多位数任务计数徽标。
+      final Finder quadrantCount = find.byKey(
+        ValueKey<String>('todo-quadrant-count-${quadrant.value}'),
       );
       // 当前象限的独立滚动视口。
       final Finder quadrantScroll = find.byKey(
@@ -551,10 +557,17 @@ void main() {
       final ScrollController scrollController = tester
           .widget<SingleChildScrollView>(quadrantScroll)
           .controller!;
+      // 当前象限在普通四象限布局中的边界。
+      final Rect quadrantBounds = tester.getRect(quadrantCard);
+      // 多位数计数徽标的实际尺寸。
+      final Size quadrantCountSize = tester.getSize(quadrantCount);
+      expect(quadrantBounds.height, lessThanOrEqualTo(gridAvailableHeight));
       expect(
-        tester.getSize(quadrantCard).height,
-        lessThanOrEqualTo(gridAvailableHeight),
+        quadrantBounds.bottom,
+        lessThanOrEqualTo(gridBounds.bottom + precisionErrorTolerance),
       );
+      expect(quadrantCountSize.height, 18);
+      expect(quadrantCountSize.width, greaterThan(18));
       expect(scrollController.position.maxScrollExtent, greaterThan(0));
     }
 
@@ -567,16 +580,16 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // 聚焦布局区域。
+    final Finder focusedLayout = find.byKey(
+      ValueKey<String>(
+        'todo-quadrant-focus-layout-${TodoPriorityQuadrant.urgentImportant.value}',
+      ),
+    );
+    // 聚焦布局的窗口内边界。
+    final Rect focusedBounds = tester.getRect(focusedLayout);
     // 聚焦布局的可用高度。
-    final double focusedAvailableHeight = tester
-        .getSize(
-          find.byKey(
-            ValueKey<String>(
-              'todo-quadrant-focus-layout-${TodoPriorityQuadrant.urgentImportant.value}',
-            ),
-          ),
-        )
-        .height;
+    final double focusedAvailableHeight = focusedBounds.height;
     for (final TodoPriorityQuadrant quadrant
         in todoPriorityQuadrantMatrixOrder) {
       // 聚焦布局中的当前象限卡片。
@@ -591,9 +604,15 @@ void main() {
       final ScrollController focusedScrollController = tester
           .widget<SingleChildScrollView>(focusedQuadrantScroll)
           .controller!;
+      // 聚焦布局中的当前象限边界。
+      final Rect focusedQuadrantBounds = tester.getRect(focusedQuadrantCard);
       expect(
-        tester.getSize(focusedQuadrantCard).height,
+        focusedQuadrantBounds.height,
         lessThanOrEqualTo(focusedAvailableHeight),
+      );
+      expect(
+        focusedQuadrantBounds.bottom,
+        lessThanOrEqualTo(focusedBounds.bottom + precisionErrorTolerance),
       );
       expect(focusedScrollController.position.maxScrollExtent, greaterThan(0));
     }
@@ -1381,6 +1400,70 @@ void main() {
     );
     expect(find.text('截止 9月21日 18:00'), findsOneWidget);
     expect(find.text('计划 9月21日'), findsNothing);
+    for (final TodoPriorityQuadrant quadrant
+        in todoPriorityQuadrantMatrixOrder) {
+      expect(
+        find.byKey(
+          ValueKey<String>('todo-quadrant-toggle-all-${quadrant.value}'),
+        ),
+        findsOneWidget,
+      );
+    }
+    // 当前象限标题栏中的批量折叠按钮。
+    final Finder quadrantToggleAll = find.byKey(
+      ValueKey<String>(
+        'todo-quadrant-toggle-all-${TodoPriorityQuadrant.urgentImportant.value}',
+      ),
+    );
+    // 当前象限标题文字。
+    final Finder quadrantTitle = find.byKey(
+      ValueKey<String>(
+        'todo-quadrant-title-${TodoPriorityQuadrant.urgentImportant.value}',
+      ),
+    );
+    // 当前象限标题右侧的任务计数。
+    final Finder quadrantCount = find.byKey(
+      ValueKey<String>(
+        'todo-quadrant-count-${TodoPriorityQuadrant.urgentImportant.value}',
+      ),
+    );
+    // 当前象限标题栏中的新增按钮。
+    final Finder quadrantCreate = find.byKey(
+      ValueKey<String>(
+        'todo-quadrant-create-${TodoPriorityQuadrant.urgentImportant.value}',
+      ),
+    );
+    // 当前象限批量按钮的初始配置。
+    final IconButton initialToggleAllButton = tester.widget<IconButton>(
+      quadrantToggleAll,
+    );
+    expect(initialToggleAllButton.tooltip, '收起全部子任务');
+    expect(initialToggleAllButton.onPressed, isNotNull);
+    expect(tester.getSize(quadrantCount), const Size.square(18));
+    expect(
+      tester.getCenter(quadrantCount).dy,
+      moreOrLessEquals(tester.getCenter(quadrantTitle).dy),
+    );
+    expect(
+      tester.getTopLeft(quadrantCount).dx,
+      greaterThanOrEqualTo(tester.getTopRight(quadrantTitle).dx),
+    );
+    expect(
+      tester.getTopRight(quadrantCount).dx,
+      lessThan(tester.getTopLeft(quadrantToggleAll).dx),
+    );
+    expect(
+      tester.getTopLeft(quadrantToggleAll).dx,
+      lessThan(tester.getTopLeft(quadrantCreate).dx),
+    );
+    await tester.tap(quadrantToggleAll);
+    await tester.pump();
+    expect(find.text('发布子任务'), findsNothing);
+    expect(tester.widget<IconButton>(quadrantToggleAll).tooltip, '展开全部子任务');
+    await tester.tap(quadrantToggleAll);
+    await tester.pump();
+    expect(find.text('发布子任务'), findsOneWidget);
+    expect(tester.widget<IconButton>(quadrantToggleAll).tooltip, '收起全部子任务');
     // 同行展示的任务名称与描述。
     final Finder rootTitle = find.byKey(
       ValueKey<String>('todo-title-${root.id}'),
@@ -1413,6 +1496,7 @@ void main() {
       findsNothing,
     );
     expect(find.byTooltip('展开子任务'), findsOneWidget);
+    expect(tester.widget<IconButton>(quadrantToggleAll).tooltip, '展开全部子任务');
     await tester.tap(treeToggle);
     await tester.pump();
     expect(find.text('发布子任务'), findsOneWidget);
@@ -1420,6 +1504,7 @@ void main() {
       find.byKey(ValueKey<String>('todo-tree-branch-${child.id}')),
       findsOneWidget,
     );
+    expect(tester.widget<IconButton>(quadrantToggleAll).tooltip, '收起全部子任务');
     // 父任务行上直接展示的添加子任务按钮。
     final Finder addChildButton = find.byKey(
       ValueKey<String>('todo-add-child-${root.id}'),

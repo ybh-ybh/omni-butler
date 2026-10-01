@@ -85,6 +85,9 @@ class _TodosPageState extends ConsumerState<TodosPage> {
   /// 正在播放完成反馈的待办标识。
   final Set<String> _completingTodoIds = <String>{};
 
+  /// 当前已经折叠子任务的父任务标识。
+  final Set<String> _collapsedTreeIds = <String>{};
+
   /// 撤销浮动消息。
   OmniMessageHandle? _undoMessage;
 
@@ -118,6 +121,28 @@ class _TodosPageState extends ConsumerState<TodosPage> {
   /// 更新会话内保留的聚焦象限。
   void _setPriorityQuadrantFilter(TodoPriorityQuadrant? quadrant) {
     ref.read(_todoQuadrantFocusProvider.notifier).setFocusedQuadrant(quadrant);
+  }
+
+  /// 更新单棵任务树的子任务展开状态。
+  void _setTreeExpanded(String rootId, bool expanded) {
+    setState(() {
+      if (expanded) {
+        _collapsedTreeIds.remove(rootId);
+      } else {
+        _collapsedTreeIds.add(rootId);
+      }
+    });
+  }
+
+  /// 批量更新一个象限内任务树的子任务展开状态。
+  void _setQuadrantTreesExpanded(Set<String> rootIds, bool expanded) {
+    setState(() {
+      if (expanded) {
+        _collapsedTreeIds.removeAll(rootIds);
+      } else {
+        _collapsedTreeIds.addAll(rootIds);
+      }
+    });
   }
 
   /// 释放撤销浮动消息。
@@ -418,56 +443,58 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     return LayoutBuilder(
       key: const ValueKey<String>('todo-quadrant-grid-layout'),
       builder: (BuildContext context, BoxConstraints constraints) {
-        // 每个象限最多占用当前待办主体的完整可用高度。
+        // 桌面四象限需要展示的总行数。
+        final int rowCount = (quadrants.length + 1) ~/ 2;
+        // 两行象限之间占用的总垂直间距。
+        final double totalVerticalGap = OmniSpacing.xs * (rowCount - 1);
+        // 每个象限最多占用扣除另一行和间距后的平均行高。
         final double? maxQuadrantHeight = constraints.hasBoundedHeight
-            ? constraints.maxHeight
+            ? (constraints.maxHeight - totalVerticalGap) / rowCount
             : null;
-        return SingleChildScrollView(
+        return Column(
           key: const ValueKey<String>('todo-quadrant-grid'),
-          child: Column(
-            children: <Widget>[
-              for (
-                int index = 0;
-                index < quadrants.length;
-                index += 2
-              ) ...<Widget>[
-                if (index > 0) const SizedBox(height: OmniSpacing.xs),
-                IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
+          children: <Widget>[
+            for (
+              int index = 0;
+              index < quadrants.length;
+              index += 2
+            ) ...<Widget>[
+              if (index > 0) const SizedBox(height: OmniSpacing.xs),
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    Expanded(
+                      child: _buildQuadrant(
+                        context,
+                        quadrants[index],
+                        grouped[quadrants[index]]!,
+                        now: now,
+                        allowFocus: true,
+                        allowDrag: true,
+                        maxHeight: maxQuadrantHeight,
+                      ),
+                    ),
+                    const SizedBox(width: OmniSpacing.xs),
+                    if (index + 1 < quadrants.length)
                       Expanded(
                         child: _buildQuadrant(
                           context,
-                          quadrants[index],
-                          grouped[quadrants[index]]!,
+                          quadrants[index + 1],
+                          grouped[quadrants[index + 1]]!,
                           now: now,
                           allowFocus: true,
                           allowDrag: true,
                           maxHeight: maxQuadrantHeight,
                         ),
-                      ),
-                      const SizedBox(width: OmniSpacing.xs),
-                      if (index + 1 < quadrants.length)
-                        Expanded(
-                          child: _buildQuadrant(
-                            context,
-                            quadrants[index + 1],
-                            grouped[quadrants[index + 1]]!,
-                            now: now,
-                            allowFocus: true,
-                            allowDrag: true,
-                            maxHeight: maxQuadrantHeight,
-                          ),
-                        )
-                      else
-                        const Spacer(),
-                    ],
-                  ),
+                      )
+                    else
+                      const Spacer(),
+                  ],
                 ),
-              ],
+              ),
             ],
-          ),
+          ],
         );
       },
     );
@@ -510,12 +537,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
           allowDrag: true,
           maxHeight: maxQuadrantHeight,
         );
-        // 参与整行高度对齐但不拉伸内部卡片的主象限列。
-        final Widget primaryQuadrant = Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[primaryQuadrantCard],
-        );
-        // 对侧纵向排列的象限列。
+        // 对侧纵向排列且共同分配当前页面高度的象限列。
         final Widget secondaryColumn = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
@@ -525,36 +547,34 @@ class _TodosPageState extends ConsumerState<TodosPage> {
               index += 1
             ) ...<Widget>[
               if (index > 0) const SizedBox(height: OmniSpacing.xs),
-              _buildQuadrant(
-                context,
-                secondaryQuadrants[index],
-                grouped[secondaryQuadrants[index]]!,
-                now: now,
-                allowFocus: true,
-                allowDrag: true,
-                maxHeight: maxQuadrantHeight,
+              Expanded(
+                child: _buildQuadrant(
+                  context,
+                  secondaryQuadrants[index],
+                  grouped[secondaryQuadrants[index]]!,
+                  now: now,
+                  allowFocus: true,
+                  allowDrag: true,
+                  maxHeight: maxQuadrantHeight,
+                ),
               ),
             ],
           ],
         );
-        return SingleChildScrollView(
+        return Row(
           key: ValueKey<String>('todo-quadrant-focus-${focusedQuadrant.value}'),
-          child: IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                if (focusedOnLeft) ...<Widget>[
-                  Expanded(flex: 2, child: primaryQuadrant),
-                  horizontalGap,
-                  Expanded(child: secondaryColumn),
-                ] else ...<Widget>[
-                  Expanded(child: secondaryColumn),
-                  horizontalGap,
-                  Expanded(flex: 2, child: primaryQuadrant),
-                ],
-              ],
-            ),
-          ),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            if (focusedOnLeft) ...<Widget>[
+              Expanded(flex: 2, child: primaryQuadrantCard),
+              horizontalGap,
+              Expanded(child: secondaryColumn),
+            ] else ...<Widget>[
+              Expanded(child: secondaryColumn),
+              horizontalGap,
+              Expanded(flex: 2, child: primaryQuadrantCard),
+            ],
+          ],
         );
       },
     );
@@ -616,6 +636,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       trees: trees,
       now: now,
       completingTodoIds: _completingTodoIds,
+      collapsedTreeIds: _collapsedTreeIds,
       allowDrag: allowDrag,
       onFocus: allowFocus
           ? () => _setPriorityQuadrantFilter(
@@ -630,6 +651,8 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       onDrop: (_TodoDragPayload payload, String? beforeRootId) =>
           _moveTree(payload, quadrant, beforeRootId),
       onCompletedChanged: _setTodoCompleted,
+      onTreeExpansionChanged: _setTreeExpanded,
+      onAllTreeExpansionChanged: _setQuadrantTreesExpanded,
       onEdit: (TodoRecord todo) => TodoEditorDialog.show(context, record: todo),
       onAddChild: (TodoRecord root) => TodoEditorDialog.show(
         context,
@@ -1315,6 +1338,49 @@ class _TodoViewBar extends StatelessWidget {
   }
 }
 
+/// 象限标题旁的紧凑任务计数徽标。
+class _TodoQuadrantCountBadge extends StatelessWidget {
+  /// 当前象限任务数量。
+  final int count;
+
+  /// 当前象限强调色。
+  final Color color;
+
+  /// 创建紧凑任务计数徽标。
+  const _TodoQuadrantCountBadge({
+    required this.count,
+    required this.color,
+    super.key,
+  });
+
+  /// 构建单数字近圆形、多数字自动横向扩展的计数徽标。
+  @override
+  Widget build(BuildContext context) {
+    // 当前数量是否需要为多位数字预留横向空间。
+    final bool multipleDigits = count >= 10;
+    return Container(
+      constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+      alignment: Alignment.center,
+      padding: multipleDigits
+          ? const EdgeInsets.symmetric(horizontal: OmniSpacing.xxs)
+          : EdgeInsets.zero,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(OmniRadius.pill),
+      ),
+      child: Text(
+        '$count',
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          height: 1,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
 /// 单个四象限任务树放置区。
 class _TodoQuadrantDropZone extends StatelessWidget {
   /// 当前象限。
@@ -1328,6 +1394,9 @@ class _TodoQuadrantDropZone extends StatelessWidget {
 
   /// 正在完成的待办标识。
   final Set<String> completingTodoIds;
+
+  /// 当前已经折叠子任务的父任务标识。
+  final Set<String> collapsedTreeIds;
 
   /// 是否允许桌面拖拽。
   final bool allowDrag;
@@ -1344,6 +1413,13 @@ class _TodoQuadrantDropZone extends StatelessWidget {
 
   /// 完成状态变化回调。
   final Future<void> Function(TodoRecord todo, bool value) onCompletedChanged;
+
+  /// 单棵任务树展开状态变化回调。
+  final void Function(String rootId, bool expanded) onTreeExpansionChanged;
+
+  /// 当前象限全部任务树展开状态变化回调。
+  final void Function(Set<String> rootIds, bool expanded)
+  onAllTreeExpansionChanged;
 
   /// 编辑任务回调。
   final ValueChanged<TodoRecord> onEdit;
@@ -1363,11 +1439,14 @@ class _TodoQuadrantDropZone extends StatelessWidget {
     required this.trees,
     required this.now,
     required this.completingTodoIds,
+    required this.collapsedTreeIds,
     required this.allowDrag,
     required this.onFocus,
     required this.onCreate,
     required this.onDrop,
     required this.onCompletedChanged,
+    required this.onTreeExpansionChanged,
+    required this.onAllTreeExpansionChanged,
     required this.onEdit,
     required this.onAddChild,
     required this.onMove,
@@ -1381,6 +1460,16 @@ class _TodoQuadrantDropZone extends StatelessWidget {
     final OmniColors colors = OmniColors.of(context);
     // 当前象限强调色。
     final Color accent = quadrant.color(colors);
+    // 当前象限内包含未完成子任务的父任务标识。
+    final Set<String> expandableTreeIds = <String>{
+      for (final TodoTreeNode tree in trees)
+        if (tree.children.any((TodoRecord child) => !child.isCompleted))
+          tree.root.id,
+    };
+    // 当前象限内所有可展示的子任务是否均已折叠。
+    final bool allTreesCollapsed =
+        expandableTreeIds.isNotEmpty &&
+        expandableTreeIds.every(collapsedTreeIds.contains);
     return DragTarget<_TodoDragPayload>(
       key: ValueKey<String>('todo-drop-quadrant-${quadrant.value}'),
       onWillAcceptWithDetails: (DragTargetDetails<_TodoDragPayload> details) =>
@@ -1436,12 +1525,36 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: <Widget>[
-                                  Text(
-                                    quadrant.actionLabel,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleSmall
-                                        ?.copyWith(fontWeight: FontWeight.w600),
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
+                                    children: <Widget>[
+                                      Flexible(
+                                        child: Text(
+                                          quadrant.actionLabel,
+                                          key: ValueKey<String>(
+                                            'todo-quadrant-title-${quadrant.value}',
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleSmall
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: OmniSpacing.xxs),
+                                      _TodoQuadrantCountBadge(
+                                        key: ValueKey<String>(
+                                          'todo-quadrant-count-${quadrant.value}',
+                                        ),
+                                        count: trees.length,
+                                        color: accent,
+                                      ),
+                                    ],
                                   ),
                                   Text(
                                     quadrant.label,
@@ -1451,8 +1564,29 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                                 ],
                               ),
                             ),
-                            OmniTag(label: '${trees.length}', color: accent),
                             IconButton(
+                              key: ValueKey<String>(
+                                'todo-quadrant-toggle-all-${quadrant.value}',
+                              ),
+                              tooltip: allTreesCollapsed
+                                  ? '展开全部子任务'
+                                  : '收起全部子任务',
+                              onPressed: expandableTreeIds.isEmpty
+                                  ? null
+                                  : () => onAllTreeExpansionChanged(
+                                      expandableTreeIds,
+                                      allTreesCollapsed,
+                                    ),
+                              icon: Icon(
+                                allTreesCollapsed
+                                    ? Icons.unfold_more_rounded
+                                    : Icons.unfold_less_rounded,
+                              ),
+                            ),
+                            IconButton(
+                              key: ValueKey<String>(
+                                'todo-quadrant-create-${quadrant.value}',
+                              ),
                               tooltip: '添加到${quadrant.label}',
                               onPressed: onCreate,
                               icon: const Icon(Icons.add_rounded),
@@ -1492,9 +1626,17 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                                   tree: trees[index],
                                   now: now,
                                   completingTodoIds: completingTodoIds,
+                                  expanded: !collapsedTreeIds.contains(
+                                    trees[index].root.id,
+                                  ),
                                   allowDrag: allowDrag,
                                   quadrant: quadrant,
                                   onCompletedChanged: onCompletedChanged,
+                                  onExpansionChanged: (bool expanded) =>
+                                      onTreeExpansionChanged(
+                                        trees[index].root.id,
+                                        expanded,
+                                      ),
                                   onEdit: onEdit,
                                   onAddChild: onAddChild,
                                   onMove: onMove,
@@ -1630,6 +1772,9 @@ class _TodoTreeCard extends StatefulWidget {
   /// 正在完成的待办标识。
   final Set<String> completingTodoIds;
 
+  /// 子任务当前是否展开。
+  final bool expanded;
+
   /// 是否允许主任务拖动。
   final bool allowDrag;
 
@@ -1638,6 +1783,9 @@ class _TodoTreeCard extends StatefulWidget {
 
   /// 完成状态变化回调。
   final Future<void> Function(TodoRecord todo, bool value) onCompletedChanged;
+
+  /// 子任务展开状态变化回调。
+  final ValueChanged<bool> onExpansionChanged;
 
   /// 编辑回调。
   final ValueChanged<TodoRecord> onEdit;
@@ -1656,9 +1804,11 @@ class _TodoTreeCard extends StatefulWidget {
     required this.tree,
     required this.now,
     required this.completingTodoIds,
+    required this.expanded,
     required this.allowDrag,
     required this.quadrant,
     required this.onCompletedChanged,
+    required this.onExpansionChanged,
     required this.onEdit,
     required this.onAddChild,
     required this.onMove,
@@ -1676,12 +1826,9 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
   /// 展开控制与拖拽热区尺寸。
   static const double _treeControlSize = 32;
 
-  /// 子任务当前是否展开。
-  bool _expanded = true;
-
   /// 切换当前父任务的子任务展开状态。
   void _toggleChildren() {
-    setState(() => _expanded = !_expanded);
+    widget.onExpansionChanged(!widget.expanded);
   }
 
   /// 构建可单击展开并可拖动整棵任务树的双用途控制。
@@ -1696,7 +1843,7 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
       dimension: _treeControlSize,
       child: IconButton(
         tooltip: hasChildren
-            ? _expanded
+            ? widget.expanded
                   ? '收起子任务'
                   : '展开子任务'
             : '拖动任务',
@@ -1709,7 +1856,7 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
         icon: Icon(
           key: ValueKey<String>('todo-drag-handle-${tree.root.id}'),
           hasChildren
-              ? _expanded
+              ? widget.expanded
                     ? Icons.expand_more_rounded
                     : Icons.chevron_right_rounded
               : Icons.drag_indicator_rounded,
@@ -1798,7 +1945,7 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
         rootRow,
         for (
           int index = 0;
-          _expanded && index < pendingChildren.length;
+          widget.expanded && index < pendingChildren.length;
           index += 1
         )
           CustomPaint(
