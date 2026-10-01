@@ -251,7 +251,8 @@ class ResponsiveShell extends ConsumerWidget {
     return Shortcuts(
       shortcuts: const <ShortcutActivator, Intent>{
         SingleActivator(LogicalKeyboardKey.keyN): _CreateTodoIntent(),
-        SingleActivator(LogicalKeyboardKey.slash): _SearchIntent(),
+        SingleActivator(LogicalKeyboardKey.keyF, control: true):
+            _SearchIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -815,7 +816,7 @@ class _SearchTrigger extends StatelessWidget {
                     border: Border.all(color: colors.line),
                   ),
                   child: Text(
-                    '/',
+                    'Ctrl+F',
                     style: Theme.of(context).textTheme.labelSmall,
                   ),
                 ),

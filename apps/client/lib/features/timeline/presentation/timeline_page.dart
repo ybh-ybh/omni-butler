@@ -2087,6 +2087,7 @@ class _AbsoluteTimeEntryDialogState
           )
         : null;
     return OmniDialogScaffold(
+      onWindowsEnter: _saving || sliderConflict != null ? null : _save,
       key: const ValueKey<String>('time-entry-editor'),
       title: _title,
       width: 620,

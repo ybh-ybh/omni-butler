@@ -1,6 +1,7 @@
 // ignore_for_file: invalid_use_of_internal_member
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -59,6 +60,7 @@ void main() {
     expect(find.byTooltip('个人本机数据'), findsNothing);
     expect(find.byTooltip('外观模式'), findsOneWidget);
     expect(find.text('搜索待办、事件、物品和会员'), findsOneWidget);
+    expect(find.text('Ctrl+F'), findsOneWidget);
 
     tester.view.physicalSize = const Size(640, 760);
     await tester.pumpAndSettle();
@@ -66,6 +68,20 @@ void main() {
     expect(find.byTooltip('个人本机数据'), findsNothing);
     expect(find.byTooltip('外观模式'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Ctrl+F 打开全局搜索且斜杠键不再触发', (WidgetTester tester) async {
+    await _pumpShell(tester, syncEnabled: false);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.slash);
+    await tester.pumpAndSettle();
+    expect(find.text('搜索全部内容'), findsNothing);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(find.text('搜索全部内容'), findsOneWidget);
   });
 
   testWidgets('连接尚未建立时显示连接中', (WidgetTester tester) async {

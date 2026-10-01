@@ -10,3 +10,4 @@ export 'omni_split_action_button.dart';
 export 'omni_statistics_carousel.dart';
 export 'omni_switch.dart';
 export 'omni_tag.dart';
+export 'omni_windows_enter_submit.dart';

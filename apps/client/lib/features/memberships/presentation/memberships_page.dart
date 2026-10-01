@@ -2291,6 +2291,7 @@ class _MembershipEditorDialogState
       ...categories.map((TaxonomyEntry entry) => entry.name),
     }.toList(growable: false);
     return OmniSideSheetScaffold(
+      onWindowsEnter: _saving ? null : _save,
       title: widget.membership == null ? '添加会员' : '编辑会员',
       canClose: !_saving,
       actions: <Widget>[

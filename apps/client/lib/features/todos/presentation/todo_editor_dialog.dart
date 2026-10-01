@@ -232,6 +232,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
         widget.parent != null || widget.record?.parentId != null;
 
     return OmniSideSheetScaffold(
+      onWindowsEnter: _saving ? null : _save,
       title: isEditing
           ? isChild
                 ? '编辑子任务'

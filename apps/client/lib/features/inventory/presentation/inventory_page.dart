@@ -3603,6 +3603,7 @@ class _InventoryEditorDialogState
       ...locations.map((TaxonomyEntry entry) => entry.name),
     }.toList(growable: false);
     return OmniSideSheetScaffold(
+      onWindowsEnter: _saving ? null : _save,
       title: widget.item != null
           ? '编辑物品'
           : widget.parentItemId == null

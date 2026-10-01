@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/shared/ui/omni_button.dart';
+import 'package:omni_butler/shared/ui/omni_windows_enter_submit.dart';
 
 /// 显示桌面右侧面板或移动端全屏编辑器。
 Future<T?> showOmniSideSheet<T>(
@@ -132,12 +133,16 @@ class OmniSideSheetScaffold extends StatelessWidget {
   /// 是否允许关闭。
   final bool canClose;
 
+  /// Windows 端按下 Enter 时执行的回调。
+  final VoidCallback? onWindowsEnter;
+
   /// 创建侧滑编辑器结构。
   const OmniSideSheetScaffold({
     required this.title,
     required this.child,
     this.actions = const <Widget>[],
     this.canClose = true,
+    this.onWindowsEnter,
     super.key,
   });
 
@@ -146,7 +151,8 @@ class OmniSideSheetScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    return Material(
+    // 侧滑编辑器的完整内容。
+    final Widget content = Material(
       color: colors.paper,
       child: SafeArea(
         child: Column(
@@ -202,6 +208,9 @@ class OmniSideSheetScaffold extends StatelessWidget {
         ),
       ),
     );
+    return onWindowsEnter == null
+        ? content
+        : OmniWindowsEnterSubmit(onSubmit: onWindowsEnter, child: content);
   }
 }
 
@@ -222,6 +231,9 @@ class OmniDialogScaffold extends StatelessWidget {
   /// 可选弹窗高度。
   final double? height;
 
+  /// Windows 端按下 Enter 时执行的回调。
+  final VoidCallback? onWindowsEnter;
+
   /// 创建标准弹窗。
   const OmniDialogScaffold({
     required this.title,
@@ -229,6 +241,7 @@ class OmniDialogScaffold extends StatelessWidget {
     this.actions = const <Widget>[],
     this.width = 520,
     this.height,
+    this.onWindowsEnter,
     super.key,
   });
 
@@ -239,7 +252,8 @@ class OmniDialogScaffold extends StatelessWidget {
     final OmniColors colors = OmniColors.of(context);
     // 当前视口尺寸。
     final Size viewport = MediaQuery.sizeOf(context);
-    return Dialog(
+    // 标准弹窗的完整内容。
+    final Widget content = Dialog(
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: width,
@@ -297,6 +311,9 @@ class OmniDialogScaffold extends StatelessWidget {
         ),
       ),
     );
+    return onWindowsEnter == null
+        ? content
+        : OmniWindowsEnterSubmit(onSubmit: onWindowsEnter, child: content);
   }
 }
 
