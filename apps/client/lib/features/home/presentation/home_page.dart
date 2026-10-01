@@ -18,6 +18,7 @@ import 'package:omni_butler/features/home/presentation/home_context_card.dart';
 import 'package:omni_butler/features/home/presentation/home_time_status_card.dart';
 import 'package:omni_butler/features/home/presentation/quote_library_dialog.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
+import 'package:omni_butler/features/timeline/presentation/timeline_page.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
@@ -25,8 +26,20 @@ import 'package:omni_butler/features/todos/presentation/todo_priority_quadrant_s
 import 'package:omni_butler/shared/attachments/attachment_picker_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
+/// Android 首页拆分按钮中的次要操作。
+enum _HomeMobileAction {
+  /// 补记已经完成的时间记录。
+  backfill,
+
+  /// 新增待办。
+  todo,
+}
+
 /// 今日工作台页面。
 class HomePage extends ConsumerWidget {
+  /// Android 悬浮拆分按钮需要避让的滚动内容高度。
+  static const double _mobileActionClearance = 88;
+
   /// 创建今日工作台页面。
   const HomePage({super.key});
 
@@ -58,6 +71,16 @@ class HomePage extends ConsumerWidget {
     final FeaturePreference featurePreference = ref.watch(
       featurePreferenceProvider,
     );
+    // 当前是否使用 Android 紧凑首页。
+    final bool androidCompact =
+        Theme.of(context).platform == TargetPlatform.android &&
+        OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
+
+    /// 打开待办新增弹窗。
+    void openTodoEditor() {
+      unawaited(TodoEditorDialog.show(context, initialDate: today));
+    }
+
     // 今日名言卡。
     final Widget quoteCard = _QuoteHero(
       quoteAsync: quoteAsync,
@@ -81,7 +104,7 @@ class HomePage extends ConsumerWidget {
     final Widget todoCard = _TodayTodoCard(
       todoTreesAsync: todoTreesAsync,
       pendingTodoTrees: pendingTodoTrees,
-      onCreate: () => TodoEditorDialog.show(context, initialDate: today),
+      onCreate: openTodoEditor,
       onOpenQuadrant: (TodoPriorityQuadrant quadrant) =>
           context.go('/todos?quadrant=${quadrant.value}'),
       onEdit: (TodoRecord todo) =>
@@ -104,10 +127,53 @@ class HomePage extends ConsumerWidget {
         )
         .toList(growable: false);
 
-    return _HomeDashboard(
+    // 首页卡片与工具栏的完整内容。
+    final Widget dashboard = _HomeDashboard(
       visibleCards: visibleCards,
       cards: cards,
       onManageCards: () => showHomeCardManager(context),
+      safeBottomPadding: androidCompact ? _mobileActionClearance : 0,
+    );
+    if (!androidCompact || !featurePreference.isEnabled(AppFeature.timeline)) {
+      return dashboard;
+    }
+    // Android 首页拆分按钮中的可用次要操作。
+    final List<OmniSplitAction<_HomeMobileAction>> mobileActions =
+        <OmniSplitAction<_HomeMobileAction>>[
+          const OmniSplitAction<_HomeMobileAction>(
+            value: _HomeMobileAction.backfill,
+            label: '补记时间',
+            icon: Icons.edit_calendar_outlined,
+          ),
+          if (featurePreference.isEnabled(AppFeature.todos))
+            const OmniSplitAction<_HomeMobileAction>(
+              value: _HomeMobileAction.todo,
+              label: '新增待办',
+              icon: Icons.add_task_rounded,
+            ),
+        ];
+    return Scaffold(
+      floatingActionButton: OmniSplitActionButton<_HomeMobileAction>(
+        keyPrefix: 'home-mobile',
+        label: '开始记录',
+        primaryIcon: Icons.play_arrow_rounded,
+        primarySemanticsLabel: '开始记录',
+        menuTooltip: '更多首页操作',
+        onPressed: () => showStartTimeEntryDialog(context, day: now),
+        actions: mobileActions,
+        onSelected: (_HomeMobileAction action) {
+          switch (action) {
+            case _HomeMobileAction.backfill:
+              showBackfillTimeEntryDialog(context, day: now);
+              return;
+            case _HomeMobileAction.todo:
+              openTodoEditor();
+              return;
+          }
+        },
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      body: dashboard,
     );
   }
 }
@@ -123,11 +189,15 @@ class _HomeDashboard extends StatelessWidget {
   /// 打开卡片管理面板回调。
   final VoidCallback onManageCards;
 
+  /// 滚动到底部时需要额外保留的安全间距。
+  final double safeBottomPadding;
+
   /// 创建首页卡片式工作台。
   const _HomeDashboard({
     required this.visibleCards,
     required this.cards,
     required this.onManageCards,
+    required this.safeBottomPadding,
   });
 
   /// 构建工作台工具栏、响应式网格与空状态。
@@ -167,12 +237,7 @@ class _HomeDashboard extends StatelessWidget {
                 .floorToDouble();
 
         return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(
-            14,
-            OmniSpacing.xs,
-            14,
-            OmniSpacing.xl,
-          ),
+          padding: const EdgeInsets.fromLTRB(14, OmniSpacing.xs, 14, 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
@@ -202,6 +267,7 @@ class _HomeDashboard extends StatelessWidget {
                     ),
                   ),
                 ),
+              SizedBox(height: OmniSpacing.xl + safeBottomPadding),
             ],
           ),
         );
@@ -1056,8 +1122,67 @@ class _TodayTodoCard extends StatefulWidget {
 
 /// 今日待办摘要卡状态。
 class _TodayTodoCardState extends State<_TodayTodoCard> {
+  /// 首页展示的三个重点待办象限。
+  static const List<TodoPriorityQuadrant> _focusQuadrants =
+      <TodoPriorityQuadrant>[
+        TodoPriorityQuadrant.urgentImportant,
+        TodoPriorityQuadrant.importantNotUrgent,
+        TodoPriorityQuadrant.urgentNotImportant,
+      ];
+
   /// 当前撤销浮动消息。
   OmniMessageHandle? _undoMessage;
+
+  /// 当前已经折叠子任务的父任务标识。
+  final Set<String> _collapsedTreeIds = <String>{};
+
+  /// 切换指定父任务的子任务展开状态。
+  void _toggleTree(String rootId) {
+    setState(() {
+      if (!_collapsedTreeIds.remove(rootId)) {
+        _collapsedTreeIds.add(rootId);
+      }
+    });
+  }
+
+  /// 根据当前整体状态收起或展开全部可见子任务。
+  void _toggleAllTrees(Set<String> expandableTreeIds, bool allCollapsed) {
+    setState(() {
+      if (allCollapsed) {
+        _collapsedTreeIds.removeAll(expandableTreeIds);
+      } else {
+        _collapsedTreeIds.addAll(expandableTreeIds);
+      }
+    });
+  }
+
+  /// 返回首页实际展示且包含未完成子任务的父任务标识。
+  Set<String> _visibleExpandableTreeIds() {
+    // 每个重点象限已经选入首页的父任务数量。
+    final Map<TodoPriorityQuadrant, int> visibleCounts =
+        <TodoPriorityQuadrant, int>{
+          for (final TodoPriorityQuadrant quadrant in _focusQuadrants)
+            quadrant: 0,
+        };
+    // 最终可以批量展开或折叠的父任务标识。
+    final Set<String> expandableTreeIds = <String>{};
+    for (final TodoTreeNode tree in widget.pendingTodoTrees) {
+      // 当前待办树所属象限。
+      final TodoPriorityQuadrant quadrant = TodoPriorityQuadrant.fromValue(
+        tree.root.priorityQuadrant,
+      );
+      // 当前象限已经选入的父任务数量。
+      final int? visibleCount = visibleCounts[quadrant];
+      if (visibleCount == null || visibleCount >= 3) {
+        continue;
+      }
+      visibleCounts[quadrant] = visibleCount + 1;
+      if (tree.children.any((TodoRecord child) => !child.isCompleted)) {
+        expandableTreeIds.add(tree.root.id);
+      }
+    }
+    return expandableTreeIds;
+  }
 
   /// 完成任务并展示顶部浮动撤销消息。
   Future<void> _completeTodo(TodoRecord todo) async {
@@ -1089,6 +1214,16 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
+    // 当前是否使用 Android 紧凑首页。
+    final bool androidCompact =
+        Theme.of(context).platform == TargetPlatform.android &&
+        OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
+    // 首页可见且含有未完成子任务的父任务标识。
+    final Set<String> expandableTreeIds = _visibleExpandableTreeIds();
+    // 当前是否已收起全部可见子任务。
+    final bool allTreesCollapsed =
+        expandableTreeIds.isNotEmpty &&
+        expandableTreeIds.every(_collapsedTreeIds.contains);
     // 待办列表或状态内容。
     final Widget todoContent = _buildTodoContent(context, colors);
     return OmniPanel(
@@ -1120,15 +1255,41 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-              SizedBox(
-                key: const ValueKey<String>('home-todo-create-button'),
-                height: 30,
-                child: OmniButton(
-                  label: '新增',
-                  icon: Icons.add_rounded,
-                  onPressed: widget.onCreate,
+              if (androidCompact)
+                SizedBox.square(
+                  dimension: 30,
+                  child: IconButton(
+                    key: const ValueKey<String>('home-todo-toggle-all'),
+                    tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
+                    onPressed: expandableTreeIds.isEmpty
+                        ? null
+                        : () => _toggleAllTrees(
+                            expandableTreeIds,
+                            allTreesCollapsed,
+                          ),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 30,
+                      height: 30,
+                    ),
+                    icon: Icon(
+                      allTreesCollapsed
+                          ? Icons.unfold_more_rounded
+                          : Icons.unfold_less_rounded,
+                      size: 18,
+                    ),
+                  ),
+                )
+              else
+                SizedBox(
+                  key: const ValueKey<String>('home-todo-create-button'),
+                  height: 30,
+                  child: OmniButton(
+                    label: '新增',
+                    icon: Icons.add_rounded,
+                    onPressed: widget.onCreate,
+                  ),
                 ),
-              ),
             ],
           ),
           const SizedBox(height: OmniSpacing.xs),
@@ -1152,16 +1313,10 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
         child: Text('待办暂时无法读取', style: TextStyle(color: colors.danger)),
       );
     }
-    // 首页展示的三个重点待办区间。
-    const List<TodoPriorityQuadrant> focusQuadrants = <TodoPriorityQuadrant>[
-      TodoPriorityQuadrant.urgentImportant,
-      TodoPriorityQuadrant.importantNotUrgent,
-      TodoPriorityQuadrant.urgentNotImportant,
-    ];
     // 按重点区间分组后的今日待办树。
     final Map<TodoPriorityQuadrant, List<TodoTreeNode>> groupedTodoTrees =
         <TodoPriorityQuadrant, List<TodoTreeNode>>{
-          for (final TodoPriorityQuadrant quadrant in focusQuadrants)
+          for (final TodoPriorityQuadrant quadrant in _focusQuadrants)
             quadrant: <TodoTreeNode>[],
         };
     for (final TodoTreeNode tree in widget.pendingTodoTrees) {
@@ -1178,13 +1333,15 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
       children: <Widget>[
         for (
           int index = 0;
-          index < focusQuadrants.length;
+          index < _focusQuadrants.length;
           index += 1
         ) ...<Widget>[
           _HomeTodoQuadrant(
-            quadrant: focusQuadrants[index],
-            todoTrees: groupedTodoTrees[focusQuadrants[index]]!,
-            onOpen: () => widget.onOpenQuadrant(focusQuadrants[index]),
+            quadrant: _focusQuadrants[index],
+            todoTrees: groupedTodoTrees[_focusQuadrants[index]]!,
+            collapsedTreeIds: _collapsedTreeIds,
+            onToggleTree: _toggleTree,
+            onOpen: () => widget.onOpenQuadrant(_focusQuadrants[index]),
             onEdit: widget.onEdit,
             onToggle: (TodoRecord todo, bool value) =>
                 value ? _completeTodo(todo) : widget.onToggle(todo, false),
@@ -1203,6 +1360,12 @@ class _HomeTodoQuadrant extends StatelessWidget {
   /// 当前象限全部未完成待办树。
   final List<TodoTreeNode> todoTrees;
 
+  /// 当前已经折叠子任务的父任务标识。
+  final Set<String> collapsedTreeIds;
+
+  /// 切换指定父任务子任务展开状态的回调。
+  final ValueChanged<String> onToggleTree;
+
   /// 查看当前象限回调。
   final VoidCallback onOpen;
 
@@ -1216,6 +1379,8 @@ class _HomeTodoQuadrant extends StatelessWidget {
   const _HomeTodoQuadrant({
     required this.quadrant,
     required this.todoTrees,
+    required this.collapsedTreeIds,
+    required this.onToggleTree,
     required this.onOpen,
     required this.onEdit,
     required this.onToggle,
@@ -1284,6 +1449,8 @@ class _HomeTodoQuadrant extends StatelessWidget {
           key: ValueKey<String>('home-todo-tree-${tree.root.id}'),
           tree: tree,
           accentColor: quadrant.color(OmniColors.of(context)),
+          childrenExpanded: !collapsedTreeIds.contains(tree.root.id),
+          onToggleChildren: () => onToggleTree(tree.root.id),
           onEdit: onEdit,
           onComplete: (TodoRecord todo) => onToggle(todo, true),
         ),
@@ -1309,12 +1476,18 @@ class _HomeTodoQuadrant extends StatelessWidget {
 }
 
 /// 首页中的单棵两层待办树。
-class _HomeTodoTree extends StatefulWidget {
+class _HomeTodoTree extends StatelessWidget {
   /// 当前待办树。
   final TodoTreeNode tree;
 
   /// 当前任务所属象限强调色。
   final Color accentColor;
+
+  /// 子任务当前是否展开。
+  final bool childrenExpanded;
+
+  /// 切换子任务展开状态的回调。
+  final VoidCallback onToggleChildren;
 
   /// 编辑指定待办回调。
   final ValueChanged<TodoRecord> onEdit;
@@ -1326,18 +1499,13 @@ class _HomeTodoTree extends StatefulWidget {
   const _HomeTodoTree({
     required this.tree,
     required this.accentColor,
+    required this.childrenExpanded,
+    required this.onToggleChildren,
     required this.onEdit,
     required this.onComplete,
     super.key,
   });
 
-  /// 创建首页待办树展开状态。
-  @override
-  State<_HomeTodoTree> createState() => _HomeTodoTreeState();
-}
-
-/// 管理首页父任务的子任务展开状态。
-class _HomeTodoTreeState extends State<_HomeTodoTree> {
   /// 父任务勾选框中心对应的树形主干横坐标。
   static const double _treeTrunkX = OmniSpacing.xs + 16;
 
@@ -1347,19 +1515,11 @@ class _HomeTodoTreeState extends State<_HomeTodoTree> {
   /// 子任务支线停在勾选框左侧的横坐标。
   static const double _branchEndX = _childIndent + OmniSpacing.xs + 7;
 
-  /// 子任务当前是否展开。
-  bool _expanded = true;
-
-  /// 切换子任务展开状态。
-  void _toggleChildren() {
-    setState(() => _expanded = !_expanded);
-  }
-
   /// 构建父任务、展开控制与直属子任务。
   @override
   Widget build(BuildContext context) {
     // 当前仍未完成的直属子任务。
-    final List<TodoRecord> pendingChildren = widget.tree.children
+    final List<TodoRecord> pendingChildren = tree.children
         .where((TodoRecord child) => !child.isCompleted)
         .toList(growable: false);
     // 当前任务树是否存在需要展示的子任务。
@@ -1373,13 +1533,13 @@ class _HomeTodoTreeState extends State<_HomeTodoTree> {
         : OmniMotion.normal;
     // 父任务行；展开控制收纳在行尾，确保勾选框始终位于最左侧。
     final Widget rootRow = _HomeTodoRow(
-      key: ValueKey<String>('home-todo-row-${widget.tree.root.id}'),
-      todo: widget.tree.root,
-      accentColor: widget.accentColor,
-      onEdit: widget.onEdit,
-      onComplete: widget.onComplete,
-      childrenExpanded: hasChildren ? _expanded : null,
-      onToggleChildren: hasChildren ? _toggleChildren : null,
+      key: ValueKey<String>('home-todo-row-${tree.root.id}'),
+      todo: tree.root,
+      accentColor: accentColor,
+      onEdit: onEdit,
+      onComplete: onComplete,
+      childrenExpanded: hasChildren ? childrenExpanded : null,
+      onToggleChildren: hasChildren ? onToggleChildren : null,
     );
 
     return Column(
@@ -1391,10 +1551,10 @@ class _HomeTodoTreeState extends State<_HomeTodoTree> {
           alignment: Alignment.topCenter,
           duration: duration,
           curve: OmniMotion.standardCurve,
-          child: _expanded && hasChildren
+          child: childrenExpanded && hasChildren
               ? Column(
                   key: ValueKey<String>(
-                    'home-todo-tree-children-${widget.tree.root.id}',
+                    'home-todo-tree-children-${tree.root.id}',
                   ),
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
@@ -1421,9 +1581,9 @@ class _HomeTodoTreeState extends State<_HomeTodoTree> {
                               'home-todo-row-${pendingChildren[index].id}',
                             ),
                             todo: pendingChildren[index],
-                            accentColor: widget.accentColor,
-                            onEdit: widget.onEdit,
-                            onComplete: widget.onComplete,
+                            accentColor: accentColor,
+                            onEdit: onEdit,
+                            onComplete: onComplete,
                           ),
                         ),
                       ),

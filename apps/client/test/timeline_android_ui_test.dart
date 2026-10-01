@@ -69,6 +69,10 @@ void main() {
       ),
       findsOneWidget,
     );
+    expect(
+      find.descendant(of: primaryButton, matching: find.text('开始')),
+      findsOneWidget,
+    );
     // 底部导航栏的实际位置。
     final Rect navigationRect = tester.getRect(
       find.byKey(const ValueKey<String>('navigation-/timeline')),
@@ -212,7 +216,10 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('开始记录'), findsWidgets);
+    expect(
+      find.descendant(of: primaryButton, matching: find.text('开始')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey<String>('ongoing-time-entry-banner')),
       findsNothing,

@@ -358,7 +358,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     return Scaffold(
       floatingActionButton: OmniSplitActionButton<_TimelineMobileAction>(
         keyPrefix: 'timeline-mobile',
-        label: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
+        label: ongoingEntries.isEmpty ? '开始' : '结束记录',
         primaryIcon: ongoingEntries.isEmpty
             ? Icons.play_arrow_rounded
             : Icons.stop_rounded,

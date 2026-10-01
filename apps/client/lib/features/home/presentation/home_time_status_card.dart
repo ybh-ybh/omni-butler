@@ -26,6 +26,10 @@ class HomeTimeStatusCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
+    // 当前是否使用由悬浮拆分按钮提供新增入口的 Android 紧凑布局。
+    final bool androidCompact =
+        Theme.of(context).platform == TargetPlatform.android &&
+        OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
     // 今日自然日起点。
     final DateTime today = DateUtils.dateOnly(now);
     // 明日自然日起点。
@@ -110,6 +114,7 @@ class HomeTimeStatusCard extends ConsumerWidget {
           _TimeStatusHeader(
             onStart: () => showStartTimeEntryDialog(context, day: now),
             onBackfill: () => showBackfillTimeEntryDialog(context, day: now),
+            showActions: !androidCompact,
           ),
           const SizedBox(height: OmniSpacing.md),
           if (todayRecordsAsync.isLoading || weekRecordsAsync.isLoading)
@@ -172,7 +177,9 @@ class HomeTimeStatusCard extends ConsumerWidget {
             Text('今日记录暂时无法读取', style: TextStyle(color: colors.danger))
           else if (visibleEntries.isEmpty)
             _TimeEmptyState(
-              onCreate: () => showStartTimeEntryDialog(context, day: now),
+              onCreate: androidCompact
+                  ? null
+                  : () => showStartTimeEntryDialog(context, day: now),
             )
           else
             for (
@@ -206,8 +213,15 @@ class _TimeStatusHeader extends StatelessWidget {
   /// 补记时间回调。
   final VoidCallback onBackfill;
 
+  /// 是否在卡片标题中显示时间操作。
+  final bool showActions;
+
   /// 创建时间状态卡片标题。
-  const _TimeStatusHeader({required this.onStart, required this.onBackfill});
+  const _TimeStatusHeader({
+    required this.onStart,
+    required this.onBackfill,
+    required this.showActions,
+  });
 
   /// 构建标题、说明和原地记录入口。
   @override
@@ -244,18 +258,20 @@ class _TimeStatusHeader extends StatelessWidget {
             ],
           ),
         ),
-        OmniButton(
-          key: const ValueKey<String>('home-time-start-button'),
-          label: '开始',
-          onPressed: onStart,
-        ),
-        const SizedBox(width: OmniSpacing.xxs),
-        OmniButton(
-          key: const ValueKey<String>('home-time-backfill-button'),
-          label: '补记',
-          variant: OmniButtonVariant.secondary,
-          onPressed: onBackfill,
-        ),
+        if (showActions) ...<Widget>[
+          OmniButton(
+            key: const ValueKey<String>('home-time-start-button'),
+            label: '开始',
+            onPressed: onStart,
+          ),
+          const SizedBox(width: OmniSpacing.xxs),
+          OmniButton(
+            key: const ValueKey<String>('home-time-backfill-button'),
+            label: '补记',
+            variant: OmniButtonVariant.secondary,
+            onPressed: onBackfill,
+          ),
+        ],
       ],
     );
   }
@@ -516,7 +532,7 @@ class _TimeEntryRow extends StatelessWidget {
 /// 时间状态卡片的紧凑空状态。
 class _TimeEmptyState extends StatelessWidget {
   /// 打开时间管理回调。
-  final VoidCallback onCreate;
+  final VoidCallback? onCreate;
 
   /// 创建时间记录空状态。
   const _TimeEmptyState({required this.onCreate});
@@ -537,7 +553,8 @@ class _TimeEmptyState extends StatelessWidget {
           Icon(Icons.schedule_outlined, color: colors.muted),
           const SizedBox(width: OmniSpacing.xs),
           const Expanded(child: Text('今天还没有时间记录')),
-          TextButton(onPressed: onCreate, child: const Text('开始记录')),
+          if (onCreate != null)
+            TextButton(onPressed: onCreate, child: const Text('开始记录')),
         ],
       ),
     );

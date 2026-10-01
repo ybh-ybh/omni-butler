@@ -269,6 +269,107 @@ void main() {
     await _disposeApp(tester, database, container);
   });
 
+  testWidgets('Android 首页集中新增入口并批量折叠子任务', (WidgetTester tester) async {
+    // 测试当前时间。
+    final DateTime now = DateTime(2026, 9, 21, 14, 20);
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 测试用待办仓储。
+    final TodoRepository repository = TodoRepository(database);
+    await repository.save(
+      TodoDraft(
+        title: 'Android 父任务',
+        scheduledDate: DateUtils.dateOnly(now),
+        priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
+      ),
+    );
+    // 新增后的父任务。
+    final TodoRecord parent =
+        (await database.select(database.todoItems).get()).single;
+    await repository.save(
+      TodoDraft(
+        title: 'Android 子任务',
+        parentId: parent.id,
+        scheduledDate: DateUtils.dateOnly(now),
+      ),
+    );
+    // Android 紧凑视口使用的测试依赖容器。
+    final ProviderContainer container = await _pumpApp(
+      tester,
+      database: database,
+      preferences: await _preferences(<String, Object>{}),
+      now: now,
+      platform: TargetPlatform.android,
+      physicalSize: const Size(412, 915),
+    );
+
+    expect(
+      find.byKey(const ValueKey<String>('home-mobile-create-split')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('home-todo-create-button')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('home-time-start-button')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('home-time-backfill-button')),
+      findsNothing,
+    );
+    expect(find.text('Android 子任务'), findsOneWidget);
+    // 待办卡片标题右侧的批量子任务按钮。
+    final Finder toggleAll = find.byKey(
+      const ValueKey<String>('home-todo-toggle-all'),
+    );
+    await tester.ensureVisible(toggleAll);
+    expect(find.byTooltip('收起全部子任务'), findsOneWidget);
+    await tester.tap(toggleAll);
+    await tester.pumpAndSettle();
+    expect(find.text('Android 子任务'), findsNothing);
+    expect(find.byTooltip('展开全部子任务'), findsOneWidget);
+    await tester.tap(toggleAll);
+    await tester.pumpAndSettle();
+    expect(find.text('Android 子任务'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey<String>('home-mobile-create')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('time-entry-editor')),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('home-mobile-more-actions')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('补记时间'), findsOneWidget);
+    expect(find.text('新增待办'), findsOneWidget);
+    await tester.tap(find.text('补记时间'));
+    await tester.pumpAndSettle();
+    expect(find.text('补记一段时间'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('home-mobile-more-actions')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('新增待办'));
+    await tester.pumpAndSettle();
+    expect(find.text('新增待办'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+
+    await _disposeApp(tester, database, container);
+  });
+
   testWidgets('功能开关隐藏对应卡片并保留今日刻度', (WidgetTester tester) async {
     // 测试当前时间。
     final DateTime now = DateTime(2026, 9, 21, 14, 20);
@@ -711,15 +812,17 @@ Future<SharedPreferences> _preferences(Map<String, Object> values) async {
   return SharedPreferences.getInstance();
 }
 
-/// 在桌面视口加载带测试依赖的完整应用。
+/// 在指定平台与视口加载带测试依赖的完整应用。
 Future<ProviderContainer> _pumpApp(
   WidgetTester tester, {
   required AppDatabase database,
   required SharedPreferences preferences,
   required DateTime now,
+  TargetPlatform platform = TargetPlatform.windows,
+  Size physicalSize = const Size(1440, 900),
 }) async {
-  debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-  tester.view.physicalSize = const Size(1440, 900);
+  debugDefaultTargetPlatformOverride = platform;
+  tester.view.physicalSize = physicalSize;
   tester.view.devicePixelRatio = 1;
   // 显式管理的测试依赖容器。
   final ProviderContainer container = ProviderContainer(
