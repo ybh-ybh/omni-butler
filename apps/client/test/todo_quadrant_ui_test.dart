@@ -977,6 +977,17 @@ void main() {
         priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
       ),
     );
+    // 移动端交互测试使用的主任务记录。
+    final TodoRecord mobileRoot = await database
+        .select(database.todoItems)
+        .getSingle();
+    await repository.save(
+      TodoDraft(
+        title: '移动端展开子任务',
+        parentId: mobileRoot.id,
+        scheduledDate: DateTime(2026, 9, 6),
+      ),
+    );
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -1052,6 +1063,53 @@ void main() {
         findsOneWidget,
       );
     }
+    expect(
+      find.byKey(ValueKey<String>('todo-tree-toggle-${mobileRoot.id}')),
+      findsNothing,
+    );
+    expect(find.text('移动端展开子任务'), findsOneWidget);
+    // 点击移动端父任务名称只收起子任务，不打开编辑器。
+    final Finder mobileRootTitle = find.byKey(
+      ValueKey<String>('todo-title-${mobileRoot.id}'),
+    );
+    await tester.tap(mobileRootTitle);
+    await tester.pump();
+    expect(find.text('移动端展开子任务'), findsNothing);
+    expect(find.text('编辑待办'), findsNothing);
+    await tester.tap(mobileRootTitle);
+    await tester.pump();
+    expect(find.text('移动端展开子任务'), findsOneWidget);
+
+    // 移动端整页横滑区域。
+    final Finder swipeSurface = find.byKey(
+      const ValueKey<String>('todo-mobile-swipe-surface'),
+    );
+    // 向左依次切换立即处理、安排时间、快速处理和有空再做。
+    for (final TodoPriorityQuadrant quadrant
+        in todoPriorityQuadrantActionOrder) {
+      await tester.fling(swipeSurface, const Offset(-160, 0), 800);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(
+          ValueKey<String>('todo-mobile-section-${quadrant.value}-focused'),
+        ),
+        findsOneWidget,
+      );
+    }
+    // 最末分类继续左滑时保持不变，不循环回全部。
+    await tester.fling(swipeSurface, const Offset(-160, 0), 800);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-section-0-focused')),
+      findsOneWidget,
+    );
+    // 向右回到快速处理，验证反向相邻切换。
+    await tester.fling(swipeSurface, const Offset(160, 0), 800);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-section-1-focused')),
+      findsOneWidget,
+    );
 
     for (final double width in <double>[320, 360, 390]) {
       tester.view.physicalSize = Size(width, viewport.height);

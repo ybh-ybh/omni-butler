@@ -69,6 +69,12 @@ class TodosPage extends ConsumerStatefulWidget {
 
 /// 每日待办页面状态。
 class _TodosPageState extends ConsumerState<TodosPage> {
+  /// 触发移动端象限切换所需的最小横向拖动距离。
+  static const double _swipeDistanceThreshold = 48;
+
+  /// 触发移动端象限切换所需的最小横向速度。
+  static const double _swipeVelocityThreshold = 500;
+
   /// 当前完成历史日期。
   late DateTime _selectedDay;
 
@@ -87,6 +93,9 @@ class _TodosPageState extends ConsumerState<TodosPage> {
 
   /// 当前已经折叠子任务的父任务标识。
   final Set<String> _collapsedTreeIds = <String>{};
+
+  /// 本次移动端横向拖动累计距离，向右为正。
+  double _horizontalDragDistance = 0;
 
   /// 撤销浮动消息。
   OmniMessageHandle? _undoMessage;
@@ -145,6 +154,59 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     });
   }
 
+  /// 开始记录移动端待办页面的横向拖动。
+  void _startHorizontalDrag(DragStartDetails details) {
+    _horizontalDragDistance = 0;
+  }
+
+  /// 累计移动端待办页面的横向拖动距离。
+  void _updateHorizontalDrag(DragUpdateDetails details) {
+    _horizontalDragDistance += details.primaryDelta ?? 0;
+  }
+
+  /// 取消本次移动端待办页面的横向拖动。
+  void _cancelHorizontalDrag() {
+    _horizontalDragDistance = 0;
+  }
+
+  /// 根据拖动距离和速度完成移动端象限切换。
+  void _finishHorizontalDrag(DragEndDetails details) {
+    // 手指离开时的横向速度，向右为正。
+    final double velocity = details.primaryVelocity ?? 0;
+    // 是否达到稳定的拖动距离阈值。
+    final bool reachedDistance =
+        _horizontalDragDistance.abs() >= _swipeDistanceThreshold;
+    // 是否达到快速滑动速度阈值。
+    final bool reachedVelocity = velocity.abs() >= _swipeVelocityThreshold;
+    if (!reachedDistance && !reachedVelocity) {
+      _horizontalDragDistance = 0;
+      return;
+    }
+    // 优先使用已达到阈值的拖动距离，快速短扫则使用离手速度。
+    final double direction = reachedDistance
+        ? _horizontalDragDistance
+        : velocity;
+    _horizontalDragDistance = 0;
+    _moveToAdjacentQuadrant(direction < 0 ? 1 : -1);
+  }
+
+  /// 切换到当前分类前后相邻的移动端待办象限。
+  void _moveToAdjacentQuadrant(int offset) {
+    // 全部与四个象限的固定滑动顺序。
+    final List<TodoPriorityQuadrant?> options = <TodoPriorityQuadrant?>[
+      null,
+      ...todoPriorityQuadrantActionOrder,
+    ];
+    // 当前分类在滑动顺序中的位置。
+    final int currentIndex = options.indexOf(_priorityQuadrantFilter);
+    // 横滑后的目标分类位置。
+    final int targetIndex = currentIndex + offset;
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= options.length) {
+      return;
+    }
+    _setPriorityQuadrantFilter(options[targetIndex]);
+  }
+
   /// 释放撤销浮动消息。
   @override
   void dispose() {
@@ -190,14 +252,30 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       return Stack(
         children: <Widget>[
           Positioned.fill(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(
-                OmniSpacing.xs,
-                OmniSpacing.xs,
-                OmniSpacing.xs,
-                88,
+            child: GestureDetector(
+              key: const ValueKey<String>('todo-mobile-swipe-surface'),
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragStart: _pageView == _TodoPageView.active
+                  ? _startHorizontalDrag
+                  : null,
+              onHorizontalDragUpdate: _pageView == _TodoPageView.active
+                  ? _updateHorizontalDrag
+                  : null,
+              onHorizontalDragEnd: _pageView == _TodoPageView.active
+                  ? _finishHorizontalDrag
+                  : null,
+              onHorizontalDragCancel: _pageView == _TodoPageView.active
+                  ? _cancelHorizontalDrag
+                  : null,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(
+                  OmniSpacing.xs,
+                  OmniSpacing.xs,
+                  OmniSpacing.xs,
+                  88,
+                ),
+                child: content,
               ),
-              child: content,
             ),
           ),
           if (_pageView == _TodoPageView.active)
@@ -613,6 +691,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
               now: now,
               allowFocus: false,
               allowDrag: false,
+              mobile: true,
             ),
           ),
         ],
@@ -628,6 +707,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     required DateTime now,
     required bool allowFocus,
     required bool allowDrag,
+    bool mobile = false,
     double? maxHeight,
   }) {
     // 当前象限卡片及其独立滚动内容。
@@ -638,6 +718,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       completingTodoIds: _completingTodoIds,
       collapsedTreeIds: _collapsedTreeIds,
       allowDrag: allowDrag,
+      mobile: mobile,
       onFocus: allowFocus
           ? () => _setPriorityQuadrantFilter(
               _priorityQuadrantFilter == quadrant ? null : quadrant,
@@ -1401,6 +1482,9 @@ class _TodoQuadrantDropZone extends StatelessWidget {
   /// 是否允许桌面拖拽。
   final bool allowDrag;
 
+  /// 是否使用 Android 紧凑布局交互。
+  final bool mobile;
+
   /// 聚焦象限回调。
   final VoidCallback? onFocus;
 
@@ -1441,6 +1525,7 @@ class _TodoQuadrantDropZone extends StatelessWidget {
     required this.completingTodoIds,
     required this.collapsedTreeIds,
     required this.allowDrag,
+    required this.mobile,
     required this.onFocus,
     required this.onCreate,
     required this.onDrop,
@@ -1630,6 +1715,7 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                                     trees[index].root.id,
                                   ),
                                   allowDrag: allowDrag,
+                                  mobile: mobile,
                                   quadrant: quadrant,
                                   onCompletedChanged: onCompletedChanged,
                                   onExpansionChanged: (bool expanded) =>
@@ -1778,6 +1864,9 @@ class _TodoTreeCard extends StatefulWidget {
   /// 是否允许主任务拖动。
   final bool allowDrag;
 
+  /// 是否使用 Android 紧凑布局交互。
+  final bool mobile;
+
   /// 当前象限。
   final TodoPriorityQuadrant quadrant;
 
@@ -1806,6 +1895,7 @@ class _TodoTreeCard extends StatefulWidget {
     required this.completingTodoIds,
     required this.expanded,
     required this.allowDrag,
+    required this.mobile,
     required this.quadrant,
     required this.onCompletedChanged,
     required this.onExpansionChanged,
@@ -1900,7 +1990,8 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
         .where((TodoRecord child) => !child.isCompleted)
         .toList(growable: false);
     // 当前是否需要显示展开或拖拽控制。
-    final bool showsTreeControl = tree.children.isNotEmpty || widget.allowDrag;
+    final bool showsTreeControl =
+        !widget.mobile && (tree.children.isNotEmpty || widget.allowDrag);
     // 父任务左侧的双用途控制。
     final Widget? treeControl = showsTreeControl
         ? _buildTreeControl(tree)
@@ -1934,6 +2025,11 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
       progressLabel: tree.children.isEmpty ? null : '${tree.children.length}',
       onCompletedChanged: (bool value) =>
           widget.onCompletedChanged(tree.root, value),
+      onTap: widget.mobile
+          ? tree.children.isEmpty
+                ? null
+                : _toggleChildren
+          : () => widget.onEdit(tree.root),
       onEdit: () => widget.onEdit(tree.root),
       onAddChild: () => widget.onAddChild(tree.root),
       onMove: () => widget.onMove(tree.root),
@@ -1969,6 +2065,9 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
                 ),
                 onCompletedChanged: (bool value) =>
                     widget.onCompletedChanged(pendingChildren[index], value),
+                onTap: widget.mobile
+                    ? null
+                    : () => widget.onEdit(pendingChildren[index]),
                 onEdit: () => widget.onEdit(pendingChildren[index]),
                 onMove: null,
                 onDelete: () => widget.onDelete(pendingChildren[index]),
@@ -2067,6 +2166,9 @@ class _TodoTaskRow extends StatelessWidget {
   /// 完成状态回调。
   final ValueChanged<bool> onCompletedChanged;
 
+  /// 可选任务行点击回调。
+  final VoidCallback? onTap;
+
   /// 编辑回调。
   final VoidCallback onEdit;
 
@@ -2085,6 +2187,7 @@ class _TodoTaskRow extends StatelessWidget {
     required this.now,
     required this.completing,
     required this.onCompletedChanged,
+    required this.onTap,
     required this.onEdit,
     required this.onDelete,
     this.treeControl,
@@ -2132,7 +2235,7 @@ class _TodoTaskRow extends StatelessWidget {
       child: AbsorbPointer(
         absorbing: completing,
         child: OmniListRow(
-          onTap: onEdit,
+          onTap: onTap,
           borderRadius: BorderRadius.circular(OmniRadius.control),
           padding: const EdgeInsets.symmetric(
             horizontal: OmniSpacing.sm,
