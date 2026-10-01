@@ -12,6 +12,7 @@ import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/features/todos/presentation/todo_completion_checkbox.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/features/todos/presentation/todo_priority_quadrant_style.dart';
+import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 每日待办的一级视图。
@@ -21,6 +22,18 @@ enum _TodoPageView {
 
   /// 按完成日期浏览的历史任务。
   history,
+}
+
+/// 移动端待办横滑当前由内部分类还是一级导航处理。
+enum _TodoHorizontalSwipeMode {
+  /// 尚未根据首个有效位移确定目标。
+  undecided,
+
+  /// 切换待办内部象限分类。
+  quadrant,
+
+  /// 在象限首尾接力到一级页面导航。
+  primary,
 }
 
 /// 待办页面当前聚焦象限的会话状态控制器。
@@ -97,6 +110,10 @@ class _TodosPageState extends ConsumerState<TodosPage> {
   /// 本次移动端横向拖动累计距离，向右为正。
   double _horizontalDragDistance = 0;
 
+  /// 本次移动端横滑的目标层级。
+  _TodoHorizontalSwipeMode _horizontalSwipeMode =
+      _TodoHorizontalSwipeMode.undecided;
+
   /// 撤销浮动消息。
   OmniMessageHandle? _undoMessage;
 
@@ -157,22 +174,67 @@ class _TodosPageState extends ConsumerState<TodosPage> {
   /// 开始记录移动端待办页面的横向拖动。
   void _startHorizontalDrag(DragStartDetails details) {
     _horizontalDragDistance = 0;
+    _horizontalSwipeMode = _TodoHorizontalSwipeMode.undecided;
   }
 
   /// 累计移动端待办页面的横向拖动距离。
   void _updateHorizontalDrag(DragUpdateDetails details) {
     _horizontalDragDistance += details.primaryDelta ?? 0;
+    if (_horizontalSwipeMode == _TodoHorizontalSwipeMode.undecided &&
+        _horizontalDragDistance != 0) {
+      _horizontalSwipeMode = _resolveHorizontalSwipeMode(
+        _horizontalDragDistance,
+      );
+      if (_horizontalSwipeMode == _TodoHorizontalSwipeMode.primary) {
+        PrimaryNavigationSwipeScope.maybeOf(context)?.beginPrimarySwipe();
+      }
+    }
+    if (_horizontalSwipeMode == _TodoHorizontalSwipeMode.primary) {
+      PrimaryNavigationSwipeScope.maybeOf(context)
+          ?.updatePrimarySwipe(_horizontalDragDistance);
+    }
   }
 
   /// 取消本次移动端待办页面的横向拖动。
   void _cancelHorizontalDrag() {
+    if (_horizontalSwipeMode == _TodoHorizontalSwipeMode.primary) {
+      PrimaryNavigationSwipeScope.maybeOf(context)?.cancelPrimarySwipe();
+    }
     _horizontalDragDistance = 0;
+    _horizontalSwipeMode = _TodoHorizontalSwipeMode.undecided;
+  }
+
+  /// 根据当前象限位置决定横滑由内部分类还是一级页面处理。
+  _TodoHorizontalSwipeMode _resolveHorizontalSwipeMode(double distance) {
+    // 全部与四个象限的固定滑动顺序。
+    final List<TodoPriorityQuadrant?> options = <TodoPriorityQuadrant?>[
+      null,
+      ...todoPriorityQuadrantActionOrder,
+    ];
+    // 当前分类在滑动顺序中的位置。
+    final int currentIndex = options.indexOf(_priorityQuadrantFilter);
+    // 左滑前进、右滑后退对应的分类偏移。
+    final int offset = distance < 0 ? 1 : -1;
+    // 当前象限内部的目标位置。
+    final int targetIndex = currentIndex + offset;
+    if (currentIndex >= 0 && targetIndex >= 0 && targetIndex < options.length) {
+      return _TodoHorizontalSwipeMode.quadrant;
+    }
+    return PrimaryNavigationSwipeScope.maybeOf(context) == null
+        ? _TodoHorizontalSwipeMode.quadrant
+        : _TodoHorizontalSwipeMode.primary;
   }
 
   /// 根据拖动距离和速度完成移动端象限切换。
   void _finishHorizontalDrag(DragEndDetails details) {
     // 手指离开时的横向速度，向右为正。
     final double velocity = details.primaryVelocity ?? 0;
+    if (_horizontalSwipeMode == _TodoHorizontalSwipeMode.primary) {
+      PrimaryNavigationSwipeScope.maybeOf(context)?.endPrimarySwipe(velocity);
+      _horizontalDragDistance = 0;
+      _horizontalSwipeMode = _TodoHorizontalSwipeMode.undecided;
+      return;
+    }
     // 是否达到稳定的拖动距离阈值。
     final bool reachedDistance =
         _horizontalDragDistance.abs() >= _swipeDistanceThreshold;
@@ -180,6 +242,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     final bool reachedVelocity = velocity.abs() >= _swipeVelocityThreshold;
     if (!reachedDistance && !reachedVelocity) {
       _horizontalDragDistance = 0;
+      _horizontalSwipeMode = _TodoHorizontalSwipeMode.undecided;
       return;
     }
     // 优先使用已达到阈值的拖动距离，快速短扫则使用离手速度。
@@ -187,6 +250,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         ? _horizontalDragDistance
         : velocity;
     _horizontalDragDistance = 0;
+    _horizontalSwipeMode = _TodoHorizontalSwipeMode.undecided;
     _moveToAdjacentQuadrant(direction < 0 ? 1 : -1);
   }
 

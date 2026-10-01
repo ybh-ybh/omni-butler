@@ -12,6 +12,7 @@ import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/features/management/presentation/android_management_shell.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
+import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
 import 'package:omni_butler/shared/search/global_search_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:powersync/powersync.dart' show SyncStatus;
@@ -39,6 +40,9 @@ class _AppDestination {
   /// 是否为 Android 管理聚合入口。
   final bool managementGroup;
 
+  /// 对应的一级有状态导航分支。
+  final PrimaryNavigationDestination? primaryDestination;
+
   /// 创建应用导航目的地。
   const _AppDestination({
     required this.path,
@@ -48,6 +52,7 @@ class _AppDestination {
     this.features = const <AppFeature>[],
     this.selectionPaths = const <String>[],
     this.managementGroup = false,
+    this.primaryDestination,
   });
 }
 
@@ -148,6 +153,7 @@ const List<_AppDestination> _androidCompactDestinations = <_AppDestination>[
     label: '首页',
     icon: Icons.home_outlined,
     selectedIcon: Icons.home_rounded,
+    primaryDestination: PrimaryNavigationDestination.home,
   ),
   _AppDestination(
     path: '/todos',
@@ -155,6 +161,7 @@ const List<_AppDestination> _androidCompactDestinations = <_AppDestination>[
     icon: Icons.check_box_outlined,
     selectedIcon: Icons.check_box_rounded,
     features: <AppFeature>[AppFeature.todos],
+    primaryDestination: PrimaryNavigationDestination.todos,
   ),
   _AppDestination(
     path: '/timeline',
@@ -162,6 +169,7 @@ const List<_AppDestination> _androidCompactDestinations = <_AppDestination>[
     icon: Icons.access_time_outlined,
     selectedIcon: Icons.access_time_filled,
     features: <AppFeature>[AppFeature.timeline],
+    primaryDestination: PrimaryNavigationDestination.timeline,
   ),
   _AppDestination(
     path: '/inventory',
@@ -175,12 +183,14 @@ const List<_AppDestination> _androidCompactDestinations = <_AppDestination>[
     ],
     selectionPaths: <String>['/inventory', '/events', '/memberships'],
     managementGroup: true,
+    primaryDestination: PrimaryNavigationDestination.management,
   ),
   _AppDestination(
     path: '/settings',
     label: '更多',
     icon: Icons.apps_outlined,
     selectedIcon: Icons.apps_rounded,
+    primaryDestination: PrimaryNavigationDestination.more,
   ),
 ];
 
@@ -201,13 +211,21 @@ class ResponsiveShell extends ConsumerWidget {
   /// 当前路由路径。
   final String location;
 
-  /// 当前页面内容。
+  /// 当前页面或五分支有状态导航壳层内容。
   final Widget child;
+
+  /// 当前五分支有状态导航壳层；独立布局测试可以不提供。
+  final StatefulNavigationShell? navigationShell;
+
+  /// 与有状态分支容器共享的一级导航协调器；静态布局可以不提供。
+  final PrimaryNavigationCoordinator? primaryNavigationCoordinator;
 
   /// 创建响应式应用壳层。
   const ResponsiveShell({
     required this.location,
     required this.child,
+    this.navigationShell,
+    this.primaryNavigationCoordinator,
     super.key,
   });
 
@@ -302,6 +320,7 @@ class ResponsiveShell extends ConsumerWidget {
                           destination,
                           featurePreference,
                           managementSection,
+                          navigationShell,
                         ),
                   ),
                 );
@@ -353,9 +372,26 @@ class ResponsiveShell extends ConsumerWidget {
     _AppDestination destination,
     FeaturePreference preference,
     ManagementSection preferredSection,
+    StatefulNavigationShell? navigationShell,
   ) {
+    // 当前导航项对应的一级分支。
+    final PrimaryNavigationDestination? primaryDestination =
+        destination.primaryDestination;
+    if (primaryNavigationCoordinator?.isAttached == true &&
+        primaryDestination != null) {
+      primaryNavigationCoordinator?.navigateTo(primaryDestination);
+      return;
+    }
     if (!destination.managementGroup) {
-      context.go(destination.path);
+      if (primaryDestination == null) {
+        context.go(destination.path);
+        return;
+      }
+      if (navigationShell == null) {
+        context.go(destination.path);
+        return;
+      }
+      navigationShell.goBranch(primaryDestination.index);
       return;
     }
     // 根据功能开关解析后的实际管理分区。

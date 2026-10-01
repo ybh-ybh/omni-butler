@@ -311,29 +311,17 @@ void main() {
       '/events',
     );
 
-    // 第一个管理分区继续向右横滑时不循环。
+    // 第一个管理分区继续向右横滑时接力返回时间页。
     await _dragManagementPage(tester, 260);
-    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpAndSettle();
     expect(
       container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/events',
+      '/timeline',
     );
-    expect(
-      find.byKey(const ValueKey<String>('event-mobile-create')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey<String>('inventory-mobile-create')),
-      findsNothing,
-    );
-    expect(
-      find.byKey(const ValueKey<String>('event-statistics-carousel')),
-      findsOneWidget,
-    );
-    _expectManagementScrollableLayout(
-      tester,
-      find.byKey(const ValueKey<String>('event-card-grid')),
-    );
+    // 返回事件页继续验证管理分区内部手势。
+    container.read(appRouterProvider).go('/events');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
     expect(
       find.byKey(const ValueKey<String>('statistics-carousel-indicator-2')),
       findsOneWidget,
@@ -1007,12 +995,12 @@ void main() {
       find.byKey(const ValueKey<String>('management-section-memberships')),
       findsNothing,
     );
-    // 只剩一个管理分区时横滑不离开当前页面。
+    // 只剩一个管理分区时向左横滑直接接力进入更多页。
     await _dragManagementPage(tester, -260);
-    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpAndSettle();
     expect(
       container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/inventory',
+      '/settings',
     );
     expect(tester.takeException(), isNull);
 
@@ -1048,7 +1036,8 @@ void main() {
         child: const OmniButlerApp(),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
 
     expect(find.text('管理'), findsNothing);
     expect(
@@ -1056,6 +1045,9 @@ void main() {
       findsNothing,
     );
 
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
     await database.close();
     debugDefaultTargetPlatformOverride = null;
   });

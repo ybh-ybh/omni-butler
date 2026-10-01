@@ -2,91 +2,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/features/management/presentation/management_navigation.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
+import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
 import 'package:omni_butler/shared/ui/omni_sliding_segmented_control.dart';
 
-/// Android 管理页可切换的业务分区。
-enum ManagementSection {
-  /// 事件记录。
-  events,
+export 'package:omni_butler/features/management/presentation/management_navigation.dart';
 
-  /// 会员管理。
-  memberships,
+/// Android 管理页横滑当前由内部分区还是一级导航处理。
+enum _ManagementHorizontalSwipeMode {
+  /// 尚未根据首个有效位移确定目标。
+  undecided,
 
-  /// 物品管理。
-  inventory,
-}
+  /// 切换管理页内部业务分区。
+  section,
 
-/// 管理分区的展示与导航信息。
-extension ManagementSectionPresentation on ManagementSection {
-  /// 顶部滑块展示文案。
-  String get label => switch (this) {
-    ManagementSection.inventory => '物品管理',
-    ManagementSection.events => '事件记录',
-    ManagementSection.memberships => '会员管理',
-  };
-
-  /// 对应的现有业务路由。
-  String get route => switch (this) {
-    ManagementSection.inventory => '/inventory',
-    ManagementSection.events => '/events',
-    ManagementSection.memberships => '/memberships',
-  };
-
-  /// 对应的功能开关。
-  AppFeature get feature => switch (this) {
-    ManagementSection.inventory => AppFeature.inventory,
-    ManagementSection.events => AppFeature.events,
-    ManagementSection.memberships => AppFeature.memberships,
-  };
-}
-
-/// 管理页会话内最后选中分区控制器。
-class ManagementSectionController extends Notifier<ManagementSection> {
-  /// 首次进入默认显示物品管理。
-  @override
-  ManagementSection build() => ManagementSection.inventory;
-
-  /// 记住用户最近选中的管理分区。
-  void select(ManagementSection section) {
-    if (state == section) {
-      return;
-    }
-    state = section;
-  }
-}
-
-/// 管理页会话内选中分区。
-final NotifierProvider<ManagementSectionController, ManagementSection>
-managementSectionProvider =
-    NotifierProvider<ManagementSectionController, ManagementSection>(
-      ManagementSectionController.new,
-    );
-
-/// 返回当前已启用的管理分区。
-List<ManagementSection> enabledManagementSections(
-  FeaturePreference preference,
-) {
-  return ManagementSection.values
-      .where(
-        (ManagementSection section) => preference.isEnabled(section.feature),
-      )
-      .toList(growable: false);
-}
-
-/// 返回可用的首选分区；全部关闭时返回空值。
-ManagementSection? resolveManagementSection(
-  FeaturePreference preference,
-  ManagementSection preferred,
-) {
-  // 当前已启用的分区列表。
-  final List<ManagementSection> sections = enabledManagementSections(
-    preference,
-  );
-  if (sections.isEmpty) {
-    return null;
-  }
-  return sections.contains(preferred) ? preferred : sections.first;
+  /// 在管理分区首尾接力到一级页面导航。
+  primary,
 }
 
 /// Android 紧凑布局的管理页顶部切换壳层。
@@ -122,6 +54,10 @@ class _AndroidManagementShellState
   /// 本次横向拖动累计距离，向右为正。
   double _horizontalDragDistance = 0;
 
+  /// 本次横滑的目标层级。
+  _ManagementHorizontalSwipeMode _horizontalSwipeMode =
+      _ManagementHorizontalSwipeMode.undecided;
+
   /// 初始化时将直达路由记为最近分区。
   @override
   void initState() {
@@ -153,22 +89,76 @@ class _AndroidManagementShellState
   /// 开始记录管理页面横向拖动。
   void _startHorizontalDrag(DragStartDetails details) {
     _horizontalDragDistance = 0;
+    _horizontalSwipeMode = _ManagementHorizontalSwipeMode.undecided;
   }
 
   /// 累计管理页面横向拖动距离。
   void _updateHorizontalDrag(DragUpdateDetails details) {
     _horizontalDragDistance += details.primaryDelta ?? 0;
+    if (_horizontalSwipeMode == _ManagementHorizontalSwipeMode.undecided &&
+        _horizontalDragDistance != 0) {
+      _horizontalSwipeMode = _resolveHorizontalSwipeMode(
+        _horizontalDragDistance,
+      );
+      if (_horizontalSwipeMode == _ManagementHorizontalSwipeMode.primary) {
+        PrimaryNavigationSwipeScope.maybeOf(context)?.beginPrimarySwipe();
+      }
+    }
+    if (_horizontalSwipeMode == _ManagementHorizontalSwipeMode.primary) {
+      PrimaryNavigationSwipeScope.maybeOf(context)
+          ?.updatePrimarySwipe(_horizontalDragDistance);
+    }
   }
 
   /// 取消本次管理页面横向拖动。
   void _cancelHorizontalDrag() {
+    if (_horizontalSwipeMode == _ManagementHorizontalSwipeMode.primary) {
+      PrimaryNavigationSwipeScope.maybeOf(context)?.cancelPrimarySwipe();
+    }
     _horizontalDragDistance = 0;
+    _horizontalSwipeMode = _ManagementHorizontalSwipeMode.undecided;
+  }
+
+  /// 根据当前管理分区位置决定横滑由内部还是一级导航处理。
+  _ManagementHorizontalSwipeMode _resolveHorizontalSwipeMode(double distance) {
+    // 当前功能启用偏好。
+    final FeaturePreference preference = ref.read(featurePreferenceProvider);
+    // 当前可横滑的管理分区。
+    final List<ManagementSection> sections = enabledManagementSections(
+      preference,
+    );
+    // 当前路由对应的有效管理分区。
+    final ManagementSection? currentSection = resolveManagementSection(
+      preference,
+      widget.selectedSection,
+    );
+    if (currentSection == null) {
+      return _ManagementHorizontalSwipeMode.section;
+    }
+    // 当前分区在可见顺序中的位置。
+    final int currentIndex = sections.indexOf(currentSection);
+    // 左滑前进、右滑后退对应的分区偏移。
+    final int offset = distance < 0 ? 1 : -1;
+    // 当前管理页内部的目标位置。
+    final int targetIndex = currentIndex + offset;
+    if (targetIndex >= 0 && targetIndex < sections.length) {
+      return _ManagementHorizontalSwipeMode.section;
+    }
+    return PrimaryNavigationSwipeScope.maybeOf(context) == null
+        ? _ManagementHorizontalSwipeMode.section
+        : _ManagementHorizontalSwipeMode.primary;
   }
 
   /// 根据拖动距离和速度完成管理分区切换。
   void _finishHorizontalDrag(DragEndDetails details) {
     // 手指离开时的横向速度，向右为正。
     final double velocity = details.primaryVelocity ?? 0;
+    if (_horizontalSwipeMode == _ManagementHorizontalSwipeMode.primary) {
+      PrimaryNavigationSwipeScope.maybeOf(context)?.endPrimarySwipe(velocity);
+      _horizontalDragDistance = 0;
+      _horizontalSwipeMode = _ManagementHorizontalSwipeMode.undecided;
+      return;
+    }
     // 是否达到稳定的拖动距离阈值。
     final bool reachedDistance =
         _horizontalDragDistance.abs() >= _swipeDistanceThreshold;
@@ -176,6 +166,7 @@ class _AndroidManagementShellState
     final bool reachedVelocity = velocity.abs() >= _swipeVelocityThreshold;
     if (!reachedDistance && !reachedVelocity) {
       _horizontalDragDistance = 0;
+      _horizontalSwipeMode = _ManagementHorizontalSwipeMode.undecided;
       return;
     }
     // 优先使用已达到阈值的拖动距离，快速短扫则使用离手速度。
@@ -183,6 +174,7 @@ class _AndroidManagementShellState
         ? _horizontalDragDistance
         : velocity;
     _horizontalDragDistance = 0;
+    _horizontalSwipeMode = _ManagementHorizontalSwipeMode.undecided;
     _moveToAdjacentSection(direction < 0 ? 1 : -1);
   }
 

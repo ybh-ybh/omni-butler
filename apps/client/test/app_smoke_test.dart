@@ -38,6 +38,10 @@ void main() {
     expect(find.text('今日待办'), findsOneWidget);
     expect(find.text('海盐'), findsNothing);
     expect(find.text('石墨'), findsNothing);
+    expect(
+      find.byKey(const ValueKey<String>('primary-navigation-swipe-surface')),
+      findsNothing,
+    );
 
     // 根组件下的 Provider 容器。
     final ProviderContainer container = ProviderScope.containerOf(
@@ -82,6 +86,9 @@ void main() {
     expect(find.text('管理'), findsOneWidget);
     expect(find.text('更多'), findsOneWidget);
 
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
     await database.close();
     debugDefaultTargetPlatformOverride = null;
   });

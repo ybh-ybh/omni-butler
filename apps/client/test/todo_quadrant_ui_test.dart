@@ -1096,15 +1096,22 @@ void main() {
         findsOneWidget,
       );
     }
-    // 最末分类继续左滑时保持不变，不循环回全部。
+    // 最末分类继续左滑时向一级导航接力进入时间页。
     await tester.fling(swipeSurface, const Offset(-160, 0), 800);
     await tester.pumpAndSettle();
     expect(
-      find.byKey(const ValueKey<String>('todo-mobile-section-0-focused')),
-      findsOneWidget,
+      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
+      '/timeline',
     );
+    // 返回待办后保留末项选择，继续验证内部反向相邻切换。
+    container.read(appRouterProvider).go('/todos');
+    await tester.pumpAndSettle();
     // 向右回到快速处理，验证反向相邻切换。
-    await tester.fling(swipeSurface, const Offset(160, 0), 800);
+    await tester.fling(
+      find.byKey(const ValueKey<String>('todo-mobile-swipe-surface')),
+      const Offset(160, 0),
+      800,
+    );
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('todo-mobile-section-1-focused')),
