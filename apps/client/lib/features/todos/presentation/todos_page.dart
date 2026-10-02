@@ -24,18 +24,6 @@ enum _TodoPageView {
   history,
 }
 
-/// 移动端待办横滑当前由内部分类还是一级导航处理。
-enum _TodoHorizontalSwipeMode {
-  /// 尚未根据首个有效位移确定目标。
-  undecided,
-
-  /// 切换待办内部象限分类。
-  quadrant,
-
-  /// 在象限首尾接力到一级页面导航。
-  primary,
-}
-
 /// 待办页面当前聚焦象限的会话状态控制器。
 class _TodoQuadrantFocusController extends Notifier<TodoPriorityQuadrant?> {
   /// 默认显示完整四象限布局。
@@ -82,12 +70,6 @@ class TodosPage extends ConsumerStatefulWidget {
 
 /// 每日待办页面状态。
 class _TodosPageState extends ConsumerState<TodosPage> {
-  /// 触发移动端象限切换所需的最小横向拖动距离。
-  static const double _swipeDistanceThreshold = 48;
-
-  /// 触发移动端象限切换所需的最小横向速度。
-  static const double _swipeVelocityThreshold = 500;
-
   /// 当前完成历史日期。
   late DateTime _selectedDay;
 
@@ -107,12 +89,8 @@ class _TodosPageState extends ConsumerState<TodosPage> {
   /// 当前已经折叠子任务的父任务标识。
   final Set<String> _collapsedTreeIds = <String>{};
 
-  /// 本次移动端横向拖动累计距离，向右为正。
-  double _horizontalDragDistance = 0;
-
-  /// 本次移动端横滑的目标层级。
-  _TodoHorizontalSwipeMode _horizontalSwipeMode =
-      _TodoHorizontalSwipeMode.undecided;
+  /// 待办内容横滑时顶部象限滑块的连续页偏移。
+  double? _swipePageOffset;
 
   /// 撤销浮动消息。
   OmniMessageHandle? _undoMessage;
@@ -171,89 +149,6 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     });
   }
 
-  /// 开始记录移动端待办页面的横向拖动。
-  void _startHorizontalDrag(DragStartDetails details) {
-    _horizontalDragDistance = 0;
-    _horizontalSwipeMode = _TodoHorizontalSwipeMode.undecided;
-  }
-
-  /// 累计移动端待办页面的横向拖动距离。
-  void _updateHorizontalDrag(DragUpdateDetails details) {
-    _horizontalDragDistance += details.primaryDelta ?? 0;
-    if (_horizontalSwipeMode == _TodoHorizontalSwipeMode.undecided &&
-        _horizontalDragDistance != 0) {
-      _horizontalSwipeMode = _resolveHorizontalSwipeMode(
-        _horizontalDragDistance,
-      );
-      if (_horizontalSwipeMode == _TodoHorizontalSwipeMode.primary) {
-        PrimaryNavigationSwipeScope.maybeOf(context)?.beginPrimarySwipe();
-      }
-    }
-    if (_horizontalSwipeMode == _TodoHorizontalSwipeMode.primary) {
-      PrimaryNavigationSwipeScope.maybeOf(context)
-          ?.updatePrimarySwipe(_horizontalDragDistance);
-    }
-  }
-
-  /// 取消本次移动端待办页面的横向拖动。
-  void _cancelHorizontalDrag() {
-    if (_horizontalSwipeMode == _TodoHorizontalSwipeMode.primary) {
-      PrimaryNavigationSwipeScope.maybeOf(context)?.cancelPrimarySwipe();
-    }
-    _horizontalDragDistance = 0;
-    _horizontalSwipeMode = _TodoHorizontalSwipeMode.undecided;
-  }
-
-  /// 根据当前象限位置决定横滑由内部分类还是一级页面处理。
-  _TodoHorizontalSwipeMode _resolveHorizontalSwipeMode(double distance) {
-    // 全部与四个象限的固定滑动顺序。
-    final List<TodoPriorityQuadrant?> options = <TodoPriorityQuadrant?>[
-      null,
-      ...todoPriorityQuadrantActionOrder,
-    ];
-    // 当前分类在滑动顺序中的位置。
-    final int currentIndex = options.indexOf(_priorityQuadrantFilter);
-    // 左滑前进、右滑后退对应的分类偏移。
-    final int offset = distance < 0 ? 1 : -1;
-    // 当前象限内部的目标位置。
-    final int targetIndex = currentIndex + offset;
-    if (currentIndex >= 0 && targetIndex >= 0 && targetIndex < options.length) {
-      return _TodoHorizontalSwipeMode.quadrant;
-    }
-    return PrimaryNavigationSwipeScope.maybeOf(context) == null
-        ? _TodoHorizontalSwipeMode.quadrant
-        : _TodoHorizontalSwipeMode.primary;
-  }
-
-  /// 根据拖动距离和速度完成移动端象限切换。
-  void _finishHorizontalDrag(DragEndDetails details) {
-    // 手指离开时的横向速度，向右为正。
-    final double velocity = details.primaryVelocity ?? 0;
-    if (_horizontalSwipeMode == _TodoHorizontalSwipeMode.primary) {
-      PrimaryNavigationSwipeScope.maybeOf(context)?.endPrimarySwipe(velocity);
-      _horizontalDragDistance = 0;
-      _horizontalSwipeMode = _TodoHorizontalSwipeMode.undecided;
-      return;
-    }
-    // 是否达到稳定的拖动距离阈值。
-    final bool reachedDistance =
-        _horizontalDragDistance.abs() >= _swipeDistanceThreshold;
-    // 是否达到快速滑动速度阈值。
-    final bool reachedVelocity = velocity.abs() >= _swipeVelocityThreshold;
-    if (!reachedDistance && !reachedVelocity) {
-      _horizontalDragDistance = 0;
-      _horizontalSwipeMode = _TodoHorizontalSwipeMode.undecided;
-      return;
-    }
-    // 优先使用已达到阈值的拖动距离，快速短扫则使用离手速度。
-    final double direction = reachedDistance
-        ? _horizontalDragDistance
-        : velocity;
-    _horizontalDragDistance = 0;
-    _horizontalSwipeMode = _TodoHorizontalSwipeMode.undecided;
-    _moveToAdjacentQuadrant(direction < 0 ? 1 : -1);
-  }
-
   /// 切换到当前分类前后相邻的移动端待办象限。
   void _moveToAdjacentQuadrant(int offset) {
     // 全部与四个象限的固定滑动顺序。
@@ -269,6 +164,14 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       return;
     }
     _setPriorityQuadrantFilter(options[targetIndex]);
+  }
+
+  /// 同步待办内容横滑进度到固定顶部象限导航。
+  void _updateSwipePageOffset(double? offset) {
+    if (_swipePageOffset == offset || !mounted) {
+      return;
+    }
+    setState(() => _swipePageOffset = offset);
   }
 
   /// 释放撤销浮动消息。
@@ -303,43 +206,121 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     final bool mobile =
         !desktopPlatform &&
         OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
-    // 当前主体内容。
-    final Widget content = _buildPageContent(
-      context,
-      activeAsync: activeAsync,
-      historyAsync: historyAsync,
-      now: now,
-      mobile: mobile,
-    );
-
     if (mobile) {
+      // 全部与四个象限的固定滑动顺序。
+      final List<TodoPriorityQuadrant?> options = <TodoPriorityQuadrant?>[
+        null,
+        ...todoPriorityQuadrantActionOrder,
+      ];
+      // 当前分类在滑动顺序中的位置。
+      final int currentIndex = options.indexOf(_priorityQuadrantFilter);
+      // 当前分类前一页的象限筛选。
+      final TodoPriorityQuadrant? previousFilter = currentIndex > 0
+          ? options[currentIndex - 1]
+          : null;
+      // 当前分类后一页的象限筛选。
+      final TodoPriorityQuadrant? nextFilter =
+          currentIndex >= 0 && currentIndex + 1 < options.length
+          ? options[currentIndex + 1]
+          : null;
+      // 当前进行中任务树。
+      final List<TodoTreeNode> trees =
+          activeAsync.asData?.value ?? <TodoTreeNode>[];
+      _latestTrees = trees;
+      // 全部未完成节点数量。
+      final int pendingCount = trees.fold<int>(
+        0,
+        (int count, TodoTreeNode tree) =>
+            count + (tree.root.isCompleted ? 0 : 1) + tree.pendingChildrenCount,
+      );
+      // 移动端导航展示的各象限主任务数量。
+      final Map<TodoPriorityQuadrant, int> quadrantCounts =
+          <TodoPriorityQuadrant, int>{
+            for (final TodoPriorityQuadrant quadrant
+                in todoPriorityQuadrantActionOrder)
+              quadrant: 0,
+          };
+      for (final TodoTreeNode tree in trees) {
+        // 当前主任务所属的象限。
+        final TodoPriorityQuadrant quadrant = TodoPriorityQuadrant.fromValue(
+          tree.root.priorityQuadrant,
+        );
+        quadrantCounts.update(quadrant, (int count) => count + 1);
+      }
       return Stack(
         children: <Widget>[
           Positioned.fill(
-            child: GestureDetector(
-              key: const ValueKey<String>('todo-mobile-swipe-surface'),
-              behavior: HitTestBehavior.translucent,
-              onHorizontalDragStart: _pageView == _TodoPageView.active
-                  ? _startHorizontalDrag
-                  : null,
-              onHorizontalDragUpdate: _pageView == _TodoPageView.active
-                  ? _updateHorizontalDrag
-                  : null,
-              onHorizontalDragEnd: _pageView == _TodoPageView.active
-                  ? _finishHorizontalDrag
-                  : null,
-              onHorizontalDragCancel: _pageView == _TodoPageView.active
-                  ? _cancelHorizontalDrag
-                  : null,
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(
-                  OmniSpacing.xs,
-                  OmniSpacing.xs,
-                  OmniSpacing.xs,
-                  88,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    OmniSpacing.xs,
+                    OmniSpacing.xs,
+                    OmniSpacing.xs,
+                    0,
+                  ),
+                  child: _TodoViewBar(
+                    view: _pageView,
+                    mobile: true,
+                    selectedDay: _selectedDay,
+                    today: today,
+                    activeCount: pendingCount,
+                    selectedQuadrant: _priorityQuadrantFilter,
+                    quadrantCounts: quadrantCounts,
+                    quadrantIndicatorIndex: _swipePageOffset == null
+                        ? null
+                        : currentIndex + _swipePageOffset!,
+                    onViewChanged: (_TodoPageView value) {
+                      _dismissUndo();
+                      setState(() => _pageView = value);
+                    },
+                    onDaySelected: (DateTime value) {
+                      setState(() => _selectedDay = DateUtils.dateOnly(value));
+                    },
+                    onQuadrantSelected: _setPriorityQuadrantFilter,
+                  ),
                 ),
-                child: content,
-              ),
+                const SizedBox(height: OmniSpacing.sm),
+                Expanded(
+                  child: NestedPageSwipeSurface(
+                    surfaceKey: const ValueKey<String>(
+                      'todo-mobile-swipe-surface',
+                    ),
+                    previousChild:
+                        _pageView == _TodoPageView.active && currentIndex > 0
+                        ? _buildMobilePage(
+                            context,
+                            activeAsync: activeAsync,
+                            historyAsync: historyAsync,
+                            now: now,
+                            priorityQuadrantFilter: previousFilter,
+                          )
+                        : null,
+                    nextChild:
+                        _pageView == _TodoPageView.active &&
+                            currentIndex >= 0 &&
+                            currentIndex + 1 < options.length
+                        ? _buildMobilePage(
+                            context,
+                            activeAsync: activeAsync,
+                            historyAsync: historyAsync,
+                            now: now,
+                            priorityQuadrantFilter: nextFilter,
+                          )
+                        : null,
+                    onPageChanged: _moveToAdjacentQuadrant,
+                    onPageOffsetChanged: _updateSwipePageOffset,
+                    child: _buildMobilePage(
+                      context,
+                      activeAsync: activeAsync,
+                      historyAsync: historyAsync,
+                      now: now,
+                      priorityQuadrantFilter: _priorityQuadrantFilter,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           if (_pageView == _TodoPageView.active)
@@ -358,12 +339,44 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         ],
       );
     }
+    // 当前桌面主体内容。
+    final Widget content = _buildPageContent(
+      context,
+      activeAsync: activeAsync,
+      historyAsync: historyAsync,
+      now: now,
+      mobile: false,
+      priorityQuadrantFilter: _priorityQuadrantFilter,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(
         horizontal: 14,
         vertical: OmniSpacing.sm,
       ),
       child: content,
+    );
+  }
+
+  /// 构建指定象限筛选对应的移动端滚动内容。
+  Widget _buildMobilePage(
+    BuildContext context, {
+    required AsyncValue<List<TodoTreeNode>> activeAsync,
+    required AsyncValue<List<TodoHistoryEntry>> historyAsync,
+    required DateTime now,
+    required TodoPriorityQuadrant? priorityQuadrantFilter,
+  }) {
+    // 指定象限筛选对应的业务主体。
+    final Widget body = _buildPageBody(
+      context,
+      activeAsync: activeAsync,
+      historyAsync: historyAsync,
+      now: now,
+      mobile: true,
+      priorityQuadrantFilter: priorityQuadrantFilter,
+    );
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(OmniSpacing.xs, 0, OmniSpacing.xs, 88),
+      child: body,
     );
   }
 
@@ -374,6 +387,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     required AsyncValue<List<TodoHistoryEntry>> historyAsync,
     required DateTime now,
     required bool mobile,
+    required TodoPriorityQuadrant? priorityQuadrantFilter,
   }) {
     // 当前进行中任务树。
     final List<TodoTreeNode> trees =
@@ -400,29 +414,14 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       quadrantCounts.update(quadrant, (int count) => count + 1);
     }
     // 当前视图主体。
-    final Widget body = _pageView == _TodoPageView.active
-        ? activeAsync.when(
-            data: (List<TodoTreeNode> records) =>
-                _buildActiveContent(context, records, now: now, mobile: mobile),
-            loading: _buildLoading,
-            error: (Object error, StackTrace stackTrace) =>
-                _ErrorCard(message: '待办读取失败：$error'),
-          )
-        : historyAsync.when(
-            data: (List<TodoHistoryEntry> records) => _CompletedTodoHistory(
-              key: ValueKey<String>(
-                'todo-history-${DateUtils.dateOnly(_selectedDay).toIso8601String()}',
-              ),
-              mobile: mobile,
-              entries: records,
-              onReopen: (TodoRecord todo) => _setTodoCompleted(todo, false),
-              onEdit: (TodoRecord todo) =>
-                  TodoEditorDialog.show(context, record: todo),
-            ),
-            loading: _buildLoading,
-            error: (Object error, StackTrace stackTrace) =>
-                _ErrorCard(message: '完成历史读取失败：$error'),
-          );
+    final Widget body = _buildPageBody(
+      context,
+      activeAsync: activeAsync,
+      historyAsync: historyAsync,
+      now: now,
+      mobile: mobile,
+      priorityQuadrantFilter: priorityQuadrantFilter,
+    );
     // 页面头部与控制区。
     final List<Widget> header = <Widget>[
       if (!mobile) ...<Widget>[
@@ -454,8 +453,9 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         selectedDay: _selectedDay,
         today: DateUtils.dateOnly(now),
         activeCount: pendingCount,
-        selectedQuadrant: _priorityQuadrantFilter,
+        selectedQuadrant: priorityQuadrantFilter,
         quadrantCounts: quadrantCounts,
+        quadrantIndicatorIndex: null,
         onViewChanged: (_TodoPageView value) {
           _dismissUndo();
           setState(() {
@@ -469,7 +469,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         onReturnToQuadrants:
             !mobile &&
                 _pageView == _TodoPageView.active &&
-                _priorityQuadrantFilter != null
+                priorityQuadrantFilter != null
             ? () => _setPriorityQuadrantFilter(null)
             : null,
       ),
@@ -490,6 +490,46 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     );
   }
 
+  /// 构建进行中象限或完成历史的纯业务主体。
+  Widget _buildPageBody(
+    BuildContext context, {
+    required AsyncValue<List<TodoTreeNode>> activeAsync,
+    required AsyncValue<List<TodoHistoryEntry>> historyAsync,
+    required DateTime now,
+    required bool mobile,
+    required TodoPriorityQuadrant? priorityQuadrantFilter,
+  }) {
+    if (_pageView == _TodoPageView.active) {
+      return activeAsync.when(
+        data: (List<TodoTreeNode> records) => _buildActiveContent(
+          context,
+          records,
+          now: now,
+          mobile: mobile,
+          priorityQuadrantFilter: priorityQuadrantFilter,
+        ),
+        loading: _buildLoading,
+        error: (Object error, StackTrace stackTrace) =>
+            _ErrorCard(message: '待办读取失败：$error'),
+      );
+    }
+    return historyAsync.when(
+      data: (List<TodoHistoryEntry> records) => _CompletedTodoHistory(
+        key: ValueKey<String>(
+          'todo-history-${DateUtils.dateOnly(_selectedDay).toIso8601String()}',
+        ),
+        mobile: mobile,
+        entries: records,
+        onReopen: (TodoRecord todo) => _setTodoCompleted(todo, false),
+        onEdit: (TodoRecord todo) =>
+            TodoEditorDialog.show(context, record: todo),
+      ),
+      loading: _buildLoading,
+      error: (Object error, StackTrace stackTrace) =>
+          _ErrorCard(message: '完成历史读取失败：$error'),
+    );
+  }
+
   /// 构建统一加载状态。
   Widget _buildLoading() {
     return const Center(
@@ -506,6 +546,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     List<TodoTreeNode> trees, {
     required DateTime now,
     required bool mobile,
+    required TodoPriorityQuadrant? priorityQuadrantFilter,
   }) {
     // 按象限分组后的任务树。
     final Map<TodoPriorityQuadrant, List<TodoTreeNode>> grouped =
@@ -525,7 +566,12 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       quadrantTrees.sort(_compareTrees);
     }
     if (mobile) {
-      return _buildMobileBoard(context, grouped, now: now);
+      return _buildMobileBoard(
+        context,
+        grouped,
+        now: now,
+        priorityQuadrantFilter: priorityQuadrantFilter,
+      );
     }
     // 当前系统是否要求减少动态效果。
     final bool disableLayoutAnimation =
@@ -536,12 +582,12 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         ? Duration.zero
         : OmniMotion.panel;
     // 当前桌面端象限布局。
-    final Widget desktopBoard = _priorityQuadrantFilter == null
+    final Widget desktopBoard = priorityQuadrantFilter == null
         ? _buildDesktopQuadrantGrid(context, grouped, now: now)
         : _buildDesktopFocusedBoard(
             context,
             grouped,
-            focusedQuadrant: _priorityQuadrantFilter!,
+            focusedQuadrant: priorityQuadrantFilter,
             now: now,
           );
     return AnimatedSwitcher(
@@ -556,9 +602,9 @@ class _TodosPageState extends ConsumerState<TodosPage> {
           ),
       transitionBuilder: (Widget child, Animation<double> animation) {
         // 聚焦布局进入时的水平起点。
-        final double horizontalOffset = _priorityQuadrantFilter == null
+        final double horizontalOffset = priorityQuadrantFilter == null
             ? 0
-            : (_isLeftQuadrant(_priorityQuadrantFilter!) ? -0.025 : 0.025);
+            : (_isLeftQuadrant(priorityQuadrantFilter) ? -0.025 : 0.025);
         // 当前布局的位移动画。
         final Animation<Offset> slideAnimation = Tween<Offset>(
           begin: Offset(horizontalOffset, 0),
@@ -734,11 +780,12 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     BuildContext context,
     Map<TodoPriorityQuadrant, List<TodoTreeNode>> grouped, {
     required DateTime now,
+    required TodoPriorityQuadrant? priorityQuadrantFilter,
   }) {
     // 当前需要展示的象限。
-    final List<TodoPriorityQuadrant> quadrants = _priorityQuadrantFilter == null
+    final List<TodoPriorityQuadrant> quadrants = priorityQuadrantFilter == null
         ? todoPriorityQuadrantActionOrder
-        : <TodoPriorityQuadrant>[_priorityQuadrantFilter!];
+        : <TodoPriorityQuadrant>[priorityQuadrantFilter];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -746,7 +793,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
           if (index > 0) const SizedBox(height: OmniSpacing.xs),
           KeyedSubtree(
             key: ValueKey<String>(
-              'todo-mobile-section-${quadrants[index].value}-${_priorityQuadrantFilter == null ? 'all' : 'focused'}',
+              'todo-mobile-section-${quadrants[index].value}-${priorityQuadrantFilter == null ? 'all' : 'focused'}',
             ),
             child: _buildQuadrant(
               context,
@@ -1356,6 +1403,9 @@ class _TodoViewBar extends StatelessWidget {
   /// 各象限主任务数量。
   final Map<TodoPriorityQuadrant, int> quadrantCounts;
 
+  /// 横滑时象限导航滑块的连续选项索引。
+  final double? quadrantIndicatorIndex;
+
   /// 视图切换回调。
   final ValueChanged<_TodoPageView> onViewChanged;
 
@@ -1377,6 +1427,7 @@ class _TodoViewBar extends StatelessWidget {
     required this.activeCount,
     required this.selectedQuadrant,
     required this.quadrantCounts,
+    required this.quadrantIndicatorIndex,
     required this.onViewChanged,
     required this.onDaySelected,
     required this.onQuadrantSelected,
@@ -1394,6 +1445,7 @@ class _TodoViewBar extends StatelessWidget {
         activeCount: activeCount,
         selectedQuadrant: selectedQuadrant,
         quadrantCounts: quadrantCounts,
+        quadrantIndicatorIndex: quadrantIndicatorIndex,
         onViewChanged: onViewChanged,
         onDaySelected: onDaySelected,
         onQuadrantSelected: onQuadrantSelected,
@@ -2938,6 +2990,9 @@ class _MobileTodoNavigation extends StatelessWidget {
   /// 各象限主任务数量。
   final Map<TodoPriorityQuadrant, int> quadrantCounts;
 
+  /// 横滑时象限导航滑块的连续选项索引。
+  final double? quadrantIndicatorIndex;
+
   /// 一级视图切换回调。
   final ValueChanged<_TodoPageView> onViewChanged;
 
@@ -2955,6 +3010,7 @@ class _MobileTodoNavigation extends StatelessWidget {
     required this.activeCount,
     required this.selectedQuadrant,
     required this.quadrantCounts,
+    required this.quadrantIndicatorIndex,
     required this.onViewChanged,
     required this.onDaySelected,
     required this.onQuadrantSelected,
@@ -3064,6 +3120,7 @@ class _MobileTodoNavigation extends StatelessWidget {
       key: const ValueKey<String>('todo-mobile-quadrant-filters'),
       options: options,
       selected: selectedQuadrant,
+      indicatorIndex: quadrantIndicatorIndex,
       width: width,
       height: OmniSize.touch,
       embedded: true,

@@ -1135,6 +1135,60 @@ void main() {
     final Finder swipeSurface = find.byKey(
       const ValueKey<String>('todo-mobile-swipe-surface'),
     );
+    // 横滑前固定待办导航的边界。
+    final Rect todoNavigationRect = tester.getRect(
+      find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
+    );
+    // 横滑前象限导航滑块的水平位置。
+    final double todoIndicatorStart = quadrantIndicator.alignment
+        .resolve(TextDirection.ltr)
+        .x;
+    // 用于检查待办象限跟手中间态的真实触摸手势。
+    final TestGesture todoGesture = await tester.startGesture(
+      tester.getTopLeft(swipeSurface) + const Offset(330, 240),
+    );
+    await todoGesture.moveBy(const Offset(-24, 0));
+    await tester.pump();
+    await todoGesture.moveBy(const Offset(-72, 0));
+    await tester.pump();
+    // 正在离开的全部象限卡片缩放变换。
+    final Transform todoCurrentScale = tester.widget<Transform>(
+      find.byKey(const ValueKey<String>('nested-page-swipe-current-scale')),
+    );
+    // 正在进入的单象限卡片缩放变换。
+    final Transform todoTargetScale = tester.widget<Transform>(
+      find.byKey(const ValueKey<String>('nested-page-swipe-target-scale')),
+    );
+    // 正在离开的全部象限卡片外观。
+    final PhysicalModel todoCurrentCard = tester.widget<PhysicalModel>(
+      find.byKey(const ValueKey<String>('nested-page-swipe-current-card')),
+    );
+    // 跟手中的象限导航滑块水平位置。
+    final double todoIndicatorDragged = tester
+        .widget<AnimatedAlign>(
+          find.descendant(
+            of: find.byKey(
+              const ValueKey<String>('todo-mobile-quadrant-filters'),
+            ),
+            matching: find.byType(AnimatedAlign),
+          ),
+        )
+        .alignment
+        .resolve(TextDirection.ltr)
+        .x;
+    expect(todoCurrentScale.transform.storage[0], lessThan(1));
+    expect(todoTargetScale.transform.storage[0], greaterThan(0.985));
+    expect(todoCurrentCard.elevation, greaterThan(0));
+    expect(
+      tester.getRect(
+        find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
+      ),
+      todoNavigationRect,
+    );
+    expect(todoIndicatorDragged, greaterThan(todoIndicatorStart));
+    await todoGesture.moveBy(const Offset(72, 0));
+    await todoGesture.up();
+    await tester.pumpAndSettle();
     // 向左依次切换立即处理、安排时间、快速处理和有空再做。
     for (final TodoPriorityQuadrant quadrant
         in todoPriorityQuadrantActionOrder) {

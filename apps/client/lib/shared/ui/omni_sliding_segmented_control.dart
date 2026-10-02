@@ -9,6 +9,9 @@ class OmniSlidingSegmentedControl<T> extends StatelessWidget {
   /// 当前选中的选项。
   final T selected;
 
+  /// 横滑过程中用于直接定位滑块的连续选项索引。
+  final double? indicatorIndex;
+
   /// 控件总宽度。
   final double width;
 
@@ -40,6 +43,7 @@ class OmniSlidingSegmentedControl<T> extends StatelessWidget {
     required this.onChanged,
     this.height = 36,
     this.embedded = false,
+    this.indicatorIndex,
     this.itemBuilder,
     this.itemKeyBuilder,
     super.key,
@@ -57,14 +61,19 @@ class OmniSlidingSegmentedControl<T> extends StatelessWidget {
     final bool disableAnimation =
         MediaQuery.disableAnimationsOf(context) ||
         MediaQuery.of(context).accessibleNavigation;
+    // 横滑跟手时直接使用连续索引，静态切换时使用当前选中项。
+    final double resolvedIndicatorIndex = (indicatorIndex ?? selectedIndex)
+        .clamp(0, options.length - 1)
+        .toDouble();
     // 滑块动画时长。
-    final Duration animationDuration = disableAnimation
+    final Duration animationDuration =
+        disableAnimation || indicatorIndex != null
         ? Duration.zero
         : OmniMotion.normal;
     // 当前滑块在连续轨道中的对齐位置。
     final double indicatorAlignment = options.length == 1
         ? 0
-        : -1 + (2 * selectedIndex / (options.length - 1));
+        : -1 + (2 * resolvedIndicatorIndex / (options.length - 1));
 
     return Container(
       width: width,

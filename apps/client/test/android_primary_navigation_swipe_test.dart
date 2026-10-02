@@ -13,6 +13,45 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证 Android 紧凑布局的全局卡片式横滑导航。
 void main() {
+  test('分页吸附要求慢拖越过半页且快速滑动方向一致', () {
+    expect(
+      OmniPageSwipePhysics.shouldCommit(
+        distance: -194,
+        velocity: 0,
+        viewportWidth: 390,
+        targetDirection: 1,
+      ),
+      isFalse,
+    );
+    expect(
+      OmniPageSwipePhysics.shouldCommit(
+        distance: -195,
+        velocity: 0,
+        viewportWidth: 390,
+        targetDirection: 1,
+      ),
+      isTrue,
+    );
+    expect(
+      OmniPageSwipePhysics.shouldCommit(
+        distance: -20,
+        velocity: 600,
+        viewportWidth: 390,
+        targetDirection: 1,
+      ),
+      isFalse,
+    );
+    expect(
+      OmniPageSwipePhysics.shouldCommit(
+        distance: -20,
+        velocity: -600,
+        viewportWidth: 390,
+        targetDirection: 1,
+      ),
+      isTrue,
+    );
+  });
+
   testWidgets('五个一级页面双向切换且拖动时展示真实卡片动效', (WidgetTester tester) async {
     // 当前测试使用的应用环境。
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
@@ -52,6 +91,8 @@ void main() {
     expect(currentCard.borderRadius, isNot(BorderRadius.zero));
     expect(_currentPath(app.container), '/home');
 
+    await gesture.moveBy(const Offset(-160, 0));
+    await tester.pump();
     await gesture.up();
     await tester.pumpAndSettle();
     expect(_currentPath(app.container), '/todos');
@@ -62,11 +103,11 @@ void main() {
       '/inventory',
       '/settings',
     ]) {
-      await _swipePrimary(tester, -120);
+      await _swipePrimary(tester, -220);
       expect(_currentPath(app.container), expectedPath);
     }
     // 更多页到达末端后不会循环回首页。
-    await _swipePrimary(tester, -120);
+    await _swipePrimary(tester, -220);
     expect(_currentPath(app.container), '/settings');
 
     // 反向依次返回管理、时间、待办和首页。
@@ -76,11 +117,11 @@ void main() {
       '/todos',
       '/home',
     ]) {
-      await _swipePrimary(tester, 120);
+      await _swipePrimary(tester, 220);
       expect(_currentPath(app.container), expectedPath);
     }
     // 首页到达首端后不会循环到更多页。
-    await _swipePrimary(tester, 120);
+    await _swipePrimary(tester, 220);
     expect(_currentPath(app.container), '/home');
 
     await _disposePrimaryNavigationApp(tester, app);

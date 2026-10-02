@@ -96,6 +96,38 @@ void main() {
 
     await tester.tap(categoryRows.first);
     await tester.pump();
+    // 页面层级切换期间主页和详情页通过同一组淡出淡入动画交接。
+    final Finder overviewFade = find.ancestor(
+      of: find.byKey(const ValueKey<String>('android-settings-overview')),
+      matching: find.byType(FadeTransition),
+    );
+    // 功能管理详情页的淡入动画。
+    final Finder detailFade = find.ancestor(
+      of: find.byKey(
+        const ValueKey<String>('android-settings-detail-features'),
+      ),
+      matching: find.byType(FadeTransition),
+    );
+    expect(overviewFade, findsOneWidget);
+    expect(detailFade, findsOneWidget);
+    // 页面切换动画的中点等待时长。
+    final Duration transitionHalfway = Duration(
+      microseconds: OmniMotion.panel.inMicroseconds ~/ 2,
+    );
+    await tester.pump(transitionHalfway);
+    // 动画中点的主页透明度。
+    final double overviewOpacity = tester
+        .widget<FadeTransition>(overviewFade)
+        .opacity
+        .value;
+    // 动画中点的详情页透明度。
+    final double detailOpacity = tester
+        .widget<FadeTransition>(detailFade)
+        .opacity
+        .value;
+    expect(overviewOpacity, inExclusiveRange(0, 1));
+    expect(detailOpacity, inExclusiveRange(0, 1));
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('android-settings-detail-features')),
       findsOneWidget,
@@ -117,20 +149,20 @@ void main() {
     await tester.tap(
       find.byKey(const ValueKey<String>('android-settings-back')),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('android-settings-overview')),
       findsOneWidget,
     );
 
     await tester.tap(categoryRows[1]);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('android-settings-detail-appearance')),
       findsOneWidget,
     );
     await tester.binding.handlePopRoute();
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('android-settings-overview')),
       findsOneWidget,
@@ -146,7 +178,7 @@ void main() {
       await tester.tap(
         find.byKey(ValueKey<String>('android-settings-category-$name')),
       );
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(
         find.byKey(ValueKey<String>('android-settings-detail-$name')),
         findsOneWidget,
@@ -165,7 +197,7 @@ void main() {
       await tester.tap(
         find.byKey(const ValueKey<String>('android-settings-back')),
       );
-      await tester.pump();
+      await tester.pumpAndSettle();
     }
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -350,6 +382,80 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('新建周期事件'), findsOneWidget);
     await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+
+    // 管理分区内部横滑应与一级导航一样展示真实双卡片跟手动效。
+    final Finder managementSwipeSurface = find.byKey(
+      const ValueKey<String>('android-management-swipe-surface'),
+    );
+    // 横滑前固定管理导航的边界。
+    final Rect managementNavigationRect = tester.getRect(
+      find.byKey(const ValueKey<String>('management-section-control')),
+    );
+    // 横滑前管理导航滑块的水平位置。
+    final double managementIndicatorStart = tester
+        .widget<AnimatedAlign>(
+          find.descendant(
+            of: find.byKey(
+              const ValueKey<String>('management-section-control'),
+            ),
+            matching: find.byType(AnimatedAlign),
+          ),
+        )
+        .alignment
+        .resolve(TextDirection.ltr)
+        .x;
+    // 管理分区横滑表面的实际边界。
+    final Rect managementSwipeRect = tester.getRect(managementSwipeSurface);
+    // 用于检查管理分区跟手中间态的真实触摸手势。
+    final TestGesture managementGesture = await tester.startGesture(
+      Offset(managementSwipeRect.right - 60, managementSwipeRect.bottom - 200),
+    );
+    await managementGesture.moveBy(const Offset(-24, 0));
+    await tester.pump();
+    await managementGesture.moveBy(const Offset(-72, 0));
+    await tester.pump();
+    // 正在离开的事件分区卡片缩放变换。
+    final Transform managementCurrentScale = tester.widget<Transform>(
+      find.byKey(const ValueKey<String>('nested-page-swipe-current-scale')),
+    );
+    // 正在进入的会员分区卡片缩放变换。
+    final Transform managementTargetScale = tester.widget<Transform>(
+      find.byKey(const ValueKey<String>('nested-page-swipe-target-scale')),
+    );
+    // 正在离开的事件分区卡片外观。
+    final PhysicalModel managementCurrentCard = tester.widget<PhysicalModel>(
+      find.byKey(const ValueKey<String>('nested-page-swipe-current-card')),
+    );
+    // 跟手中的管理导航滑块水平位置。
+    final double managementIndicatorDragged = tester
+        .widget<AnimatedAlign>(
+          find.descendant(
+            of: find.byKey(
+              const ValueKey<String>('management-section-control'),
+            ),
+            matching: find.byType(AnimatedAlign),
+          ),
+        )
+        .alignment
+        .resolve(TextDirection.ltr)
+        .x;
+    expect(managementCurrentScale.transform.storage[0], lessThan(1));
+    expect(managementTargetScale.transform.storage[0], greaterThan(0.985));
+    expect(managementCurrentCard.elevation, greaterThan(0));
+    expect(
+      tester.getRect(
+        find.byKey(const ValueKey<String>('management-section-control')),
+      ),
+      managementNavigationRect,
+    );
+    expect(managementIndicatorDragged, greaterThan(managementIndicatorStart));
+    expect(
+      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
+      '/events',
+    );
+    await managementGesture.moveBy(const Offset(72, 0));
+    await managementGesture.up();
     await tester.pumpAndSettle();
 
     // 短距离拖动不应误切管理分区。

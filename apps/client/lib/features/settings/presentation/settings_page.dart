@@ -164,6 +164,28 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   Widget _buildAndroidSettings(OmniColors colors) {
     // 当前 Android 二级分类。
     final _SettingsCategory? selectedCategory = _androidSelectedCategory;
+    // 当前系统是否要求关闭页面切换动画。
+    final bool disableAnimations =
+        MediaQuery.disableAnimationsOf(context) ||
+        MediaQuery.of(context).accessibleNavigation;
+    // 当前 Android 设置层级对应的完整页面卡片。
+    final Widget page = selectedCategory == null
+        ? _AndroidSettingsOverview(
+            key: const ValueKey<String>('android-settings-page-overview'),
+            onSelected: _openAndroidCategory,
+          )
+        : _AndroidSettingsDetail(
+            key: ValueKey<String>(
+              'android-settings-page-${selectedCategory.name}',
+            ),
+            category: selectedCategory,
+            onBack: _closeAndroidCategory,
+            child: _SettingsCategoryContent(
+              category: selectedCategory,
+              colors: colors,
+              showPageHeader: false,
+            ),
+          );
     return PopScope<Object?>(
       canPop: selectedCategory == null,
       onPopInvokedWithResult: (bool didPop, Object? result) {
@@ -171,17 +193,21 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           _closeAndroidCategory();
         }
       },
-      child: selectedCategory == null
-          ? _AndroidSettingsOverview(onSelected: _openAndroidCategory)
-          : _AndroidSettingsDetail(
-              category: selectedCategory,
-              onBack: _closeAndroidCategory,
-              child: _SettingsCategoryContent(
-                category: selectedCategory,
-                colors: colors,
-                showPageHeader: false,
-              ),
+      child: AnimatedSwitcher(
+        key: const ValueKey<String>('android-settings-page-switcher'),
+        duration: disableAnimations ? Duration.zero : OmniMotion.panel,
+        reverseDuration: disableAnimations ? Duration.zero : OmniMotion.panel,
+        switchInCurve: OmniMotion.standardCurve,
+        switchOutCurve: OmniMotion.standardCurve,
+        layoutBuilder: (Widget? currentChild, List<Widget> previousChildren) =>
+            Stack(
+              fit: StackFit.expand,
+              children: <Widget>[...previousChildren, ?currentChild],
             ),
+        transitionBuilder: (Widget child, Animation<double> animation) =>
+            FadeTransition(opacity: animation, child: child),
+        child: page,
+      ),
     );
   }
 
@@ -205,7 +231,7 @@ class _AndroidSettingsOverview extends StatelessWidget {
   final ValueChanged<_SettingsCategory> onSelected;
 
   /// 创建 Android 设置分类主页。
-  const _AndroidSettingsOverview({required this.onSelected});
+  const _AndroidSettingsOverview({required this.onSelected, super.key});
 
   /// 构建分组三组的设置分类卡片。
   @override
@@ -281,6 +307,7 @@ class _AndroidSettingsDetail extends StatelessWidget {
     required this.category,
     required this.onBack,
     required this.child,
+    super.key,
   });
 
   /// 构建带返回标题栏的分类详情。

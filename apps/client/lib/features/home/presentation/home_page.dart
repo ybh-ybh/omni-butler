@@ -1831,6 +1831,11 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
     final String? dueLabel = widget.todo.dueAt == null
         ? null
         : _formatHomeTodoDueAt(widget.todo);
+    // Android 首页通过任务名称控制子任务，其余平台继续通过名称编辑任务。
+    final VoidCallback? onTitleTap =
+        Theme.of(context).platform == TargetPlatform.android
+        ? widget.onToggleChildren
+        : () => widget.onEdit(widget.todo);
 
     return AnimatedSize(
       duration: collapseDuration,
@@ -1912,7 +1917,7 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                                 key: ValueKey<String>(
                                   'home-todo-title-action-${widget.todo.id}',
                                 ),
-                                onTap: () => widget.onEdit(widget.todo),
+                                onTap: onTitleTap,
                                 borderRadius: BorderRadius.circular(
                                   OmniRadius.control,
                                 ),

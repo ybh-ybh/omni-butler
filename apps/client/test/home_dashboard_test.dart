@@ -322,6 +322,25 @@ void main() {
       findsNothing,
     );
     expect(find.text('Android 子任务'), findsOneWidget);
+    // Android 首页点击父任务名称时直接折叠子任务，不再打开编辑弹窗。
+    final Finder parentTitleAction = find.byKey(
+      ValueKey<String>('home-todo-title-action-${parent.id}'),
+    );
+    await tester.tap(parentTitleAction);
+    await tester.pumpAndSettle();
+    expect(find.text('Android 子任务'), findsNothing);
+    expect(find.text('编辑待办'), findsNothing);
+    await tester.tap(parentTitleAction);
+    await tester.pumpAndSettle();
+    expect(find.text('Android 子任务'), findsOneWidget);
+    // 无直属子任务的名称在 Android 首页不再触发编辑。
+    final TodoRecord child = (await database.select(database.todoItems).get())
+        .singleWhere((TodoRecord item) => item.parentId == parent.id);
+    await tester.tap(
+      find.byKey(ValueKey<String>('home-todo-title-action-${child.id}')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('编辑待办'), findsNothing);
     // 待办卡片标题右侧的批量子任务按钮。
     final Finder toggleAll = find.byKey(
       const ValueKey<String>('home-todo-toggle-all'),
