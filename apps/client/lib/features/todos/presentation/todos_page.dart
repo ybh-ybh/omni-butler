@@ -2109,7 +2109,9 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
       now: widget.now,
       completing: widget.completingTodoIds.contains(tree.root.id),
       treeControl: treeControl,
-      progressLabel: tree.children.isEmpty ? null : '${tree.children.length}',
+      progressLabel: tree.children.isEmpty
+          ? null
+          : '${tree.pendingChildrenCount}/${tree.children.length}',
       onCompletedChanged: (bool value) =>
           widget.onCompletedChanged(tree.root, value),
       onTap: widget.mobile

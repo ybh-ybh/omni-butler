@@ -1461,10 +1461,22 @@ void main() {
     await repository.save(
       TodoDraft(title: '发布子任务', parentId: root.id, scheduledDate: today),
     );
-    // 主任务下的子任务记录。
-    final TodoRecord child = await (database.select(
+    await repository.save(
+      TodoDraft(title: '已完成子任务', parentId: root.id, scheduledDate: today),
+    );
+    // 主任务下的全部子任务记录。
+    final List<TodoRecord> children = await (database.select(
       database.todoItems,
-    )..where((TodoItems table) => table.parentId.equals(root.id))).getSingle();
+    )..where((TodoItems table) => table.parentId.equals(root.id))).get();
+    // 仍未完成的子任务记录。
+    final TodoRecord pendingChild = children.singleWhere(
+      (TodoRecord child) => child.title == '发布子任务',
+    );
+    // 准备用于验证总数的已完成子任务记录。
+    final TodoRecord completedChild = children.singleWhere(
+      (TodoRecord child) => child.title == '已完成子任务',
+    );
+    await repository.setCompleted(completedChild.id, true);
 
     await tester.pumpWidget(
       ProviderScope(
@@ -1487,17 +1499,17 @@ void main() {
     expect(find.text('发布主任务'), findsOneWidget);
     expect(find.text('核对发布清单'), findsOneWidget);
     expect(find.text('发布子任务'), findsOneWidget);
-    // 只显示子任务总数的数量标签。
+    // 显示未完成子任务数量与子任务总数的进度标签。
     final Finder childCountTag = find.byKey(
       ValueKey<String>('todo-tree-progress-${root.id}'),
     );
     expect(childCountTag, findsOneWidget);
     expect(
-      find.descendant(of: childCountTag, matching: find.text('1')),
+      find.descendant(of: childCountTag, matching: find.text('1/2')),
       findsOneWidget,
     );
     expect(
-      find.byKey(ValueKey<String>('todo-tree-branch-${child.id}')),
+      find.byKey(ValueKey<String>('todo-tree-branch-${pendingChild.id}')),
       findsOneWidget,
     );
     // 父任务的统一列表行。
@@ -1510,7 +1522,7 @@ void main() {
     // 子任务的统一列表行。
     final OmniListRow childListRow = tester.widget<OmniListRow>(
       find.descendant(
-        of: find.byKey(ValueKey<String>('todo-child-${child.id}')),
+        of: find.byKey(ValueKey<String>('todo-child-${pendingChild.id}')),
         matching: find.byType(OmniListRow),
       ),
     );
@@ -1613,7 +1625,7 @@ void main() {
     await tester.pump();
     expect(find.text('发布子任务'), findsNothing);
     expect(
-      find.byKey(ValueKey<String>('todo-tree-branch-${child.id}')),
+      find.byKey(ValueKey<String>('todo-tree-branch-${pendingChild.id}')),
       findsNothing,
     );
     expect(find.byTooltip('展开子任务'), findsOneWidget);
@@ -1622,7 +1634,7 @@ void main() {
     await tester.pump();
     expect(find.text('发布子任务'), findsOneWidget);
     expect(
-      find.byKey(ValueKey<String>('todo-tree-branch-${child.id}')),
+      find.byKey(ValueKey<String>('todo-tree-branch-${pendingChild.id}')),
       findsOneWidget,
     );
     expect(tester.widget<IconButton>(quadrantToggleAll).tooltip, '收起全部子任务');
@@ -1691,17 +1703,21 @@ void main() {
     final TodoRecord movedRoot = await (database.select(
       database.todoItems,
     )..where((TodoItems table) => table.id.equals(root.id))).getSingle();
-    // 拖动后的子任务。
-    final TodoRecord movedChild = await (database.select(
+    // 拖动后的全部子任务。
+    final List<TodoRecord> movedChildren = await (database.select(
       database.todoItems,
-    )..where((TodoItems table) => table.parentId.equals(root.id))).getSingle();
+    )..where((TodoItems table) => table.parentId.equals(root.id))).get();
     expect(
       movedRoot.priorityQuadrant,
       TodoPriorityQuadrant.urgentNotImportant.value,
     );
     expect(
-      movedChild.priorityQuadrant,
-      TodoPriorityQuadrant.urgentNotImportant.value,
+      movedChildren.every(
+        (TodoRecord child) =>
+            child.priorityQuadrant ==
+            TodoPriorityQuadrant.urgentNotImportant.value,
+      ),
+      isTrue,
     );
 
     await tester.pumpWidget(const SizedBox.shrink());
