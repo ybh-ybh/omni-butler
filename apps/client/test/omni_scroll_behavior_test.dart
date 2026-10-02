@@ -4,7 +4,7 @@ import 'package:omni_butler/app/omni_scroll_behavior.dart';
 
 /// 验证应用级滚动行为的平台差异与边界回弹。
 void main() {
-  testWidgets('Android 在顶部和底部使用 iOS 弹性回弹', (WidgetTester tester) async {
+  testWidgets('Android 在顶部和底部使用低幅弹性回弹', (WidgetTester tester) async {
     // 被测列表的滚动控制器。
     final ScrollController controller = ScrollController();
     addTearDown(controller.dispose);
@@ -30,9 +30,13 @@ void main() {
     final TestGesture topGesture = await tester.startGesture(
       tester.getCenter(find.byType(ListView)),
     );
-    await topGesture.moveBy(const Offset(0, 120));
-    await tester.pump();
+    // 当前分段拖动的序号，用于模拟真实手指连续移动。
+    for (int step = 0; step < 6; step += 1) {
+      await topGesture.moveBy(const Offset(0, 20));
+      await tester.pump();
+    }
     expect(controller.offset, lessThan(0));
+    expect(controller.offset.abs(), lessThan(50));
     await topGesture.up();
     await tester.pumpAndSettle();
     expect(controller.offset, closeTo(0, 0.01));
@@ -45,9 +49,13 @@ void main() {
     final TestGesture bottomGesture = await tester.startGesture(
       tester.getCenter(find.byType(ListView)),
     );
-    await bottomGesture.moveBy(const Offset(0, -120));
-    await tester.pump();
+    // 当前分段拖动的序号，用于模拟真实手指连续移动。
+    for (int step = 0; step < 6; step += 1) {
+      await bottomGesture.moveBy(const Offset(0, -20));
+      await tester.pump();
+    }
     expect(controller.offset, greaterThan(maxScrollExtent));
+    expect(controller.offset - maxScrollExtent, lessThan(50));
     await bottomGesture.up();
     await tester.pumpAndSettle();
     expect(controller.offset, closeTo(maxScrollExtent, 0.01));

@@ -129,6 +129,97 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     final bool compact = OmniBreakpoint.isCompact(
       MediaQuery.sizeOf(context).width,
     );
+    // 事件统计区域。
+    final Widget statistics = _EventStatistics(
+      events: activeEvents,
+      completions: completions,
+      now: now,
+      useCarousel: widget.embeddedInManagement,
+    );
+    // 事件状态筛选栏。
+    final Widget toolbar = _EventToolbar(
+      compact: compact,
+      showArchived: _showArchived,
+      useTwoColumns: _useTwoColumns,
+      onArchivedChanged: (bool value) {
+        setState(() => _showArchived = value);
+      },
+      onToggleLayout: () {
+        setState(() => _useTwoColumns = !_useTwoColumns);
+      },
+    );
+    // 当前事件列表内容。
+    final Widget records = events.when(
+      data: (List<EventRecord> records) {
+        if (records.isEmpty) {
+          return _EmptyEvents(archived: _showArchived);
+        }
+        return _EventCardGrid(
+          events: records,
+          archived: _showArchived,
+          useTwoColumns: _useTwoColumns,
+          compactCards: widget.embeddedInManagement,
+          safeBottomPadding: widget.embeddedInManagement
+              ? _mobileActionClearance
+              : 0,
+          onRecord: _recordNow,
+          onHistory: _openHistory,
+          onEdit: _openEditor,
+          onArchive: _toggleArchived,
+          onDelete: _delete,
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (Object error, StackTrace stackTrace) =>
+          Center(child: Text('事件读取失败：$error')),
+    );
+    // Android 管理页让统计卡随外层滚动离开，筛选栏留在列表顶部。
+    final Widget pageContent = widget.embeddedInManagement
+        ? NestedScrollView(
+            key: const ValueKey<String>('event-management-scroll'),
+            headerSliverBuilder:
+                (BuildContext context, bool innerBoxIsScrolled) => <Widget>[
+                  SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        statistics,
+                        const SizedBox(height: OmniSpacing.xs),
+                      ],
+                    ),
+                  ),
+                ],
+            body: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                toolbar,
+                const SizedBox(height: OmniSpacing.xs),
+                Expanded(child: records),
+              ],
+            ),
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              OmniPageHeader(
+                title: '事件记录',
+                actions: <Widget>[
+                  OmniButton(
+                    label: '新增事件',
+                    icon: Icons.add_rounded,
+                    variant: OmniButtonVariant.pagePrimary,
+                    onPressed: _openEditor,
+                  ),
+                ],
+              ),
+              const SizedBox(height: OmniSpacing.xs),
+              statistics,
+              const SizedBox(height: OmniSpacing.xs),
+              toolbar,
+              const SizedBox(height: OmniSpacing.xs),
+              Expanded(child: records),
+            ],
+          );
     return Scaffold(
       floatingActionButton: widget.embeddedInManagement
           ? OmniButton(
@@ -152,69 +243,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                 horizontal: 14,
                 vertical: OmniSpacing.sm,
               ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            if (!widget.embeddedInManagement) ...<Widget>[
-              OmniPageHeader(
-                title: '事件记录',
-                actions: <Widget>[
-                  OmniButton(
-                    label: '新增事件',
-                    icon: Icons.add_rounded,
-                    variant: OmniButtonVariant.pagePrimary,
-                    onPressed: _openEditor,
-                  ),
-                ],
-              ),
-              const SizedBox(height: OmniSpacing.xs),
-            ],
-            _EventStatistics(
-              events: activeEvents,
-              completions: completions,
-              now: now,
-              useCarousel: widget.embeddedInManagement,
-            ),
-            const SizedBox(height: OmniSpacing.xs),
-            _EventToolbar(
-              compact: compact,
-              showArchived: _showArchived,
-              useTwoColumns: _useTwoColumns,
-              onArchivedChanged: (bool value) {
-                setState(() => _showArchived = value);
-              },
-              onToggleLayout: () {
-                setState(() => _useTwoColumns = !_useTwoColumns);
-              },
-            ),
-            const SizedBox(height: OmniSpacing.xs),
-            Expanded(
-              child: events.when(
-                data: (List<EventRecord> records) {
-                  if (records.isEmpty) {
-                    return _EmptyEvents(archived: _showArchived);
-                  }
-                  return _EventCardGrid(
-                    events: records,
-                    archived: _showArchived,
-                    useTwoColumns: _useTwoColumns,
-                    safeBottomPadding: widget.embeddedInManagement
-                        ? _mobileActionClearance
-                        : 0,
-                    onRecord: _recordNow,
-                    onHistory: _openHistory,
-                    onEdit: _openEditor,
-                    onArchive: _toggleArchived,
-                    onDelete: _delete,
-                  );
-                },
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (Object error, StackTrace stackTrace) =>
-                    Center(child: Text('事件读取失败：$error')),
-              ),
-            ),
-          ],
-        ),
+        child: pageContent,
       ),
     );
   }
@@ -826,6 +855,9 @@ class _EventCardGrid extends StatelessWidget {
   /// 是否优先使用双列布局。
   final bool useTwoColumns;
 
+  /// 是否使用 Android 管理页紧凑卡片。
+  final bool compactCards;
+
   /// 滚动到底部时为悬浮操作按钮保留的安全间距。
   final double safeBottomPadding;
 
@@ -849,6 +881,7 @@ class _EventCardGrid extends StatelessWidget {
     required this.events,
     required this.archived,
     required this.useTwoColumns,
+    required this.compactCards,
     required this.safeBottomPadding,
     required this.onRecord,
     required this.onHistory,
@@ -886,6 +919,7 @@ class _EventCardGrid extends StatelessWidget {
                         key: ValueKey<String>('event-card-${event.id}'),
                         event: event,
                         archived: archived,
+                        compact: compactCards,
                         onRecord: () => onRecord(event),
                         onHistory: () => onHistory(event),
                         onEdit: () => onEdit(event),
@@ -911,6 +945,9 @@ class _EventCard extends ConsumerWidget {
   /// 当前是否来自归档列表。
   final bool archived;
 
+  /// 是否使用 Android 管理页紧凑布局。
+  final bool compact;
+
   /// 记录完成回调。
   final VoidCallback onRecord;
 
@@ -930,6 +967,7 @@ class _EventCard extends ConsumerWidget {
   const _EventCard({
     required this.event,
     required this.archived,
+    required this.compact,
     required this.onRecord,
     required this.onHistory,
     required this.onEdit,
@@ -984,11 +1022,40 @@ class _EventCard extends ConsumerWidget {
         : dueAt == null
         ? '完成一次后开始推算'
         : '下次 ${dueAt.month} 月 ${dueAt.day} 日';
+    // Android 管理页使用更紧凑的卡片内边距。
+    final EdgeInsetsGeometry cardPadding = compact
+        ? const EdgeInsets.symmetric(
+            horizontal: OmniSpacing.sm,
+            vertical: OmniSpacing.xs,
+          )
+        : const EdgeInsets.all(OmniSpacing.md);
+    // Android 管理页不再保留桌面卡片的一百八十四像素内容下限。
+    final BoxConstraints cardConstraints = compact
+        ? const BoxConstraints()
+        : const BoxConstraints(minHeight: 184);
+    // 紧凑卡片统一使用四像素段间距。
+    final double sectionGap = compact ? OmniSpacing.xxs : OmniSpacing.sm;
+    // 紧凑卡片的事件图标尺寸。
+    final double iconSize = compact ? OmniSize.control : 36;
+    // 紧凑卡片的醒目状态文字层级。
+    final TextStyle? headlineStyle = compact
+        ? Theme.of(context).textTheme.titleLarge
+        : Theme.of(context).textTheme.headlineLarge;
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // 当前事件操作菜单。
         final Widget menu = OmniPopupMenuButton<String>(
           tooltip: '更多操作',
+          child: compact
+              ? SizedBox.square(
+                  dimension: OmniSize.touch,
+                  child: Icon(
+                    Icons.more_horiz_rounded,
+                    size: OmniSize.icon,
+                    color: colors.muted,
+                  ),
+                )
+              : null,
           onSelected: (String value) {
             switch (value) {
               case 'edit':
@@ -1021,9 +1088,9 @@ class _EventCard extends ConsumerWidget {
           ],
         );
         return OmniPanel(
-          padding: const EdgeInsets.all(OmniSpacing.md),
+          padding: cardPadding,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 184),
+            constraints: cardConstraints,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
@@ -1031,8 +1098,8 @@ class _EventCard extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Container(
-                      width: 36,
-                      height: 36,
+                      width: iconSize,
+                      height: iconSize,
                       decoration: BoxDecoration(
                         color: colors.event.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(OmniRadius.panel),
@@ -1074,7 +1141,7 @@ class _EventCard extends ConsumerWidget {
                     menu,
                   ],
                 ),
-                const SizedBox(height: OmniSpacing.sm),
+                SizedBox(height: sectionGap),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: <Widget>[
@@ -1083,8 +1150,9 @@ class _EventCard extends ConsumerWidget {
                         headline,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.headlineLarge
-                            ?.copyWith(color: effectiveStatusView.$2),
+                        style: headlineStyle?.copyWith(
+                          color: effectiveStatusView.$2,
+                        ),
                       ),
                     ),
                     const SizedBox(width: OmniSpacing.xs),
@@ -1099,48 +1167,74 @@ class _EventCard extends ConsumerWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: OmniSpacing.sm),
+                SizedBox(height: sectionGap),
                 _EventCycleTimeline(
                   key: ValueKey<String>('event-timeline-${event.id}'),
                   event: event,
                   dueAt: dueAt,
                   now: now,
                   archived: archived,
+                  compact: compact,
                   progressColor: effectiveStatusView.$2,
                 ),
-                const SizedBox(height: OmniSpacing.xs),
+                SizedBox(height: compact ? OmniSpacing.xxs : OmniSpacing.xs),
                 Divider(height: 1, color: colors.line),
-                const SizedBox(height: OmniSpacing.xxs),
-                Row(
-                  children: <Widget>[
-                    OmniButton(
-                      key: ValueKey<String>('event-history-${event.id}'),
-                      label: '历史',
-                      icon: Icons.history_rounded,
-                      variant: OmniButtonVariant.text,
-                      onPressed: onHistory,
-                    ),
-                    const Spacer(),
-                    OmniButton(
-                      key: ValueKey<String>(
-                        archived
-                            ? 'event-restore-${event.id}'
-                            : 'event-record-${event.id}',
+                if (!compact) const SizedBox(height: OmniSpacing.xxs),
+                SizedBox(
+                  height: compact ? OmniSize.touch : null,
+                  child: Row(
+                    crossAxisAlignment: compact
+                        ? CrossAxisAlignment.stretch
+                        : CrossAxisAlignment.center,
+                    children: <Widget>[
+                      OmniButton(
+                        key: ValueKey<String>('event-history-${event.id}'),
+                        label: '历史',
+                        icon: Icons.history_rounded,
+                        variant: OmniButtonVariant.text,
+                        onPressed: onHistory,
                       ),
-                      label: archived
-                          ? '恢复'
-                          : status == EventDueStatus.unrecorded
-                          ? '首次记录'
-                          : '记录',
-                      icon: archived
-                          ? Icons.unarchive_outlined
-                          : Icons.done_rounded,
-                      variant: archived
-                          ? OmniButtonVariant.secondary
-                          : OmniButtonVariant.primary,
-                      onPressed: archived ? onArchive : onRecord,
-                    ),
-                  ],
+                      const Spacer(),
+                      if (compact)
+                        _CompactEventActionButton(
+                          key: ValueKey<String>(
+                            archived
+                                ? 'event-restore-${event.id}'
+                                : 'event-record-${event.id}',
+                          ),
+                          label: archived
+                              ? '恢复'
+                              : status == EventDueStatus.unrecorded
+                              ? '首次记录'
+                              : '记录',
+                          icon: archived
+                              ? Icons.unarchive_outlined
+                              : Icons.done_rounded,
+                          primary: !archived,
+                          onPressed: archived ? onArchive : onRecord,
+                        )
+                      else
+                        OmniButton(
+                          key: ValueKey<String>(
+                            archived
+                                ? 'event-restore-${event.id}'
+                                : 'event-record-${event.id}',
+                          ),
+                          label: archived
+                              ? '恢复'
+                              : status == EventDueStatus.unrecorded
+                              ? '首次记录'
+                              : '记录',
+                          icon: archived
+                              ? Icons.unarchive_outlined
+                              : Icons.done_rounded,
+                          variant: archived
+                              ? OmniButtonVariant.secondary
+                              : OmniButtonVariant.primary,
+                          onPressed: archived ? onArchive : onRecord,
+                        ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -1189,6 +1283,82 @@ class _EventCard extends ConsumerWidget {
   }
 }
 
+/// Android 事件卡中视觉紧凑、触控区域完整的尾部操作。
+class _CompactEventActionButton extends StatelessWidget {
+  /// 按钮文案。
+  final String label;
+
+  /// 按钮图标。
+  final IconData icon;
+
+  /// 是否使用主要操作样式。
+  final bool primary;
+
+  /// 点击回调。
+  final VoidCallback onPressed;
+
+  /// 创建紧凑事件操作按钮。
+  const _CompactEventActionButton({
+    required this.label,
+    required this.icon,
+    required this.primary,
+    required this.onPressed,
+    super.key,
+  });
+
+  /// 构建三十二像素视觉按钮与四十四像素触控层。
+  @override
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 视觉按钮圆角。
+    final BorderRadius visualRadius = BorderRadius.circular(OmniRadius.control);
+    // 按钮前景色。
+    final Color foregroundColor = primary ? colors.accentInk : colors.ink;
+    // 按钮背景色。
+    final Color backgroundColor = primary ? colors.brand : colors.paper;
+    // 次要按钮边框色。
+    final Color borderColor = primary ? Colors.transparent : colors.line;
+    return Semantics(
+      button: true,
+      label: label,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: visualRadius,
+        child: SizedBox(
+          height: OmniSize.touch,
+          child: Center(
+            child: Container(
+              key: const ValueKey<String>('event-compact-action-surface'),
+              height: OmniSize.control,
+              padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
+              decoration: BoxDecoration(
+                color: backgroundColor,
+                borderRadius: visualRadius,
+                border: Border.all(color: borderColor),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(icon, size: 16, color: foregroundColor),
+                  const SizedBox(width: OmniSpacing.xxs),
+                  Text(
+                    label,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: foregroundColor,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 事件最近完成时间到下一次应做时间的周期进度条。
 class _EventCycleTimeline extends StatelessWidget {
   /// 当前事件。
@@ -1203,6 +1373,9 @@ class _EventCycleTimeline extends StatelessWidget {
   /// 当前事件是否已归档。
   final bool archived;
 
+  /// 是否使用 Android 管理页紧凑时间轴。
+  final bool compact;
+
   /// 时间条进度色。
   final Color progressColor;
 
@@ -1212,6 +1385,7 @@ class _EventCycleTimeline extends StatelessWidget {
     required this.dueAt,
     required this.now,
     required this.archived,
+    required this.compact,
     required this.progressColor,
     super.key,
   });
@@ -1259,7 +1433,7 @@ class _EventCycleTimeline extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             SizedBox(
-              height: 12,
+              height: compact ? 10 : 12,
               child: waitingForFirstRecord
                   ? _buildWaitingTrack(colors)
                   : TweenAnimationBuilder<double>(
@@ -1282,7 +1456,7 @@ class _EventCycleTimeline extends StatelessWidget {
                           },
                     ),
             ),
-            const SizedBox(height: OmniSpacing.xxs),
+            SizedBox(height: compact ? 2 : OmniSpacing.xxs),
             Row(
               children: <Widget>[
                 Expanded(

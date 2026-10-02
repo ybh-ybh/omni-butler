@@ -359,6 +359,152 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     final bool compact = OmniBreakpoint.isCompact(
       MediaQuery.sizeOf(context).width,
     );
+    // 物品统计区域。
+    final Widget statistics = _InventoryStatistics(
+      items: allItems,
+      accessories: allAccessories,
+      categories: categories.asData?.value ?? const <TaxonomyEntry>[],
+      useCarousel: widget.embeddedInManagement,
+    );
+    // 物品搜索与筛选栏。
+    final Widget toolbar = _InventoryToolbar(
+      compact: compact,
+      embeddedInManagement: widget.embeddedInManagement,
+      searchController: _searchController,
+      searchQuery: _query,
+      records: allItems.asData?.value ?? const <InventoryRecord>[],
+      tags: filterTags,
+      locations: locations,
+      taxonomyLinks: taxonomyLinks,
+      selectedTag: _tagFilter,
+      selectedLocation: _locationFilter,
+      filtersExpanded: _filtersExpanded,
+      inventoryColumns: _inventoryColumns,
+      onSearchChanged: (String value) => setState(() => _query = value),
+      onClearSearch: () {
+        _searchController.clear();
+        setState(() => _query = '');
+      },
+      onTagChanged: _selectTagFilter,
+      onLocationChanged: _selectLocationFilter,
+      onFiltersToggled: () =>
+          setState(() => _filtersExpanded = !_filtersExpanded),
+      onColumnsChanged: _selectInventoryColumns,
+      onMove: _openMoveDialog,
+    );
+    // 当前物品列表内容。
+    final Widget records = items.when(
+      data: (List<InventoryRecord> records) {
+        // 应用标签和位置筛选。
+        final List<InventoryRecord> filteredRecords = records
+            .where(
+              (InventoryRecord item) => _matchesTaxonomyFilters(
+                item,
+                filterTags,
+                locations,
+                taxonomyLinks,
+              ),
+            )
+            .toList(growable: false);
+        if (filteredRecords.isEmpty) {
+          return _InventoryEmpty(
+            searching:
+                _query.isNotEmpty ||
+                _tagFilter != null ||
+                _locationFilter != null,
+          );
+        }
+        return LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            // 根据用户选择和当前视口计算实际列数。
+            final int maxColumns = constraints.maxWidth >= 1200
+                ? 6
+                : constraints.maxWidth >= 900
+                ? 5
+                : constraints.maxWidth >= 660
+                ? 4
+                : 1;
+            // 当前实际使用的物品列数。
+            final int columns = _inventoryColumns.clamp(1, maxColumns).toInt();
+            return GridView.builder(
+              key: const ValueKey<String>('inventory-card-grid'),
+              padding: widget.embeddedInManagement
+                  ? const EdgeInsets.only(bottom: _mobileActionClearance)
+                  : null,
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: columns,
+                crossAxisSpacing: OmniSpacing.xs,
+                mainAxisSpacing: OmniSpacing.xs,
+                mainAxisExtent: widget.embeddedInManagement ? 104 : 300,
+              ),
+              itemCount: filteredRecords.length,
+              itemBuilder: (BuildContext context, int index) {
+                // 当前物品。
+                final InventoryRecord item = filteredRecords[index];
+                return _InventoryCard(
+                  item: item,
+                  useHorizontalLayout: widget.embeddedInManagement,
+                  onOpen: () => _openDetails(item),
+                  onEdit: () => _openEditor(item),
+                  onAccessories: () => _openAccessories(item),
+                  onDelete: () => _delete(item),
+                );
+              },
+            );
+          },
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (Object error, StackTrace stackTrace) =>
+          Center(child: Text('物品读取失败：$error')),
+    );
+    // Android 管理页让统计卡随外层滚动离开，筛选栏留在列表顶部。
+    final Widget pageContent = widget.embeddedInManagement
+        ? NestedScrollView(
+            key: const ValueKey<String>('inventory-management-scroll'),
+            headerSliverBuilder:
+                (BuildContext context, bool innerBoxIsScrolled) => <Widget>[
+                  SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        statistics,
+                        const SizedBox(height: OmniSpacing.xs),
+                      ],
+                    ),
+                  ),
+                ],
+            body: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                toolbar,
+                const SizedBox(height: OmniSpacing.xs),
+                Expanded(child: records),
+              ],
+            ),
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              OmniPageHeader(
+                title: '物品管理',
+                actions: <Widget>[
+                  OmniButton(
+                    label: '新增物品',
+                    icon: Icons.add_rounded,
+                    variant: OmniButtonVariant.pagePrimary,
+                    onPressed: _openEditor,
+                  ),
+                ],
+              ),
+              const SizedBox(height: OmniSpacing.xs),
+              statistics,
+              const SizedBox(height: OmniSpacing.xs),
+              toolbar,
+              const SizedBox(height: OmniSpacing.xs),
+              Expanded(child: records),
+            ],
+          );
     return Scaffold(
       floatingActionButton: widget.embeddedInManagement
           ? _InventoryCreateSplitButton(
@@ -389,134 +535,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                 horizontal: 14,
                 vertical: OmniSpacing.sm,
               ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            if (!widget.embeddedInManagement) ...<Widget>[
-              OmniPageHeader(
-                title: '物品管理',
-                actions: <Widget>[
-                  OmniButton(
-                    label: '新增物品',
-                    icon: Icons.add_rounded,
-                    variant: OmniButtonVariant.pagePrimary,
-                    onPressed: _openEditor,
-                  ),
-                ],
-              ),
-              const SizedBox(height: OmniSpacing.xs),
-            ],
-            _InventoryStatistics(
-              items: allItems,
-              accessories: allAccessories,
-              categories: categories.asData?.value ?? const <TaxonomyEntry>[],
-              useCarousel: widget.embeddedInManagement,
-            ),
-            const SizedBox(height: OmniSpacing.xs),
-            _InventoryToolbar(
-              compact: compact,
-              embeddedInManagement: widget.embeddedInManagement,
-              searchController: _searchController,
-              searchQuery: _query,
-              records: allItems.asData?.value ?? const <InventoryRecord>[],
-              tags: filterTags,
-              locations: locations,
-              taxonomyLinks: taxonomyLinks,
-              selectedTag: _tagFilter,
-              selectedLocation: _locationFilter,
-              filtersExpanded: _filtersExpanded,
-              inventoryColumns: _inventoryColumns,
-              onSearchChanged: (String value) => setState(() => _query = value),
-              onClearSearch: () {
-                _searchController.clear();
-                setState(() => _query = '');
-              },
-              onTagChanged: _selectTagFilter,
-              onLocationChanged: _selectLocationFilter,
-              onFiltersToggled: () =>
-                  setState(() => _filtersExpanded = !_filtersExpanded),
-              onColumnsChanged: _selectInventoryColumns,
-              onMove: _openMoveDialog,
-            ),
-            const SizedBox(height: OmniSpacing.xs),
-            Expanded(
-              child: items.when(
-                data: (List<InventoryRecord> records) {
-                  // 应用标签和位置筛选。
-                  final List<InventoryRecord> filteredRecords = records
-                      .where(
-                        (InventoryRecord item) => _matchesTaxonomyFilters(
-                          item,
-                          filterTags,
-                          locations,
-                          taxonomyLinks,
-                        ),
-                      )
-                      .toList(growable: false);
-                  if (filteredRecords.isEmpty) {
-                    return _InventoryEmpty(
-                      searching:
-                          _query.isNotEmpty ||
-                          _tagFilter != null ||
-                          _locationFilter != null,
-                    );
-                  }
-                  return LayoutBuilder(
-                    builder:
-                        (BuildContext context, BoxConstraints constraints) {
-                          // 根据用户选择和当前视口计算实际列数。
-                          final int maxColumns = constraints.maxWidth >= 1200
-                              ? 6
-                              : constraints.maxWidth >= 900
-                              ? 5
-                              : constraints.maxWidth >= 660
-                              ? 4
-                              : 1;
-                          final int columns = _inventoryColumns
-                              .clamp(1, maxColumns)
-                              .toInt();
-                          return GridView.builder(
-                            key: const ValueKey<String>('inventory-card-grid'),
-                            padding: widget.embeddedInManagement
-                                ? const EdgeInsets.only(
-                                    bottom: _mobileActionClearance,
-                                  )
-                                : null,
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: columns,
-                                  crossAxisSpacing: OmniSpacing.xs,
-                                  mainAxisSpacing: OmniSpacing.xs,
-                                  mainAxisExtent: widget.embeddedInManagement
-                                      ? 128
-                                      : 300,
-                                ),
-                            itemCount: filteredRecords.length,
-                            itemBuilder: (BuildContext context, int index) {
-                              // 当前物品。
-                              final InventoryRecord item =
-                                  filteredRecords[index];
-                              return _InventoryCard(
-                                item: item,
-                                useHorizontalLayout:
-                                    widget.embeddedInManagement,
-                                onOpen: () => _openDetails(item),
-                                onEdit: () => _openEditor(item),
-                                onAccessories: () => _openAccessories(item),
-                                onDelete: () => _delete(item),
-                              );
-                            },
-                          );
-                        },
-                  );
-                },
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (Object error, StackTrace stackTrace) =>
-                    Center(child: Text('物品读取失败：$error')),
-              ),
-            ),
-          ],
-        ),
+        child: pageContent,
       ),
     );
   }
@@ -1882,7 +1901,9 @@ class _InventoryStatusPanel extends StatelessWidget {
                   _buildCountBadges(colors, accessoryCount: accessoryCount),
               ],
             ),
-            const SizedBox(height: OmniSpacing.sm),
+            SizedBox(
+              height: compactHeader ? OmniSpacing.sm - 1 : OmniSpacing.sm,
+            ),
             Row(
               children: <Widget>[
                 for (
@@ -2579,7 +2600,7 @@ class _InventoryCard extends ConsumerWidget {
     return OmniPanel(
       key: ValueKey<String>('inventory-card-${item.id}'),
       onTap: onOpen,
-      padding: const EdgeInsets.all(OmniSpacing.sm),
+      padding: const EdgeInsets.all(OmniSpacing.xs),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -2587,11 +2608,11 @@ class _InventoryCard extends ConsumerWidget {
             key: ValueKey<String>('inventory-card-image-${item.id}'),
             borderRadius: BorderRadius.circular(OmniRadius.panel),
             child: SizedBox(
-              width: 104,
+              width: 88,
               child: _InventoryImage(item: item, colors: colors, compact: true),
             ),
           ),
-          const SizedBox(width: OmniSpacing.sm),
+          const SizedBox(width: OmniSpacing.xs),
           Expanded(
             child: Container(
               key: ValueKey<String>('inventory-card-content-${item.id}'),
@@ -2606,9 +2627,10 @@ class _InventoryCard extends ConsumerWidget {
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w700,
+                      height: 1,
                     ),
                   ),
-                  const SizedBox(height: OmniSpacing.xxs),
+                  const SizedBox(height: 2),
                   Row(
                     key: ValueKey<String>('inventory-status-row-${item.id}'),
                     children: <Widget>[

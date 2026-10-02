@@ -138,6 +138,10 @@ class HomePage extends ConsumerWidget {
     if (!androidCompact || !featurePreference.isEnabled(AppFeature.timeline)) {
       return dashboard;
     }
+    // 当前全部进行中记录，用于同步 Android 首页与时间页的主操作状态。
+    final List<TimeEntryRecord> ongoingEntries =
+        ref.watch(ongoingTimeEntriesProvider).asData?.value ??
+        const <TimeEntryRecord>[];
     // Android 首页拆分按钮中的可用次要操作。
     final List<OmniSplitAction<_HomeMobileAction>> mobileActions =
         <OmniSplitAction<_HomeMobileAction>>[
@@ -156,11 +160,18 @@ class HomePage extends ConsumerWidget {
     return Scaffold(
       floatingActionButton: OmniSplitActionButton<_HomeMobileAction>(
         keyPrefix: 'home-mobile',
-        label: '开始记录',
-        primaryIcon: Icons.play_arrow_rounded,
-        primarySemanticsLabel: '开始记录',
+        label: ongoingEntries.isEmpty ? '开始' : '结束记录',
+        primaryIcon: ongoingEntries.isEmpty
+            ? Icons.play_arrow_rounded
+            : Icons.stop_rounded,
+        primarySemanticsLabel: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
         menuTooltip: '更多首页操作',
-        onPressed: () => showStartTimeEntryDialog(context, day: now),
+        onPressed: ongoingEntries.isEmpty
+            ? () => showStartTimeEntryDialog(context, day: now)
+            : () => showFinishTimeEntryDialog(
+                context,
+                record: ongoingEntries.first,
+              ),
         actions: mobileActions,
         onSelected: (_HomeMobileAction action) {
           switch (action) {

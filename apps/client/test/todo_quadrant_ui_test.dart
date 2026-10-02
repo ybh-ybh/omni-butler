@@ -461,6 +461,13 @@ void main() {
     for (final TodoPriorityQuadrant quadrant
         in todoPriorityQuadrantMatrixOrder) {
       expect(find.text(quadrant.label), findsNWidgets(2));
+      expect(find.text(quadrant.description), findsNothing);
+      // 新增弹窗中的紧凑象限选择卡。
+      final Finder priorityOption = find.byKey(
+        ValueKey<String>('todo-priority-option-${quadrant.value}'),
+      );
+      expect(priorityOption, findsOneWidget);
+      expect(tester.getSize(priorityOption).height, lessThan(94));
     }
 
     await tester.ensureVisible(timeSettings);
@@ -989,6 +996,12 @@ void main() {
         scheduledDate: DateTime(2026, 9, 6),
       ),
     );
+    // 用于验证移动端子任务行高度的记录。
+    final TodoRecord mobileChild =
+        await (database.select(
+              database.todoItems,
+            )..where((TodoItems table) => table.parentId.equals(mobileRoot.id)))
+            .getSingle();
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -1029,6 +1042,45 @@ void main() {
       find.byKey(const ValueKey<String>('todo-mobile-count-2')),
       findsNothing,
     );
+    for (final double width in <double>[320, 360, 390]) {
+      tester.view.physicalSize = Size(width, viewport.height);
+      await tester.pumpAndSettle();
+      // 当前宽度下的移动端父任务行。
+      final Finder mobileRootRow = find.byKey(
+        ValueKey<String>('todo-tree-root-${mobileRoot.id}'),
+      );
+      // 当前宽度下的移动端子任务行。
+      final Finder mobileChildRow = find.byKey(
+        ValueKey<String>('todo-child-${mobileChild.id}'),
+      );
+      expect(tester.getSize(mobileRootRow).height, 48);
+      expect(tester.getSize(mobileChildRow).height, 48);
+      expect(tester.takeException(), isNull);
+    }
+    // 移动端父任务行中的新增子任务操作。
+    final Finder mobileAddChild = find.byKey(
+      ValueKey<String>('todo-add-child-${mobileRoot.id}'),
+    );
+    // 移动端父任务行中的更多操作菜单。
+    final Finder mobileMoreAction = find.descendant(
+      of: find.byKey(ValueKey<String>('todo-tree-root-${mobileRoot.id}')),
+      matching: find.byTooltip('更多操作'),
+    );
+    expect(tester.getSize(mobileAddChild), const Size.square(OmniSize.touch));
+    expect(tester.getSize(mobileMoreAction), const Size.square(OmniSize.touch));
+    await tester.tap(mobileAddChild);
+    await tester.pumpAndSettle();
+    expect(find.text('新增子任务'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    await tester.tap(mobileMoreAction);
+    await tester.pumpAndSettle();
+    expect(find.text('编辑'), findsOneWidget);
+    await tester.tap(find.text('编辑'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TodoEditorDialog), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
     // 待办象限轨道中的滑块动画。
     final AnimatedAlign quadrantIndicator = tester.widget<AnimatedAlign>(
       find.descendant(

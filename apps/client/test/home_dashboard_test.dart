@@ -321,6 +321,13 @@ void main() {
       find.byKey(const ValueKey<String>('home-time-backfill-button')),
       findsNothing,
     );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey<String>('home-mobile-create')),
+        matching: find.text('开始'),
+      ),
+      findsOneWidget,
+    );
     expect(find.text('Android 子任务'), findsOneWidget);
     // Android 首页点击父任务名称时直接折叠子任务，不再打开编辑弹窗。
     final Finder parentTitleAction = find.byKey(
@@ -385,6 +392,50 @@ void main() {
     expect(find.text('新增待办'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
+
+    await _disposeApp(tester, database, container);
+  });
+
+  testWidgets('Android 首页在记录进行中切换为结束主操作', (WidgetTester tester) async {
+    // 测试固定当前时间。
+    final DateTime now = DateTime(2026, 9, 21, 14, 20);
+    // 测试用内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 测试用时间记录仓储。
+    final TimeEntryRepository repository = TimeEntryRepository(database);
+    await repository.save(
+      TimeEntryDraft(startedAt: now.subtract(const Duration(hours: 1))),
+    );
+    // Android 紧凑视口使用的测试依赖容器。
+    final ProviderContainer container = await _pumpApp(
+      tester,
+      database: database,
+      preferences: await _preferences(<String, Object>{}),
+      now: now,
+      platform: TargetPlatform.android,
+      physicalSize: const Size(412, 915),
+    );
+    // 首页拆分按钮主操作。
+    final Finder primaryButton = find.byKey(
+      const ValueKey<String>('home-mobile-create'),
+    );
+
+    expect(
+      find.descendant(of: primaryButton, matching: find.text('结束记录')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: primaryButton,
+        matching: find.byIcon(Icons.stop_rounded),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(primaryButton);
+    await tester.pumpAndSettle();
+    expect(find.text('结束并保存'), findsOneWidget);
 
     await _disposeApp(tester, database, container);
   });

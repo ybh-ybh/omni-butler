@@ -598,8 +598,8 @@ void main() {
     final Rect contentRect = tester.getRect(itemContent);
     // 右侧金额与操作区的实际位置。
     final Rect trailingRect = tester.getRect(itemTrailing);
-    expect(tester.getSize(itemCard).height, 128);
-    expect(imageRect.width, 104);
+    expect(tester.getSize(itemCard).height, 104);
+    expect(imageRect.width, 88);
     expect(imageRect.right, lessThan(contentRect.left));
     expect(contentRect.right, lessThan(trailingRect.left));
     expect(trailingRect.contains(tester.getRect(itemPrice).center), isTrue);

@@ -199,6 +199,149 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
     final bool compact = OmniBreakpoint.isCompact(
       MediaQuery.sizeOf(context).width,
     );
+    // 会员支出统计区域。
+    final Widget statistics = _MembershipSpendingSummary(
+      memberships: memberships,
+      payments: payments,
+      now: now,
+      useCarousel: widget.embeddedInManagement,
+    );
+    // 会员搜索与筛选栏。
+    final Widget toolbar = _MembershipToolbar(
+      compact: compact,
+      embeddedInManagement: widget.embeddedInManagement,
+      memberships: memberships.asData?.value ?? const <MembershipRecord>[],
+      repository: repository,
+      now: now,
+      quickFilter: _quickFilter,
+      categoryFilter: _categoryFilter,
+      categoryEntries: membershipCategories,
+      taxonomyLinks: membershipTaxonomyLinks,
+      searchController: _searchController,
+      searchQuery: _query,
+      useTwoColumns: _useTwoColumns,
+      onQuickFilterChanged: _selectQuickFilter,
+      onCategoryFilterChanged: _selectCategoryFilter,
+      onSearchChanged: _updateSearchQuery,
+      onClearSearch: _clearSearchQuery,
+      filtersExpanded: _filtersExpanded,
+      onFiltersToggled: () =>
+          setState(() => _filtersExpanded = !_filtersExpanded),
+      onToggleLayout: () => setState(() => _useTwoColumns = !_useTwoColumns),
+    );
+    // 当前会员列表内容。
+    final Widget records = memberships.when(
+      data: (List<MembershipRecord> records) {
+        // 当前过滤结果。
+        final List<MembershipRecord> filtered = records
+            .where((MembershipRecord item) {
+              // 当前会员分类名称，优先使用 ID 关联后的名称。
+              final Set<String> categoryNames = _categoryNamesForMembership(
+                item,
+                membershipCategories,
+                membershipTaxonomyLinks,
+              );
+              // 当前会员的可搜索文本。
+              final String searchable = <String>[
+                item.name,
+                item.provider ?? '',
+                ...categoryNames,
+                item.description ?? '',
+              ].join(' ').toLowerCase();
+              // 当前搜索词。
+              final String keyword = _query.trim().toLowerCase();
+              return (keyword.isEmpty || searchable.contains(keyword)) &&
+                  (_categoryFilter == null ||
+                      categoryNames.contains(_categoryFilter)) &&
+                  _matchesQuickFilter(item, repository.statusFor(item, now));
+            })
+            .toList(growable: false);
+        if (filtered.isEmpty) {
+          return const _MembershipEmpty();
+        }
+        return _MembershipCardGrid(
+          memberships: filtered,
+          payments: payments.asData?.value ?? const <MembershipPaymentRecord>[],
+          useTwoColumns: _useTwoColumns,
+          compactCards: widget.embeddedInManagement,
+          safeBottomPadding: widget.embeddedInManagement
+              ? _mobileActionClearance
+              : 0,
+          categoryLabels: <String, String>{
+            for (final MembershipRecord item in records)
+              item.id: _categoryLabelForMembership(
+                item,
+                membershipCategories,
+                membershipTaxonomyLinks,
+              ),
+          },
+          onEdit: (MembershipRecord membership) =>
+              _openEditor(context, membership),
+          onDelete: (MembershipRecord membership) =>
+              _delete(context, ref, membership),
+          onHistory: (MembershipRecord membership) => showOmniDialog<void>(
+            context: context,
+            builder: (BuildContext context) =>
+                _PaymentHistoryDialog(membership: membership),
+          ),
+          onRenew: (MembershipRecord membership) => showOmniDialog<void>(
+            context: context,
+            builder: (BuildContext context) =>
+                _PaymentEditorDialog(membership: membership),
+          ),
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (Object error, StackTrace stackTrace) =>
+          Center(child: Text('会员读取失败：$error')),
+    );
+    // Android 管理页让统计卡随外层滚动离开，筛选栏留在列表顶部。
+    final Widget pageContent = widget.embeddedInManagement
+        ? NestedScrollView(
+            key: const ValueKey<String>('membership-management-scroll'),
+            headerSliverBuilder:
+                (BuildContext context, bool innerBoxIsScrolled) => <Widget>[
+                  SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        statistics,
+                        const SizedBox(height: OmniSpacing.xs),
+                      ],
+                    ),
+                  ),
+                ],
+            body: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                toolbar,
+                const SizedBox(height: OmniSpacing.xs),
+                Expanded(child: records),
+              ],
+            ),
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              OmniPageHeader(
+                title: '会员管理',
+                actions: <Widget>[
+                  OmniButton(
+                    label: '新增会员',
+                    icon: Icons.add_rounded,
+                    variant: OmniButtonVariant.pagePrimary,
+                    onPressed: () => _openEditor(context),
+                  ),
+                ],
+              ),
+              const SizedBox(height: OmniSpacing.xs),
+              statistics,
+              const SizedBox(height: OmniSpacing.xs),
+              toolbar,
+              const SizedBox(height: OmniSpacing.xs),
+              Expanded(child: records),
+            ],
+          );
     return Scaffold(
       floatingActionButton: widget.embeddedInManagement
           ? OmniSplitActionButton<TaxonomyKind>(
@@ -234,132 +377,7 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
                 horizontal: 14,
                 vertical: OmniSpacing.sm,
               ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            if (!widget.embeddedInManagement) ...<Widget>[
-              OmniPageHeader(
-                title: '会员管理',
-                actions: <Widget>[
-                  OmniButton(
-                    label: '新增会员',
-                    icon: Icons.add_rounded,
-                    variant: OmniButtonVariant.pagePrimary,
-                    onPressed: () => _openEditor(context),
-                  ),
-                ],
-              ),
-              const SizedBox(height: OmniSpacing.xs),
-            ],
-            _MembershipSpendingSummary(
-              memberships: memberships,
-              payments: payments,
-              now: now,
-              useCarousel: widget.embeddedInManagement,
-            ),
-            const SizedBox(height: OmniSpacing.xs),
-            _MembershipToolbar(
-              compact: compact,
-              embeddedInManagement: widget.embeddedInManagement,
-              memberships:
-                  memberships.asData?.value ?? const <MembershipRecord>[],
-              repository: repository,
-              now: now,
-              quickFilter: _quickFilter,
-              categoryFilter: _categoryFilter,
-              categoryEntries: membershipCategories,
-              taxonomyLinks: membershipTaxonomyLinks,
-              searchController: _searchController,
-              searchQuery: _query,
-              useTwoColumns: _useTwoColumns,
-              onQuickFilterChanged: _selectQuickFilter,
-              onCategoryFilterChanged: _selectCategoryFilter,
-              onSearchChanged: _updateSearchQuery,
-              onClearSearch: _clearSearchQuery,
-              filtersExpanded: _filtersExpanded,
-              onFiltersToggled: () =>
-                  setState(() => _filtersExpanded = !_filtersExpanded),
-              onToggleLayout: () =>
-                  setState(() => _useTwoColumns = !_useTwoColumns),
-            ),
-            const SizedBox(height: OmniSpacing.xs),
-            Expanded(
-              child: memberships.when(
-                data: (List<MembershipRecord> records) {
-                  // 当前过滤结果。
-                  final List<MembershipRecord> filtered = records
-                      .where((MembershipRecord item) {
-                        // 可搜索文本。
-                        // 当前会员分类名称，优先使用 ID 关联后的名称。
-                        final Set<String> categoryNames =
-                            _categoryNamesForMembership(
-                              item,
-                              membershipCategories,
-                              membershipTaxonomyLinks,
-                            );
-                        final String searchable = <String>[
-                          item.name,
-                          item.provider ?? '',
-                          ...categoryNames,
-                          item.description ?? '',
-                        ].join(' ').toLowerCase();
-                        // 当前搜索词。
-                        final String keyword = _query.trim().toLowerCase();
-                        return (keyword.isEmpty ||
-                                searchable.contains(keyword)) &&
-                            (_categoryFilter == null ||
-                                categoryNames.contains(_categoryFilter)) &&
-                            _matchesQuickFilter(
-                              item,
-                              repository.statusFor(item, now),
-                            );
-                      })
-                      .toList(growable: false);
-                  if (filtered.isEmpty) {
-                    return const _MembershipEmpty();
-                  }
-                  return _MembershipCardGrid(
-                    memberships: filtered,
-                    payments:
-                        payments.asData?.value ??
-                        const <MembershipPaymentRecord>[],
-                    useTwoColumns: _useTwoColumns,
-                    safeBottomPadding: widget.embeddedInManagement
-                        ? _mobileActionClearance
-                        : 0,
-                    categoryLabels: <String, String>{
-                      for (final MembershipRecord item in records)
-                        item.id: _categoryLabelForMembership(
-                          item,
-                          membershipCategories,
-                          membershipTaxonomyLinks,
-                        ),
-                    },
-                    onEdit: (MembershipRecord membership) =>
-                        _openEditor(context, membership),
-                    onDelete: (MembershipRecord membership) =>
-                        _delete(context, ref, membership),
-                    onHistory: (MembershipRecord membership) =>
-                        showOmniDialog<void>(
-                          context: context,
-                          builder: (BuildContext context) =>
-                              _PaymentHistoryDialog(membership: membership),
-                        ),
-                    onRenew: (MembershipRecord membership) =>
-                        showOmniDialog<void>(
-                          context: context,
-                          builder: (BuildContext context) =>
-                              _PaymentEditorDialog(membership: membership),
-                        ),
-                  );
-                },
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (Object error, StackTrace stackTrace) =>
-                    Center(child: Text('会员读取失败：$error')),
-              ),
-            ),
-          ],
-        ),
+        child: pageContent,
       ),
     );
   }
@@ -1473,6 +1491,9 @@ class _MembershipCardGrid extends StatelessWidget {
   /// 是否优先使用双列布局。
   final bool useTwoColumns;
 
+  /// 是否使用管理页移动端紧凑卡片。
+  final bool compactCards;
+
   /// 滚动到底部时为悬浮操作按钮保留的安全间距。
   final double safeBottomPadding;
 
@@ -1494,6 +1515,7 @@ class _MembershipCardGrid extends StatelessWidget {
     required this.payments,
     required this.categoryLabels,
     required this.useTwoColumns,
+    required this.compactCards,
     required this.safeBottomPadding,
     required this.onEdit,
     required this.onDelete,
@@ -1544,6 +1566,7 @@ class _MembershipCardGrid extends StatelessWidget {
                         membership: membership,
                         categoryLabel: categoryLabels[membership.id] ?? '未分类',
                         latestPayment: latestPayments[membership.id],
+                        compact: compactCards,
                         onEdit: () => onEdit(membership),
                         onDelete: () => onDelete(membership),
                         onHistory: () => onHistory(membership),
@@ -1571,6 +1594,9 @@ class _MembershipCard extends ConsumerWidget {
   /// 最近一笔支付或续费记录。
   final MembershipPaymentRecord? latestPayment;
 
+  /// 是否使用管理页移动端紧凑布局。
+  final bool compact;
+
   /// 编辑回调。
   final VoidCallback onEdit;
 
@@ -1588,6 +1614,7 @@ class _MembershipCard extends ConsumerWidget {
     required this.membership,
     required this.categoryLabel,
     required this.latestPayment,
+    required this.compact,
     required this.onEdit,
     required this.onDelete,
     required this.onHistory,
@@ -1613,7 +1640,7 @@ class _MembershipCard extends ConsumerWidget {
     final OmniColors colors = OmniColors.of(context);
     // 状态展示信息。
     final (String, Color) statusView = switch (status) {
-      MembershipStatus.permanent => ('永久有效', colors.info),
+      MembershipStatus.permanent => ('永久', colors.info),
       MembershipStatus.trial => ('试用中', colors.info),
       MembershipStatus.active => ('有效', colors.success),
       MembershipStatus.cancelled => ('已取消', colors.muted),
@@ -1638,6 +1665,18 @@ class _MembershipCard extends ConsumerWidget {
     // 时间条是否从续费日期开始。
     final bool timelineStartsFromRenewal = DateUtils.dateOnly(timelineStartDate)
         .isAfter(DateUtils.dateOnly(membership.purchaseDate));
+    if (compact) {
+      return _buildCompactCard(
+        context,
+        colors: colors,
+        statusView: statusView,
+        detail: detail,
+        billingCycleLabel: billingCycleLabel,
+        timelineStartDate: timelineStartDate,
+        timelineStartsFromRenewal: timelineStartsFromRenewal,
+        now: now,
+      );
+    }
     return OmniPanel(
       padding: const EdgeInsets.all(OmniSpacing.md),
       child: Row(
@@ -1710,6 +1749,7 @@ class _MembershipCard extends ConsumerWidget {
                   now: now,
                   progressColor: colors.member,
                   statusColor: statusView.$2,
+                  compact: false,
                 ),
               ],
             ),
@@ -1748,58 +1788,213 @@ class _MembershipCard extends ConsumerWidget {
                     ),
                     const SizedBox(width: OmniSpacing.xxs),
                   ],
-                  OmniPopupMenuButton<String>(
-                    tooltip: '更多操作',
-                    menuConstraints: BoxConstraints(
-                      minWidth: OmniDropdownMetrics.actionMenuMinWidth * 0.85,
-                      maxWidth: OmniDropdownMetrics.actionMenuMaxWidth * 0.85,
-                    ),
-                    onSelected: (String value) {
-                      if (value == 'history') {
-                        onHistory();
-                      } else if (value == 'edit') {
-                        onEdit();
-                      } else if (value == 'image') {
-                        AttachmentPickerDialog.show(
-                          context,
-                          businessType: AttachmentBusinessType.membershipImage,
-                          businessId: membership.id,
-                          title: '${membership.name} · 主图',
-                        );
-                      } else {
-                        onDelete();
-                      }
-                    },
-                    itemBuilder: (_) => <PopupMenuEntry<String>>[
-                      OmniPopupMenuItem<String>(
-                        value: 'history',
-                        label: '支付记录',
-                        icon: Icons.receipt_long_outlined,
-                      ),
-                      OmniPopupMenuItem<String>(
-                        value: 'edit',
-                        label: '编辑',
-                        icon: Icons.edit_outlined,
-                      ),
-                      OmniPopupMenuItem<String>(
-                        value: 'image',
-                        label: '更换图片',
-                        icon: Icons.add_photo_alternate_outlined,
-                      ),
-                      OmniPopupMenuItem<String>(
-                        value: 'delete',
-                        label: '移入回收站',
-                        icon: Icons.delete_outline_rounded,
-                        danger: true,
-                      ),
-                    ],
-                  ),
+                  _buildMoreMenu(context, colors),
                 ],
               ),
             ],
           ),
         ],
       ),
+    );
+  }
+
+  /// 构建管理页中的移动端紧凑会员卡片。
+  Widget _buildCompactCard(
+    BuildContext context, {
+    required OmniColors colors,
+    required (String, Color) statusView,
+    required String detail,
+    required String billingCycleLabel,
+    required DateTime timelineStartDate,
+    required bool timelineStartsFromRenewal,
+    required DateTime now,
+  }) {
+    // 当前会员的价格及计费周期文案。
+    final String priceLabel =
+        '¥ ${(membership.priceCents / 100).toStringAsFixed(2)}'
+        '${membership.isPermanent ? ' · ' : ' / '}$billingCycleLabel';
+    return OmniPanel(
+      padding: const EdgeInsets.symmetric(
+        horizontal: OmniSpacing.sm,
+        vertical: OmniSpacing.xs,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          SizedBox(
+            height: 44,
+            child: Row(
+              children: <Widget>[
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: colors.member.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(OmniRadius.control),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: membership.imageLocalPath == null
+                      ? Icon(Icons.loyalty_rounded, color: colors.member)
+                      : Image.file(
+                          File(membership.imageLocalPath!),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Icon(
+                            Icons.broken_image_outlined,
+                            color: colors.muted,
+                          ),
+                        ),
+                ),
+                const SizedBox(width: OmniSpacing.xs),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        membership.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall
+                            ?.copyWith(height: 1),
+                      ),
+                      LayoutBuilder(
+                        builder:
+                            (BuildContext context, BoxConstraints constraints) {
+                              if (constraints.maxWidth < 96) {
+                                return Text(
+                                  '${statusView.$1} · $detail',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(color: statusView.$2),
+                                );
+                              }
+                              return Row(
+                                children: <Widget>[
+                                  OmniTag(
+                                    label: statusView.$1,
+                                    color: statusView.$2,
+                                  ),
+                                  const SizedBox(width: OmniSpacing.xxs),
+                                  Expanded(
+                                    child: Text(
+                                      detail,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall,
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: OmniSpacing.xxs),
+                SizedBox(
+                  width: 82,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      priceLabel,
+                      key: ValueKey<String>(
+                        'membership-price-${membership.id}',
+                      ),
+                      maxLines: 1,
+                      textAlign: TextAlign.end,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                ),
+                if (!membership.autoRenew && !membership.isPermanent)
+                  SizedBox(
+                    height: 44,
+                    child: OmniButton(
+                      key: ValueKey<String>(
+                        'membership-renew-${membership.id}',
+                      ),
+                      label: '续费',
+                      variant: OmniButtonVariant.text,
+                      onPressed: onRenew,
+                    ),
+                  ),
+                _buildMoreMenu(context, colors),
+              ],
+            ),
+          ),
+          const SizedBox(height: OmniSpacing.xxs),
+          _MembershipExpirationTimeline(
+            key: ValueKey<String>('membership-timeline-${membership.id}'),
+            membership: membership,
+            startDate: timelineStartDate,
+            startsFromRenewal: timelineStartsFromRenewal,
+            now: now,
+            progressColor: colors.member,
+            statusColor: statusView.$2,
+            compact: true,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 构建会员卡片的更多操作菜单。
+  Widget _buildMoreMenu(BuildContext context, OmniColors colors) {
+    return OmniPopupMenuButton<String>(
+      tooltip: '更多操作',
+      menuConstraints: BoxConstraints(
+        minWidth: OmniDropdownMetrics.actionMenuMinWidth * 0.85,
+        maxWidth: OmniDropdownMetrics.actionMenuMaxWidth * 0.85,
+      ),
+      onSelected: (String value) {
+        if (value == 'history') {
+          onHistory();
+        } else if (value == 'edit') {
+          onEdit();
+        } else if (value == 'image') {
+          AttachmentPickerDialog.show(
+            context,
+            businessType: AttachmentBusinessType.membershipImage,
+            businessId: membership.id,
+            title: '${membership.name} · 主图',
+          );
+        } else {
+          onDelete();
+        }
+      },
+      itemBuilder: (_) => <PopupMenuEntry<String>>[
+        OmniPopupMenuItem<String>(
+          value: 'history',
+          label: '支付记录',
+          icon: Icons.receipt_long_outlined,
+        ),
+        OmniPopupMenuItem<String>(
+          value: 'edit',
+          label: '编辑',
+          icon: Icons.edit_outlined,
+        ),
+        OmniPopupMenuItem<String>(
+          value: 'image',
+          label: '更换图片',
+          icon: Icons.add_photo_alternate_outlined,
+        ),
+        OmniPopupMenuItem<String>(
+          value: 'delete',
+          label: '移入回收站',
+          icon: Icons.delete_outline_rounded,
+          danger: true,
+        ),
+      ],
+      child: compact
+          ? SizedBox.square(
+              dimension: 44,
+              child: Icon(Icons.more_horiz_rounded, color: colors.muted),
+            )
+          : null,
     );
   }
 }
@@ -1824,6 +2019,9 @@ class _MembershipExpirationTimeline extends StatelessWidget {
   /// 剩余状态文字色。
   final Color statusColor;
 
+  /// 是否使用紧凑时间轴。
+  final bool compact;
+
   /// 创建会员到期时间条。
   const _MembershipExpirationTimeline({
     required this.membership,
@@ -1832,6 +2030,7 @@ class _MembershipExpirationTimeline extends StatelessWidget {
     required this.now,
     required this.progressColor,
     required this.statusColor,
+    required this.compact,
     super.key,
   });
 
@@ -1879,7 +2078,7 @@ class _MembershipExpirationTimeline extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         SizedBox(
-          height: 10,
+          height: compact ? 8 : 10,
           child: LayoutBuilder(
             builder: (BuildContext context, BoxConstraints constraints) {
               // 当前进度点的水平位置。
@@ -1937,19 +2136,23 @@ class _MembershipExpirationTimeline extends StatelessWidget {
             },
           ),
         ),
-        const SizedBox(height: OmniSpacing.xxs),
+        SizedBox(height: compact ? 2 : OmniSpacing.xxs),
         Row(
           children: <Widget>[
             Expanded(
               child: Text(
                 '${startsFromRenewal ? '续费' : '购买'} '
                 '${DateFormat('yyyy-MM-dd').format(periodStartDay)}',
+                maxLines: compact ? 1 : null,
+                overflow: compact ? TextOverflow.ellipsis : null,
                 style: Theme.of(context).textTheme.labelSmall,
               ),
             ),
             Expanded(
               child: Text(
                 remainingLabel,
+                maxLines: compact ? 1 : null,
+                overflow: compact ? TextOverflow.ellipsis : null,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.labelSmall
                     ?.copyWith(color: statusColor, fontWeight: FontWeight.w400),
@@ -1958,6 +2161,8 @@ class _MembershipExpirationTimeline extends StatelessWidget {
             Expanded(
               child: Text(
                 expirationLabel,
+                maxLines: compact ? 1 : null,
+                overflow: compact ? TextOverflow.ellipsis : null,
                 textAlign: TextAlign.end,
                 style: Theme.of(context).textTheme.labelSmall,
               ),

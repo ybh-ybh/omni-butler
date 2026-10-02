@@ -2160,6 +2160,7 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
       todo: tree.root,
       now: widget.now,
       completing: widget.completingTodoIds.contains(tree.root.id),
+      mobile: widget.mobile,
       treeControl: treeControl,
       progressLabel: tree.children.isEmpty
           ? null
@@ -2204,6 +2205,7 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
                 completing: widget.completingTodoIds.contains(
                   pendingChildren[index].id,
                 ),
+                mobile: widget.mobile,
                 onCompletedChanged: (bool value) =>
                     widget.onCompletedChanged(pendingChildren[index], value),
                 onTap: widget.mobile
@@ -2298,6 +2300,9 @@ class _TodoTaskRow extends StatelessWidget {
   /// 是否正在播放完成反馈。
   final bool completing;
 
+  /// 是否使用 Android 紧凑任务行布局。
+  final bool mobile;
+
   /// 可选展开与拖拽控制。
   final Widget? treeControl;
 
@@ -2327,6 +2332,7 @@ class _TodoTaskRow extends StatelessWidget {
     required this.todo,
     required this.now,
     required this.completing,
+    required this.mobile,
     required this.onCompletedChanged,
     required this.onTap,
     required this.onEdit,
@@ -2345,6 +2351,33 @@ class _TodoTaskRow extends StatelessWidget {
     final OmniColors colors = OmniColors.of(context);
     // 当前是否存在需要换行展示的辅助信息。
     final bool hasDetails = _TodoDetails.hasContent(todo);
+    // 移动端仅保留两像素垂直留白，使四十四像素操作区形成四十八像素行高。
+    final EdgeInsetsGeometry rowPadding = mobile
+        ? const EdgeInsets.symmetric(horizontal: OmniSpacing.sm, vertical: 2)
+        : const EdgeInsets.symmetric(
+            horizontal: OmniSpacing.sm,
+            vertical: OmniSpacing.xs,
+          );
+    // 移动端新增子任务按钮使用四十四像素点击区域，桌面端沿用原有主题尺寸。
+    final ButtonStyle addChildButtonStyle = mobile
+        ? IconButton.styleFrom(
+            foregroundColor: colors.todo,
+            fixedSize: const Size.square(OmniSize.touch),
+            padding: EdgeInsets.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          )
+        : IconButton.styleFrom(foregroundColor: colors.todo);
+    // 移动端更多菜单使用固定点击区域，避免 PopupMenuButton 默认尺寸撑高任务行。
+    final Widget? moreActionChild = mobile
+        ? SizedBox.square(
+            dimension: OmniSize.touch,
+            child: Icon(
+              Icons.more_horiz_rounded,
+              size: OmniSize.icon,
+              color: colors.muted,
+            ),
+          )
+        : null;
     // 当前是否关闭非必要动画。
     final bool disableAnimations =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
@@ -2378,10 +2411,7 @@ class _TodoTaskRow extends StatelessWidget {
         child: OmniListRow(
           onTap: onTap,
           borderRadius: BorderRadius.circular(OmniRadius.control),
-          padding: const EdgeInsets.symmetric(
-            horizontal: OmniSpacing.sm,
-            vertical: OmniSpacing.xs,
-          ),
+          padding: rowPadding,
           leadingGap: 0,
           leading: Row(
             mainAxisSize: MainAxisSize.min,
@@ -2425,11 +2455,12 @@ class _TodoTaskRow extends StatelessWidget {
                   key: ValueKey<String>('todo-add-child-${todo.id}'),
                   tooltip: '添加子任务',
                   onPressed: onAddChild,
-                  style: IconButton.styleFrom(foregroundColor: colors.todo),
+                  style: addChildButtonStyle,
                   icon: const Icon(Icons.playlist_add_rounded, size: 20),
                 ),
               OmniPopupMenuButton<String>(
                 tooltip: '更多操作',
+                child: moreActionChild,
                 onSelected: (String value) {
                   if (value == 'edit') {
                     onEdit();

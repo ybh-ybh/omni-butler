@@ -105,9 +105,13 @@ class _PriorityQuadrantOption extends StatelessWidget {
         child: InkWell(
           onTap: onSelected,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 94),
+            key: ValueKey<String>('todo-priority-option-${quadrant.value}'),
+            constraints: const BoxConstraints(minHeight: 64),
             child: Padding(
-              padding: const EdgeInsets.all(OmniSpacing.sm),
+              padding: const EdgeInsets.symmetric(
+                horizontal: OmniSpacing.sm,
+                vertical: OmniSpacing.xs,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
@@ -139,13 +143,6 @@ class _PriorityQuadrantOption extends StatelessWidget {
                       color: accentColor,
                       fontWeight: FontWeight.w400,
                     ),
-                  ),
-                  const SizedBox(height: OmniSpacing.xxs),
-                  Text(
-                    quadrant.description,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
               ),
