@@ -1,5 +1,6 @@
 // ignore_for_file: implementation_imports, invalid_use_of_internal_member
 
+import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 
@@ -13,6 +14,8 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
 import 'package:omni_butler/features/floating/platform/windows_window_host.dart';
+import 'package:omni_butler/features/floating/platform/windows_floating_resize_service.dart';
+import 'package:omni_butler/features/floating/platform/floating_resize_scheduler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:win32/win32.dart' as win32;
 
@@ -46,6 +49,7 @@ Future<void> main() async {
           .setEnabledFromSettings(true);
       // 本周期创建的真实桌面卡片。
       final win32.HWND card = await _waitForCard();
+      if (cycle == 0) await _checkResizeBounds(card);
       await container
           .read(floatingWindowPreferenceProvider.notifier)
           .setEnabledFromSettings(false);
@@ -99,6 +103,143 @@ Future<void> main() async {
   } catch (error, stackTrace) {
     stderr.writeln('FAIL: $error\n$stackTrace');
     exit(1);
+  }
+}
+
+/// 验证连续横/竖及斜向缩放中宿主和内部视图同步，且右/上边界不漂移。
+Future<void> _checkResizeBounds(win32.HWND card) async {
+  // 首帧已挂到桌面不代表异步显示器查询和初始位置恢复已完成。
+  await Future<void>.delayed(const Duration(milliseconds: 500));
+  // 初始窗口屏幕矩形。
+  final Pointer<win32.RECT> bounds = calloc<win32.RECT>();
+  // Flutter 渲染子窗口类名。
+  final Pointer<Utf16> contentClass = 'FLUTTERVIEW'.toNativeUtf16();
+  // 子视图客户区尺寸缓冲区。
+  final Pointer<win32.RECT> client = calloc<win32.RECT>();
+  // 原生异步尺寸通道。
+  final WindowsFloatingResizeService service = WindowsFloatingResizeService();
+  try {
+    win32.GetWindowRect(card, bounds);
+    // 缩放时保持的右边缘物理坐标。
+    final int right = bounds.ref.right;
+    // 缩放时保持的顶边缘物理坐标。
+    final int top = bounds.ref.top;
+    // 原始物理宽度。
+    final int baseWidth = bounds.ref.right - bounds.ref.left;
+    // 原始物理高度。
+    final int baseHeight = bounds.ref.bottom - bounds.ref.top;
+    // 本进程卡片的实际内部视图。
+    final win32.HWND content = win32.FindWindowEx(
+      card,
+      null,
+      win32.PCWSTR(contentClass),
+      null,
+    ).value;
+    if (content == nullptr) throw StateError('悬浮窗缺少 Flutter 子视图');
+    if ((win32.GetWindowLongPtr(card, win32.GWL_EXSTYLE).value &
+            win32.WS_EX_LAYERED) !=
+        0) {
+      throw StateError('悬浮窗重新启用了会导致横向抖动的整窗透明层');
+    }
+    if ((win32.GetWindowLongPtr(card, win32.GWL_EXSTYLE).value &
+            win32.WS_EX_LAYOUTRTL) ==
+        0) {
+      throw StateError('宿主没有按固定右边缘定位渲染子视图');
+    }
+    if ((win32.GetWindowLongPtr(content, win32.GWL_EXSTYLE).value &
+            win32.WS_EX_LAYOUTRTL) !=
+        0) {
+      throw StateError('Flutter 子视图错误继承了宿主镜像布局');
+    }
+    // 高频指针更新只覆盖最新目标。
+    Rect target = Rect.fromLTWH(
+      (right - baseWidth).toDouble(),
+      top.toDouble(),
+      baseWidth.toDouble(),
+      baseHeight.toDouble(),
+    );
+    // 累计已完成并检查的原生缩放数量。
+    int checked = 0;
+    // 使用与生产手势完全相同的串行尺寸提交器。
+    final FloatingResizeScheduler scheduler = FloatingResizeScheduler(() async {
+      // 本次原生提交的稳定快照。
+      final Rect submitted = target;
+      await service.setBounds(card.address, submitted);
+      win32.GetWindowRect(card, bounds);
+      win32.GetClientRect(content, client);
+      if (bounds.ref.left != submitted.left.round() ||
+          bounds.ref.top != top ||
+          bounds.ref.right != right ||
+          bounds.ref.bottom != submitted.bottom.round() ||
+          client.ref.left != 0 ||
+          client.ref.top != 0 ||
+          client.ref.right != submitted.width.round() ||
+          client.ref.bottom != submitted.height.round()) {
+        throw StateError(
+          '父子窗口边界不同步或固定边缘漂移：'
+          'target=${submitted.left},${submitted.top},${submitted.right},${submitted.bottom}; '
+          'host=${bounds.ref.left},${bounds.ref.top},${bounds.ref.right},${bounds.ref.bottom}; '
+          'client=${client.ref.left},${client.ref.top},${client.ref.right},${client.ref.bottom}',
+        );
+      }
+      // 子视图屏幕边界必须与宿主一致，不能只验证客户区宽高。
+      final Pointer<win32.RECT> contentBounds = calloc<win32.RECT>();
+      // 鼠标坐标仍从子视图左上角开始，而非宿主的右侧原点。
+      final Pointer<win32.POINT> pointer = calloc<win32.POINT>();
+      try {
+        win32.GetWindowRect(content, contentBounds);
+        pointer.ref
+          ..x = contentBounds.ref.left + 20
+          ..y = contentBounds.ref.top + 30;
+        win32.ScreenToClient(content, pointer);
+        if (contentBounds.ref.left != bounds.ref.left ||
+            contentBounds.ref.right != bounds.ref.right ||
+            contentBounds.ref.top != bounds.ref.top ||
+            contentBounds.ref.bottom != bounds.ref.bottom ||
+            pointer.ref.x != 20 ||
+            pointer.ref.y != 30) {
+          throw StateError('右锚定改变了子视图的位置或鼠标坐标');
+        }
+      } finally {
+        calloc.free(contentBounds);
+        calloc.free(pointer);
+      }
+      checked += 1;
+    });
+    try {
+      // 分别覆盖横向、竖向和斜向往返，并重复反向，模拟录屏的快速拖动。
+      for (int axis = 0; axis < 3; axis += 1) {
+        // 一个方向内连续提交的指针事件序号。
+        for (int step = 0; step < 40; step += 1) {
+          // 每二十次事件反转方向，包含放大和缩小。
+          final int delta = (step < 20 ? step : 39 - step) * 12;
+          target = Rect.fromLTWH(
+            (right - baseWidth - (axis == 1 ? 0 : delta)).toDouble(),
+            top.toDouble(),
+            (baseWidth + (axis == 1 ? 0 : delta)).toDouble(),
+            (baseHeight + (axis == 0 ? 0 : delta)).toDouble(),
+          );
+          // 观察更新失败，同时继续发送高频事件，让提交器覆盖过期目标。
+          unawaited(
+            scheduler.schedule().catchError((Object error) {
+              stderr.writeln('FAIL: $error');
+              exit(1);
+            }),
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+        }
+        await scheduler.flush();
+      }
+      stdout.writeln(
+        'PASS: $checked synchronized resize frames from 120 updates',
+      );
+    } finally {
+      scheduler.dispose();
+    }
+  } finally {
+    calloc.free(bounds);
+    calloc.free(client);
+    calloc.free(contentClass);
   }
 }
 

@@ -138,6 +138,16 @@ void main() {
       expect(tester.getSize(viewport).height, closeTo(firstFrameHeight, 0.5));
       expect(tester.takeException(), isNull);
     }
+    // 连续竖向缩放必须在当前尺寸帧完成扩展，不能下一帧再跳一次高度。
+    for (final double height in <double>[708, 716, 724, 708, 700, 684]) {
+      tester.view.physicalSize = Size(294, height);
+      await tester.pump();
+      // 当前尺寸帧已经分配好的象限高度。
+      final double firstFrameHeight = tester.getSize(viewport).height;
+      await tester.pump();
+      expect(tester.getSize(viewport).height, closeTo(firstFrameHeight, 0.5));
+      expect(tester.takeException(), isNull);
+    }
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 1));
   });

@@ -10,6 +10,7 @@ add_executable(${BINARY_NAME} WIN32
   "main.cpp"
   "utils.cpp"
   "windows_tray_controller.cpp"
+  "windows_floating_controller.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
   "Runner.rc"
   "runner.exe.manifest"
@@ -33,7 +34,15 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "shell32.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "comctl32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# 独立原生缩放回归，只在显式指定该目标时构建，不进入发布包。
+add_executable(windows_floating_resize_anchor_test EXCLUDE_FROM_ALL
+  "../../test/support/windows_floating_resize_anchor_test.cpp"
+)
+apply_standard_settings(windows_floating_resize_anchor_test)
+target_link_libraries(windows_floating_resize_anchor_test PRIVATE "user32.lib")

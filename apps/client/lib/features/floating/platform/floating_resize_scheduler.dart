@@ -1,53 +1,47 @@
 import 'dart:async';
 
-/// 合并连续指针事件，并阻止 SetWindowPos 等待绘制时发生重入缩放。
+/// 单次原生更新完成后才提交最新矩形，不使用与显示帧率脱节的定时器。
 class FloatingResizeScheduler {
-  /// 创建约一帧提交一次的尺寸更新器。
+  /// 创建等待原生尺寸更新完成的提交器。
   FloatingResizeScheduler(this.applyResize);
 
-  /// 读取最新鼠标位置并提交原生矩形的操作。
-  final void Function() applyResize;
+  /// 在原生消息线程完成矩形更新的异步操作。
+  final Future<void> Function() applyResize;
 
-  /// 当前尚未提交的帧定时器。
-  Timer? _timer;
+  /// 当前完整的串行提交任务。
+  Future<void>? _operation;
 
-  /// 是否正在原生尺寸更新中，原生消息循环可能重新进入 Dart。
-  bool _isApplying = false;
+  /// 原生更新期间是否又收到新矩形。
+  bool _pending = false;
 
-  /// 关闭后不再允许排队或提交尺寸。
+  /// 关闭后不再提交任何新请求。
   bool _disposed = false;
 
-  /// 将高频事件合并为下一帧的最新尺寸。
-  void schedule() {
-    if (_disposed || _timer != null) {
-      return;
-    }
-    _timer = Timer(const Duration(milliseconds: 16), flush);
+  /// 同一事件轮合并请求，执行期间只保留最新矩形。
+  Future<void> schedule() {
+    if (_disposed) return Future<void>.value();
+    _pending = true;
+    return _operation ??= Future<void>.microtask(_drain);
   }
 
-  /// 松开时立即提交最后位置，重入时延至下一帧。
-  void flush() {
-    _timer?.cancel();
-    _timer = null;
-    if (_disposed) {
-      return;
-    }
-    if (_isApplying) {
-      schedule();
-      return;
-    }
-    _isApplying = true;
+  /// 松开鼠标后等待最后一个矩形真正应用，再读取位置和尺寸。
+  Future<void> flush() => schedule();
+
+  /// 顺序提交原生请求，让 Dart 等待期间仍可处理新帧。
+  Future<void> _drain() async {
     try {
-      applyResize();
+      while (_pending && !_disposed) {
+        _pending = false;
+        await applyResize();
+      }
     } finally {
-      _isApplying = false;
+      _operation = null;
     }
   }
 
-  /// 取消待提交事件，避免关闭后的旧回调操作失效句柄。
+  /// 关闭时丢弃待提交的矩形，已发往原生的请求由句柄校验保护。
   void dispose() {
     _disposed = true;
-    _timer?.cancel();
-    _timer = null;
+    _pending = false;
   }
 }

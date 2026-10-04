@@ -19,6 +19,7 @@ import 'package:omni_butler/features/floating/data/floating_window_preferences.d
 import 'package:omni_butler/features/floating/platform/floating_window_placement.dart';
 import 'package:omni_butler/features/floating/platform/floating_resize_scheduler.dart';
 import 'package:omni_butler/features/floating/platform/windows_desktop_card_controller.dart';
+import 'package:omni_butler/features/floating/platform/windows_floating_resize_service.dart';
 import 'package:omni_butler/features/floating/platform/windows_tray_service.dart';
 import 'package:omni_butler/features/floating/presentation/floating_window_page.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
@@ -591,7 +592,7 @@ class _WindowsWindowCoordinatorState
 
   /// 结束调整并保存悬浮窗的位置与尺寸。
   Future<void> _handleFloatingResizeEnd() async {
-    _floatingNative?.endResizeFromBottomLeft();
+    await _floatingNative?.endResizeFromBottomLeft();
     await _saveCurrentFloatingState();
   }
 
@@ -962,7 +963,11 @@ class _WindowsFloatingWindowNative {
     _applyPendingResize,
   );
 
-  /// 关闭前取消尺寸更新，避免旧窗口的定时回调继续执行。
+  /// 通过原生消息线程提交窗口矩形的服务。
+  final WindowsFloatingResizeService _resizeService =
+      WindowsFloatingResizeService();
+
+  /// 关闭前取消尺寸更新，避免旧窗口的待提交请求继续执行。
   void dispose() {
     _resizeScheduler.dispose();
     _resizeCursorOrigin = null;
@@ -1033,21 +1038,19 @@ class _WindowsFloatingWindowNative {
       _windowHandle,
       win32.GWL_EXSTYLE,
     ).value;
-    // 隐藏任务栏入口并允许整窗半透明的扩展样式。
+    // 不使用整窗 layered 缓存：它会在左扩时短暂搬移旧尺寸的 Flutter 画面。
+    // 半透明仍由 Flutter 卡片背景和原生毛玻璃提供，避免两套合成路径叠加。
+    // 宿主从右侧定位子视图，保持左扩过程的右边界。
+    // 禁止布局继承：Flutter 子视图仍使用正常的文字、绘制和鼠标坐标。
     final int floatingExtendedStyle =
-        (currentExtendedStyle & ~win32.WS_EX_APPWINDOW) |
+        (currentExtendedStyle & ~win32.WS_EX_APPWINDOW & ~win32.WS_EX_LAYERED) |
         win32.WS_EX_TOOLWINDOW |
-        win32.WS_EX_LAYERED;
+        win32.WS_EX_LAYOUTRTL |
+        win32.WS_EX_NOINHERITLAYOUT;
     win32.SetWindowLongPtr(
       _windowHandle,
       win32.GWL_EXSTYLE,
       floatingExtendedStyle,
-    );
-    win32.SetLayeredWindowAttributes(
-      _windowHandle,
-      const win32.COLORREF(0),
-      246,
-      win32.LWA_ALPHA,
     );
     // 位于普通应用下方、桌面图标上方的实际桌面宿主。
     final win32.HWND? desktopHandle = _findDesktopHost();
@@ -1244,24 +1247,30 @@ class _WindowsFloatingWindowNative {
       minimumSize: minimumPhysicalSize,
     );
     _resizeTargetRect = targetRect;
-    _resizeScheduler.schedule();
+    unawaited(_resizeScheduler.schedule().catchError(_handleResizeError));
   }
 
-  /// 每帧只提交最新矩形，SetWindowPos 等待 Flutter 绘制时不允许嵌套缩放。
-  void _applyPendingResize() {
+  /// 原生更新完成后才提交最新矩形，不在 Dart 手势栈内同步更新窗口。
+  Future<void> _applyPendingResize() async {
     // 本轮合并后的最终窗口矩形。
     final Rect? targetRect = _resizeTargetRect;
     if (targetRect != null) {
-      _setBoundsAtScreenRect(targetRect, discardClientPixels: true);
+      await _resizeService.setBounds(_windowHandle.address, targetRect);
     }
   }
 
   /// 应用最后一次尺寸变化并清理拖拽起点。
-  void endResizeFromBottomLeft() {
+  Future<void> endResizeFromBottomLeft() async {
     updateResizeFromBottomLeft();
-    _resizeScheduler.flush();
+    // 先结束本轮手势，等待期间开始的新手势不能被旧结束回调清除。
     _resizeCursorOrigin = null;
     _resizeWindowRect = null;
+    await _resizeScheduler.flush();
+  }
+
+  /// 记录提交错误，避免手势回调留下未处理的异步异常。
+  void _handleResizeError(Object error, StackTrace stackTrace) {
+    debugPrint('Windows 悬浮窗尺寸更新失败：$error\n$stackTrace');
   }
 
   /// 读取当前鼠标的屏幕物理坐标。
@@ -1285,11 +1294,8 @@ class _WindowsFloatingWindowNative {
     _setBoundsAtScreenRect(screenPosition & currentPhysicalSize);
   }
 
-  /// 按屏幕物理矩形同时移动并按需调整桌面子窗口。
-  void _setBoundsAtScreenRect(
-    Rect screenRect, {
-    bool discardClientPixels = false,
-  }) {
+  /// 仅移动桌面子窗口，尺寸更新统一走异步原生通道。
+  void _setBoundsAtScreenRect(Rect screenRect) {
     // 四舍五入后的目标屏幕左坐标。
     final int targetLeft = screenRect.left.round();
     // 四舍五入后的目标屏幕顶坐标。
@@ -1321,7 +1327,7 @@ class _WindowsFloatingWindowNative {
         win32.SWP_NOACTIVATE |
         win32.SWP_NOZORDER |
         win32.SWP_NOOWNERZORDER |
-        (discardClientPixels ? win32.SWP_NOCOPYBITS : 0);
+        win32.SWP_NOSIZE;
     try {
       point.ref.x = targetLeft;
       point.ref.y = targetTop;

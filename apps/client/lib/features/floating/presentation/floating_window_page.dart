@@ -175,16 +175,13 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
   /// 当前展开的快速录入区。
   _FloatingComposerMode? _composerMode;
 
-  /// 可以分配给溢出待办象限的额外高度。
-  double _todoExpansionBudget = 0;
+  /// 与窗口高度无关的完整内容自然高度，用于当前尺寸帧直接计算剩余空间。
+  double? _baseContentHeight;
 
   /// 当前三个待办象限实际使用的额外高度。
   double _appliedTodoExpansion = 0;
 
-  /// 当前内容滚动区扣除上下内边距后的可用高度。
-  double _availableContentBodyHeight = 0;
-
-  /// 当前是否已经安排下一帧重新计算象限高度预算。
+  /// 当前是否已经安排布局后的自然高度测量。
   bool _todoBudgetUpdateScheduled = false;
 
   /// 展开指定快速录入区。
@@ -200,11 +197,11 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
   /// 记录待办象限本帧实际使用的扩展高度。
   void _recordAppliedTodoExpansion(double value) {
     _appliedTodoExpansion = value;
+    _scheduleTodoExpansionBudgetUpdate();
   }
 
-  /// 在布局结束后按完整内容实测高度更新象限扩展预算。
-  void _scheduleTodoExpansionBudgetUpdate(double availableHeight) {
-    _availableContentBodyHeight = availableHeight;
+  /// 仅在内容自然高度改变时更新基准，窗口增高不再触发下一帧二次扩展。
+  void _scheduleTodoExpansionBudgetUpdate() {
     if (_todoBudgetUpdateScheduled) {
       return;
     }
@@ -223,15 +220,11 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
       // 扣除当前象限扩展量后的固定内容自然高度，包含下方时间状态。
       final double baseContentHeight =
           contentBox.size.height - _appliedTodoExpansion;
-      // 保证全部固定内容可见后仍能分给溢出象限的剩余高度。
-      final double targetBudget =
-          (_availableContentBodyHeight - baseContentHeight)
-              .clamp(0, double.infinity)
-              .toDouble();
-      if ((_todoExpansionBudget - targetBudget).abs() <= 0.5) {
+      if (_baseContentHeight != null &&
+          (_baseContentHeight! - baseContentHeight).abs() <= 0.5) {
         return;
       }
-      setState(() => _todoExpansionBudget = targetBudget);
+      setState(() => _baseContentHeight = baseContentHeight);
     });
   }
 
@@ -376,9 +369,14 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
                                               OmniSpacing.md)
                                           .clamp(0, double.infinity)
                                           .toDouble();
-                                  _scheduleTodoExpansionBudgetUpdate(
-                                    availableBodyHeight,
-                                  );
+                                  _scheduleTodoExpansionBudgetUpdate();
+                                  // 当前尺寸帧立即分配增高空间，避免先画旧高度再画新高度。
+                                  final double expansionBudget =
+                                      (availableBodyHeight -
+                                              (_baseContentHeight ??
+                                                  availableBodyHeight))
+                                          .clamp(0, double.infinity)
+                                          .toDouble();
                                   return SingleChildScrollView(
                                     key: const ValueKey<String>(
                                       'floating-window-content-scroll',
@@ -400,8 +398,7 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
                                           _FloatingTodos(
                                             today: today,
                                             onComplete: _completeTodo,
-                                            expansionBudget:
-                                                _todoExpansionBudget,
+                                            expansionBudget: expansionBudget,
                                             onAppliedExpansionChanged:
                                                 _recordAppliedTodoExpansion,
                                             onToggleComposer:
