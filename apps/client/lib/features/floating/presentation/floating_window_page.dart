@@ -9,6 +9,7 @@ import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
+import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
 import 'package:omni_butler/features/timeline/presentation/timeline_page.dart';
@@ -534,6 +535,7 @@ class _FloatingResizeHandle extends StatelessWidget {
           onPanStart: (_) => onResizeStart(),
           onPanUpdate: (_) => onResizeUpdate(),
           onPanEnd: (_) => unawaited(onResizeEnd()),
+          onPanCancel: () => unawaited(onResizeEnd()),
           child: SizedBox(
             width: 28,
             height: 28,
@@ -1283,8 +1285,8 @@ class _FloatingTimeComposerState extends ConsumerState<_FloatingTimeComposer> {
   /// 活动内容控制器。
   final TextEditingController _activityController = TextEditingController();
 
-  /// 类别控制器。
-  final TextEditingController _categoryController = TextEditingController();
+  /// 当前选中的时间类别。
+  String? _selectedCategory;
 
   /// 开始时间控制器。
   late final TextEditingController _startController;
@@ -1333,7 +1335,6 @@ class _FloatingTimeComposerState extends ConsumerState<_FloatingTimeComposer> {
   @override
   void dispose() {
     _activityController.dispose();
-    _categoryController.dispose();
     _startController.dispose();
     _endController.dispose();
     super.dispose();
@@ -1400,7 +1401,7 @@ class _FloatingTimeComposerState extends ConsumerState<_FloatingTimeComposer> {
               startedAt: startedAt,
               endedAt: endedAt,
               activity: _activityController.text,
-              category: _categoryController.text,
+              category: _selectedCategory,
             ),
           );
       if (mounted) {
@@ -1434,6 +1435,18 @@ class _FloatingTimeComposerState extends ConsumerState<_FloatingTimeComposer> {
   Widget build(BuildContext context) {
     // 当前是否为补记模式。
     final bool backfill = widget.mode == _FloatingTimeComposerMode.backfill;
+    // 当前可用的统一时间类别。
+    final List<TaxonomyEntry> categories =
+        ref
+            .watch(
+              taxonomyEntriesProvider((
+                TaxonomyModule.timeline,
+                TaxonomyKind.category,
+              )),
+            )
+            .asData
+            ?.value ??
+        const <TaxonomyEntry>[];
     return _FloatingComposerFrame(
       title: backfill ? '补记时间' : '开始记录',
       onClose: widget.onClose,
@@ -1465,12 +1478,24 @@ class _FloatingTimeComposerState extends ConsumerState<_FloatingTimeComposer> {
             const SizedBox(height: OmniSpacing.xs),
             _FloatingLabeledField(
               label: '类别',
-              child: TextFormField(
+              child: OmniDropdownButtonFormField<String>(
                 key: const ValueKey<String>('floating-time-category-field'),
-                controller: _categoryController,
-                textInputAction: TextInputAction.next,
-                style: const TextStyle(fontSize: 13),
-                decoration: _floatingFieldDecoration(context, hintText: '可选'),
+                initialValue: _selectedCategory,
+                hint: const Text('可选'),
+                decoration: _floatingFieldDecoration(context),
+                selectionIndicatorPosition:
+                    OmniDropdownSelectionIndicatorPosition.trailing,
+                items: categories
+                    .map(
+                      (TaxonomyEntry category) => DropdownMenuItem<String>(
+                        value: category.name,
+                        child: Text(category.name),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (String? value) {
+                  setState(() => _selectedCategory = value);
+                },
               ),
             ),
             const SizedBox(height: OmniSpacing.xs),

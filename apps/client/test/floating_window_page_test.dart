@@ -128,6 +128,18 @@ void main() {
       find.byKey(const ValueKey<String>('floating-time-status')),
       findsOneWidget,
     );
+    // 纯横向扩展不应让象限高度在后续布局帧之间反复跳变。
+    for (final double width in <double>[320, 360, 420, 500, 420, 320, 294]) {
+      tester.view.physicalSize = Size(width, 700);
+      await tester.pump();
+      // 横向改变后的本帧视口高度。
+      final double firstFrameHeight = tester.getSize(viewport).height;
+      await tester.pump();
+      expect(tester.getSize(viewport).height, closeTo(firstFrameHeight, 0.5));
+      expect(tester.takeException(), isNull);
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
   });
 
   testWidgets('远端同步表更新后悬浮窗重新读取业务数据', (WidgetTester tester) async {
@@ -583,6 +595,25 @@ void main() {
       find.byKey(const ValueKey<String>('time-entry-editor')),
       findsNothing,
     );
+    // 悬浮窗时间类别复用时间管理分类，并以选项而非自由输入展示。
+    final Finder timeCategoryField = find.byKey(
+      const ValueKey<String>('floating-time-category-field'),
+    );
+    expect(timeCategoryField, findsOneWidget);
+    expect(
+      find.descendant(
+        of: timeCategoryField,
+        matching: find.byType(EditableText),
+      ),
+      findsNothing,
+    );
+    await tester.tap(timeCategoryField);
+    await tester.pumpAndSettle();
+    // 当前测试数据库自动初始化的时间类别选项。
+    final Finder workCategoryOption = find.widgetWithText(MenuItemButton, '工作');
+    expect(workCategoryOption, findsOneWidget);
+    await tester.tap(workCategoryOption);
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey<String>('floating-time-activity-field')),
       '整理资料',
@@ -597,6 +628,7 @@ void main() {
         .get();
     expect(backfilledRecords, hasLength(1));
     expect(backfilledRecords.single.endedAt, isNotNull);
+    expect(backfilledRecords.single.category, '工作');
 
     await tester.tap(find.byKey(const ValueKey<String>('floating-time-start')));
     await tester.pump();
@@ -622,5 +654,8 @@ void main() {
       find.byKey(const ValueKey<String>('floating-todo-view-all')),
       findsNothing,
     );
+    // 主动卸载页面并执行分类流的自动释放任务，避免测试结束时遗留计时器。
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
   });
 }

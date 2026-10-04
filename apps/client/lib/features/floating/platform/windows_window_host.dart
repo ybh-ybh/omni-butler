@@ -17,6 +17,8 @@ import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
 import 'package:omni_butler/features/floating/platform/floating_window_placement.dart';
+import 'package:omni_butler/features/floating/platform/floating_resize_scheduler.dart';
+import 'package:omni_butler/features/floating/platform/windows_desktop_card_controller.dart';
 import 'package:omni_butler/features/floating/platform/windows_tray_service.dart';
 import 'package:omni_butler/features/floating/presentation/floating_window_page.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
@@ -209,7 +211,7 @@ class _WindowsWindowCoordinatorState
     widget.mainWindowDelegate.onDestroyed = _handleMainWindowDestroyed;
     _trayService.onOpen = _showMainWindow;
     _trayService.onToggle = _toggleFloatingFromTray;
-    _trayService.onExit = () => _queueOperation(_exitApplication);
+    _trayService.onExit = () => unawaited(_exitApplication());
     screenRetriever.addListener(this);
   }
 
@@ -228,7 +230,9 @@ class _WindowsWindowCoordinatorState
     _trayService.onToggle = null;
     _trayService.onExit = null;
     unawaited(_disposeTray());
+    _floatingNative?.dispose();
     _floatingNative = null;
+    _floatingController?.destroy();
     _floatingController?.dispose();
     super.dispose();
   }
@@ -243,6 +247,16 @@ class _WindowsWindowCoordinatorState
 
   @override
   Widget build(BuildContext context) {
+    // 停用时立即移除窗口，不排在显示器查询或托盘初始化之后。
+    ref.listen(floatingWindowPreferenceProvider, (previous, next) {
+      if (previous?.enabled != next.enabled) {
+        // 同一帧内关闭再开启不能被上次构建的目标状态去重掉。
+        _lastRequestedState = null;
+      }
+      if (!next.enabled) {
+        unawaited(_hideFloatingWindow());
+      }
+    });
     // 当前悬浮窗偏好。
     final FloatingWindowPreference floatingPreference = ref.watch(
       floatingWindowPreferenceProvider,
@@ -295,6 +309,9 @@ class _WindowsWindowCoordinatorState
     required FloatingWindowPreference floatingPreference,
     required FeaturePreference featurePreference,
   }) async {
+    if (!mounted || _isExiting) {
+      return;
+    }
     // 当前是否至少有一个悬浮窗业务模块启用。
     final bool hasVisibleModule =
         featurePreference.isEnabled(AppFeature.todos) ||
@@ -319,7 +336,9 @@ class _WindowsWindowCoordinatorState
 
   /// 创建并显示悬浮窗。
   Future<void> _showFloatingWindow(FloatingWindowPreference preference) async {
-    if (_floatingController != null) {
+    if (_isExiting ||
+        !ref.read(floatingWindowPreferenceProvider).enabled ||
+        _floatingController != null) {
       return;
     }
     // 当前窗口注册表。
@@ -336,7 +355,7 @@ class _WindowsWindowCoordinatorState
     );
     // 按应用重启前保存的值恢复，首次或设置重置后使用默认尺寸。
     final Size initialSize = _resolveFloatingSize(preference);
-    controller = RegularWindowController(
+    controller = WindowsDesktopCardController(
       size: initialSize,
       constraints: const BoxConstraints(
         minWidth: _floatingWindowWidth,
@@ -345,6 +364,13 @@ class _WindowsWindowCoordinatorState
       title: 'Omni Butler · 今日',
       delegate: delegate,
     );
+    // 原生创建会轮询消息；若期间用户停用或退出，不再登记迟到的窗口。
+    if (!mounted ||
+        _isExiting ||
+        !ref.read(floatingWindowPreferenceProvider).enabled) {
+      controller.destroy();
+      return;
+    }
     // 悬浮窗注册条目。
     late final WindowEntry entry;
     entry = WindowEntry(
@@ -366,7 +392,7 @@ class _WindowsWindowCoordinatorState
 
     // 新窗口原生句柄需要等待首帧挂载完成。
     await WidgetsBinding.instance.endOfFrame;
-    if (!mounted || _floatingController != controller) {
+    if (!mounted || _isExiting || _floatingController != controller) {
       return;
     }
     // Windows 悬浮窗口原生操作器。
@@ -401,14 +427,18 @@ class _WindowsWindowCoordinatorState
     final WindowEntry? entry = _floatingEntry;
     // 待销毁的悬浮窗控制器。
     final RegularWindowController? controller = _floatingController;
-    if (entry == null || controller == null) {
-      return;
-    }
+    _floatingNative?.dispose();
     _floatingEntry = null;
     _floatingController = null;
     _floatingNative = null;
-    _windowRegistry?.unregister(entry);
-    controller.destroy();
+    if (controller != null) {
+      // 先隐藏真实宿主，避免注册表更新或资源清理期间残留最后一帧。
+      _WindowsWindowVisibility.hide(controller);
+      controller.destroy();
+    }
+    if (entry != null) {
+      _windowRegistry?.unregister(entry);
+    }
   }
 
   /// 响应悬浮窗销毁并清理注册状态。
@@ -428,14 +458,22 @@ class _WindowsWindowCoordinatorState
     final RegularWindowController? controller = _floatingController;
     _floatingEntry = null;
     _floatingController = null;
+    _floatingNative?.dispose();
     _floatingNative = null;
     controller?.dispose();
   }
 
   /// 从卡片关闭入口停用悬浮窗并恢复主窗口。
   Future<void> _disableFloatingFromCard() async {
+    if (!mounted || _isExiting) {
+      return;
+    }
+    // 偏好先同步失效，正在排队的显示请求不能重新创建关闭中的窗口。
+    final Future<void> saving = ref
+        .read(floatingWindowPreferenceProvider.notifier)
+        .setEnabled(false);
     _showMainWindow();
-    await ref.read(floatingWindowPreferenceProvider.notifier).setEnabled(false);
+    await saving;
   }
 
   /// 恢复或重新约束悬浮窗位置。
@@ -444,7 +482,7 @@ class _WindowsWindowCoordinatorState
   }) async {
     // 当前原生悬浮窗操作器。
     final _WindowsFloatingWindowNative? native = _floatingNative;
-    if (native == null) {
+    if (native == null || _isExiting) {
       return;
     }
     // 当前设备保存的悬浮窗偏好。
@@ -454,13 +492,19 @@ class _WindowsWindowCoordinatorState
     final List<Display> displays = await _displayService.getAllDisplays(
       widget.mainWindowController.rootView.devicePixelRatio,
     );
-    if (displays.isEmpty) {
+    if (displays.isEmpty ||
+        !mounted ||
+        _isExiting ||
+        _floatingNative != native) {
       return;
     }
     // 当前系统主显示器。
     final Display primaryDisplay = await _displayService.getPrimaryDisplay(
       widget.mainWindowController.rootView.devicePixelRatio,
     );
+    if (!mounted || _isExiting || _floatingNative != native) {
+      return;
+    }
     // 恢复目标显示器。
     final Display display = _findPreferredDisplay(
       displays,
@@ -555,14 +599,17 @@ class _WindowsWindowCoordinatorState
   Future<void> _saveCurrentFloatingState() async {
     // 当前原生悬浮窗操作器。
     final _WindowsFloatingWindowNative? native = _floatingNative;
-    if (native == null) {
+    if (native == null || _isExiting) {
       return;
     }
     // 当前屏幕列表。
     final List<Display> displays = await _displayService.getAllDisplays(
       widget.mainWindowController.rootView.devicePixelRatio,
     );
-    if (displays.isEmpty) {
+    if (displays.isEmpty ||
+        !mounted ||
+        _isExiting ||
+        _floatingNative != native) {
       return;
     }
     // 当前窗口左上角物理坐标。
@@ -593,6 +640,8 @@ class _WindowsWindowCoordinatorState
       margin: 0,
     );
     native.moveToDisplayPosition(display, clampedPosition);
+    // 在异步写入之前快照尺寸，不能再读取可能已被关闭的窗口。
+    final Size logicalSize = native.logicalSize;
     await ref
         .read(floatingWindowPreferenceProvider.notifier)
         .savePlacement(
@@ -600,8 +649,9 @@ class _WindowsWindowCoordinatorState
           positionX: clampedPosition.dx,
           positionY: clampedPosition.dy,
         );
-    // 当前悬浮窗最终逻辑尺寸。
-    final Size logicalSize = native.logicalSize;
+    if (!mounted || _isExiting || _floatingNative != native) {
+      return;
+    }
     await ref
         .read(floatingWindowPreferenceProvider.notifier)
         .saveSize(width: logicalSize.width, height: logicalSize.height);
@@ -646,7 +696,7 @@ class _WindowsWindowCoordinatorState
       });
       return;
     }
-    _queueOperation(_exitApplication);
+    unawaited(_exitApplication());
   }
 
   /// 隐藏主窗口到托盘。
@@ -657,6 +707,9 @@ class _WindowsWindowCoordinatorState
 
   /// 恢复并激活主窗口。
   void _showMainWindow() {
+    if (_isExiting) {
+      return;
+    }
     _mainWindowHidden = false;
     _WindowsWindowVisibility.show(widget.mainWindowController);
     widget.mainWindowController.activate();
@@ -678,18 +731,23 @@ class _WindowsWindowCoordinatorState
     if (_isExiting) {
       return;
     }
-    unawaited(
-      ServicesBinding.instance.exitApplication(ui.AppExitType.required),
-    );
+    unawaited(_exitApplication(mainAlreadyDestroyed: true));
   }
 
   /// 确保系统托盘已经创建并同步开关状态。
   Future<void> _ensureTray(bool floatingEnabled) async {
+    if (_isExiting) {
+      return;
+    }
     if (_trayCreated) {
       await _trayService.setFloatingEnabled(floatingEnabled);
       return;
     }
     await _trayService.initialize(floatingEnabled: floatingEnabled);
+    if (_isExiting) {
+      await _trayService.destroy();
+      return;
+    }
     _trayCreated = true;
   }
 
@@ -727,16 +785,24 @@ class _WindowsWindowCoordinatorState
   }
 
   /// 销毁所有窗口并退出应用。
-  Future<void> _exitApplication() async {
+  Future<void> _exitApplication({bool mainAlreadyDestroyed = false}) async {
     if (_isExiting) {
       return;
     }
     _isExiting = true;
-    await _saveCurrentFloatingState();
+    // 拖动/缩放结束已保存状态，退出不等待屏幕查询和磁盘写入才关闭界面。
+    if (!mainAlreadyDestroyed) {
+      _WindowsWindowVisibility.hide(widget.mainWindowController);
+    }
     await _hideFloatingWindow();
-    await _disposeTray();
-    widget.mainWindowController.destroy();
-    await ServicesBinding.instance.exitApplication(ui.AppExitType.required);
+    if (!mainAlreadyDestroyed) {
+      widget.mainWindowController.destroy();
+    }
+    try {
+      await _disposeTray();
+    } finally {
+      await ServicesBinding.instance.exitApplication(ui.AppExitType.required);
+    }
   }
 }
 
@@ -885,8 +951,24 @@ class _WindowsFloatingWindowNative {
   /// 开始调整尺寸时窗口物理矩形。
   Rect? _resizeWindowRect;
 
+  /// 最新指针事件算出的矩形，松开时仍保留以供重入延迟提交。
+  Rect? _resizeTargetRect;
+
   /// 当前窗口所在显示器的缩放比例。
   double _currentScaleFactor = 1;
+
+  /// 高频鼠标事件对应的原生缩放提交器。
+  late final FloatingResizeScheduler _resizeScheduler = FloatingResizeScheduler(
+    _applyPendingResize,
+  );
+
+  /// 关闭前取消尺寸更新，避免旧窗口的定时回调继续执行。
+  void dispose() {
+    _resizeScheduler.dispose();
+    _resizeCursorOrigin = null;
+    _resizeWindowRect = null;
+    _resizeTargetRect = null;
+  }
 
   /// 当前窗口左上角的屏幕物理坐标。
   Offset get screenPosition {
@@ -1138,6 +1220,7 @@ class _WindowsFloatingWindowNative {
     final Size currentSize = physicalSize;
     _resizeCursorOrigin = cursorPosition;
     _resizeWindowRect = currentPosition & currentSize;
+    _resizeTargetRect = null;
   }
 
   /// 根据当前鼠标位置从左下角调整窗口宽高。
@@ -1160,12 +1243,23 @@ class _WindowsFloatingWindowNative {
       pointerDelta: currentCursor - cursorOrigin,
       minimumSize: minimumPhysicalSize,
     );
-    _setBoundsAtScreenRect(targetRect);
+    _resizeTargetRect = targetRect;
+    _resizeScheduler.schedule();
+  }
+
+  /// 每帧只提交最新矩形，SetWindowPos 等待 Flutter 绘制时不允许嵌套缩放。
+  void _applyPendingResize() {
+    // 本轮合并后的最终窗口矩形。
+    final Rect? targetRect = _resizeTargetRect;
+    if (targetRect != null) {
+      _setBoundsAtScreenRect(targetRect, discardClientPixels: true);
+    }
   }
 
   /// 应用最后一次尺寸变化并清理拖拽起点。
   void endResizeFromBottomLeft() {
     updateResizeFromBottomLeft();
+    _resizeScheduler.flush();
     _resizeCursorOrigin = null;
     _resizeWindowRect = null;
   }
@@ -1191,26 +1285,57 @@ class _WindowsFloatingWindowNative {
     _setBoundsAtScreenRect(screenPosition & currentPhysicalSize);
   }
 
-  /// 按屏幕物理矩形同时移动并调整桌面子窗口。
-  void _setBoundsAtScreenRect(Rect screenRect) {
+  /// 按屏幕物理矩形同时移动并按需调整桌面子窗口。
+  void _setBoundsAtScreenRect(
+    Rect screenRect, {
+    bool discardClientPixels = false,
+  }) {
+    // 四舍五入后的目标屏幕左坐标。
+    final int targetLeft = screenRect.left.round();
+    // 四舍五入后的目标屏幕顶坐标。
+    final int targetTop = screenRect.top.round();
+    // 四舍五入后的目标物理宽度。
+    final int targetWidth = screenRect.width.round();
+    // 四舍五入后的目标物理高度。
+    final int targetHeight = screenRect.height.round();
+    // 当前窗口原生矩形。
+    final Pointer<win32.RECT> currentRect = calloc<win32.RECT>();
+    try {
+      // 左边缘移动会让 Flutter 手势坐标系同步变化；忽略该反馈产生的重复更新。
+      if (win32.GetWindowRect(_windowHandle, currentRect).value &&
+          currentRect.ref.left == targetLeft &&
+          currentRect.ref.top == targetTop &&
+          currentRect.ref.right == targetLeft + targetWidth &&
+          currentRect.ref.bottom == targetTop + targetHeight) {
+        return;
+      }
+    } finally {
+      calloc.free(currentRect);
+    }
     // 桌面宿主句柄。
     final win32.HWND? desktopHandle = _desktopHandle;
     // 目标原生坐标。
     final Pointer<win32.POINT> point = calloc<win32.POINT>();
+    // 本次窗口位置更新使用的原生标志。
+    final win32.SET_WINDOW_POS_FLAGS positionFlags =
+        win32.SWP_NOACTIVATE |
+        win32.SWP_NOZORDER |
+        win32.SWP_NOOWNERZORDER |
+        (discardClientPixels ? win32.SWP_NOCOPYBITS : 0);
     try {
-      point.ref.x = screenRect.left.round();
-      point.ref.y = screenRect.top.round();
+      point.ref.x = targetLeft;
+      point.ref.y = targetTop;
       if (desktopHandle != null) {
         win32.ScreenToClient(desktopHandle, point);
       }
       win32.SetWindowPos(
         _windowHandle,
-        win32.HWND_TOP,
+        null,
         point.ref.x,
         point.ref.y,
-        screenRect.width.round(),
-        screenRect.height.round(),
-        win32.SWP_NOACTIVATE,
+        targetWidth,
+        targetHeight,
+        positionFlags,
       );
     } finally {
       calloc.free(point);
