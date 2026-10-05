@@ -828,7 +828,15 @@ void main() {
     expect(find.text(firstChild.title), findsNothing);
     expect(find.text(lastChild.title), findsOneWidget);
     expect(find.text(root.title), findsOneWidget);
-    expect(find.text('2'), findsOneWidget);
+    // 完成一个子任务后显示剩余数量与子任务总数。
+    final Finder remainingChildCountTag = find.byKey(
+      ValueKey<String>('todo-tree-progress-${root.id}'),
+    );
+    expect(remainingChildCountTag, findsOneWidget);
+    expect(
+      find.descendant(of: remainingChildCountTag, matching: find.text('1/2')),
+      findsOneWidget,
+    );
     // 完成一个子任务后父任务仍保持未完成。
     final TodoRecord pendingRoot = await (database.select(
       database.todoItems,

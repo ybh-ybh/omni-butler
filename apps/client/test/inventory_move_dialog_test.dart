@@ -170,7 +170,9 @@ void main() {
     await tester.tap(
       find.byKey(const ValueKey<String>('inventory-move-submit')),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    // 等待迁移弹窗关闭与浮动消息出现，但不推进到四秒自动关闭。
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.textContaining('已将 2 项迁移到“储物间”'), findsOneWidget);
 
     // 主物品写入新位置，继承位置配件继续保持空位置。

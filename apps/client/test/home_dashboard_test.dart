@@ -79,7 +79,7 @@ void main() {
     await _disposeApp(tester, database, container);
   });
 
-  testWidgets('首页勾选后立即切换每日待办仍提交完成并响应重新打开', (WidgetTester tester) async {
+  testWidgets('首页勾选后立即切换每日待办仍提交完成并可在待办页重新打开', (WidgetTester tester) async {
     // 测试当天。
     final DateTime now = DateTime(2026, 9, 25, 14);
     // 两个页面共用的数据库。
@@ -121,9 +121,6 @@ void main() {
     expect(completed.isCompleted, isTrue);
     expect(find.text('切页完成任务'), findsNothing);
     await repository.setCompleted(record.id, false);
-    await tester.pumpAndSettle();
-    expect(find.text('切页完成任务'), findsOneWidget);
-    container.read(appRouterProvider).go('/home');
     await tester.pumpAndSettle();
     expect(find.text('切页完成任务'), findsOneWidget);
     await _disposeApp(tester, database, container);

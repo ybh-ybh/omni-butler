@@ -24,6 +24,7 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     SharedPreferences.setMockInitialValues(<String, Object>{
       'appearance.theme_mode': 'light',
     });
@@ -131,7 +132,7 @@ void main() {
       find.byType(OmniButlerApp),
       matchesGoldenFile('goldens/home_feishu_light_1440x900.png'),
     );
-    await database.close();
+    await _disposeGoldenApp(tester, database);
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -143,6 +144,7 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     SharedPreferences.setMockInitialValues(<String, Object>{
       'appearance.theme_mode': 'light',
     });
@@ -190,7 +192,7 @@ void main() {
       find.byType(OmniButlerApp),
       matchesGoldenFile('goldens/home_feishu_windows_narrow_1024x768.png'),
     );
-    await database.close();
+    await _disposeGoldenApp(tester, database);
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -202,6 +204,7 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     SharedPreferences.setMockInitialValues(<String, Object>{
       'appearance.theme_mode': 'dark',
     });
@@ -228,7 +231,18 @@ void main() {
       find.byType(OmniButlerApp),
       matchesGoldenFile('goldens/home_feishu_dark_390x844.png'),
     );
-    await database.close();
+    await _disposeGoldenApp(tester, database);
     debugDefaultTargetPlatformOverride = null;
   });
+}
+
+/// 卸载首页应用并释放测试数据库，避免后台查询计时器残留。
+Future<void> _disposeGoldenApp(
+  WidgetTester tester,
+  AppDatabase database,
+) async {
+  await tester.pumpWidget(const SizedBox.shrink());
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 100));
+  await database.close();
 }
