@@ -1486,7 +1486,20 @@ class _FloatingTimeComposerState extends ConsumerState<_FloatingTimeComposer> {
                     .map(
                       (TaxonomyEntry category) => DropdownMenuItem<String>(
                         value: category.name,
-                        child: Text(category.name),
+                        child: Row(
+                          children: <Widget>[
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color: Color(category.colorValue),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: OmniSpacing.xs),
+                            Expanded(child: Text(category.name)),
+                          ],
+                        ),
                       ),
                     )
                     .toList(growable: false),
