@@ -478,7 +478,7 @@ class _ExpandedSidebar extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              _BrandMark(colors: colors),
+              const _BrandMark(),
               const SizedBox(height: 28),
               for (final _AppDestination destination in destinations)
                 Padding(
@@ -542,7 +542,7 @@ class _MediumNavigation extends StatelessWidget {
         child: Column(
           children: <Widget>[
             const SizedBox(height: OmniSpacing.sm),
-            _CompactBrandMark(colors: colors),
+            const _CompactBrandMark(),
             const SizedBox(height: OmniSpacing.lg),
             for (final _AppDestination destination in destinations)
               Padding(
@@ -875,18 +875,15 @@ class _SearchTrigger extends StatelessWidget {
 
 /// 品牌标识。
 class _BrandMark extends StatelessWidget {
-  /// 当前主题语义色。
-  final OmniColors colors;
-
   /// 创建品牌标识。
-  const _BrandMark({required this.colors});
+  const _BrandMark();
 
   /// 构建品牌标识。
   @override
   Widget build(BuildContext context) {
     return Row(
       children: <Widget>[
-        _CompactBrandMark(colors: colors),
+        const _CompactBrandMark(),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
@@ -907,27 +904,18 @@ class _BrandMark extends StatelessWidget {
 
 /// 紧凑品牌图形。
 class _CompactBrandMark extends StatelessWidget {
-  /// 当前主题语义色。
-  final OmniColors colors;
-
   /// 创建紧凑品牌图形。
-  const _CompactBrandMark({required this.colors});
+  const _CompactBrandMark();
 
-  /// 构建带刻度的品牌图形。
+  /// 显示由正式 SVG 导出的克莱因蓝小管家，保持各导航宽度的品牌一致。
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return Image.asset(
+      'assets/icon/app_icon.png',
       width: 32,
       height: 32,
-      decoration: BoxDecoration(
-        color: colors.brand,
-        borderRadius: BorderRadius.circular(OmniRadius.panel),
-      ),
-      child: Icon(
-        Icons.schedule_rounded,
-        color: Theme.of(context).colorScheme.onPrimary,
-        size: OmniSize.icon,
-      ),
+      filterQuality: FilterQuality.medium,
+      semanticLabel: '知序应用图标',
     );
   }
 }

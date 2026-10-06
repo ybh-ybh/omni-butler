@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
   <title id="title">Omni Butler 知序小管家 · 克莱因蓝</title>
-  <desc id="desc">克莱因蓝配色的小管家图标，保留小发梢、小圆眼、短浅嘴角与领结。</desc>
+  <desc id="desc">克莱因蓝配色的小管家图标，保留小发梢、小圆眼、短浅嘴角与领结，供配色选择。</desc>
   <defs>
     <!-- 克莱因蓝为主色，轻微明暗变化保留层次。 -->
     <linearGradient id="canvas" x1="12" y1="4" x2="49" y2="64" gradientUnits="userSpaceOnUse">

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Omni Butler 知序小管家 · 灰白色</title>
+  <desc id="desc">灰白色配色的小管家图标，保留小发梢、小圆眼、短浅嘴角与领结，供配色选择。</desc>
+  <defs>
+    <!-- 灰白色为主色，轻微明暗变化保留层次。 -->
+    <linearGradient id="canvas" x1="12" y1="4" x2="49" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FAFBFC"/>
+      <stop offset="1" stop-color="#E4E8ED"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角底板保留透明四角，适配浅色与深色桌面。 -->
+  <rect width="64" height="64" rx="16" fill="url(#canvas)"/>
+
+  <!-- 对比色轮廓区分白色圆脸与底板，保留圆润的小发梢。 -->
+  <path d="M25 10C20 9 16 11 15 15C14.5 17 15 19 16.5 20.5C14.8 23.1 14 26.4 14 30C14 40 20.5 46 32 46C43.5 46 50 40 50 30C50 18.4 43 12 32.5 12C30 12 27.5 11.5 25 10Z" fill="#FBFDFF" stroke="#697581" stroke-width="2.5" stroke-linejoin="round"/>
+
+  <!-- 小圆眼与短而平缓的嘴角，让表情更自然克制。 -->
+  <circle cx="25" cy="28.5" r="1.8" fill="#46515D"/>
+  <circle cx="39" cy="28.5" r="1.8" fill="#46515D"/>
+  <path d="M30 35.5C31.6 36.4 33.6 36.1 35 34.8" fill="none" stroke="#697581" stroke-width="1.8" stroke-linecap="round"/>
+
+  <!-- 领结与结心配色呼应主体，明确管家身份。 -->
+  <path d="M22 48.5C21 48 20 48.7 20 50V56C20 57.3 21 58 22 57.5L29 54.5V51.5Z" fill="#929EAA"/>
+  <path d="M42 48.5C43 48 44 48.7 44 50V56C44 57.3 43 58 42 57.5L35 54.5V51.5Z" fill="#929EAA"/>
+  <rect x="29.5" y="50.5" width="5" height="5" rx="1.8" fill="#5B6773"/>
+</svg>
