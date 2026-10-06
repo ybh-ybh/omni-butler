@@ -1,49 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
-  <title id="title">Omni Butler 知序应用图标</title>
-  <desc id="desc">由青色、蓝色和紫色折叠轨道组成的抽象 S，象征把零散事务整理成清晰秩序。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Omni Butler 知序小管家</title>
+  <desc id="desc">奶油色圆角底上的小管家，以可可棕勾勒圆脸、小圆眼和轻轻上扬的嘴角，搭配焦糖色领结，神态安静亲切。</desc>
   <defs>
-    <clipPath id="icon-clip">
-      <rect width="64" height="64" rx="16"/>
-    </clipPath>
-    <linearGradient id="canvas" x1="8" y1="6" x2="56" y2="60" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#EEF4FF"/>
+    <!-- 奶油色为主色，细微暖色变化保留柔和的层次。 -->
+    <linearGradient id="canvas" x1="12" y1="4" x2="49" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF6E6"/>
+      <stop offset="1" stop-color="#F2E1C7"/>
     </linearGradient>
-    <linearGradient id="track" x1="19" y1="16" x2="47" y2="54" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#16C7D9"/>
-      <stop offset="0.43" stop-color="#3370FF"/>
-      <stop offset="1" stop-color="#6957E8"/>
-    </linearGradient>
-    <filter id="shadow" x="7" y="8" width="51" height="55" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#245BDB" flood-opacity="0.2"/>
-    </filter>
   </defs>
 
+  <!-- 圆角底板保留透明四角，适配浅色与深色桌面。 -->
   <rect width="64" height="64" rx="16" fill="url(#canvas)"/>
 
-  <g clip-path="url(#icon-clip)" filter="url(#shadow)">
-    <path
-      d="M18 16.5H39.5C44.7 16.5 48.5 20.1 48.5 24.5C48.5 28 46.4 30.4 42.8 32.1L21.2 42.3C17.6 44 15.5 46.4 15.5 49.5C15.5 53.2 18.8 55.5 23.5 55.5H46"
-      fill="none"
-      stroke="url(#track)"
-      stroke-width="9"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
-    <path
-      d="M18 16.5H30"
-      fill="none"
-      stroke="#45D8E6"
-      stroke-width="9"
-      stroke-linecap="round"
-    />
-    <path
-      d="M36 55.5H46"
-      fill="none"
-      stroke="#7B67EE"
-      stroke-width="9"
-      stroke-linecap="round"
-    />
-    <rect x="39.8" y="29.1" width="5.8" height="5.8" rx="1.7" fill="#FFFFFF" transform="rotate(45 42.7 32)"/>
-  </g>
+  <!-- 可可色轮廓区分奶白圆脸与奶油底板，保留圆润的小发梢。 -->
+  <path d="M25 10C20 9 16 11 15 15C14.5 17 15 19 16.5 20.5C14.8 23.1 14 26.4 14 30C14 40 20.5 46 32 46C43.5 46 50 40 50 30C50 18.4 43 12 32.5 12C30 12 27.5 11.5 25 10Z" fill="#FFFCF5" stroke="#79604C" stroke-width="2.5" stroke-linejoin="round"/>
+
+  <!-- 小圆眼与短而平缓的嘴角，让表情更自然克制。 -->
+  <circle cx="25" cy="28.5" r="1.8" fill="#644A38"/>
+  <circle cx="39" cy="28.5" r="1.8" fill="#644A38"/>
+  <path d="M30 35.5C31.6 36.4 33.6 36.1 35 34.8" fill="none" stroke="#79604C" stroke-width="1.8" stroke-linecap="round"/>
+
+  <!-- 焦糖色领结与可可色结心呼应五官，明确管家身份。 -->
+  <path d="M22 48.5C21 48 20 48.7 20 50V56C20 57.3 21 58 22 57.5L29 54.5V51.5Z" fill="#B8825D"/>
+  <path d="M42 48.5C43 48 44 48.7 44 50V56C44 57.3 43 58 42 57.5L35 54.5V51.5Z" fill="#B8825D"/>
+  <rect x="29.5" y="50.5" width="5" height="5" rx="1.8" fill="#79604C"/>
 </svg>
