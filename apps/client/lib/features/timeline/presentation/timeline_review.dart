@@ -638,11 +638,14 @@ class _FingerprintDayRow extends StatelessWidget {
                                     colors.time,
                                 child: InkWell(
                                   onTap: () => onEdit(record),
-                                  child:
-                                      tall &&
-                                          record.endMinute -
-                                                  record.startMinute >=
-                                              90
+                                  child: !tall
+                                      ? _FingerprintCategoryLabel(
+                                          category: record.category ?? '未分类',
+                                        )
+                                      : tall &&
+                                            record.endMinute -
+                                                    record.startMinute >=
+                                                90
                                       ? Align(
                                           alignment: Alignment.centerLeft,
                                           child: Padding(
@@ -677,6 +680,50 @@ class _FingerprintDayRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 周时间指纹中仅在空间充足时显示的低对比类别标签。
+class _FingerprintCategoryLabel extends StatelessWidget {
+  /// 当前时间段所属类别。
+  final String category;
+
+  /// 创建周视图类别标签。
+  const _FingerprintCategoryLabel({required this.category});
+
+  /// 测量完整类别名称，并以浅灰文字居中显示。
+  @override
+  Widget build(BuildContext context) {
+    // 跟随主题字体的低对比标签样式。
+    final TextStyle style =
+        (Theme.of(context).textTheme.labelSmall ??
+                const TextStyle(fontSize: 11))
+            .copyWith(
+              color: const Color(0xFFD6D6D6).withValues(alpha: 0.85),
+              fontWeight: FontWeight.w400,
+            );
+    // 跟随系统设置的文字缩放比例。
+    final TextScaler textScaler = MediaQuery.textScalerOf(context);
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 测量完整文本，避免用时长阈值误判窄屏或长类别名称。
+        final TextPainter painter = TextPainter(
+          text: TextSpan(text: category, style: style),
+          textDirection: Directionality.of(context),
+          textScaler: textScaler,
+          maxLines: 1,
+        )..layout();
+        // 两侧保留留白，高度不足时也隐藏标签。
+        final bool fits =
+            painter.width + OmniSpacing.xs * 2 <= constraints.maxWidth &&
+            painter.height + 2 <= constraints.maxHeight;
+        painter.dispose();
+        if (!fits) return const SizedBox.shrink();
+        return Center(
+          child: Text(category, maxLines: 1, softWrap: false, style: style),
+        );
+      },
     );
   }
 }

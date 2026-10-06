@@ -8,12 +8,59 @@ import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证真实首页中待办的默认折叠、固定标题与独立滚动行为。
 void main() {
+  testWidgets('真实桌面首页时间卡复用独立滚动作用域并保留全部记录', (WidgetTester tester) async {
+    // 在完整首页网格中验证真实仓储数据，不只挂载独立卡片。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 通过生产仓储保存二十条今日记录。
+    final TimeEntryRepository repository = TimeEntryRepository(database);
+    for (int index = 0; index < 20; index++) {
+      await repository.save(
+        TimeEntryDraft(
+          startedAt: DateTime(2026, 10, 6, 0, index * 30),
+          endedAt: DateTime(2026, 10, 6, 0, index * 30 + 20),
+          activity: '完整首页时间记录 $index',
+          category: '开发',
+        ),
+      );
+    }
+    await _pumpHome(tester, database: database, useDefaultCards: true);
+    // 卡片内只能有一个滚动条和一个实际连接的控制器。
+    final Finder scrollbar = find.descendant(
+      of: find.byKey(const ValueKey<String>('home-time-status-card')),
+      matching: find.byType(Scrollbar),
+    );
+    expect(scrollbar, findsOneWidget);
+    // 标题与操作按钮的固定位置。
+    final Rect headerBefore = tester.getRect(
+      find.byKey(const ValueKey<String>('home-time-header')),
+    );
+    // 实际首页提供的滚动控制器。
+    final ScrollController controller = tester
+        .widget<Scrollbar>(scrollbar)
+        .controller!;
+    expect(controller.positions.length, 1);
+    expect(controller.position.maxScrollExtent, greaterThan(0));
+    controller.jumpTo(controller.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(find.text('完整首页时间记录 0').hitTestable(), findsOneWidget);
+    expect(
+      tester.getRect(find.byKey(const ValueKey<String>('home-time-header'))),
+      headerBefore,
+    );
+    expect(find.textContaining('查看全部'), findsNothing);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('桌面首页滚动内容时标题与新增固定，窗口缩放后仍可操作', (WidgetTester tester) async {
     // 使用真实仓储生成足量待办，避免仅检查组件属性。
     final AppDatabase database = AppDatabase.forTesting(

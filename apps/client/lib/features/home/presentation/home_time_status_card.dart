@@ -1,5 +1,7 @@
 import 'dart:math' as math;
+import 'dart:ui' show lerpDouble;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -30,6 +32,16 @@ class HomeTimeStatusCard extends ConsumerStatefulWidget {
 class _HomeTimeStatusCardState extends ConsumerState<HomeTimeStatusCard> {
   /// 用户暂时隐藏的类别；未出现过的新类别默认显示。
   final Set<String> _hiddenCategories = <String>{};
+
+  /// 单列与移动端没有网格滚动作用域时使用的记录滚动控制器。
+  final ScrollController _entriesController = ScrollController();
+
+  /// 释放卡片自有的滚动控制器。
+  @override
+  void dispose() {
+    _entriesController.dispose();
+    super.dispose();
+  }
 
   /// 切换类别在两个圆环中的可见性。
   void _toggleCategory(String category) {
@@ -128,118 +140,141 @@ class _HomeTimeStatusCardState extends ConsumerState<HomeTimeStatusCard> {
     final List<TimeEntryRecord> sortedTodaySegments = List<TimeEntryRecord>.of(
       todaySegments,
     )..sort(_compareHomeEntries);
-    // 首页最多展示的五条今日记录。
-    final List<TimeEntryRecord> visibleEntries = sortedTodaySegments
-        .take(5)
-        .toList(growable: false);
+    // 优先复用桌面网格为当前卡片提供的滚动控制器。
+    final ScrollController? gridController = OmniPanelScrollScope.maybeOf(
+      context,
+    )?.controller;
 
-    return OmniPanel(
-      key: const ValueKey<String>('home-time-status-card'),
-      padding: const EdgeInsets.all(OmniSpacing.md),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          _TimeStatusHeader(
-            onStart: () => showStartTimeEntryDialog(context, day: now),
-            onBackfill: () => showBackfillTimeEntryDialog(context, day: now),
-            showActions: !androidCompact,
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: gridController == null
+            ? math.max(420, MediaQuery.sizeOf(context).height - 160)
+            : double.infinity,
+      ),
+      child: OmniPanelScrollScope(
+        controller: gridController ?? _entriesController,
+        child: OmniPanel(
+          key: const ValueKey<String>('home-time-status-card'),
+          padding: const EdgeInsets.fromLTRB(
+            OmniSpacing.md,
+            0,
+            OmniSpacing.md,
+            OmniSpacing.md,
           ),
-          const SizedBox(height: OmniSpacing.md),
-          if (todayRecordsAsync.isLoading || weekRecordsAsync.isLoading)
-            const SizedBox(
-              height: 142,
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (todayRecordsAsync.hasError || weekRecordsAsync.hasError)
-            SizedBox(
-              height: 142,
-              child: Center(
-                child: Text(
-                  '时间状态暂时无法读取',
-                  style: TextStyle(color: colors.danger),
-                ),
-              ),
-            )
-          else ...<Widget>[
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Expanded(
-                  child: _TimeDonut(
-                    label: '今日',
-                    summary: _visibleSummary(todaySummary, _hiddenCategories),
-                    filtered: _hiddenCategories.isNotEmpty,
-                    emptyColor: colors.mist,
-                  ),
-                ),
-                const SizedBox(width: OmniSpacing.sm),
-                Expanded(
-                  child: _TimeDonut(
-                    label: '本周',
-                    summary: _visibleSummary(weekSummary, _hiddenCategories),
-                    filtered: _hiddenCategories.isNotEmpty,
-                    emptyColor: colors.mist,
-                  ),
-                ),
-              ],
+          header: Padding(
+            key: const ValueKey<String>('home-time-header'),
+            padding: const EdgeInsets.fromLTRB(
+              OmniSpacing.md,
+              OmniSpacing.md,
+              OmniSpacing.md,
+              OmniSpacing.xs,
             ),
-            if (legendSlices.isNotEmpty) ...<Widget>[
-              const SizedBox(height: OmniSpacing.md),
-              _TimeCategoryLegend(
-                slices: legendSlices.values.toList(),
-                hiddenCategories: _hiddenCategories,
-                onToggle: _toggleCategory,
-              ),
-            ],
-          ],
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: OmniSpacing.md),
-            child: Divider(color: colors.line),
+            child: _TimeStatusHeader(
+              onStart: () => showStartTimeEntryDialog(context, day: now),
+              onBackfill: () => showBackfillTimeEntryDialog(context, day: now),
+              showActions: !androidCompact,
+            ),
           ),
-          Row(
+          child: Column(
+            key: const ValueKey<String>('home-time-content'),
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              Expanded(
+              const SizedBox(height: OmniSpacing.xs),
+              if (todayRecordsAsync.isLoading || weekRecordsAsync.isLoading)
+                const SizedBox(
+                  height: 142,
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (todayRecordsAsync.hasError || weekRecordsAsync.hasError)
+                SizedBox(
+                  height: 142,
+                  child: Center(
+                    child: Text(
+                      '时间状态暂时无法读取',
+                      style: TextStyle(color: colors.danger),
+                    ),
+                  ),
+                )
+              else ...<Widget>[
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Expanded(
+                      child: _TimeDonut(
+                        label: '今日',
+                        summary: _visibleSummary(
+                          todaySummary,
+                          _hiddenCategories,
+                        ),
+                        filtered: _hiddenCategories.isNotEmpty,
+                        emptyColor: colors.mist,
+                      ),
+                    ),
+                    const SizedBox(width: OmniSpacing.sm),
+                    Expanded(
+                      child: _TimeDonut(
+                        label: '本周',
+                        summary: _visibleSummary(
+                          weekSummary,
+                          _hiddenCategories,
+                        ),
+                        filtered: _hiddenCategories.isNotEmpty,
+                        emptyColor: colors.mist,
+                      ),
+                    ),
+                  ],
+                ),
+                if (legendSlices.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: OmniSpacing.md),
+                  _TimeCategoryLegend(
+                    slices: legendSlices.values.toList(),
+                    hiddenCategories: _hiddenCategories,
+                    onToggle: _toggleCategory,
+                  ),
+                ],
+              ],
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: OmniSpacing.md),
+                child: Divider(color: colors.line),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
                 child: Text(
                   '今天做了什么',
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),
-              if (sortedTodaySegments.length > 5)
-                TextButton(
-                  onPressed: () => context.go('/timeline'),
-                  child: Text('查看全部 ${sortedTodaySegments.length} 条'),
-                ),
+              const SizedBox(height: OmniSpacing.xxs),
+              if (todayRecordsAsync.hasError)
+                Text('今日记录暂时无法读取', style: TextStyle(color: colors.danger))
+              else if (sortedTodaySegments.isEmpty)
+                _TimeEmptyState(
+                  onCreate: androidCompact
+                      ? null
+                      : () => showStartTimeEntryDialog(context, day: now),
+                )
+              else
+                for (
+                  int index = 0;
+                  index < sortedTodaySegments.length;
+                  index += 1
+                ) ...<Widget>[
+                  if (index > 0) Divider(color: colors.line),
+                  _TimeEntryRow(
+                    key: ValueKey<String>(
+                      'home-time-entry-${sortedTodaySegments[index].id}',
+                    ),
+                    record: sortedTodaySegments[index],
+                    color:
+                        categoryColors[sortedTodaySegments[index].category] ??
+                        colors.time,
+                    onTap: () => context.go('/timeline'),
+                  ),
+                ],
             ],
           ),
-          const SizedBox(height: OmniSpacing.xxs),
-          if (todayRecordsAsync.hasError)
-            Text('今日记录暂时无法读取', style: TextStyle(color: colors.danger))
-          else if (visibleEntries.isEmpty)
-            _TimeEmptyState(
-              onCreate: androidCompact
-                  ? null
-                  : () => showStartTimeEntryDialog(context, day: now),
-            )
-          else
-            for (
-              int index = 0;
-              index < visibleEntries.length;
-              index += 1
-            ) ...<Widget>[
-              if (index > 0) Divider(color: colors.line),
-              _TimeEntryRow(
-                key: ValueKey<String>(
-                  'home-time-entry-${visibleEntries[index].id}',
-                ),
-                record: visibleEntries[index],
-                color:
-                    categoryColors[visibleEntries[index].category] ??
-                    colors.time,
-                onTap: () => context.go('/timeline'),
-              ),
-            ],
-        ],
+        ),
       ),
     );
   }
@@ -380,6 +415,8 @@ class _TimeDonut extends StatelessWidget {
               ? '$label所选类别暂无时间记录'
               : '$label还没有时间记录'
         : '$label记录${_formatDuration(summary.totalMinutes)}，${summary.detail}；${summary.breakdown}';
+    // 保留零角度类别的位置，隐藏与恢复都沿原扇区边界过渡。
+    final _TimeDonutFrame frame = _TimeDonutFrame.fromSummary(summary);
     return Semantics(
       label: semanticsLabel,
       child: ExcludeSemantics(
@@ -392,14 +429,28 @@ class _TimeDonut extends StatelessWidget {
               child: Stack(
                 alignment: Alignment.center,
                 children: <Widget>[
-                  CustomPaint(
-                    key: ValueKey<String>('home-time-donut-$label'),
-                    size: const Size.square(104),
-                    painter: _TimeDonutPainter(
-                      slices: summary.slices,
-                      totalMinutes: summary.totalMinutes,
-                      emptyColor: emptyColor,
+                  TweenAnimationBuilder<_TimeDonutFrame>(
+                    tween: _TimeDonutTween(begin: frame, end: frame),
+                    duration: OmniMotion.duration(
+                      context,
+                      const Duration(milliseconds: 400),
                     ),
+                    curve: OmniMotion.standardCurve,
+                    builder:
+                        (
+                          BuildContext context,
+                          _TimeDonutFrame value,
+                          Widget? child,
+                        ) {
+                          return CustomPaint(
+                            key: ValueKey<String>('home-time-donut-$label'),
+                            size: const Size.square(104),
+                            painter: _TimeDonutPainter(
+                              frame: value,
+                              emptyColor: emptyColor,
+                            ),
+                          );
+                        },
                   ),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -448,8 +499,8 @@ class _TimeCategoryLegend extends StatelessWidget {
     return Wrap(
       key: const ValueKey<String>('home-time-category-legend'),
       alignment: WrapAlignment.center,
-      spacing: OmniSpacing.md,
-      runSpacing: OmniSpacing.xs,
+      spacing: OmniSpacing.xxs,
+      runSpacing: 0,
       children: <Widget>[
         for (final _TimeSlice slice in slices)
           Semantics(
@@ -460,37 +511,41 @@ class _TimeCategoryLegend extends StatelessWidget {
               onTap: () => onToggle(slice.label),
               borderRadius: BorderRadius.circular(OmniRadius.control),
               child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: OmniDensity.controlHeight(context),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Container(
-                      key: ValueKey<String>(
-                        'home-time-legend-color-${slice.label}',
-                      ),
-                      width: 24,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        color: hiddenCategories.contains(slice.label)
-                            ? OmniColors.of(context).line
-                            : slice.color,
-                        borderRadius: BorderRadius.circular(OmniRadius.tiny),
-                      ),
-                    ),
-                    const SizedBox(width: OmniSpacing.xs),
-                    Flexible(
-                      child: Text(
-                        slice.label,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                constraints: BoxConstraints(minHeight: OmniSize.control),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: OmniSpacing.xs,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Container(
+                        key: ValueKey<String>(
+                          'home-time-legend-color-${slice.label}',
+                        ),
+                        width: 24,
+                        height: 10,
+                        decoration: BoxDecoration(
                           color: hiddenCategories.contains(slice.label)
-                              ? OmniColors.of(context).muted
-                              : OmniColors.of(context).ink,
+                              ? OmniColors.of(context).line
+                              : slice.color,
+                          borderRadius: BorderRadius.circular(OmniRadius.tiny),
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: OmniSpacing.xs),
+                      Flexible(
+                        child: Text(
+                          slice.label,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: hiddenCategories.contains(slice.label)
+                                    ? OmniColors.of(context).muted
+                                    : OmniColors.of(context).ink,
+                              ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -500,23 +555,123 @@ class _TimeCategoryLegend extends StatelessWidget {
   }
 }
 
+/// 用稳定类别标识描述圆环当前的角度与颜色。
+class _TimeArc {
+  /// 对应的时间类别。
+  final String label;
+
+  /// 当前类别颜色。
+  final Color color;
+
+  /// 当前圆弧起始角度。
+  final double start;
+
+  /// 当前圆弧覆盖角度，隐藏类别为零。
+  final double sweep;
+
+  /// 创建圆弧几何数据。
+  const _TimeArc(this.label, this.color, this.start, this.sweep);
+
+  /// 按几何值比较，避免无关刷新重新触发动画。
+  @override
+  bool operator ==(Object other) =>
+      other is _TimeArc &&
+      other.label == label &&
+      other.color == color &&
+      other.start == start &&
+      other.sweep == sweep;
+
+  /// 与值比较保持一致的哈希。
+  @override
+  int get hashCode => Object.hash(label, color, start, sweep);
+}
+
+/// 圆环的一帧几何数据。
+class _TimeDonutFrame {
+  /// 含零角度类别的稳定圆弧顺序。
+  final List<_TimeArc> arcs;
+
+  /// 创建一帧圆环数据。
+  const _TimeDonutFrame(this.arcs);
+
+  /// 将分类分钟比例转换为目标角度。
+  factory _TimeDonutFrame.fromSummary(_TimeSummary summary) {
+    // 从圆环顶部开始累积类别角度。
+    double start = -math.pi / 2;
+    // 所有类别的目标圆弧。
+    final List<_TimeArc> arcs = <_TimeArc>[];
+    for (final _TimeSlice slice in summary.slices) {
+      // 隐藏类别保留原位置，但角度归零。
+      final double sweep = summary.totalMinutes == 0
+          ? 0
+          : slice.minutes / summary.totalMinutes * math.pi * 2;
+      arcs.add(_TimeArc(slice.label, slice.color, start, sweep));
+      start += sweep;
+    }
+    return _TimeDonutFrame(arcs);
+  }
+
+  /// 相同摘要不应重新启动过渡。
+  @override
+  bool operator ==(Object other) =>
+      other is _TimeDonutFrame && listEquals(other.arcs, arcs);
+
+  /// 与帧值比较保持一致的哈希。
+  @override
+  int get hashCode => Object.hashAll(arcs);
+}
+
+/// 以类别名称配对角度，连续点击时从当前呈现帧接续动画。
+class _TimeDonutTween extends Tween<_TimeDonutFrame> {
+  /// 创建由 Flutter 管理当前帧的圆环过渡。
+  _TimeDonutTween({
+    required _TimeDonutFrame begin,
+    required _TimeDonutFrame end,
+  }) : super(begin: begin, end: end);
+
+  /// 插值圆弧边界，同时处理记录刷新带来的类别增删。
+  @override
+  _TimeDonutFrame lerp(double t) {
+    // 起始帧按类别建立索引。
+    final Map<String, _TimeArc> previous = {
+      for (final _TimeArc arc in begin!.arcs) arc.label: arc,
+    };
+    // 目标帧按类别建立索引。
+    final Map<String, _TimeArc> target = {
+      for (final _TimeArc arc in end!.arcs) arc.label: arc,
+    };
+    // 已删除类别在退出完成前仍参与过渡。
+    final Set<String> labels = {...target.keys, ...previous.keys};
+    return _TimeDonutFrame([
+      for (final String label in labels)
+        _TimeArc(
+          label,
+          Color.lerp(previous[label]?.color, target[label]?.color, t)!,
+          lerpDouble(
+            previous[label]?.start ?? target[label]!.start,
+            target[label]?.start ?? previous[label]!.start,
+            t,
+          )!,
+          lerpDouble(
+            previous[label]?.sweep ?? 0,
+            target[label]?.sweep ?? 0,
+            t,
+          )!,
+        ),
+    ]);
+  }
+}
+
 /// 绘制按分类分段的时间圆环。
 class _TimeDonutPainter extends CustomPainter {
-  /// 按分类统计的圆环分段。
-  final List<_TimeSlice> slices;
-
-  /// 已记录总分钟数。
-  final int totalMinutes;
+  /// 动画当前帧的圆弧几何数据。
+  final _TimeDonutFrame frame;
 
   /// 空圆环颜色。
   final Color emptyColor;
 
   /// 创建时间圆环绘制器。
-  const _TimeDonutPainter({
-    required this.slices,
-    required this.totalMinutes,
-    required this.emptyColor,
-  });
+  const _TimeDonutPainter({required this.frame, required this.emptyColor});
 
   /// 绘制空圆环或按分钟比例绘制分类圆弧。
   @override
@@ -528,36 +683,38 @@ class _TimeDonutPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 10
       ..strokeCap = StrokeCap.butt;
-    if (totalMinutes <= 0 || slices.isEmpty) {
-      paint.color = emptyColor;
+    // 全部类别隐藏时逐渐露出空圆环，恢复时沿原方向展开。
+    final double coverage =
+        (frame.arcs.fold<double>(
+                  0,
+                  (double total, _TimeArc arc) => total + arc.sweep,
+                ) /
+                (math.pi * 2))
+            .clamp(0, 1);
+    if (coverage < 1) {
+      paint.color = emptyColor.withValues(alpha: emptyColor.a * (1 - coverage));
       canvas.drawArc(bounds.deflate(7), 0, math.pi * 2, false, paint);
-      return;
     }
-    // 当前分类圆弧的起始角度。
-    double startAngle = -math.pi / 2;
-    for (final _TimeSlice slice in slices) {
-      // 当前分类占据的完整角度。
-      final double sweep = slice.minutes / totalMinutes * math.pi * 2;
+    for (final _TimeArc arc in frame.arcs) {
       // 分类之间使用的细小间隔角度。
-      final double gap = slices.length > 1 ? math.min(0.035, sweep * 0.18) : 0;
-      paint.color = slice.color;
+      final double gap =
+          math.min(0.035, arc.sweep * 0.18) *
+          ((math.pi * 2 - arc.sweep) / 0.035).clamp(0, 1);
+      paint.color = arc.color;
       canvas.drawArc(
         bounds.deflate(7),
-        startAngle + gap / 2,
-        math.max(0, sweep - gap),
+        arc.start + gap / 2,
+        math.max(0, arc.sweep - gap),
         false,
         paint,
       );
-      startAngle += sweep;
     }
   }
 
   /// 仅在圆环数据或颜色变化时重绘。
   @override
   bool shouldRepaint(covariant _TimeDonutPainter oldDelegate) {
-    return oldDelegate.slices != slices ||
-        oldDelegate.totalMinutes != totalMinutes ||
-        oldDelegate.emptyColor != emptyColor;
+    return oldDelegate.frame != frame || oldDelegate.emptyColor != emptyColor;
   }
 }
 
@@ -660,7 +817,8 @@ _TimeSummary _visibleSummary(
   _TimeSummary summary,
   Set<String> hiddenCategories,
 ) {
-  return _buildSummary(
+  // 可见类别仍按实际时长生成文字和读屏摘要。
+  final _TimeSummary visible = _buildSummary(
     <String, int>{
       for (final _TimeSlice slice in summary.slices)
         if (!hiddenCategories.contains(slice.label)) slice.label: slice.minutes,
@@ -669,6 +827,19 @@ _TimeSummary _visibleSummary(
       for (final _TimeSlice slice in summary.slices) slice.label: slice.color,
     },
     Colors.transparent,
+  );
+  return _TimeSummary(
+    slices: [
+      for (final _TimeSlice slice in summary.slices)
+        _TimeSlice(
+          label: slice.label,
+          minutes: hiddenCategories.contains(slice.label) ? 0 : slice.minutes,
+          color: slice.color,
+        ),
+    ],
+    totalMinutes: visible.totalMinutes,
+    detail: visible.detail,
+    breakdown: visible.breakdown,
   );
 }
 

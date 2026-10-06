@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -267,6 +268,247 @@ void main() {
     expect(find.text(longCategory), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('类别隐藏的中间帧连续变化，反向点击从当前画面恢复', (WidgetTester tester) async {
+    // 用明显不同的扇区比例验证真实像素，而非只检查动画控件存在。
+    final List<TimeEntryRecord> records = [
+      _entry(
+        id: 'work',
+        startedAt: DateTime(2026, 10, 6, 9),
+        minutes: 90,
+        category: '工作',
+      ),
+      _entry(
+        id: 'study',
+        startedAt: DateTime(2026, 10, 6, 11),
+        minutes: 30,
+        category: '学习',
+      ),
+    ];
+    await _pumpTimeCard(
+      tester,
+      now: DateTime(2026, 10, 6, 14),
+      todayRecords: records,
+      weekRecords: records,
+      categoryColors: const {'工作': Colors.blue, '学习': Colors.orange},
+    );
+    // 点击前的两个真实圆环像素。
+    final ByteData todayBefore = await _donutPixels(tester, '今日');
+    // 本周圆环也必须参与同一次过渡。
+    final ByteData weekBefore = await _donutPixels(tester, '本周');
+    // 可反复激活的图例项。
+    final Finder work = find.byKey(
+      const ValueKey<String>('home-time-legend-item-工作'),
+    );
+    await tester.tap(work);
+    await tester.pump();
+    expect(
+      (await _donutPixels(tester, '今日')).buffer.asUint8List(),
+      todayBefore.buffer.asUint8List(),
+    );
+    await tester.pump(const Duration(milliseconds: 120));
+    // 尚未到终点的呈现帧。
+    final ByteData middle = await _donutPixels(tester, '今日');
+    expect(
+      middle.buffer.asUint8List(),
+      isNot(todayBefore.buffer.asUint8List()),
+    );
+    expect(
+      (await _donutPixels(tester, '本周')).buffer.asUint8List(),
+      isNot(weekBefore.buffer.asUint8List()),
+    );
+    await tester.tap(work);
+    await tester.pump();
+    expect(
+      (await _donutPixels(tester, '今日')).buffer.asUint8List(),
+      middle.buffer.asUint8List(),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      (await _donutPixels(tester, '今日')).buffer.asUint8List(),
+      todayBefore.buffer.asUint8List(),
+    );
+    await tester.tap(work);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 120));
+    // 再次隐藏时仍有真实的中间画面。
+    final ByteData hiding = await _donutPixels(tester, '今日');
+    await tester.pumpAndSettle();
+    expect(
+      (await _donutPixels(tester, '今日')).buffer.asUint8List(),
+      isNot(hiding.buffer.asUint8List()),
+    );
+    expect(
+      await _paintedDonutColors(tester, '今日'),
+      isNot(contains(Colors.blue.toARGB32())),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('系统减少动画时类别切换立即完成', (WidgetTester tester) async {
+    // 单一类别同时覆盖全部隐藏与恢复的空圆环边界。
+    final TimeEntryRecord record = _entry(
+      id: 'work',
+      startedAt: DateTime(2026, 10, 6, 9),
+      minutes: 60,
+      category: '工作',
+    );
+    await _pumpTimeCard(
+      tester,
+      now: DateTime(2026, 10, 6, 14),
+      todayRecords: [record],
+      weekRecords: [record],
+      categoryColors: const {'工作': Colors.blue},
+      disableAnimations: true,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('home-time-legend-item-工作')),
+    );
+    await tester.pump();
+    expect(
+      await _paintedDonutColors(tester, '今日'),
+      isNot(contains(Colors.blue.toARGB32())),
+    );
+    expect(find.text('0h0m'), findsNWidgets(2));
+    expect(tester.binding.hasScheduledFrame, isFalse);
+    await tester.tap(
+      find.byKey(const ValueKey<String>('home-time-legend-item-工作')),
+    );
+    await tester.pump();
+    expect(
+      await _paintedDonutColors(tester, '今日'),
+      contains(Colors.blue.toARGB32()),
+    );
+  });
+
+  for (final TargetPlatform platform in [
+    TargetPlatform.windows,
+    TargetPlatform.android,
+  ]) {
+    testWidgets('${platform.name} 全部今日记录可滚到最后，标题固定且滚动条贴卡片边缘', (
+      WidgetTester tester,
+    ) async {
+      // 二十条不同时间的记录，覆盖旧版五条截断及真实视口溢出。
+      final List<TimeEntryRecord> records = [
+        for (int index = 0; index < 20; index++)
+          _entry(
+            id: 'record-$index',
+            startedAt: DateTime(2026, 10, 6, 0, index * 30),
+            minutes: 20,
+            category: '工作',
+          ),
+      ];
+      await _pumpTimeCard(
+        tester,
+        now: DateTime(2026, 10, 6, 21),
+        width: platform == TargetPlatform.android ? 390 : 520,
+        height: 650,
+        platform: platform,
+        todayRecords: records,
+        weekRecords: records,
+      );
+      // 真实卡片内的专用滚动条与视口。
+      final Finder scrollbar = find.descendant(
+        of: find.byType(HomeTimeStatusCard),
+        matching: find.byType(Scrollbar),
+      );
+      // 固定标题的滚动前位置。
+      final Rect headerBefore = tester.getRect(
+        find.byKey(const ValueKey<String>('home-time-header')),
+      );
+      // 内容最底部对应最早的记录。
+      final Finder last = find.text('测试活动 record-0');
+      expect(find.textContaining('查看全部'), findsNothing);
+      expect(find.text('测试活动 record-19'), findsOneWidget);
+      expect(last, findsOneWidget);
+      expect(
+        tester
+            .widget<Scrollbar>(scrollbar)
+            .controller!
+            .position
+            .maxScrollExtent,
+        greaterThan(0),
+      );
+      await tester.drag(scrollbar, const Offset(0, -3000));
+      await tester.pumpAndSettle();
+      expect(last.hitTestable(), findsOneWidget);
+      expect(
+        tester.getRect(find.byKey(const ValueKey<String>('home-time-header'))),
+        headerBefore,
+      );
+      expect(
+        tester.getRect(scrollbar).right,
+        tester
+            .getRect(
+              find.byKey(const ValueKey<String>('home-time-status-card')),
+            )
+            .right,
+      );
+      expect(ScrollbarTheme.of(tester.element(scrollbar)).crossAxisMargin, 2);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('安卓图例相邻行保持紧凑，悬浮背景两侧有留白', (WidgetTester tester) async {
+    // 六类记录在手机宽度下必须换行。
+    const List<String> categories = ['睡眠', '开发', '学习', '吃饭', '娱乐', '其他'];
+    // 让类别顺序稳定且每个图例都有真实数据。
+    final List<TimeEntryRecord> records = [
+      for (int index = 0; index < categories.length; index++)
+        _entry(
+          id: 'category-$index',
+          startedAt: DateTime(2026, 10, 6, index),
+          minutes: 30,
+          category: categories[index],
+        ),
+    ];
+    await _pumpTimeCard(
+      tester,
+      now: DateTime(2026, 10, 6, 14),
+      width: 390,
+      platform: TargetPlatform.android,
+      todayRecords: records,
+      weekRecords: records,
+    );
+    // 每行文字的真实中心位置，直接验证上下间距。
+    final Set<double> rowCenters = {
+      for (final String category in categories)
+        tester.getCenter(find.text(category)).dy,
+    };
+    expect(rowCenters.length, 2);
+    expect(rowCenters.last - rowCenters.first, lessThanOrEqualTo(32));
+    // 图例色块距离悬浮区域的左右边缘。
+    final Finder item = find.byKey(
+      const ValueKey<String>('home-time-legend-item-开发'),
+    );
+    // 整个图例的可点击悬浮背景。
+    final Finder ink = find.descendant(
+      of: item,
+      matching: find.byType(InkWell),
+    );
+    expect(
+      tester
+              .getRect(
+                find.byKey(const ValueKey<String>('home-time-legend-color-开发')),
+              )
+              .left -
+          tester.getRect(ink).left,
+      8,
+    );
+    expect(
+      tester.getRect(ink).right - tester.getRect(find.text('开发')).right,
+      8,
+    );
+    // 鼠标进入时不会改变换行或图例大小。
+    final TestGesture mouse = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(ink));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(item).height, 32);
+    await mouse.removePointer();
+    expect(tester.takeException(), isNull);
+  });
 }
 
 /// 挂载独立时间卡片，用真实统计方法和受控异步数据验证图例。
@@ -274,11 +516,14 @@ Future<void> _pumpTimeCard(
   WidgetTester tester, {
   required DateTime now,
   double width = 520,
+  double height = 900,
+  TargetPlatform platform = TargetPlatform.windows,
+  bool disableAnimations = false,
   List<TimeEntryRecord> todayRecords = const <TimeEntryRecord>[],
   List<TimeEntryRecord> weekRecords = const <TimeEntryRecord>[],
   Map<String, Color> categoryColors = const <String, Color>{},
 }) async {
-  tester.view.physicalSize = Size(width, 900);
+  tester.view.physicalSize = Size(width, height);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
@@ -336,7 +581,12 @@ Future<void> _pumpTimeCard(
       container: container,
       child: MaterialApp(
         theme: AppTheme.build(brightness: Brightness.light)
-            .copyWith(platform: TargetPlatform.windows),
+            .copyWith(platform: platform),
+        builder: (BuildContext context, Widget? child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(disableAnimations: disableAnimations),
+          child: child!,
+        ),
         home: Scaffold(
           body: SingleChildScrollView(child: HomeTimeStatusCard(now: now)),
         ),
@@ -383,12 +633,31 @@ Color _legendColor(WidgetTester tester, String category) {
 
 /// 执行真实圆环绘制并提取不透明颜色，避免依赖私有分段实现。
 Future<Set<int>> _paintedDonutColors(WidgetTester tester, String label) async {
+  // 每四字节读取一个像素，忽略边缘抗锯齿产生的半透明色。
+  final ByteData pixels = await _donutPixels(tester, label);
+  // 收集实色笔画内部的 ARGB 颜色。
+  final Set<int> paintedColors = <int>{};
+  for (int offset = 0; offset < pixels.lengthInBytes; offset += 4) {
+    if (pixels.getUint8(offset + 3) == 255) {
+      paintedColors.add(
+        0xFF000000 |
+            pixels.getUint8(offset) << 16 |
+            pixels.getUint8(offset + 1) << 8 |
+            pixels.getUint8(offset + 2),
+      );
+    }
+  }
+  return paintedColors;
+}
+
+/// 读取动画当前帧的真实圆环像素。
+Future<ByteData> _donutPixels(WidgetTester tester, String label) async {
   // 页面上该周期的真实圆环绘制器。
   final CustomPaint donut = tester.widget<CustomPaint>(
     find.byKey(ValueKey<String>('home-time-donut-$label')),
   );
   // 图像读取使用真实异步调度，避免测试虚拟时间阻塞像素回传。
-  final Set<int>? colors = await tester.runAsync(() async {
+  final ByteData? result = await tester.runAsync(() async {
     // 用与圆环相同的尺寸记录真实绘制命令。
     final ui.PictureRecorder recorder = ui.PictureRecorder();
     donut.painter!.paint(Canvas(recorder), const Size.square(104));
@@ -400,22 +669,9 @@ Future<Set<int>> _paintedDonutColors(WidgetTester tester, String label) async {
     final ByteData pixels = (await image.toByteData(
       format: ui.ImageByteFormat.rawRgba,
     ))!;
-    // 收集实色笔画内部的 ARGB 颜色。
-    final Set<int> paintedColors = <int>{};
-    // 每四字节读取一个像素，忽略边缘抗锯齿产生的半透明色。
-    for (int offset = 0; offset < pixels.lengthInBytes; offset += 4) {
-      if (pixels.getUint8(offset + 3) == 255) {
-        paintedColors.add(
-          0xFF000000 |
-              pixels.getUint8(offset) << 16 |
-              pixels.getUint8(offset + 1) << 8 |
-              pixels.getUint8(offset + 2),
-        );
-      }
-    }
     image.dispose();
     picture.dispose();
-    return paintedColors;
+    return pixels;
   });
-  return colors!;
+  return result!;
 }
