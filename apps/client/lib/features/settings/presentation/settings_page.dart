@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_theme_palette.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
@@ -12,7 +11,6 @@ import 'package:omni_butler/core/auth/auth_providers.dart';
 import 'package:omni_butler/core/notifications/local_notification_service.dart';
 import 'package:omni_butler/core/notifications/notification_preferences.dart';
 import 'package:omni_butler/core/notifications/notification_providers.dart';
-import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/sync/sync_preferences.dart';
 import 'package:omni_butler/core/sync/sync_connection_coordinator.dart';
 import 'package:omni_butler/core/sync/sync_connection_providers.dart';
@@ -21,7 +19,7 @@ import 'package:omni_butler/core/sync/image_sync_providers.dart';
 import 'package:omni_butler/core/attachments/image_sync_service.dart';
 import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
-import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
+import 'package:omni_butler/features/settings/presentation/recycle_bin_section.dart';
 import 'package:omni_butler/features/settings/presentation/sync_connection_dialog.dart';
 import 'package:omni_butler/features/settings/presentation/sync_backup_dialog.dart';
 import 'package:omni_butler/features/settings/presentation/theme_palette_selector.dart';
@@ -51,7 +49,7 @@ enum _SettingsCategory {
   /// 数据同步。
   sync,
 
-  /// 数据与存储。
+  /// 回收站。
   storage,
 }
 
@@ -63,7 +61,7 @@ extension _SettingsCategoryPresentation on _SettingsCategory {
     _SettingsCategory.appearance => '外观与主题',
     _SettingsCategory.notifications => '通知提醒',
     _SettingsCategory.sync => '数据同步',
-    _SettingsCategory.storage => '数据与存储',
+    _SettingsCategory.storage => '回收站',
   };
 
   /// 一级分类说明。
@@ -81,7 +79,7 @@ extension _SettingsCategoryPresentation on _SettingsCategory {
     _SettingsCategory.appearance => Icons.palette_outlined,
     _SettingsCategory.notifications => Icons.notifications_outlined,
     _SettingsCategory.sync => Icons.cloud_sync_outlined,
-    _SettingsCategory.storage => Icons.storage_outlined,
+    _SettingsCategory.storage => Icons.delete_outline_rounded,
   };
 }
 
@@ -562,7 +560,7 @@ class _AndroidSettingsCategoryRow extends StatelessWidget {
     required this.onTap,
   });
 
-  /// 构建纯文字与右箭头入口。
+  /// 构建文字与右箭头入口，回收站额外展示用户要求的图标。
   @override
   Widget build(BuildContext context) {
     // 当前主题语义色。
@@ -576,6 +574,10 @@ class _AndroidSettingsCategoryRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.lg),
           child: Row(
             children: <Widget>[
+              if (category == _SettingsCategory.storage) ...<Widget>[
+                Icon(category.icon, size: OmniSize.icon, color: colors.brand),
+                const SizedBox(width: OmniSpacing.xs),
+              ],
               Expanded(
                 child: Text(
                   category.label,
@@ -810,9 +812,7 @@ class _SettingsCategoryContent extends ConsumerWidget {
       ),
       _SettingsCategory.notifications => const _NotificationCard(),
       _SettingsCategory.sync => _SyncSettingsCard(colors: colors),
-      _SettingsCategory.storage => _RecycleBinCard(
-        items: ref.watch(recycleBinItemsProvider),
-      ),
+      _SettingsCategory.storage => const RecycleBinSection(),
     };
 
     return SingleChildScrollView(
@@ -1645,154 +1645,6 @@ class _SyncSettingsCard extends ConsumerWidget {
         ? '已断开服务器并删除本机数据'
         : '已断开服务器，本机数据仍然保留';
     showOmniMessage(context, message: message, tone: OmniMessageTone.success);
-  }
-}
-
-/// 统一回收站卡。
-class _RecycleBinCard extends ConsumerWidget {
-  /// 统一回收站异步状态。
-  final AsyncValue<List<RecycleBinItem>> items;
-
-  /// 创建统一回收站卡。
-  const _RecycleBinCard({required this.items});
-
-  /// 构建可恢复与永久删除的回收站。
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
-
-    // 当前回收站列表行。
-    final List<Widget> rows = items.when(
-      data: (List<RecycleBinItem> records) {
-        if (records.isEmpty) {
-          return const <Widget>[
-            OmniListRow(
-              title: Text('回收站为空'),
-              subtitle: Text('删除的业务记录会在这里保留 30 天'),
-            ),
-          ];
-        }
-        return <Widget>[
-          for (final RecycleBinItem item in records)
-            OmniListRow(
-              leading: Icon(_iconFor(item.type), size: OmniSize.icon),
-              title: Text(
-                item.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                '${_typeLabel(item.type)} · 删除于 ${DateFormat('M月d日 HH:mm').format(item.deletedAt)}',
-              ),
-              trailing: Wrap(
-                spacing: OmniSpacing.xxs,
-                children: <Widget>[
-                  OmniButton(
-                    label: '恢复',
-                    variant: OmniButtonVariant.text,
-                    onPressed: () async {
-                      await ref
-                          .read(recycleBinRepositoryProvider)
-                          .restore(item);
-                      ref.invalidate(recycleBinItemsProvider);
-                      if (context.mounted) {
-                        showOmniMessage(
-                          context,
-                          message: '“${item.title}”已恢复',
-                          tone: OmniMessageTone.success,
-                        );
-                      }
-                    },
-                  ),
-                  OmniButton(
-                    label: '永久删除',
-                    variant: OmniButtonVariant.danger,
-                    onPressed: () =>
-                        _confirmPermanentDelete(context, ref, item),
-                  ),
-                ],
-              ),
-            ),
-        ];
-      },
-      loading: () => const <Widget>[
-        OmniListRow(
-          title: Text('正在读取回收站'),
-          trailing: SizedBox.square(
-            dimension: OmniSize.icon,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-        ),
-      ],
-      error: (Object error, StackTrace stackTrace) => <Widget>[
-        OmniListRow(
-          title: const Text('回收站读取失败'),
-          subtitle: Text(
-            error.toString(),
-            style: TextStyle(color: colors.danger),
-          ),
-        ),
-      ],
-    );
-
-    return _SettingsSection(
-      title: '回收站',
-      description: '删除的业务记录默认保留 30 天。',
-      icon: Icons.delete_outline_rounded,
-      children: rows,
-    );
-  }
-
-  /// 返回回收站类型名称。
-  String _typeLabel(RecycleEntityType type) {
-    return switch (type) {
-      RecycleEntityType.todo => '待办',
-      RecycleEntityType.event => '事件',
-      RecycleEntityType.inventory => '物品',
-      RecycleEntityType.timeEntry => '时间记录',
-      RecycleEntityType.membership => '会员',
-      RecycleEntityType.quote => '名言',
-    };
-  }
-
-  /// 返回回收站类型图标。
-  IconData _iconFor(RecycleEntityType type) {
-    return switch (type) {
-      RecycleEntityType.todo => Icons.task_alt_rounded,
-      RecycleEntityType.event => Icons.event_repeat_rounded,
-      RecycleEntityType.inventory => Icons.inventory_2_outlined,
-      RecycleEntityType.timeEntry => Icons.view_timeline_outlined,
-      RecycleEntityType.membership => Icons.loyalty_outlined,
-      RecycleEntityType.quote => Icons.format_quote_rounded,
-    };
-  }
-
-  /// 确认永久删除记录。
-  Future<void> _confirmPermanentDelete(
-    BuildContext context,
-    WidgetRef ref,
-    RecycleBinItem item,
-  ) async {
-    // 用户是否确认永久删除。
-    final bool confirmed = await showOmniConfirmDialog(
-      context,
-      title: '永久删除？',
-      message: '“${item.title}”删除后无法恢复。',
-      confirmLabel: '永久删除',
-      danger: true,
-    );
-    if (confirmed) {
-      await ref.read(recycleBinRepositoryProvider).permanentlyDelete(item);
-      ref.invalidate(recycleBinItemsProvider);
-      if (context.mounted) {
-        showOmniMessage(
-          context,
-          message: '“${item.title}”已永久删除',
-          tone: OmniMessageTone.success,
-        );
-      }
-    }
   }
 }
 

@@ -44,6 +44,9 @@ abstract final class OmniRadius {
 
 /// Omni Butler 的统一尺寸 Token。
 abstract final class OmniSize {
+  /// 列表操作紧凑按钮的视觉高度，触控热区单独保留。
+  static const double controlCompact = 28;
+
   /// 桌面紧凑控件高度。
   static const double control = 32;
 

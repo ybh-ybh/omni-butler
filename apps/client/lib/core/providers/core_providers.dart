@@ -386,12 +386,11 @@ final Provider<RecycleBinRepository> recycleBinRepositoryProvider =
     });
 
 /// 统一回收站记录提供者。
-final FutureProvider<List<RecycleBinItem>> recycleBinItemsProvider =
-    FutureProvider<List<RecycleBinItem>>((Ref ref) async {
+final StreamProvider<List<RecycleBinItem>> recycleBinItemsProvider =
+    StreamProvider<List<RecycleBinItem>>((Ref ref) {
       // 统一回收站仓储。
       final RecycleBinRepository repository = ref.watch(
         recycleBinRepositoryProvider,
       );
-      await repository.purgeExpired();
-      return repository.loadItems();
+      return repository.watchItems();
     });

@@ -23,6 +23,7 @@ import 'package:omni_butler/features/floating/platform/windows_floating_resize_s
 import 'package:omni_butler/features/floating/platform/windows_tray_service.dart';
 import 'package:omni_butler/features/floating/presentation/floating_window_page.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
+import 'package:omni_butler/features/settings/data/recycle_bin_cleanup_coordinator.dart';
 import 'package:omni_butler/core/sync/sync_maintenance_boundary.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 import 'package:win32/win32.dart' as win32;
@@ -791,6 +792,10 @@ class _WindowsWindowCoordinatorState
       return;
     }
     _isExiting = true;
+    // 捕获清理排空任务；先关闭可见窗口，再等待事务完成才退出进程。
+    final Future<void>? recycleCleanup = ref
+        .read(recycleBinCleanupProvider)
+        ?.stop();
     // 拖动/缩放结束已保存状态，退出不等待屏幕查询和磁盘写入才关闭界面。
     if (!mainAlreadyDestroyed) {
       _WindowsWindowVisibility.hide(widget.mainWindowController);
@@ -802,6 +807,7 @@ class _WindowsWindowCoordinatorState
     try {
       await _disposeTray();
     } finally {
+      await recycleCleanup;
       await ServicesBinding.instance.exitApplication(ui.AppExitType.required);
     }
   }

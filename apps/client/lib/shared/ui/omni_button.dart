@@ -40,6 +40,9 @@ class OmniButton extends StatelessWidget {
   /// 是否使用大尺寸。
   final bool large;
 
+  /// 是否使用列表紧凑尺寸；移动端仍保留完整触控热区。
+  final bool compact;
+
   /// 创建统一按钮。
   const OmniButton({
     required this.label,
@@ -48,6 +51,7 @@ class OmniButton extends StatelessWidget {
     this.icon,
     this.loading = false,
     this.large = false,
+    this.compact = false,
     super.key,
   });
 
@@ -61,10 +65,12 @@ class OmniButton extends StatelessWidget {
     // 加载时保持标签可读，但不再接受重复操作。
     final VoidCallback? effectiveOnPressed = loading ? null : onPressed;
     // 页面主操作仅通过尺寸强调，与其他主操作共享外观。
-    final double height = OmniDensity.controlHeight(
-      context,
-      large: large || variant == OmniButtonVariant.pagePrimary,
-    );
+    final double height = compact
+        ? OmniSize.controlCompact
+        : OmniDensity.controlHeight(
+            context,
+            large: large || variant == OmniButtonVariant.pagePrimary,
+          );
     // 实色操作使用相应语义颜色。
     final bool filled =
         variant == OmniButtonVariant.primary ||
@@ -86,12 +92,21 @@ class OmniButton extends StatelessWidget {
     // 各按钮共享密度、键盘焦点、即时按下反馈和减少动效规则。
     final ButtonStyle style = ButtonStyle(
       minimumSize: WidgetStatePropertyAll<Size>(Size(0, height)),
+      padding: compact
+          ? const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+              EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+            )
+          : null,
       visualDensity: VisualDensity.standard,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      tapTargetSize: compact && OmniDensity.isTouch(context)
+          ? MaterialTapTargetSize.padded
+          : MaterialTapTargetSize.shrinkWrap,
       animationDuration: OmniMotion.duration(context, OmniMotion.fast),
       textStyle: WidgetStatePropertyAll<TextStyle?>(
-        Theme.of(context).textTheme.labelLarge
-            ?.copyWith(fontSize: 14, fontWeight: FontWeight.w500),
+        Theme.of(context).textTheme.labelLarge?.copyWith(
+          fontSize: compact ? 12 : 14,
+          fontWeight: FontWeight.w500,
+        ),
       ),
       shape: WidgetStatePropertyAll<OutlinedBorder>(
         RoundedRectangleBorder(

@@ -194,7 +194,7 @@ void main() {
     const List<(String, String)> remainingCategories = <(String, String)>[
       ('notifications', '通知提醒'),
       ('sync', '数据同步'),
-      ('storage', '数据与存储'),
+      ('storage', '回收站'),
     ];
     for (final (String name, String label) in remainingCategories) {
       await tester.tap(

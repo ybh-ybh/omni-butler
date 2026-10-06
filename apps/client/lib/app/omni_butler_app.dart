@@ -11,6 +11,7 @@ import 'package:omni_butler/core/notifications/local_notification_service.dart';
 import 'package:omni_butler/core/notifications/notification_providers.dart';
 import 'package:omni_butler/features/memberships/data/membership_repository.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
+import 'package:omni_butler/features/settings/data/recycle_bin_cleanup_coordinator.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/core/sync/image_sync_providers.dart';
 import 'package:omni_butler/core/sync/sync_connection_providers.dart';
@@ -36,6 +37,9 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
 
   /// 是否正在执行自动续费检查。
   bool _autoRenewalRunning = false;
+
+  /// 当前根应用持有的清理器，卸载窗口时立即取消周期检查。
+  RecycleBinCleanupCoordinator? _recycleBinCleanup;
 
   /// 初始化通知点击导航。
   @override
@@ -105,6 +109,7 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
   void dispose() {
     _payloadSubscription?.cancel();
     _autoRenewalTimer?.cancel();
+    unawaited(_recycleBinCleanup?.stop());
     super.dispose();
   }
 
@@ -114,6 +119,14 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
     ref.watch(notificationCoordinatorProvider);
     ref.watch(syncControllerProvider);
     ref.watch(imageSyncServiceProvider);
+    // 仅新挂载或数据库代次切换时启动，普通重建不能重启正在退出的清理器。
+    final RecycleBinCleanupCoordinator? cleanup = ref.watch(
+      recycleBinCleanupProvider,
+    );
+    if (!identical(_recycleBinCleanup, cleanup)) {
+      _recycleBinCleanup = cleanup;
+      cleanup?.start();
+    }
     // 当前主题偏好。
     final ThemePreference preference = ref.watch(themeControllerProvider);
     // 应用路由器。

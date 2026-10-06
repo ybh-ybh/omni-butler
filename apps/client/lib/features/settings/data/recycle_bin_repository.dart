@@ -58,7 +58,33 @@ class RecycleBinRepository {
   const RecycleBinRepository(this._database, this._todoRepository);
 
   /// 读取全部顶层软删除记录。
-  Future<List<RecycleBinItem>> loadItems() async {
+  Future<List<RecycleBinItem>> loadItems() => _loadItems(grouped: true);
+
+  /// 监听六张业务表，事务读取保证分组来自同一数据库快照。
+  Stream<List<RecycleBinItem>> watchItems() {
+    return _database
+        .customSelect(
+          'SELECT COUNT(*) FROM todo_items UNION ALL '
+          'SELECT COUNT(*) FROM events UNION ALL '
+          'SELECT COUNT(*) FROM inventory_items UNION ALL '
+          'SELECT COUNT(*) FROM time_entries UNION ALL '
+          'SELECT COUNT(*) FROM memberships UNION ALL '
+          'SELECT COUNT(*) FROM quotes',
+          readsFrom: {
+            _database.todoItems,
+            _database.events,
+            _database.inventoryItems,
+            _database.timeEntries,
+            _database.memberships,
+            _database.quotes,
+          },
+        )
+        .watch()
+        .asyncMap((_) => _database.transaction(loadItems));
+  }
+
+  /// 按展示或清理用途读取软删除记录；清理不隐藏任何子项。
+  Future<List<RecycleBinItem>> _loadItems({required bool grouped}) async {
     // 合并后的回收站记录。
     final List<RecycleBinItem> items = <RecycleBinItem>[];
     // 已删除待办。
@@ -80,7 +106,7 @@ class RecycleBinRepository {
         })
         .toList(growable: false);
     items.addAll(
-      visibleTodos.map(
+      (grouped ? visibleTodos : todos).map(
         (TodoRecord record) => RecycleBinItem(
           type: RecycleEntityType.todo,
           id: record.id,
@@ -103,22 +129,32 @@ class RecycleBinRepository {
         ),
       ),
     );
-    // 已删除物品，仅显示顶层物品。
-    final List<InventoryRecord> inventory =
-        await (_database.select(_database.inventoryItems)..where(
-              (InventoryItems table) =>
-                  table.deletedAt.isNotNull() & table.parentItemId.isNull(),
-            ))
-            .get();
+    // 已删除物品及独立删除的配件。
+    final List<InventoryRecord> inventory = await (_database.select(
+      _database.inventoryItems,
+    )..where((InventoryItems table) => table.deletedAt.isNotNull())).get();
+    // 已删除物品索引，用于隐藏随主物品同批删除的配件。
+    final Map<String, InventoryRecord> deletedInventoryById = {
+      for (final InventoryRecord record in inventory) record.id: record,
+    };
     items.addAll(
-      inventory.map(
-        (InventoryRecord record) => RecycleBinItem(
-          type: RecycleEntityType.inventory,
-          id: record.id,
-          title: record.name,
-          deletedAt: record.deletedAt!.toLocal(),
-        ),
-      ),
+      inventory
+          .where((InventoryRecord record) {
+            // 当前配件的已删除父物品。
+            final InventoryRecord? parent =
+                deletedInventoryById[record.parentItemId];
+            return !grouped ||
+                parent == null ||
+                parent.deletedAt != record.deletedAt;
+          })
+          .map(
+            (InventoryRecord record) => RecycleBinItem(
+              type: RecycleEntityType.inventory,
+              id: record.id,
+              title: record.name,
+              deletedAt: record.deletedAt!.toLocal(),
+            ),
+          ),
     );
     // 已删除时间记录。
     final List<TimeEntryRecord> timeEntries = await (_database.select(
@@ -170,7 +206,8 @@ class RecycleBinRepository {
   }
 
   /// 恢复一条顶层业务记录。
-  Future<void> restore(RecycleBinItem item) async {
+  Future<void> restore(RecycleBinItem item) => _database.transaction(() async {
+    if (!await _isCurrent(item)) return;
     // 当前恢复时间。
     final DateTime now = DateTime.now();
     switch (item.type) {
@@ -189,8 +226,9 @@ class RecycleBinRepository {
         await _database.transaction(() async {
           await (_database.update(_database.inventoryItems)..where(
                 (InventoryItems table) =>
-                    table.id.equals(item.id) |
-                    table.parentItemId.equals(item.id),
+                    (table.id.equals(item.id) |
+                        table.parentItemId.equals(item.id)) &
+                    table.deletedAt.equals(item.deletedAt),
               ))
               .write(
                 InventoryItemsCompanion(
@@ -227,11 +265,58 @@ class RecycleBinRepository {
           ),
         );
     }
+  });
+
+  /// 在当前事务中复核软删除时间，防止旧界面操作删除已经恢复的记录。
+  Future<bool> _isCurrent(RecycleBinItem item, {DateTime? cutoff}) async {
+    // 当前业务记录的删除时间。
+    final DateTime? deletedAt = await switch (item.type) {
+      RecycleEntityType.todo =>
+        (_database.select(_database.todoItems)
+              ..where((TodoItems table) => table.id.equals(item.id)))
+            .map((TodoRecord record) => record.deletedAt)
+            .getSingleOrNull(),
+      RecycleEntityType.event =>
+        (_database.select(_database.events)
+              ..where((Events table) => table.id.equals(item.id)))
+            .map((EventRecord record) => record.deletedAt)
+            .getSingleOrNull(),
+      RecycleEntityType.inventory =>
+        (_database.select(_database.inventoryItems)
+              ..where((InventoryItems table) => table.id.equals(item.id)))
+            .map((InventoryRecord record) => record.deletedAt)
+            .getSingleOrNull(),
+      RecycleEntityType.timeEntry =>
+        (_database.select(_database.timeEntries)
+              ..where((TimeEntries table) => table.id.equals(item.id)))
+            .map((TimeEntryRecord record) => record.deletedAt)
+            .getSingleOrNull(),
+      RecycleEntityType.membership =>
+        (_database.select(_database.memberships)
+              ..where((Memberships table) => table.id.equals(item.id)))
+            .map((MembershipRecord record) => record.deletedAt)
+            .getSingleOrNull(),
+      RecycleEntityType.quote =>
+        (_database.select(_database.quotes)
+              ..where((Quotes table) => table.id.equals(item.id)))
+            .map((QuoteRecord record) => record.deletedAt)
+            .getSingleOrNull(),
+    };
+    return deletedAt != null &&
+        deletedAt.isAtSameMomentAs(item.deletedAt) &&
+        (cutoff == null || deletedAt.isBefore(cutoff));
   }
 
   /// 永久删除一条顶层业务记录及其从属历史。
   Future<void> permanentlyDelete(RecycleBinItem item) async {
-    await _database.transaction(() async {
+    await _deleteIfCurrent(item);
+  }
+
+  /// 复核后永久删除，返回是否实际处理了这条记录。
+  Future<bool> _deleteIfCurrent(RecycleBinItem item, {DateTime? cutoff}) async {
+    return _database.transaction(() async {
+      if (!await _isCurrent(item, cutoff: cutoff)) return false;
+      await _preserveChildren(item, cutoff: cutoff);
       switch (item.type) {
         case RecycleEntityType.todo:
           await _todoRepository.permanentlyDelete(item.id);
@@ -277,8 +362,74 @@ class RecycleBinRepository {
             _database.quotes,
           )..where((Quotes table) => table.id.equals(item.id))).go();
       }
+      return true;
     });
   }
+
+  /// 原子清空回收站，不依赖界面是否展示了从属记录。
+  Future<int> empty() => _deleteBatch();
+
+  /// 解除仍有效子项的父关联，避免父项级联删除活动或尚未过期的数据。
+  Future<void> _preserveChildren(
+    RecycleBinItem item, {
+    DateTime? cutoff,
+  }) async {
+    // 本次调整关联的时间。
+    final DateTime now = DateTime.now();
+    if (item.type == RecycleEntityType.todo) {
+      // 被现有待办树永久删除逻辑影响的直属子项。
+      final List<TodoRecord> children = await (_database.select(
+        _database.todoItems,
+      )..where((TodoItems table) => table.parentId.equals(item.id))).get();
+      for (final TodoRecord child in children) {
+        if (child.deletedAt == null ||
+            (cutoff != null && !child.deletedAt!.isBefore(cutoff))) {
+          await (_database.update(
+            _database.todoItems,
+          )..where((TodoItems table) => table.id.equals(child.id))).write(
+            TodoItemsCompanion(
+              parentId: const Value(null),
+              updatedAt: Value(now),
+            ),
+          );
+        }
+      }
+    } else if (item.type == RecycleEntityType.inventory) {
+      // 主物品删除时同样保留活动或尚未过期的配件。
+      final List<InventoryRecord> children =
+          await (_database.select(_database.inventoryItems)..where(
+                (InventoryItems table) => table.parentItemId.equals(item.id),
+              ))
+              .get();
+      for (final InventoryRecord child in children) {
+        if (child.deletedAt == null ||
+            (cutoff != null && !child.deletedAt!.isBefore(cutoff))) {
+          await (_database.update(
+            _database.inventoryItems,
+          )..where((InventoryItems table) => table.id.equals(child.id))).write(
+            InventoryItemsCompanion(
+              parentItemId: const Value(null),
+              updatedAt: Value(now),
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  /// 在一个事务中读取并复核全部候选记录，失败时整体回滚。
+  Future<int> _deleteBatch({DateTime? cutoff}) =>
+      _database.transaction(() async {
+        // 当前数据库中全部已删除业务记录。
+        final List<RecycleBinItem> items = await _loadItems(grouped: false);
+        // 实际处理的业务记录数，已由父项级联删除的子项不重复计数。
+        int count = 0;
+        for (final RecycleBinItem item in items) {
+          if (cutoff != null && !item.deletedAt.isBefore(cutoff)) continue;
+          if (await _deleteIfCurrent(item, cutoff: cutoff)) count++;
+        }
+        return count;
+      });
 
   /// 清理超过 30 天保留期的记录。
   Future<int> purgeExpired({DateTime? now}) async {
@@ -286,15 +437,6 @@ class RecycleBinRepository {
     final DateTime cutoff = (now ?? DateTime.now()).subtract(
       const Duration(days: 30),
     );
-    // 全部回收站记录。
-    final List<RecycleBinItem> items = await loadItems();
-    // 已过期记录。
-    final List<RecycleBinItem> expired = items
-        .where((RecycleBinItem item) => !item.deletedAt.isAfter(cutoff))
-        .toList(growable: false);
-    for (final RecycleBinItem item in expired) {
-      await permanentlyDelete(item);
-    }
-    return expired.length;
+    return _deleteBatch(cutoff: cutoff);
   }
 }
