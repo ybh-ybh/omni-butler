@@ -13,8 +13,17 @@ class OmniTag extends StatelessWidget {
   /// 可选前置图标。
   final IconData? icon;
 
+  /// 是否使用适合移动端记录卡的小尺寸标签。
+  final bool compact;
+
   /// 创建状态标签。
-  const OmniTag({required this.label, this.color, this.icon, super.key});
+  const OmniTag({
+    required this.label,
+    this.color,
+    this.icon,
+    this.compact = false,
+    super.key,
+  });
 
   /// 构建浅色填充标签。
   @override
@@ -25,24 +34,28 @@ class OmniTag extends StatelessWidget {
     final Color effectiveColor = color ?? colors.brand;
 
     return Container(
-      constraints: const BoxConstraints(minHeight: 24),
-      padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+      constraints: BoxConstraints(minHeight: compact ? 18 : 24),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? OmniSpacing.xxs : OmniSpacing.xs,
+      ),
       decoration: BoxDecoration(
         color: effectiveColor.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(OmniRadius.control),
+        borderRadius: BorderRadius.circular(
+          compact ? OmniRadius.tiny : OmniRadius.control,
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           if (icon != null) ...<Widget>[
-            Icon(icon, size: 13, color: effectiveColor),
+            Icon(icon, size: compact ? 11 : 13, color: effectiveColor),
             const SizedBox(width: OmniSpacing.xxs),
           ],
           Text(
             label,
             style: TextStyle(
               color: effectiveColor,
-              fontSize: 12,
+              fontSize: compact ? 11 : 12,
               height: 1.5,
               fontWeight: FontWeight.w400,
             ),

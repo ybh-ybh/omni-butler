@@ -1874,6 +1874,7 @@ class _MembershipCard extends ConsumerWidget {
                                   OmniTag(
                                     label: statusView.$1,
                                     color: statusView.$2,
+                                    compact: true,
                                   ),
                                   const SizedBox(width: OmniSpacing.xxs),
                                   Expanded(

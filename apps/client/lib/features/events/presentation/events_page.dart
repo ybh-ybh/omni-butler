@@ -821,22 +821,23 @@ class _EventToolbar extends StatelessWidget {
                 },
               ),
             ),
-            SizedBox(
-              height: actionHeight,
-              child: OmniButton(
-                key: const ValueKey<String>('event-layout-toggle'),
-                label: canUseTwoColumns
-                    ? useTwoColumns
-                          ? '单列'
-                          : '双列'
-                    : '单列',
-                icon: useTwoColumns && canUseTwoColumns
-                    ? Icons.view_agenda_outlined
-                    : Icons.grid_view_outlined,
-                variant: OmniButtonVariant.secondary,
-                onPressed: canUseTwoColumns ? onToggleLayout : null,
+            if (Theme.of(context).platform != TargetPlatform.android)
+              SizedBox(
+                height: actionHeight,
+                child: OmniButton(
+                  key: const ValueKey<String>('event-layout-toggle'),
+                  label: canUseTwoColumns
+                      ? useTwoColumns
+                            ? '单列'
+                            : '双列'
+                      : '单列',
+                  icon: useTwoColumns && canUseTwoColumns
+                      ? Icons.view_agenda_outlined
+                      : Icons.grid_view_outlined,
+                  variant: OmniButtonVariant.secondary,
+                  onPressed: canUseTwoColumns ? onToggleLayout : null,
+                ),
               ),
-            ),
           ],
         );
       },
@@ -1202,11 +1203,7 @@ class _EventCard extends ConsumerWidget {
                                 ? 'event-restore-${event.id}'
                                 : 'event-record-${event.id}',
                           ),
-                          label: archived
-                              ? '恢复'
-                              : status == EventDueStatus.unrecorded
-                              ? '首次记录'
-                              : '记录',
+                          label: archived ? '恢复' : '记录',
                           icon: archived
                               ? Icons.unarchive_outlined
                               : Icons.done_rounded,
@@ -1220,11 +1217,7 @@ class _EventCard extends ConsumerWidget {
                                 ? 'event-restore-${event.id}'
                                 : 'event-record-${event.id}',
                           ),
-                          label: archived
-                              ? '恢复'
-                              : status == EventDueStatus.unrecorded
-                              ? '首次记录'
-                              : '记录',
+                          label: archived ? '恢复' : '记录',
                           icon: archived
                               ? Icons.unarchive_outlined
                               : Icons.done_rounded,
@@ -1306,7 +1299,7 @@ class _CompactEventActionButton extends StatelessWidget {
     super.key,
   });
 
-  /// 构建三十二像素视觉按钮与四十四像素触控层。
+  /// 构建紧凑视觉按钮与四十四像素触控层。
   @override
   Widget build(BuildContext context) {
     // 当前主题语义色。
@@ -1330,8 +1323,10 @@ class _CompactEventActionButton extends StatelessWidget {
           child: Center(
             child: Container(
               key: const ValueKey<String>('event-compact-action-surface'),
-              height: OmniSize.control,
-              padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
+              height: primary ? 28 : OmniSize.control,
+              padding: EdgeInsets.symmetric(
+                horizontal: primary ? OmniSpacing.xs : OmniSpacing.sm,
+              ),
               decoration: BoxDecoration(
                 color: backgroundColor,
                 borderRadius: visualRadius,
@@ -1340,14 +1335,18 @@ class _CompactEventActionButton extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  Icon(icon, size: 16, color: foregroundColor),
+                  Icon(icon, size: primary ? 14 : 16, color: foregroundColor),
                   const SizedBox(width: OmniSpacing.xxs),
                   Text(
                     label,
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: foregroundColor,
-                      fontWeight: FontWeight.w500,
-                    ),
+                    style:
+                        (primary
+                                ? Theme.of(context).textTheme.labelMedium
+                                : Theme.of(context).textTheme.labelLarge)
+                            ?.copyWith(
+                              color: foregroundColor,
+                              fontWeight: FontWeight.w500,
+                            ),
                   ),
                 ],
               ),

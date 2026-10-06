@@ -179,7 +179,7 @@ void main() {
     final Finder activeRecordButton = find.byKey(
       ValueKey<String>('event-record-${activeEvent.id}'),
     );
-    // 待首次记录事件的首次记录按钮。
+    // 待首次记录事件的记录按钮。
     final Finder firstRecordButton = find.byKey(
       ValueKey<String>('event-record-${unrecordedEvent.id}'),
     );
@@ -195,7 +195,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.descendant(of: firstRecordButton, matching: find.text('首次记录')),
+      find.descendant(of: firstRecordButton, matching: find.text('记录')),
       findsOneWidget,
     );
     // 新时间轨道应接近占满整张事件卡片的内容宽度。

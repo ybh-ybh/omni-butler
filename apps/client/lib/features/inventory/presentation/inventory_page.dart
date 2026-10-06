@@ -2637,6 +2637,7 @@ class _InventoryCard extends ConsumerWidget {
                       OmniTag(
                         label: _statusLabel(item.status),
                         color: _statusColor(colors, item.status),
+                        compact: true,
                       ),
                       const SizedBox(width: OmniSpacing.xxs),
                       Expanded(

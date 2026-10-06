@@ -157,6 +157,10 @@ void main() {
     for (final double viewportWidth in viewportWidths) {
       tester.view.physicalSize = Size(viewportWidth, 844);
       await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('event-layout-toggle')),
+        findsNothing,
+      );
       // 当前事件卡片。
       final Finder eventCard = find.byKey(
         ValueKey<String>('event-card-$eventId'),
@@ -184,7 +188,7 @@ void main() {
       expect(tester.getSize(eventCard).height, lessThanOrEqualTo(176));
       _expectTouchTarget(tester, historyButton);
       _expectTouchTarget(tester, recordButton);
-      expect(tester.getSize(recordButtonSurface).height, 32);
+      expect(tester.getSize(recordButtonSurface).height, 28);
       _expectTouchTarget(tester, eventMenu);
       _expectWithinViewport(tester, eventCard, viewportWidth);
       expect(tester.takeException(), isNull);
@@ -231,6 +235,17 @@ void main() {
         tester.getSize(permanentMembershipCard).height,
         lessThanOrEqualTo(100),
       );
+      expect(
+        tester
+            .getSize(
+              find.descendant(
+                of: permanentMembershipCard,
+                matching: find.byType(OmniTag),
+              ),
+            )
+            .height,
+        18,
+      );
       _expectTouchTarget(tester, renewButton);
       _expectTouchTarget(tester, membershipMenu);
       _expectWithinViewport(tester, membershipCard, viewportWidth);
@@ -269,6 +284,17 @@ void main() {
         ValueKey<String>('inventory-more-button-$inventoryId'),
       );
       expect(tester.getSize(inventoryCard).height, 104);
+      expect(
+        tester
+            .getSize(
+              find.descendant(
+                of: inventoryCard,
+                matching: find.byType(OmniTag),
+              ),
+            )
+            .height,
+        18,
+      );
       _expectTouchTarget(tester, accessoriesButton);
       _expectTouchTarget(tester, inventoryMenu);
       _expectWithinViewport(tester, inventoryCard, viewportWidth);
