@@ -122,8 +122,14 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
     return MaterialApp.router(
       title: 'Omni Butler',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.build(brightness: Brightness.light),
-      darkTheme: AppTheme.build(brightness: Brightness.dark),
+      theme: AppTheme.build(
+        brightness: Brightness.light,
+        palette: preference.palette,
+      ),
+      darkTheme: AppTheme.build(
+        brightness: Brightness.dark,
+        palette: preference.palette,
+      ),
       themeMode: preference.mode,
       scrollBehavior: const OmniScrollBehavior(),
       routerConfig: router,

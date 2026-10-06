@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/app/theme/app_theme_palette.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
@@ -23,6 +24,7 @@ import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
 import 'package:omni_butler/features/settings/presentation/sync_connection_dialog.dart';
 import 'package:omni_butler/features/settings/presentation/sync_backup_dialog.dart';
+import 'package:omni_butler/features/settings/presentation/theme_palette_selector.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:powersync/powersync.dart' show SyncStatus;
 
@@ -1240,14 +1242,26 @@ class _AppearanceCard extends ConsumerWidget {
   /// 创建外观设置卡。
   const _AppearanceCard({required this.preference});
 
-  /// 构建统一品牌主题与明暗模式设置。
+  /// 构建当前设备的主题配色与明暗模式设置。
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return _SettingsSection(
       title: '外观与主题',
-      description: '统一飞书蓝品牌主题，明暗模式只影响当前设备。',
+      description: '选择喜欢的主题色与明暗模式，仅影响当前设备。',
       icon: Icons.palette_outlined,
       children: <Widget>[
+        OmniListRow(
+          title: const Text('主题色'),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: OmniSpacing.sm),
+            child: ThemePaletteSelector(
+              value: preference.palette,
+              onChanged: (AppThemePalette palette) => ref
+                  .read(themeControllerProvider.notifier)
+                  .setThemePalette(palette),
+            ),
+          ),
+        ),
         OmniListRow(
           title: const Text('明暗模式'),
           subtitle: const Text('可跟随系统自动切换'),

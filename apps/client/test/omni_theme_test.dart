@@ -2,10 +2,63 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/app/theme/app_theme_palette.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
 /// 验证统一品牌主题的关键 Token 与组件轮廓。
 void main() {
+  // 每一款配色都覆盖明暗模式，经典蓝仍由原有精确色值测试保护。
+  for (final AppThemePalette palette in AppThemePalette.values) {
+    // 独立验证浅色和深色配色。
+    for (final Brightness brightness in Brightness.values) {
+      test('${palette.label} ${brightness.name} 保留业务语义与可读色对', () {
+        // 当前配色对应的应用主题。
+        final ThemeData theme = AppTheme.build(
+          brightness: brightness,
+          palette: palette,
+        );
+        // 原有业务颜色作为兼容性参照。
+        final OmniColors original = AppTheme.build(brightness: brightness)
+            .extension<OmniColors>()!;
+        // 当前配色的扩展语义色。
+        final OmniColors colors = theme.extension<OmniColors>()!;
+        expect(colors.success, original.success);
+        expect(colors.warning, original.warning);
+        expect(colors.danger, original.danger);
+        expect(colors.info, original.info);
+        expect(colors.todo, original.todo);
+        expect(colors.event, original.event);
+        expect(colors.item, original.item);
+        expect(colors.time, original.time);
+        expect(colors.member, original.member);
+        expect(theme.colorScheme.onError, Colors.white);
+        if (palette == AppThemePalette.classicBlue) return;
+        expect(colors.canvas, isNot(original.canvas));
+        expect(colors.paper, isNot(original.paper));
+        // 实际文字、按钮、选中态与渐变两端均满足普通文字对比度。
+        final List<(Color, Color)> pairs = <(Color, Color)>[
+          (colors.ink, colors.canvas),
+          (colors.ink, colors.paper),
+          (colors.muted, colors.paper),
+          (colors.brand, colors.paper),
+          (colors.accentInk, colors.brand),
+          (colors.accentInk, colors.brandStrong),
+          (colors.brandStrong, colors.brandSoft),
+          (colors.heroInk, colors.heroStart),
+          (colors.heroInk, colors.heroEnd),
+        ];
+        // 每一对实际使用的前景色与背景色。
+        for (final (Color foreground, Color background) in pairs) {
+          expect(
+            _contrast(foreground, background),
+            greaterThanOrEqualTo(4.5),
+            reason: '${palette.label}: $foreground / $background',
+          );
+        }
+      });
+    }
+  }
+
   test('Windows 主题明确使用微软雅黑 UI', () {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -99,4 +152,15 @@ void main() {
       colors.brand.withValues(alpha: 0.03),
     );
   });
+}
+
+/// 根据相对亮度计算前景和背景的对比度。
+double _contrast(Color foreground, Color background) {
+  // 前景色的线性亮度。
+  final double foregroundLuminance = foreground.computeLuminance();
+  // 背景色的线性亮度。
+  final double backgroundLuminance = background.computeLuminance();
+  return foregroundLuminance > backgroundLuminance
+      ? (foregroundLuminance + 0.05) / (backgroundLuminance + 0.05)
+      : (backgroundLuminance + 0.05) / (foregroundLuminance + 0.05);
 }

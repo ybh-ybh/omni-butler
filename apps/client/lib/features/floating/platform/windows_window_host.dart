@@ -899,15 +899,22 @@ class _FloatingWindowSurface extends ConsumerWidget {
   /// 结束调整窗口尺寸回调。
   final Future<void> Function() onResizeEnd;
 
+  /// 构建与主窗口共享配色和明暗模式的悬浮窗。
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // 当前主题模式。
-    final ThemeMode themeMode = ref.watch(themeControllerProvider).mode;
+    // 当前设备的完整主题偏好。
+    final ThemePreference preference = ref.watch(themeControllerProvider);
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.build(brightness: Brightness.light),
-      darkTheme: AppTheme.build(brightness: Brightness.dark),
-      themeMode: themeMode,
+      theme: AppTheme.build(
+        brightness: Brightness.light,
+        palette: preference.palette,
+      ),
+      darkTheme: AppTheme.build(
+        brightness: Brightness.dark,
+        palette: preference.palette,
+      ),
+      themeMode: preference.mode,
       home: FloatingWindowPage(
         onClose: onClose,
         onOpenRoute: onOpenRoute,

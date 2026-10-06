@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:omni_butler/app/theme/app_theme_palette.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
 /// Omni Butler 扩展语义色。
@@ -206,31 +207,37 @@ class OmniColors extends ThemeExtension<OmniColors> {
 
 /// 应用主题工厂。
 abstract final class AppTheme {
-  /// 根据明暗模式构建统一的飞书式主题。
-  static ThemeData build({required Brightness brightness}) {
+  /// 根据设备配色和明暗模式构建主题，默认保留原有品牌外观。
+  static ThemeData build({
+    required Brightness brightness,
+    AppThemePalette palette = AppThemePalette.classicBlue,
+  }) {
     // 当前明暗模式的扩展语义色。
-    final OmniColors colors = _colorsFor(brightness);
+    final OmniColors colors = _colorsFor(brightness, palette);
     // Material 语义色方案。
     final ColorScheme scheme =
-        ColorScheme.fromSeed(
-          seedColor: colors.brand,
-          brightness: brightness,
-        ).copyWith(
-          primary: colors.brand,
-          onPrimary: colors.accentInk,
-          primaryContainer: colors.brandSoft,
-          onPrimaryContainer: colors.brandStrong,
-          secondary: colors.accent,
-          onSecondary: colors.accentInk,
-          surface: colors.paper,
-          onSurface: colors.ink,
-          onSurfaceVariant: colors.muted,
-          outline: colors.line,
-          outlineVariant: colors.mist,
-          surfaceContainerHighest: colors.paperSubtle,
-          error: colors.danger,
-          onError: colors.accentInk,
-        );
+        (palette == AppThemePalette.classicBlue
+                ? ColorScheme.fromSeed(
+                    seedColor: colors.brand,
+                    brightness: brightness,
+                  )
+                : palette.colorScheme(brightness))
+            .copyWith(
+              primary: colors.brand,
+              onPrimary: colors.accentInk,
+              primaryContainer: colors.brandSoft,
+              onPrimaryContainer: colors.brandStrong,
+              secondary: colors.accent,
+              onSecondary: colors.accentInk,
+              surface: colors.paper,
+              onSurface: colors.ink,
+              onSurfaceVariant: colors.muted,
+              outline: colors.line,
+              outlineVariant: colors.mist,
+              surfaceContainerHighest: colors.paperSubtle,
+              error: colors.danger,
+              onError: Colors.white,
+            );
     // 控件统一圆角。
     final RoundedRectangleBorder controlShape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(OmniRadius.control),
@@ -727,9 +734,17 @@ abstract final class AppTheme {
               : const Color(0xFFFFFFFF),
           fontSize: 14,
         ),
-        actionTextColor: brightness == Brightness.dark
-            ? const Color(0xFF245BDB)
-            : const Color(0xFF82A7FC),
+        actionTextColor: palette == AppThemePalette.classicBlue
+            ? (brightness == Brightness.dark
+                  ? const Color(0xFF245BDB)
+                  : const Color(0xFF82A7FC))
+            : palette
+                  .colorScheme(
+                    brightness == Brightness.dark
+                        ? Brightness.light
+                        : Brightness.dark,
+                  )
+                  .primary,
         elevation: 8,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(OmniRadius.panel),
@@ -808,11 +823,32 @@ abstract final class AppTheme {
     );
   }
 
-  /// 返回指定明暗模式的扩展语义色。
-  static OmniColors _colorsFor(Brightness brightness) {
+  /// 生成配色对应的表面、品牌和横幅色，保留业务状态与模块颜色。
+  static OmniColors _colorsFor(Brightness brightness, AppThemePalette palette) {
     // 当前是否使用暗色模式。
     final bool isDark = brightness == Brightness.dark;
-    return isDark ? _feishuDark : _feishuLight;
+    // 原有语义色作为业务状态与兼容默认值。
+    final OmniColors base = isDark ? _feishuDark : _feishuLight;
+    if (palette == AppThemePalette.classicBlue) return base;
+    // 当前配色的 Material 明暗色对。
+    final ColorScheme scheme = palette.colorScheme(brightness);
+    return base.copyWith(
+      brand: scheme.primary,
+      brandStrong: scheme.onPrimaryContainer,
+      brandSoft: scheme.primaryContainer,
+      accent: scheme.primary,
+      accentInk: scheme.onPrimary,
+      canvas: scheme.surfaceContainerLow,
+      paper: scheme.surface,
+      paperSubtle: scheme.surfaceContainer,
+      ink: scheme.onSurface,
+      muted: scheme.onSurfaceVariant,
+      line: scheme.outlineVariant,
+      mist: scheme.surfaceContainerHighest,
+      heroStart: scheme.primaryContainer,
+      heroEnd: scheme.secondaryContainer,
+      heroInk: scheme.onPrimaryContainer,
+    );
   }
 
   /// 飞书式浅色语义色。

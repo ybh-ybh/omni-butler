@@ -77,7 +77,9 @@ class OmniButton extends StatelessWidget {
       label: label,
       icon: icon,
       loading: loading,
-      color: variant == OmniButtonVariant.danger ? colors.accentInk : null,
+      color: variant == OmniButtonVariant.danger
+          ? Theme.of(context).colorScheme.onError
+          : null,
       tiledIcon: variant == OmniButtonVariant.pagePrimary,
       disabled: pagePrimaryDisabled,
     );
@@ -168,7 +170,7 @@ class OmniButton extends StatelessWidget {
         style: FilledButton.styleFrom(
           minimumSize: Size(0, height),
           backgroundColor: colors.danger,
-          foregroundColor: colors.accentInk,
+          foregroundColor: Theme.of(context).colorScheme.onError,
           disabledBackgroundColor: colors.mist,
           disabledForegroundColor: colors.muted,
           shape: RoundedRectangleBorder(
