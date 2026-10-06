@@ -240,6 +240,7 @@ class OmniPopupMenuItem<T> extends PopupMenuItem<T> {
            label: label,
            icon: icon,
            danger: danger,
+           enabled: enabled,
          ),
        );
 }
@@ -623,11 +624,15 @@ class _OmniPopupMenuItemContent extends StatelessWidget {
   /// 是否使用危险操作配色。
   final bool danger;
 
+  /// 是否允许操作，用于同步菜单项的禁用颜色。
+  final bool enabled;
+
   /// 创建操作菜单项内容。
   const _OmniPopupMenuItemContent({
     required this.label,
     required this.icon,
     required this.danger,
+    required this.enabled,
   });
 
   /// 构建对齐的图标与文字。
@@ -636,7 +641,11 @@ class _OmniPopupMenuItemContent extends StatelessWidget {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     // 菜单项前景色。
-    final Color foreground = danger ? colors.danger : colors.ink;
+    final Color foreground = !enabled
+        ? colors.muted.withValues(alpha: 0.5)
+        : danger
+        ? colors.danger
+        : colors.ink;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
       child: Row(

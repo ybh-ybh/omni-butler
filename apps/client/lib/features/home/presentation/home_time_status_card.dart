@@ -95,6 +95,14 @@ class HomeTimeStatusCard extends ConsumerWidget {
       categoryColors,
       colors.time,
     );
+    // 两个圆环实际分类的并集，直接复用分段颜色并按名称去重。
+    final Map<String, _TimeSlice> legendSlices = <String, _TimeSlice>{
+      for (final _TimeSlice slice in <_TimeSlice>[
+        ...todaySummary.slices,
+        ...weekSummary.slices,
+      ])
+        slice.label: slice,
+    };
     // 首页按进行中优先、开始时间倒序展示的今日记录。
     final List<TimeEntryRecord> sortedTodaySegments = List<TimeEntryRecord>.of(
       todaySegments,
@@ -132,7 +140,7 @@ class HomeTimeStatusCard extends ConsumerWidget {
                 ),
               ),
             )
-          else
+          else ...<Widget>[
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
@@ -153,6 +161,11 @@ class HomeTimeStatusCard extends ConsumerWidget {
                 ),
               ],
             ),
+            if (legendSlices.isNotEmpty) ...<Widget>[
+              const SizedBox(height: OmniSpacing.md),
+              _TimeCategoryLegend(slices: legendSlices.values.toList()),
+            ],
+          ],
           Padding(
             padding: const EdgeInsets.symmetric(vertical: OmniSpacing.md),
             child: Divider(color: colors.line),
@@ -223,13 +236,13 @@ class _TimeStatusHeader extends StatelessWidget {
     required this.showActions,
   });
 
-  /// 构建标题、说明和原地记录入口。
+  /// 构建标题和原地记录入口。
   @override
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
         Container(
           width: 34,
@@ -246,17 +259,7 @@ class _TimeStatusHeader extends StatelessWidget {
         ),
         const SizedBox(width: OmniSpacing.xs),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text('时间状态', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 2),
-              Text(
-                '按已记录时间查看类别分布',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-          ),
+          child: Text('时间状态', style: Theme.of(context).textTheme.titleMedium),
         ),
         if (showActions) ...<Widget>[
           OmniButton(
@@ -337,7 +340,7 @@ class _TimeDonut extends StatelessWidget {
     required this.emptyColor,
   });
 
-  /// 构建带中心时长和文字摘要的圆环。
+  /// 构建带中心时长和完整辅助功能摘要的圆环。
   @override
   Widget build(BuildContext context) {
     // 辅助功能可读的完整摘要。
@@ -357,6 +360,7 @@ class _TimeDonut extends StatelessWidget {
                 alignment: Alignment.center,
                 children: <Widget>[
                   CustomPaint(
+                    key: ValueKey<String>('home-time-donut-$label'),
                     size: const Size.square(104),
                     painter: _TimeDonutPainter(
                       slices: summary.slices,
@@ -380,28 +384,54 @@ class _TimeDonut extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: OmniSpacing.xs),
-            Text(
-              summary.totalMinutes == 0 ? '还没有时间记录' : summary.detail,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            if (summary.totalMinutes > 0) ...<Widget>[
-              const SizedBox(height: 2),
-              Text(
-                summary.breakdown,
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(color: OmniColors.of(context).muted),
-              ),
-            ],
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 今日与本周圆环共用的类别颜色图例。
+class _TimeCategoryLegend extends StatelessWidget {
+  /// 已按类别名称去重的圆环分段。
+  final List<_TimeSlice> slices;
+
+  /// 创建共用图例。
+  const _TimeCategoryLegend({required this.slices});
+
+  /// 构建可自动换行的小圆角色块与真实类别名称。
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      key: const ValueKey<String>('home-time-category-legend'),
+      alignment: WrapAlignment.center,
+      spacing: OmniSpacing.md,
+      runSpacing: OmniSpacing.xs,
+      children: <Widget>[
+        for (final _TimeSlice slice in slices)
+          Row(
+            key: ValueKey<String>('home-time-legend-item-${slice.label}'),
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Container(
+                key: ValueKey<String>('home-time-legend-color-${slice.label}'),
+                width: 24,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: slice.color,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+              const SizedBox(width: OmniSpacing.xs),
+              Flexible(
+                child: Text(
+                  slice.label,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+      ],
     );
   }
 }

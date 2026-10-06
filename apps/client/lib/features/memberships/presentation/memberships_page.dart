@@ -14,6 +14,18 @@ import 'package:omni_butler/shared/attachments/attachment_picker_dialog.dart';
 import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
+/// 打开会员续费表单，供管理页与首页共用。
+Future<void> showMembershipRenewalDialog(
+  BuildContext context, {
+  required MembershipRecord membership,
+}) async {
+  await showOmniDialog<void>(
+    context: context,
+    builder: (BuildContext context) =>
+        _PaymentEditorDialog(membership: membership),
+  );
+}
+
 /// 会员管理页面。
 class MembershipsPage extends ConsumerStatefulWidget {
   /// 是否嵌入 Android 管理聚合页。
@@ -284,11 +296,8 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
             builder: (BuildContext context) =>
                 _PaymentHistoryDialog(membership: membership),
           ),
-          onRenew: (MembershipRecord membership) => showOmniDialog<void>(
-            context: context,
-            builder: (BuildContext context) =>
-                _PaymentEditorDialog(membership: membership),
-          ),
+          onRenew: (MembershipRecord membership) =>
+              showMembershipRenewalDialog(context, membership: membership),
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -3011,6 +3020,9 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
 
   /// 保存支付记录。
   Future<void> _save() async {
+    if (_saving) {
+      return;
+    }
     // 解析后的金额。
     final double? amount = double.tryParse(_amountController.text);
     if (amount == null || amount < 0) {
@@ -3018,25 +3030,40 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
       return;
     }
     setState(() => _saving = true);
-    await ref
-        .read(membershipRepositoryProvider)
-        .recordPayment(
-          membershipId: widget.membership.id,
-          amountCents: (amount * 100).round(),
-          paidAt: _paidAt,
-          billingCycle: _billingCycle,
-          validUntil: _validUntil,
-          notes: _notesController.text,
+    try {
+      await ref
+          .read(membershipRepositoryProvider)
+          .recordPayment(
+            membershipId: widget.membership.id,
+            amountCents: (amount * 100).round(),
+            paidAt: _paidAt,
+            billingCycle: _billingCycle,
+            validUntil: _validUntil,
+            notes: _notesController.text,
+          );
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } catch (error) {
+      if (mounted) {
+        showOmniMessage(
+          context,
+          message: error is FormatException ? error.message : '保存失败，请重试',
+          tone: OmniMessageTone.error,
         );
-    if (mounted) {
-      Navigator.of(context).pop();
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
     }
   }
 
   /// 构建新增支付记录表单。
   @override
   Widget build(BuildContext context) {
-    return OmniDialogScaffold(
+    // 续费表单内容，保存期间由外层统一阻止关闭。
+    final Widget content = OmniDialogScaffold(
       title: '新增支付记录',
       width: 420,
       actions: <Widget>[
@@ -3127,6 +3154,7 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
         ],
       ),
     );
+    return PopScope<void>(canPop: !_saving, child: content);
   }
 
   /// 返回支付计费周期文案。

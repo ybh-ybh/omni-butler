@@ -192,7 +192,7 @@ void main() {
       findsNothing,
     );
     expect(find.text('以后整理'), findsNothing);
-    expect(find.text('首页直属子任务'), findsOneWidget);
+    expect(find.text('首页直属子任务'), findsNothing);
     expect(find.text('立即处理'), findsNothing);
     expect(find.text('安排时间'), findsNothing);
     expect(find.text('快速处理'), findsNothing);
@@ -201,7 +201,7 @@ void main() {
     expect(find.text('新增待办'), findsNothing);
     expect(find.text('新增'), findsOneWidget);
     expect(find.text('16:00'), findsOneWidget);
-    expect(find.text('17:30'), findsOneWidget);
+    expect(find.text('17:30'), findsNothing);
     for (final TodoPriorityQuadrant quadrant in <TodoPriorityQuadrant>[
       TodoPriorityQuadrant.urgentImportant,
       TodoPriorityQuadrant.importantNotUrgent,
@@ -253,6 +253,10 @@ void main() {
     expect(dueLeft, lessThan(toggleLeft));
     await tester.tap(childToggle);
     await tester.pumpAndSettle();
+    expect(find.text('首页直属子任务'), findsOneWidget);
+    expect(find.text('17:30'), findsOneWidget);
+    await tester.tap(childToggle);
+    await tester.pumpAndSettle();
     expect(find.text('首页直属子任务'), findsNothing);
     await tester.tap(childToggle);
     await tester.pumpAndSettle();
@@ -266,7 +270,7 @@ void main() {
     await _disposeApp(tester, database, container);
   });
 
-  testWidgets('Android 首页集中新增入口并批量折叠子任务', (WidgetTester tester) async {
+  testWidgets('Android 首页子任务默认折叠并支持单项与批量展开', (WidgetTester tester) async {
     // 测试当前时间。
     final DateTime now = DateTime(2026, 9, 21, 14, 20);
     // 测试用内存数据库。
@@ -325,15 +329,19 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('Android 子任务'), findsOneWidget);
-    // Android 首页点击父任务名称时直接折叠子任务，不再打开编辑弹窗。
+    expect(find.text('Android 子任务'), findsNothing);
+    expect(find.byTooltip('展开全部子任务'), findsOneWidget);
+    // Android 首页点击父任务名称时切换子任务展开状态，不打开编辑弹窗。
     final Finder parentTitleAction = find.byKey(
       ValueKey<String>('home-todo-title-action-${parent.id}'),
     );
     await tester.tap(parentTitleAction);
     await tester.pumpAndSettle();
-    expect(find.text('Android 子任务'), findsNothing);
+    expect(find.text('Android 子任务'), findsOneWidget);
     expect(find.text('编辑待办'), findsNothing);
+    await tester.tap(parentTitleAction);
+    await tester.pumpAndSettle();
+    expect(find.text('Android 子任务'), findsNothing);
     await tester.tap(parentTitleAction);
     await tester.pumpAndSettle();
     expect(find.text('Android 子任务'), findsOneWidget);
@@ -514,17 +522,28 @@ void main() {
       find.byKey(const ValueKey<String>('home-context-memberships')),
       findsOneWidget,
     );
-    // 空周期事件分区中的展开按钮。
-    final Finder emptyEventToggle = find.descendant(
-      of: find.byKey(const ValueKey<String>('home-context-events')),
-      matching: find.byType(IconButton),
+    // 空周期事件分区不提供无内容的展开操作。
+    final Finder emptyEventSection = find.byKey(
+      const ValueKey<String>('home-context-events'),
     );
-    expect(emptyEventToggle, findsOneWidget);
-
-    await tester.tap(emptyEventToggle);
-    await tester.pumpAndSettle();
+    expect(find.text('还没有周期事件'), findsOneWidget);
+    expect(find.text('还没有会员记录'), findsOneWidget);
     expect(
-      find.byKey(const ValueKey<String>('home-context-card')),
+      find.descendant(
+        of: emptyEventSection,
+        matching: find.byIcon(Icons.expand_more_rounded),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey<String>('home-context-events')),
+        matching: find.byIcon(Icons.chevron_right_rounded),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('home-context-open-周期事件')),
       findsOneWidget,
     );
 
@@ -561,7 +580,7 @@ void main() {
     await _disposeApp(tester, database, container);
   });
 
-  testWidgets('临近事件与会员到期提醒以父子树默认展开并可收起', (WidgetTester tester) async {
+  testWidgets('临近事件与会员到期提醒以日期清单默认展开并可收起', (WidgetTester tester) async {
     // 测试当前时间。
     final DateTime now = DateTime(2026, 9, 21, 14, 20);
     // 测试用内存数据库。
@@ -610,11 +629,11 @@ void main() {
     expect(find.text('更换空气滤芯'), findsOneWidget);
     expect(find.text('设计工具会员'), findsOneWidget);
     expect(
-      find.byKey(const ValueKey<String>('context-tree-branch-周期事件-0')),
+      find.byKey(const ValueKey<String>('context-details-expanded-周期事件')),
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey<String>('context-tree-branch-会员提醒-0')),
+      find.byKey(const ValueKey<String>('context-details-expanded-会员提醒')),
       findsOneWidget,
     );
     expect(find.textContaining('即将到期'), findsWidgets);

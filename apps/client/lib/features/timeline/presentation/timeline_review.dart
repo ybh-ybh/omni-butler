@@ -176,17 +176,6 @@ class TimelineReviewContent extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  _TimelineInsightBanner(
-                    text: _buildInsight(
-                      records: records,
-                      previousRecords: previousRecords,
-                      summary: summary,
-                      previousSummary: previousSummary,
-                      period: period,
-                    ),
-                    hasRecords: records.isNotEmpty,
-                  ),
-                  const SizedBox(height: OmniSpacing.xs),
                   _TimelineMetricsPanel(metrics: metrics),
                   const SizedBox(height: OmniSpacing.xs),
                   _TimeFingerprintPanel(
@@ -265,65 +254,6 @@ class _TimelineMetricData {
     required this.detail,
     required this.icon,
   });
-}
-
-/// 周期洞察提示条。
-class _TimelineInsightBanner extends StatelessWidget {
-  /// 洞察文案。
-  final String text;
-
-  /// 当前周期是否存在记录。
-  final bool hasRecords;
-
-  /// 创建周期洞察提示条。
-  const _TimelineInsightBanner({required this.text, required this.hasRecords});
-
-  /// 构建一条克制的确定性洞察。
-  @override
-  Widget build(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
-    return Semantics(
-      key: const ValueKey<String>('timeline-insight'),
-      label: text,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: hasRecords ? colors.brandSoft : colors.paper,
-          borderRadius: BorderRadius.circular(OmniRadius.panel),
-          border: Border.all(
-            color: hasRecords
-                ? colors.brand.withValues(alpha: 0.22)
-                : colors.line,
-          ),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: OmniSpacing.md,
-            vertical: OmniSpacing.sm,
-          ),
-          child: Row(
-            children: <Widget>[
-              Icon(
-                hasRecords ? Icons.auto_graph_rounded : Icons.timeline_rounded,
-                size: OmniSize.icon,
-                color: hasRecords ? colors.brand : colors.muted,
-              ),
-              const SizedBox(width: OmniSpacing.sm),
-              Expanded(
-                child: Text(
-                  text,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: hasRecords ? colors.brandStrong : colors.muted,
-                    fontWeight: FontWeight.w400,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// 周期摘要指标条。
@@ -1884,34 +1814,6 @@ class _InlineEmpty extends StatelessWidget {
   }
 }
 
-/// 构建当前周期最值得注意的一条确定性洞察。
-String _buildInsight({
-  required List<TimeEntryRecord> records,
-  required List<TimeEntryRecord> previousRecords,
-  required Map<String, int> summary,
-  required Map<String, int> previousSummary,
-  required TimelineStatsPeriod period,
-}) {
-  if (records.isEmpty) {
-    return '${_periodLabel(period)}还没有记录，新增一条后这里会形成你的时间指纹。';
-  }
-  // 当前周期耗时最多的类别。
-  final MapEntry<String, int>? dominant = _dominantEntry(summary);
-  if (dominant == null) {
-    return '${_periodLabel(period)}已有 ${records.length} 段记录，可以继续补齐空白时间。';
-  }
-  if (previousRecords.isEmpty) {
-    return '${_periodLabel(period)}投入最多的是“${dominant.key}”，共 ${_formatDuration(dominant.value)}；上一周期暂无记录。';
-  }
-  // 主要类别相对上一周期的分钟变化。
-  final int delta = dominant.value - (previousSummary[dominant.key] ?? 0);
-  // 主要类别的趋势文案。
-  final String trend = delta == 0
-      ? '与上一周期持平'
-      : '比上一周期${delta > 0 ? '增加' : '减少'} ${_formatDuration(delta.abs())}';
-  return '${_periodLabel(period)}投入最多的是“${dominant.key}”，共 ${_formatDuration(dominant.value)}，$trend。';
-}
-
 /// 构建与当前周期匹配的趋势数据。
 List<_TimeTrendDatum> _buildTrendData({
   required List<TimeEntryRecord> records,
@@ -2084,15 +1986,6 @@ String _formatLogicalDuration(TimeEntryRecord record) {
     effectiveEnd.difference(record.startedAt).inMinutes,
   );
   return _formatDuration(minutes);
-}
-
-/// 返回周期范围文案。
-String _periodLabel(TimelineStatsPeriod period) {
-  return switch (period) {
-    TimelineStatsPeriod.day => '今天',
-    TimelineStatsPeriod.week => '本周',
-    TimelineStatsPeriod.month => '本月',
-  };
 }
 
 /// 返回上一周期比较文案。

@@ -28,6 +28,9 @@ class OmniPanelScrollScope extends InheritedWidget {
 
 /// 统一的飞书式内容面板。
 class OmniPanel extends StatelessWidget {
+  /// 可选固定头部；自身间距由调用方控制，不随面板内容滚动。
+  final Widget? header;
+
   /// 面板内容。
   final Widget child;
 
@@ -46,6 +49,7 @@ class OmniPanel extends StatelessWidget {
   /// 创建统一内容面板。
   const OmniPanel({
     required this.child,
+    this.header,
     this.padding = const EdgeInsets.all(OmniSpacing.md),
     this.margin,
     this.onTap,
@@ -63,7 +67,39 @@ class OmniPanel extends StatelessWidget {
       context,
     )?.controller;
     // 面板内保持边框固定的内容区域。
-    final Widget panelContent = scrollController == null
+    final Widget panelContent = header != null
+        ? Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              header!,
+              Flexible(
+                fit: FlexFit.loose,
+                child: scrollController == null
+                    ? Padding(padding: padding, child: child)
+                    : ScrollbarTheme(
+                        data: ScrollbarTheme.of(context).copyWith(
+                          crossAxisMargin: 2,
+                          mainAxisMargin: OmniSpacing.xs,
+                        ),
+                        child: ScrollConfiguration(
+                          behavior: ScrollConfiguration.of(context)
+                              .copyWith(scrollbars: false),
+                          child: Scrollbar(
+                            controller: scrollController,
+                            child: SingleChildScrollView(
+                              controller: scrollController,
+                              primary: false,
+                              padding: padding,
+                              child: child,
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
+            ],
+          )
+        : scrollController == null
         ? child
         : Scrollbar(
             controller: scrollController,
@@ -84,7 +120,9 @@ class OmniPanel extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         hoverColor: colors.ink.withValues(alpha: 0.04),
-        child: Padding(padding: padding, child: panelContent),
+        child: header == null
+            ? Padding(padding: padding, child: panelContent)
+            : panelContent,
       ),
     );
 

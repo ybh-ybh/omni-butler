@@ -36,6 +36,18 @@ enum _HomeMobileAction {
   todo,
 }
 
+/// 首页任务行的上下文菜单操作。
+enum _HomeTodoAction {
+  /// 编辑当前任务。
+  edit,
+
+  /// 为主任务添加直属子任务。
+  addChild,
+
+  /// 将当前任务及其子任务移入回收站。
+  delete,
+}
+
 /// 今日工作台页面。
 class HomePage extends ConsumerWidget {
   /// Android 悬浮拆分按钮需要避让的滚动内容高度。
@@ -82,6 +94,57 @@ class HomePage extends ConsumerWidget {
       unawaited(TodoEditorDialog.show(context, initialDate: today));
     }
 
+    /// 执行任务菜单操作，返回是否保存了变更。
+    Future<bool> handleTodoAction(
+      TodoRecord todo,
+      _HomeTodoAction action,
+    ) async {
+      switch (action) {
+        case _HomeTodoAction.edit:
+          return await TodoEditorDialog.show(context, record: todo) ?? false;
+        case _HomeTodoAction.addChild:
+          if (todo.parentId != null) {
+            return false;
+          }
+          return await TodoEditorDialog.show(context, parent: todo) ?? false;
+        case _HomeTodoAction.delete:
+          // 首页使用仓储的单次删除范围，将当前任务树移入回收站。
+          final bool confirmed = await showOmniConfirmDialog(
+            context,
+            title: '删除任务？',
+            message:
+                '${todo.parentId == null ? '“${todo.title}”及其子任务' : '“${todo.title}”'}会移入回收站，可在回收站恢复。'
+                '${todo.repeatSeriesId == null ? '' : '\n仅将本次任务移入回收站。'}',
+            confirmLabel: '删除任务',
+            danger: true,
+          );
+          if (!confirmed || !context.mounted) {
+            return false;
+          }
+          try {
+            await todoRepository.delete(todo.id);
+            if (context.mounted) {
+              ref.invalidate(recycleBinItemsProvider);
+              showOmniMessage(
+                context,
+                message: '“${todo.title}”已移入回收站',
+                tone: OmniMessageTone.success,
+              );
+            }
+            return true;
+          } catch (_) {
+            if (context.mounted) {
+              showOmniMessage(
+                context,
+                message: '删除失败，请重试',
+                tone: OmniMessageTone.error,
+              );
+            }
+            return false;
+          }
+      }
+    }
+
     // 今日名言卡。
     final Widget quoteCard = _QuoteHero(
       quoteAsync: quoteAsync,
@@ -108,8 +171,7 @@ class HomePage extends ConsumerWidget {
       onCreate: openTodoEditor,
       onOpenQuadrant: (TodoPriorityQuadrant quadrant) =>
           context.go('/todos?quadrant=${quadrant.value}'),
-      onEdit: (TodoRecord todo) =>
-          unawaited(TodoEditorDialog.show(context, record: todo)),
+      onAction: handleTodoAction,
       onToggle: (TodoRecord todo, bool value) =>
           todoRepository.setCompleted(todo.id, value),
     );
@@ -549,15 +611,20 @@ class _RenderFillRemainingCardGrid extends RenderBox
     double naturalHeight = gap * (childCount - 1);
     // 网格行中的最大自然宽度。
     double naturalWidth = 0;
+    // 最后一排至少容纳固定卡头与一行内容，过矮时交给外层页面滚动。
+    const double minimumLastRowHeight = 120;
     // 当前待测量网格行。
     RenderBox? child = firstChild;
     while (child != null) {
       // 最后一排从当前页面剩余空间中计算高度上限。
       final double remainingGridHeight = maxGridHeight - naturalHeight;
-      // 若前面各排已经超过一页，最后一排滚入视口后最多占满一页。
-      final double lastRowHeightLimit = remainingGridHeight > 0
+      // 剩余空间不足时，最后一排滚入视口；不把固定卡头压进几像素高度。
+      final double lastRowHeightLimit =
+          remainingGridHeight >= minimumLastRowHeight
           ? remainingGridHeight
-          : maxGridHeight;
+          : maxGridHeight
+                .clamp(minimumLastRowHeight, double.infinity)
+                .toDouble();
       // 只有最后一排需要限制高度，其余排继续按自然高度参与页面滚动。
       final BoxConstraints effectiveRowConstraints = child == lastChild
           ? rowConstraints.copyWith(maxHeight: lastRowHeightLimit)
@@ -1115,8 +1182,8 @@ class _TodayTodoCard extends StatefulWidget {
   /// 查看指定象限回调。
   final ValueChanged<TodoPriorityQuadrant> onOpenQuadrant;
 
-  /// 编辑指定待办回调。
-  final ValueChanged<TodoRecord> onEdit;
+  /// 执行指定待办的菜单操作。
+  final Future<bool> Function(TodoRecord todo, _HomeTodoAction action) onAction;
 
   /// 完成状态变化回调。
   final Future<void> Function(TodoRecord todo, bool value) onToggle;
@@ -1127,7 +1194,7 @@ class _TodayTodoCard extends StatefulWidget {
     required this.pendingTodoTrees,
     required this.onCreate,
     required this.onOpenQuadrant,
-    required this.onEdit,
+    required this.onAction,
     required this.onToggle,
   });
 
@@ -1149,14 +1216,24 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
   /// 当前撤销浮动消息。
   OmniMessageHandle? _undoMessage;
 
-  /// 当前已经折叠子任务的父任务标识。
-  final Set<String> _collapsedTreeIds = <String>{};
+  /// 当前手动展开子任务的父任务标识，未操作的任务默认折叠。
+  final Set<String> _expandedTreeIds = <String>{};
+
+  /// 新增子任务保存成功后展开父任务，让新内容立即可见。
+  Future<bool> _handleAction(TodoRecord todo, _HomeTodoAction action) async {
+    // 弹窗返回的保存结果。
+    final bool saved = await widget.onAction(todo, action);
+    if (saved && mounted && action == _HomeTodoAction.addChild) {
+      setState(() => _expandedTreeIds.add(todo.id));
+    }
+    return saved;
+  }
 
   /// 切换指定父任务的子任务展开状态。
   void _toggleTree(String rootId) {
     setState(() {
-      if (!_collapsedTreeIds.remove(rootId)) {
-        _collapsedTreeIds.add(rootId);
+      if (!_expandedTreeIds.remove(rootId)) {
+        _expandedTreeIds.add(rootId);
       }
     });
   }
@@ -1165,9 +1242,9 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
   void _toggleAllTrees(Set<String> expandableTreeIds, bool allCollapsed) {
     setState(() {
       if (allCollapsed) {
-        _collapsedTreeIds.removeAll(expandableTreeIds);
+        _expandedTreeIds.addAll(expandableTreeIds);
       } else {
-        _collapsedTreeIds.addAll(expandableTreeIds);
+        _expandedTreeIds.removeAll(expandableTreeIds);
       }
     });
   }
@@ -1239,78 +1316,88 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
     // 当前是否已收起全部可见子任务。
     final bool allTreesCollapsed =
         expandableTreeIds.isNotEmpty &&
-        expandableTreeIds.every(_collapsedTreeIds.contains);
+        expandableTreeIds.every((String id) => !_expandedTreeIds.contains(id));
     // 待办列表或状态内容。
     final Widget todoContent = _buildTodoContent(context, colors);
     return OmniPanel(
       key: const ValueKey<String>('home-todo-card'),
-      padding: const EdgeInsets.all(OmniSpacing.md),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: colors.todo.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(OmniRadius.control),
-                ),
-                child: Icon(
-                  Icons.check_circle_outline_rounded,
-                  color: colors.todo,
-                  size: 19,
-                ),
+      padding: const EdgeInsets.fromLTRB(
+        OmniSpacing.md,
+        0,
+        OmniSpacing.md,
+        OmniSpacing.md,
+      ),
+      header: Padding(
+        key: const ValueKey<String>('home-todo-header'),
+        padding: const EdgeInsets.fromLTRB(
+          OmniSpacing.md,
+          OmniSpacing.md,
+          OmniSpacing.md,
+          OmniSpacing.xs,
+        ),
+        child: Row(
+          children: <Widget>[
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: colors.todo.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(OmniRadius.control),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  '今日待办',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
+              child: Icon(
+                Icons.check_circle_outline_rounded,
+                color: colors.todo,
+                size: 19,
               ),
-              if (androidCompact)
-                SizedBox.square(
-                  dimension: 30,
-                  child: IconButton(
-                    key: const ValueKey<String>('home-todo-toggle-all'),
-                    tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
-                    onPressed: expandableTreeIds.isEmpty
-                        ? null
-                        : () => _toggleAllTrees(
-                            expandableTreeIds,
-                            allTreesCollapsed,
-                          ),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints.tightFor(
-                      width: 30,
-                      height: 30,
-                    ),
-                    icon: Icon(
-                      allTreesCollapsed
-                          ? Icons.unfold_more_rounded
-                          : Icons.unfold_less_rounded,
-                      size: 18,
-                    ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '今日待办',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            if (androidCompact)
+              SizedBox.square(
+                dimension: 30,
+                child: IconButton(
+                  key: const ValueKey<String>('home-todo-toggle-all'),
+                  tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
+                  onPressed: expandableTreeIds.isEmpty
+                      ? null
+                      : () => _toggleAllTrees(
+                          expandableTreeIds,
+                          allTreesCollapsed,
+                        ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 30,
+                    height: 30,
                   ),
-                )
-              else
-                SizedBox(
-                  key: const ValueKey<String>('home-todo-create-button'),
-                  height: 30,
-                  child: OmniButton(
-                    label: '新增',
-                    icon: Icons.add_rounded,
-                    onPressed: widget.onCreate,
+                  icon: Icon(
+                    allTreesCollapsed
+                        ? Icons.unfold_more_rounded
+                        : Icons.unfold_less_rounded,
+                    size: 18,
                   ),
                 ),
-            ],
-          ),
-          const SizedBox(height: OmniSpacing.xs),
-          todoContent,
-        ],
+              )
+            else
+              SizedBox(
+                key: const ValueKey<String>('home-todo-create-button'),
+                height: 30,
+                child: OmniButton(
+                  label: '新增',
+                  icon: Icons.add_rounded,
+                  onPressed: widget.onCreate,
+                ),
+              ),
+          ],
+        ),
+      ),
+      child: KeyedSubtree(
+        key: const ValueKey<String>('home-todo-content'),
+        child: todoContent,
       ),
     );
   }
@@ -1355,10 +1442,10 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
           _HomeTodoQuadrant(
             quadrant: _focusQuadrants[index],
             todoTrees: groupedTodoTrees[_focusQuadrants[index]]!,
-            collapsedTreeIds: _collapsedTreeIds,
+            expandedTreeIds: _expandedTreeIds,
             onToggleTree: _toggleTree,
             onOpen: () => widget.onOpenQuadrant(_focusQuadrants[index]),
-            onEdit: widget.onEdit,
+            onAction: _handleAction,
             onToggle: (TodoRecord todo, bool value) =>
                 value ? _completeTodo(todo) : widget.onToggle(todo, false),
           ),
@@ -1376,8 +1463,8 @@ class _HomeTodoQuadrant extends StatelessWidget {
   /// 当前象限全部未完成待办树。
   final List<TodoTreeNode> todoTrees;
 
-  /// 当前已经折叠子任务的父任务标识。
-  final Set<String> collapsedTreeIds;
+  /// 当前手动展开子任务的父任务标识，未操作的任务默认折叠。
+  final Set<String> expandedTreeIds;
 
   /// 切换指定父任务子任务展开状态的回调。
   final ValueChanged<String> onToggleTree;
@@ -1385,8 +1472,8 @@ class _HomeTodoQuadrant extends StatelessWidget {
   /// 查看当前象限回调。
   final VoidCallback onOpen;
 
-  /// 编辑指定待办回调。
-  final ValueChanged<TodoRecord> onEdit;
+  /// 执行指定待办的菜单操作。
+  final Future<bool> Function(TodoRecord todo, _HomeTodoAction action) onAction;
 
   /// 完成状态变化回调。
   final Future<void> Function(TodoRecord todo, bool value) onToggle;
@@ -1395,10 +1482,10 @@ class _HomeTodoQuadrant extends StatelessWidget {
   const _HomeTodoQuadrant({
     required this.quadrant,
     required this.todoTrees,
-    required this.collapsedTreeIds,
+    required this.expandedTreeIds,
     required this.onToggleTree,
     required this.onOpen,
-    required this.onEdit,
+    required this.onAction,
     required this.onToggle,
   });
 
@@ -1465,9 +1552,9 @@ class _HomeTodoQuadrant extends StatelessWidget {
           key: ValueKey<String>('home-todo-tree-${tree.root.id}'),
           tree: tree,
           accentColor: quadrant.color(OmniColors.of(context)),
-          childrenExpanded: !collapsedTreeIds.contains(tree.root.id),
+          childrenExpanded: expandedTreeIds.contains(tree.root.id),
           onToggleChildren: () => onToggleTree(tree.root.id),
-          onEdit: onEdit,
+          onAction: onAction,
           onComplete: (TodoRecord todo) => onToggle(todo, true),
         ),
       );
@@ -1505,8 +1592,8 @@ class _HomeTodoTree extends StatelessWidget {
   /// 切换子任务展开状态的回调。
   final VoidCallback onToggleChildren;
 
-  /// 编辑指定待办回调。
-  final ValueChanged<TodoRecord> onEdit;
+  /// 执行指定待办的菜单操作。
+  final Future<bool> Function(TodoRecord todo, _HomeTodoAction action) onAction;
 
   /// 完成任务回调。
   final Future<void> Function(TodoRecord todo) onComplete;
@@ -1517,7 +1604,7 @@ class _HomeTodoTree extends StatelessWidget {
     required this.accentColor,
     required this.childrenExpanded,
     required this.onToggleChildren,
-    required this.onEdit,
+    required this.onAction,
     required this.onComplete,
     super.key,
   });
@@ -1552,7 +1639,7 @@ class _HomeTodoTree extends StatelessWidget {
       key: ValueKey<String>('home-todo-row-${tree.root.id}'),
       todo: tree.root,
       accentColor: accentColor,
-      onEdit: onEdit,
+      onAction: onAction,
       onComplete: onComplete,
       childrenExpanded: hasChildren ? childrenExpanded : null,
       onToggleChildren: hasChildren ? onToggleChildren : null,
@@ -1598,7 +1685,7 @@ class _HomeTodoTree extends StatelessWidget {
                             ),
                             todo: pendingChildren[index],
                             accentColor: accentColor,
-                            onEdit: onEdit,
+                            onAction: onAction,
                             onComplete: onComplete,
                           ),
                         ),
@@ -1687,8 +1774,8 @@ class _HomeTodoRow extends StatefulWidget {
   /// 当前任务所属象限强调色。
   final Color accentColor;
 
-  /// 打开当前任务编辑器回调。
-  final ValueChanged<TodoRecord> onEdit;
+  /// 执行当前任务的菜单操作。
+  final Future<bool> Function(TodoRecord todo, _HomeTodoAction action) onAction;
 
   /// 完成动画结束后的提交回调。
   final Future<void> Function(TodoRecord todo) onComplete;
@@ -1703,7 +1790,7 @@ class _HomeTodoRow extends StatefulWidget {
   const _HomeTodoRow({
     required this.todo,
     required this.accentColor,
-    required this.onEdit,
+    required this.onAction,
     required this.onComplete,
     this.childrenExpanded,
     this.onToggleChildren,
@@ -1737,6 +1824,58 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
 
   /// 勾选框当前是否获得键盘焦点。
   bool _checkboxFocused = false;
+
+  /// 菜单或其弹窗正在处理，防止同一行重复打开。
+  bool _menuOpen = false;
+
+  /// 在鼠标或长按位置显示任务操作菜单。
+  Future<void> _showContextMenu(Offset globalPosition) async {
+    if (_submitting || _menuOpen) {
+      return;
+    }
+    _menuOpen = true;
+    try {
+      // 菜单所在导航覆盖层及指针在其内部的位置。
+      final RenderBox overlay =
+          Navigator.of(context).overlay!.context.findRenderObject()!
+              as RenderBox;
+      // 转换坐标以兼容卡片内部滚动与窗口缩放。
+      final Offset position = overlay.globalToLocal(globalPosition);
+      // 用户选中的任务操作，关闭菜单时为空。
+      final _HomeTodoAction? action = await showMenu<_HomeTodoAction>(
+        context: context,
+        position: RelativeRect.fromRect(
+          position & Size.zero,
+          Offset.zero & overlay.size,
+        ),
+        menuPadding: const EdgeInsets.all(OmniSpacing.xxs),
+        items: <PopupMenuEntry<_HomeTodoAction>>[
+          OmniPopupMenuItem<_HomeTodoAction>(
+            value: _HomeTodoAction.edit,
+            label: '编辑任务',
+            icon: Icons.edit_outlined,
+          ),
+          OmniPopupMenuItem<_HomeTodoAction>(
+            value: _HomeTodoAction.addChild,
+            label: '添加子任务',
+            icon: Icons.subdirectory_arrow_right_rounded,
+            enabled: widget.todo.parentId == null,
+          ),
+          OmniPopupMenuItem<_HomeTodoAction>(
+            value: _HomeTodoAction.delete,
+            label: '删除任务',
+            icon: Icons.delete_outline_rounded,
+            danger: true,
+          ),
+        ],
+      );
+      if (action != null && mounted && !_submitting) {
+        await widget.onAction(widget.todo, action);
+      }
+    } finally {
+      _menuOpen = false;
+    }
+  }
 
   /// 更新整行任务的悬停状态。
   void _setHovered(bool hovered) {
@@ -1842,11 +1981,10 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
     final String? dueLabel = widget.todo.dueAt == null
         ? null
         : _formatHomeTodoDueAt(widget.todo);
-    // Android 首页通过任务名称控制子任务，其余平台继续通过名称编辑任务。
-    final VoidCallback? onTitleTap =
-        Theme.of(context).platform == TargetPlatform.android
-        ? widget.onToggleChildren
-        : () => widget.onEdit(widget.todo);
+    // 所有平台的左键点击只切换子任务，完成中的任务不再响应展开。
+    final VoidCallback? onTitleTap = _submitting
+        ? null
+        : widget.onToggleChildren;
 
     return AnimatedSize(
       duration: collapseDuration,
@@ -1865,144 +2003,161 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                 child: MouseRegion(
                   onEnter: (_) => _setHovered(true),
                   onExit: (_) => _setHovered(false),
-                  child: AnimatedContainer(
-                    key: ValueKey<String>('home-todo-hover-${widget.todo.id}'),
-                    duration: disableAnimations
-                        ? Duration.zero
-                        : OmniMotion.fast,
-                    curve: OmniMotion.standardCurve,
-                    decoration: BoxDecoration(
-                      color: _hovered
-                          ? colors.ink.withValues(alpha: 0.06)
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(OmniRadius.control),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: OmniSpacing.xs,
-                        vertical: OmniSpacing.xxs,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onTitleTap,
+                    onSecondaryTapUp: (TapUpDetails details) =>
+                        unawaited(_showContextMenu(details.globalPosition)),
+                    onLongPressStart: (LongPressStartDetails details) =>
+                        unawaited(_showContextMenu(details.globalPosition)),
+                    child: AnimatedContainer(
+                      key: ValueKey<String>(
+                        'home-todo-hover-${widget.todo.id}',
                       ),
-                      child: Row(
-                        children: <Widget>[
-                          Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              key: ValueKey<String>(
-                                'home-todo-checkbox-action-${widget.todo.id}',
-                              ),
-                              onTap: _submitting
-                                  ? null
-                                  : () => unawaited(_complete()),
-                              onHover: _setCheckboxHovered,
-                              onFocusChange: _setCheckboxFocused,
-                              borderRadius: BorderRadius.circular(
-                                OmniRadius.control,
-                              ),
-                              hoverColor: Colors.transparent,
-                              focusColor: Colors.transparent,
-                              splashColor: Colors.transparent,
-                              highlightColor: Colors.transparent,
-                              child: SizedBox(
-                                key: ValueKey<String>(
-                                  'home-todo-checkbox-${widget.todo.id}',
-                                ),
-                                width: 32,
-                                height: 32,
-                                child: Center(
-                                  child: _HomeTodoCheckIndicator(
-                                    checked: _checked,
-                                    highlighted:
-                                        _checkboxHovered || _checkboxFocused,
-                                    accentColor: widget.accentColor,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: OmniSpacing.xxs),
-                          Expanded(
-                            child: Material(
+                      duration: disableAnimations
+                          ? Duration.zero
+                          : OmniMotion.fast,
+                      curve: OmniMotion.standardCurve,
+                      decoration: BoxDecoration(
+                        color: _hovered
+                            ? colors.ink.withValues(alpha: 0.06)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(OmniRadius.control),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: OmniSpacing.xs,
+                          vertical: OmniSpacing.xxs,
+                        ),
+                        child: Row(
+                          children: <Widget>[
+                            Material(
                               color: Colors.transparent,
                               child: InkWell(
                                 key: ValueKey<String>(
-                                  'home-todo-title-action-${widget.todo.id}',
+                                  'home-todo-checkbox-action-${widget.todo.id}',
                                 ),
-                                onTap: onTitleTap,
+                                onTap: _submitting
+                                    ? null
+                                    : () => unawaited(_complete()),
+                                onHover: _setCheckboxHovered,
+                                onFocusChange: _setCheckboxFocused,
                                 borderRadius: BorderRadius.circular(
                                   OmniRadius.control,
                                 ),
                                 hoverColor: Colors.transparent,
-                                focusColor: colors.brandSoft,
+                                focusColor: Colors.transparent,
+                                splashColor: Colors.transparent,
+                                highlightColor: Colors.transparent,
                                 child: SizedBox(
+                                  key: ValueKey<String>(
+                                    'home-todo-checkbox-${widget.todo.id}',
+                                  ),
+                                  width: 32,
                                   height: 32,
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: AnimatedDefaultTextStyle(
-                                      duration: disableAnimations
-                                          ? Duration.zero
-                                          : OmniMotion.fast,
-                                      curve: OmniMotion.standardCurve,
-                                      style: TextStyle(
-                                        color: _checked
-                                            ? colors.muted
-                                            : colors.ink,
-                                        fontWeight: FontWeight.w400,
-                                        decoration: _checked
-                                            ? TextDecoration.lineThrough
-                                            : TextDecoration.none,
-                                      ),
-                                      child: Text(
-                                        widget.todo.title,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
+                                  child: Center(
+                                    child: _HomeTodoCheckIndicator(
+                                      checked: _checked,
+                                      highlighted:
+                                          _checkboxHovered || _checkboxFocused,
+                                      accentColor: widget.accentColor,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: OmniSpacing.xxs),
+                            Expanded(
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  key: ValueKey<String>(
+                                    'home-todo-title-action-${widget.todo.id}',
+                                  ),
+                                  onTap: onTitleTap,
+                                  borderRadius: BorderRadius.circular(
+                                    OmniRadius.control,
+                                  ),
+                                  hoverColor: Colors.transparent,
+                                  focusColor: colors.brandSoft,
+                                  child: SizedBox(
+                                    height: 32,
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: AnimatedDefaultTextStyle(
+                                        duration: disableAnimations
+                                            ? Duration.zero
+                                            : OmniMotion.fast,
+                                        curve: OmniMotion.standardCurve,
+                                        style: TextStyle(
+                                          color: _checked
+                                              ? colors.muted
+                                              : colors.ink,
+                                          fontWeight: FontWeight.w400,
+                                          decoration: _checked
+                                              ? TextDecoration.lineThrough
+                                              : TextDecoration.none,
+                                        ),
+                                        child: Text(
+                                          widget.todo.title,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                          if (dueLabel != null) ...<Widget>[
-                            const SizedBox(width: OmniSpacing.xs),
-                            Text(
-                              dueLabel,
-                              key: ValueKey<String>(
-                                'home-todo-due-${widget.todo.id}',
-                              ),
-                              maxLines: 1,
-                              style: Theme.of(context).textTheme.labelSmall
-                                  ?.copyWith(color: colors.muted),
-                            ),
-                          ],
-                          if (widget.onToggleChildren != null) ...<Widget>[
-                            const SizedBox(width: OmniSpacing.xxs),
-                            SizedBox.square(
-                              dimension: 28,
-                              child: IconButton(
+                            if (dueLabel != null) ...<Widget>[
+                              const SizedBox(width: OmniSpacing.xs),
+                              Text(
+                                dueLabel,
                                 key: ValueKey<String>(
-                                  'home-todo-tree-toggle-${widget.todo.id}',
+                                  'home-todo-due-${widget.todo.id}',
                                 ),
-                                tooltip: widget.childrenExpanded ?? false
-                                    ? '收起子任务'
-                                    : '展开子任务',
-                                onPressed: widget.onToggleChildren,
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints.tightFor(
-                                  width: 28,
-                                  height: 28,
-                                ),
-                                icon: Icon(
-                                  widget.childrenExpanded ?? false
-                                      ? Icons.expand_more_rounded
-                                      : Icons.chevron_right_rounded,
-                                  color: colors.muted,
-                                  size: 18,
+                                maxLines: 1,
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(color: colors.muted),
+                              ),
+                            ],
+                            if (widget.onToggleChildren != null) ...<Widget>[
+                              const SizedBox(width: OmniSpacing.xxs),
+                              SizedBox.square(
+                                dimension: 28,
+                                child: IconButton(
+                                  key: ValueKey<String>(
+                                    'home-todo-tree-toggle-${widget.todo.id}',
+                                  ),
+                                  tooltip: widget.childrenExpanded ?? false
+                                      ? '收起子任务'
+                                      : '展开子任务',
+                                  onPressed: onTitleTap,
+                                  hoverColor: Colors.transparent,
+                                  style: const ButtonStyle(
+                                    backgroundColor:
+                                        WidgetStatePropertyAll<Color>(
+                                          Colors.transparent,
+                                        ),
+                                  ),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints.tightFor(
+                                    width: 28,
+                                    height: 28,
+                                  ),
+                                  icon: Icon(
+                                    widget.childrenExpanded ?? false
+                                        ? Icons.expand_more_rounded
+                                        : Icons.chevron_right_rounded,
+                                    color: colors.muted,
+                                    size: 18,
+                                  ),
                                 ),
                               ),
-                            ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
                     ),
                   ),
