@@ -14,6 +14,8 @@ import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/golden_test_support.dart';
+
 /// 生成并校验首页关键视口的视觉基线。
 void main() {
   testWidgets('统一品牌浅色桌面首页视觉基线', (WidgetTester tester) async {
@@ -91,6 +93,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await prepareBrandImageForGolden(tester);
 
     // 桌面名言卡尺寸。
     final Size quoteSize = tester.getSize(
@@ -166,6 +169,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await prepareBrandImageForGolden(tester);
 
     expect(
       find.byKey(const ValueKey<String>('medium-navigation')),

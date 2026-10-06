@@ -15,6 +15,8 @@ import 'package:omni_butler/features/memberships/data/membership_repository.dart
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/golden_test_support.dart';
+
 /// 验证会员管理页的摘要与单双列布局切换。
 void main() {
   testWidgets('月初续费按付费自然日实时计入本月支出', (WidgetTester tester) async {
@@ -436,6 +438,7 @@ void main() {
       findsNothing,
     );
 
+    await prepareBrandImageForGolden(tester);
     await expectLater(
       find.byType(OmniButlerApp),
       matchesGoldenFile('goldens/memberships_light_1440x900.png'),

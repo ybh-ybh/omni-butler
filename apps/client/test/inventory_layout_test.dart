@@ -13,6 +13,8 @@ import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/features/inventory/data/inventory_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/golden_test_support.dart';
+
 /// 验证物品管理页顶部统计内容和价值图例布局。
 void main() {
   testWidgets('展示三状态统计和右置分类价值明细', (WidgetTester tester) async {
@@ -307,6 +309,7 @@ void main() {
     expect(tester.getSize(closeButton).height, greaterThanOrEqualTo(40));
     expect(tester.getSize(editButton).height, greaterThanOrEqualTo(40));
     // 固化完整物品详情卡的桌面视觉基线。
+    await prepareBrandImageForGolden(tester);
     await expectLater(
       find.byType(OmniButlerApp),
       matchesGoldenFile('goldens/inventory_detail_light_1440x900.png'),

@@ -15,6 +15,8 @@ import 'package:omni_butler/features/inventory/data/inventory_repository.dart';
 import 'package:omni_butler/features/inventory/presentation/inventory_move_dialog.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/golden_test_support.dart';
+
 /// 验证物品搬家工作台的选择、预览和响应式迁移流程。
 void main() {
   testWidgets('桌面端从位置树选择主物品并连同继承位置配件迁移', (WidgetTester tester) async {
@@ -118,6 +120,7 @@ void main() {
     expect(find.text('书房'), findsWidgets);
     expect(find.text('储物间'), findsWidgets);
     // 固化桌面双栏搬家工作台的视觉基线。
+    await prepareBrandImageForGolden(tester);
     await expectLater(
       find.byType(OmniButlerApp),
       matchesGoldenFile('goldens/inventory_move_light_1440x900.png'),

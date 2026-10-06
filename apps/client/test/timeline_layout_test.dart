@@ -11,6 +11,8 @@ import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/golden_test_support.dart';
+
 /// 验证时间复盘页面的核心信息层级和视觉基线。
 void main() {
   testWidgets('桌面时间复盘优先展示多维统计并保留明细入口', (WidgetTester tester) async {
@@ -102,6 +104,7 @@ void main() {
     tester.view.physicalSize = viewport;
     await tester.pumpAndSettle();
 
+    await prepareBrandImageForGolden(tester);
     await expectLater(
       find.byType(OmniButlerApp),
       matchesGoldenFile('goldens/timeline_review_light_1440x900.png'),

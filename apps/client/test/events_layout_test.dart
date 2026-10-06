@@ -13,6 +13,8 @@ import 'package:omni_butler/features/events/data/event_repository.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/golden_test_support.dart';
+
 /// 验证事件管理页的单双列布局与周期时间条。
 void main() {
   testWidgets('宽屏默认双列并可切换为单列', (WidgetTester tester) async {
@@ -274,6 +276,7 @@ void main() {
     );
     expect(historyDialog.width, 600);
     expect(historyDialog.height, lessThan(650));
+    await prepareBrandImageForGolden(tester);
     await expectLater(
       find.byType(OmniButlerApp),
       matchesGoldenFile('goldens/event_history_dialog_light_1440x900.png'),

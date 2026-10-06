@@ -13,6 +13,8 @@ import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/golden_test_support.dart';
+
 /// 生成并校验每日待办四象限的关键视口视觉基线。
 void main() {
   testWidgets('每日待办桌面四象限视觉基线', (WidgetTester tester) async {
@@ -207,6 +209,9 @@ Future<void> _verifyTodoGolden(
     await tester.pump(const Duration(milliseconds: 200));
   }
 
+  if (platform == TargetPlatform.windows) {
+    await prepareBrandImageForGolden(tester);
+  }
   await expectLater(find.byType(OmniButlerApp), matchesGoldenFile(goldenPath));
 
   await tester.pumpWidget(const SizedBox.shrink());
