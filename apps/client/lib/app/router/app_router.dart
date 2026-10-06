@@ -111,52 +111,31 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
                 path: '/events',
                 redirect: (context, state) =>
                     _redirectDisabledFeature(ref, AppFeature.events),
-                builder: (context, state) {
-                  // 当前是否使用 Android 管理聚合布局。
-                  final bool embedded = _usesAndroidManagementLayout(context);
-                  return _PrimaryRouteSurface(
-                    child: embedded
-                        ? const AndroidManagementShell(
-                            selectedSection: ManagementSection.events,
-                            child: EventsPage(embeddedInManagement: true),
-                          )
-                        : const EventsPage(),
-                  );
-                },
+                pageBuilder: (context, state) => _buildManagementRoutePage(
+                  context,
+                  state,
+                  ManagementSection.events,
+                ),
               ),
               GoRoute(
                 path: '/inventory',
                 redirect: (context, state) =>
                     _redirectDisabledFeature(ref, AppFeature.inventory),
-                builder: (context, state) {
-                  // 当前是否使用 Android 管理聚合布局。
-                  final bool embedded = _usesAndroidManagementLayout(context);
-                  return _PrimaryRouteSurface(
-                    child: embedded
-                        ? const AndroidManagementShell(
-                            selectedSection: ManagementSection.inventory,
-                            child: InventoryPage(embeddedInManagement: true),
-                          )
-                        : const InventoryPage(),
-                  );
-                },
+                pageBuilder: (context, state) => _buildManagementRoutePage(
+                  context,
+                  state,
+                  ManagementSection.inventory,
+                ),
               ),
               GoRoute(
                 path: '/memberships',
                 redirect: (context, state) =>
                     _redirectDisabledFeature(ref, AppFeature.memberships),
-                builder: (context, state) {
-                  // 当前是否使用 Android 管理聚合布局。
-                  final bool embedded = _usesAndroidManagementLayout(context);
-                  return _PrimaryRouteSurface(
-                    child: embedded
-                        ? const AndroidManagementShell(
-                            selectedSection: ManagementSection.memberships,
-                            child: MembershipsPage(embeddedInManagement: true),
-                          )
-                        : const MembershipsPage(),
-                  );
-                },
+                pageBuilder: (context, state) => _buildManagementRoutePage(
+                  context,
+                  state,
+                  ManagementSection.memberships,
+                ),
               ),
             ],
           ),
@@ -175,6 +154,42 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
     ],
   );
 });
+
+/// 紧凑 Android 管理路由复用页面身份，避免分区切换销毁在途横滑。
+Page<void> _buildManagementRoutePage(
+  BuildContext context,
+  GoRouterState state,
+  ManagementSection section,
+) {
+  // 只有 Android 紧凑布局共享分页壳层，其他平台保留各路由页面身份。
+  final bool embedded = _usesAndroidManagementLayout(context);
+  // 管理分区的真实业务页面。
+  final Widget content = switch (section) {
+    ManagementSection.events => EventsPage(embeddedInManagement: embedded),
+    ManagementSection.inventory => InventoryPage(
+      embeddedInManagement: embedded,
+    ),
+    ManagementSection.memberships => MembershipsPage(
+      embeddedInManagement: embedded,
+    ),
+  };
+  return MaterialPage<void>(
+    key: embedded
+        ? const ValueKey<String>('android-management-page')
+        : state.pageKey,
+    name: state.name ?? state.path,
+    arguments: <String, String>{
+      ...state.pathParameters,
+      ...state.uri.queryParameters,
+    },
+    restorationId: embedded ? 'android-management-page' : state.pageKey.value,
+    child: _PrimaryRouteSurface(
+      child: embedded
+          ? AndroidManagementShell(selectedSection: section, child: content)
+          : content,
+    ),
+  );
+}
 
 /// 判断当前是否为使用底部导航的 Android 紧凑布局。
 bool _usesAndroidManagementLayout(BuildContext context) {

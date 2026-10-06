@@ -67,31 +67,19 @@ class _AndroidManagementShellState
     });
   }
 
-  /// 切换到当前分区前后相邻的已启用分区。
-  void _moveToAdjacentSection(int offset) {
+  /// 使用横滑选中的绝对页码，避免快滑时依赖尚未重建的旧路由。
+  void _selectSwipeSection(int index) {
     // 当前功能启用偏好。
     final FeaturePreference preference = ref.read(featurePreferenceProvider);
     // 当前已启用的管理分区。
     final List<ManagementSection> sections = enabledManagementSections(
       preference,
     );
-    // 当前路由对应的有效管理分区。
-    final ManagementSection? currentSection = resolveManagementSection(
-      preference,
-      widget.selectedSection,
-    );
-    if (currentSection == null || sections.length < 2) {
-      return;
-    }
-    // 当前有效分区在启用列表中的位置。
-    final int currentIndex = sections.indexOf(currentSection);
-    // 横滑后的目标分区位置。
-    final int targetIndex = currentIndex + offset;
-    if (targetIndex < 0 || targetIndex >= sections.length) {
+    if (index < 0 || index >= sections.length) {
       return;
     }
     // 横滑命中的相邻管理分区。
-    final ManagementSection targetSection = sections[targetIndex];
+    final ManagementSection targetSection = sections[index];
     ref.read(managementSectionProvider.notifier).select(targetSection);
     context.go(targetSection.route);
   }
@@ -136,15 +124,6 @@ class _AndroidManagementShellState
     }
     // 当前管理分区在可见顺序中的位置。
     final int currentIndex = sections.indexOf(effectiveSection);
-    // 当前分区前一页。
-    final ManagementSection? previousSection = currentIndex > 0
-        ? sections[currentIndex - 1]
-        : null;
-    // 当前分区后一页。
-    final ManagementSection? nextSection =
-        currentIndex >= 0 && currentIndex + 1 < sections.length
-        ? sections[currentIndex + 1]
-        : null;
     return Column(
       key: const ValueKey<String>('android-management-shell'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -183,15 +162,13 @@ class _AndroidManagementShellState
             surfaceKey: const ValueKey<String>(
               'android-management-swipe-surface',
             ),
-            previousChild: previousSection == null
-                ? null
-                : _buildSectionPage(previousSection),
-            nextChild: nextSection == null
-                ? null
-                : _buildSectionPage(nextSection),
-            onPageChanged: _moveToAdjacentSection,
+            pageCount: sections.length,
+            pageIndex: currentIndex,
+            pageBuilder: (int index) => sections[index] == effectiveSection
+                ? widget.child
+                : _buildSectionPage(sections[index]),
+            onPageChanged: _selectSwipeSection,
             onPageOffsetChanged: _updateSwipePageOffset,
-            child: widget.child,
           ),
         ),
       ],

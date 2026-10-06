@@ -278,9 +278,7 @@ class _HomeDashboard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 当前是否减少界面动画。
-    final bool reduceMotion =
-        MediaQuery.of(context).disableAnimations ||
-        MediaQuery.of(context).accessibleNavigation;
+    final bool reduceMotion = OmniMotion.reduce(context);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // 扣除页面水平边距后的卡片网格宽度。

@@ -217,16 +217,16 @@ class _BoundedPageSwipeSimulation extends Simulation {
 
 /// 为待办象限和管理分区提供与一级导航一致的跟手卡片横滑。
 class NestedPageSwipeSurface extends StatefulWidget {
-  /// 当前完整展示的页面。
-  final Widget child;
+  /// 当前启用的内部页面数量。
+  final int pageCount;
 
-  /// 当前页面向右横滑时可进入的前一页。
-  final Widget? previousChild;
+  /// 按导航顺序构建页面，只有当前及目标页实际挂载。
+  final Widget Function(int index) pageBuilder;
 
-  /// 当前页面向左横滑时可进入的后一页。
-  final Widget? nextChild;
+  /// 外部业务状态选中的页码。
+  final int pageIndex;
 
-  /// 内部分页完成后的方向，后一页为 1，前一页为 -1。
+  /// 落位或新手势接手主导页时的绝对页码，不依赖父组件重建时机。
   final ValueChanged<int> onPageChanged;
 
   /// 横滑中的连续页偏移；后一页为正，前一页为负，结束时为空。
@@ -237,14 +237,14 @@ class NestedPageSwipeSurface extends StatefulWidget {
 
   /// 创建支持边界接力的内部卡片分页表面。
   const NestedPageSwipeSurface({
-    required this.child,
+    required this.pageCount,
+    required this.pageBuilder,
+    required this.pageIndex,
     required this.onPageChanged,
     required this.surfaceKey,
-    this.previousChild,
-    this.nextChild,
     this.onPageOffsetChanged,
     super.key,
-  });
+  }) : assert(pageIndex >= 0 && pageIndex < pageCount);
 
   /// 创建内部卡片分页状态。
   @override
@@ -262,6 +262,9 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
 
   /// 内部分页落位动画控制器。
   late final AnimationController _settleController;
+
+  /// 当前手势的页码基准，允许吸附尚未结束时继续到下一页。
+  late int _displayedIndex;
 
   /// 当前页面卡片的横向位移。
   double _dragOffset = 0;
@@ -291,8 +294,36 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
   @override
   void initState() {
     super.initState();
+    _displayedIndex = widget.pageIndex;
     _settleController = AnimationController.unbounded(vsync: this)
       ..addListener(_updateSettlingOffset);
+  }
+
+  /// 同步点击导航或功能开关导致的外部页码变化，取消过期吸附。
+  @override
+  void didUpdateWidget(covariant NestedPageSwipeSurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.pageCount != widget.pageCount ||
+        (oldWidget.pageIndex != widget.pageIndex &&
+            _displayedIndex != widget.pageIndex) ||
+        _displayedIndex >= widget.pageCount) {
+      _animationEpoch += 1;
+      _settleController.stop();
+      _displayedIndex = widget.pageIndex;
+      _dragOffset = 0;
+      _rawDragDistance = 0;
+      _targetDirection = 0;
+      _delegatingToPrimary = false;
+      _gestureActive = false;
+      _animating = false;
+      // 外部切页在构建中发生，帧后再清除父导航偏移，避免构建期间更新祖先。
+      final int resetEpoch = _animationEpoch;
+      WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+        if (mounted && resetEpoch == _animationEpoch && !_gestureActive) {
+          widget.onPageOffsetChanged?.call(null);
+        }
+      });
+    }
   }
 
   /// 释放内部分页落位动画控制器。
@@ -327,16 +358,15 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
   }
 
   /// 返回当前是否应关闭非必要动态效果。
-  bool get _reduceMotion {
-    // 当前页面媒体信息。
-    final MediaQueryData? media = MediaQuery.maybeOf(context);
-    return media?.disableAnimations == true ||
-        media?.accessibleNavigation == true;
-  }
+  bool get _reduceMotion => OmniMotion.reduce(context);
 
   /// 返回指定横滑方向上的内部目标页面。
   Widget? _targetChildForDirection(int direction) {
-    return direction > 0 ? widget.nextChild : widget.previousChild;
+    // 相对当前手势基准的目标页码。
+    final int targetIndex = _displayedIndex + direction;
+    return targetIndex >= 0 && targetIndex < widget.pageCount
+        ? widget.pageBuilder(targetIndex)
+        : null;
   }
 
   /// 开始记录内部页面横向拖动。
@@ -345,6 +375,14 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
       _animationEpoch += 1;
       _settleController.stop();
       _animating = false;
+      if (_targetDirection != 0 && _dragOffset.abs() > _viewportWidth / 2) {
+        // 以屏幕上占多数的页面接手，同时保持两张卡片的屏幕坐标不变。
+        final int direction = _targetDirection;
+        _displayedIndex += direction;
+        _dragOffset += direction * _viewportWidth;
+        _targetDirection = -direction;
+        widget.onPageChanged(_displayedIndex);
+      }
     }
     setState(() {
       _gestureActive = true;
@@ -461,7 +499,8 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
     if (!mounted || !completed) {
       return;
     }
-    widget.onPageChanged(direction);
+    _displayedIndex += direction;
+    widget.onPageChanged(_displayedIndex);
     _resetSwipeState();
   }
 
@@ -557,9 +596,12 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
         : current
         ? 8 * progress
         : 8 * (1 - progress);
-    // 当前卡片与目标卡片使用稳定测试标识。
-    final String role = current ? 'current' : 'target';
+    // 页面身份不随当前/目标角色交换，避免快滑接手时丢失子树状态。
+    final int pageIndex = current
+        ? _displayedIndex
+        : _displayedIndex + _targetDirection;
     return Positioned.fill(
+      key: ValueKey<String>('nested-page-swipe-$pageIndex'),
       child: IgnorePointer(
         ignoring: !current || _gestureActive || _animating,
         child: ExcludeSemantics(
@@ -567,13 +609,13 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
           child: TickerMode(
             enabled: true,
             child: Transform.translate(
-              key: ValueKey<String>('nested-page-swipe-$role-translation'),
+              key: ValueKey<String>('nested-page-swipe-$pageIndex-translation'),
               offset: Offset(translation, 0),
               child: Transform.scale(
-                key: ValueKey<String>('nested-page-swipe-$role-scale'),
+                key: ValueKey<String>('nested-page-swipe-$pageIndex-scale'),
                 scale: _reduceMotion ? 1 : scale,
                 child: PhysicalModel(
-                  key: ValueKey<String>('nested-page-swipe-$role-card'),
+                  key: ValueKey<String>('nested-page-swipe-$pageIndex-card'),
                   color: OmniColors.of(context).canvas,
                   elevation: elevation,
                   shadowColor: Colors.black.withValues(alpha: 0.18),
@@ -621,7 +663,7 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
                       width: constraints.maxWidth,
                     ),
                   _buildVisiblePage(
-                    child: widget.child,
+                    child: widget.pageBuilder(_displayedIndex),
                     current: true,
                     width: constraints.maxWidth,
                   ),
@@ -758,12 +800,7 @@ class _PrimaryNavigationBranchContainerState
   }
 
   /// 返回当前是否应关闭非必要动态效果。
-  bool get _reduceMotion {
-    // 当前页面媒体信息。
-    final MediaQueryData? media = MediaQuery.maybeOf(context);
-    return media?.disableAnimations == true ||
-        media?.accessibleNavigation == true;
-  }
+  bool get _reduceMotion => OmniMotion.reduce(context);
 
   /// 返回当前功能开关下可见的一级分支。
   List<int> get _visibleBranchIndices {
@@ -811,6 +848,16 @@ class _PrimaryNavigationBranchContainerState
       _animationEpoch += 1;
       _settleController.stop();
       _animating = false;
+      if (_targetIndex != null && _dragOffset.abs() > _viewportWidth / 2) {
+        // 交换逻辑基准而非重置画面，让后一次手势可以越过新页面继续前进。
+        final int previousIndex = _displayedIndex;
+        _displayedIndex = _targetIndex!;
+        _targetIndex = previousIndex;
+        _dragOffset += _targetDirection * _viewportWidth;
+        _targetDirection = -_targetDirection;
+        _ownedNavigationTarget = _displayedIndex;
+        _navigateToBranch(_displayedIndex);
+      }
     }
     setState(() {
       _gestureActive = true;

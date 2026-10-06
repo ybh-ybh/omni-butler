@@ -241,6 +241,110 @@ void main() {
     await _disposePrimaryNavigationApp(tester, app);
   });
 
+  testWidgets('辅助服务开启时连续快滑可接手吸附并跨过多个一级页面', (WidgetTester tester) async {
+    // 开启辅助导航但没有要求禁用动画的完整 Android 应用。
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+    );
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(accessibleNavigation: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    await tester.pump();
+    // 连续甩动过程中始终不等待旧弹簧完成。
+    for (final int targetIndex in <int>[1, 2, 3, 4]) {
+      // 真实带时间戳和离手速度的触摸，吸附中的卡片不能吞掉后续手势。
+      await tester.flingFrom(
+        const Offset(330, 260),
+        const Offset(-230, 0),
+        900,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(tester.hasRunningAnimations, isTrue);
+      expect(_primaryOffset(tester, targetIndex), inExclusiveRange(0, 195));
+    }
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/settings');
+    expect(_primaryOffset(tester, 4), 0);
+    // 反向也可在旧动画结束前连续接手，且不会被旧回调跳回。
+    for (final int targetIndex in <int>[3, 2, 1, 0]) {
+      _primaryController(tester).beginPrimarySwipe();
+      _primaryController(tester).updatePrimarySwipe(230);
+      _primaryController(tester).endPrimarySwipe(900);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(_primaryOffset(tester, targetIndex), inExclusiveRange(-195, 0));
+    }
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/home');
+    expect(tester.takeException(), isNull);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
+  testWidgets('连续快滑内部页保持顶部固定并在末页接力一级导航', (WidgetTester tester) async {
+    // 用真实路由验证待办、管理使用同一个可连续接手的分页表面。
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+    );
+    app.container.read(appRouterProvider).go('/todos');
+    await tester.pumpAndSettle();
+    // 待办导航应始终停在同一屏幕位置。
+    final Rect todoHeader = tester.getRect(
+      find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
+    );
+    for (final int index in <int>[1, 2, 3, 4]) {
+      _dragNestedPage(tester, 'todo-mobile-swipe-surface', -230, -900);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        find.byKey(ValueKey<String>('nested-page-swipe-$index-translation')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getRect(
+          find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
+        ),
+        todoHeader,
+      );
+    }
+    // 最后象限尚未落位就继续向左，应接力到时间页，而非卡在最后两页。
+    _dragNestedPage(tester, 'todo-mobile-swipe-surface', -230, -900);
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/timeline');
+
+    app.container.read(appRouterProvider).go('/events');
+    await tester.pumpAndSettle();
+    // 管理顶部也不能随内容页切换而移动。
+    final Rect managementHeader = tester.getRect(
+      find.byKey(const ValueKey<String>('management-section-control')),
+    );
+    for (final int index in <int>[1, 2]) {
+      _dragNestedPage(
+        tester,
+        'android-management-swipe-surface',
+        index == 2 ? -390 : -230,
+        -900,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        find.byKey(ValueKey<String>('nested-page-swipe-$index-translation')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getRect(
+          find.byKey(const ValueKey<String>('management-section-control')),
+        ),
+        managementHeader,
+      );
+    }
+    _dragNestedPage(tester, 'android-management-swipe-surface', -230, -900);
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/settings');
+    expect(tester.takeException(), isNull);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
   testWidgets('系统减少动态效果时立即切页且不保留卡片装饰', (WidgetTester tester) async {
     // 当前测试使用的应用环境。
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
@@ -273,6 +377,35 @@ void main() {
 
     await _disposePrimaryNavigationApp(tester, app);
   });
+}
+
+/// 通过实际内部手势表面传入固定距离和速度，避免快滑测试的速度估算噪声。
+void _dragNestedPage(
+  WidgetTester tester,
+  String surfaceKey,
+  double distance,
+  double velocity,
+) {
+  // 当前内部页的横滑检测器。
+  final GestureDetector detector = tester.widget<GestureDetector>(
+    find.byKey(ValueKey<String>(surfaceKey)),
+  );
+  detector.onHorizontalDragStart!(
+    DragStartDetails(globalPosition: Offset.zero),
+  );
+  detector.onHorizontalDragUpdate!(
+    DragUpdateDetails(
+      delta: Offset(distance, 0),
+      primaryDelta: distance,
+      globalPosition: Offset.zero,
+    ),
+  );
+  detector.onHorizontalDragEnd!(
+    DragEndDetails(
+      velocity: Velocity(pixelsPerSecond: Offset(velocity, 0)),
+      primaryVelocity: velocity,
+    ),
+  );
 }
 
 /// 单个全局导航测试持有的依赖容器与内存数据库。

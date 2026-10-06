@@ -1229,15 +1229,15 @@ void main() {
     await tester.pump();
     // 正在离开的全部象限卡片缩放变换。
     final Transform todoCurrentScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-current-scale')),
+      find.byKey(const ValueKey<String>('nested-page-swipe-0-scale')),
     );
     // 正在进入的单象限卡片缩放变换。
     final Transform todoTargetScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-target-scale')),
+      find.byKey(const ValueKey<String>('nested-page-swipe-1-scale')),
     );
     // 正在离开的全部象限卡片外观。
     final PhysicalModel todoCurrentCard = tester.widget<PhysicalModel>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-current-card')),
+      find.byKey(const ValueKey<String>('nested-page-swipe-0-card')),
     );
     // 跟手中的象限导航滑块水平位置。
     final double todoIndicatorDragged = tester

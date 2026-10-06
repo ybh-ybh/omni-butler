@@ -439,15 +439,15 @@ void main() {
     await tester.pump();
     // 正在离开的事件分区卡片缩放变换。
     final Transform managementCurrentScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-current-scale')),
+      find.byKey(const ValueKey<String>('nested-page-swipe-0-scale')),
     );
     // 正在进入的会员分区卡片缩放变换。
     final Transform managementTargetScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-target-scale')),
+      find.byKey(const ValueKey<String>('nested-page-swipe-1-scale')),
     );
     // 正在离开的事件分区卡片外观。
     final PhysicalModel managementCurrentCard = tester.widget<PhysicalModel>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-current-card')),
+      find.byKey(const ValueKey<String>('nested-page-swipe-0-card')),
     );
     // 跟手中的管理导航滑块水平位置。
     final double managementIndicatorDragged = tester
@@ -495,9 +495,7 @@ void main() {
     // 松手后的弹簧位移也必须持续驱动顶部滑块，导航区域本身保持固定。
     final double settlingOffset = tester
         .widget<Transform>(
-          find.byKey(
-            const ValueKey<String>('nested-page-swipe-current-translation'),
-          ),
+          find.byKey(const ValueKey<String>('nested-page-swipe-0-translation')),
         )
         .transform
         .storage[12];

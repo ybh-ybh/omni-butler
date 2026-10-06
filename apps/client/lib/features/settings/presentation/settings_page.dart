@@ -128,9 +128,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   }
 
   /// 系统减少动态效果时立即完成层级切换。
-  bool get _disableAndroidPageAnimations =>
-      MediaQuery.disableAnimationsOf(context) ||
-      MediaQuery.of(context).accessibleNavigation;
+  bool get _disableAndroidPageAnimations => OmniMotion.reduce(context);
 
   /// 构建桌面双栏或窄窗口单栏设置布局。
   @override

@@ -250,14 +250,116 @@ void main() {
     expect(interruptedOffset, lessThan(-220));
     _startDrag(tester);
     await tester.pump();
-    expect(_currentOffset(tester), interruptedOffset);
+    expect(_currentOffset(tester), closeTo(interruptedOffset + 390, 0.000001));
     _updateDrag(tester, 40);
     await tester.pump();
-    expect(_currentOffset(tester), closeTo(interruptedOffset + 40, 0.000001));
-    _detector(tester).onHorizontalDragCancel!();
+    expect(_currentOffset(tester), closeTo(interruptedOffset + 430, 0.000001));
+    _endDrag(tester, 600);
+    await tester.pumpAndSettle();
+    expect(selectedPages, <int>[1, -1]);
+    expect(_currentOffset(tester), 0);
+  });
+
+  testWidgets('辅助导航开启时内部快滑保持坐标、滑块和页面子树连续', (WidgetTester tester) async {
+    // 业务页码变化记录。
+    final List<int> selectedPages = <int>[];
+    // 导航指示块当前的相对页码偏移。
+    final List<double?> pageOffsets = <double?>[];
+    await _pumpSwipeSurface(
+      tester,
+      onPageChanged: selectedPages.add,
+      onPageOffsetChanged: pageOffsets.add,
+      accessibleNavigation: true,
+      pageCount: 6,
+    );
+    _startDrag(tester);
+    _updateDrag(tester, -230);
+    _endDrag(tester, -900);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    // 即将接手的页面真实坐标及元素身份，不能因角色交换而重建。
+    final double enteringOffset = _currentOffset(tester) + 390;
+    // 绝对指示器页码应在基准切换前后保持一致。
+    final double indicatorBefore = 1 + pageOffsets.last!;
+    // 进入页中实际已挂载的内容元素。
+    final Element enteringElement = tester.element(find.text('page-2'));
+    _startDrag(tester);
+    await tester.pump();
+    expect(_currentOffset(tester), closeTo(enteringOffset, 0.000001));
+    expect(2 + pageOffsets.last!, closeTo(indicatorBefore, 0.000001));
+    expect(tester.element(find.text('page-2')), same(enteringElement));
+    _updateDrag(tester, -230);
+    _endDrag(tester, -900);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    // 再次连续接手，既不等待旧弹簧，也不被迟到的旧回调重复推进。
+    for (final int index in <int>[3, 4]) {
+      _startDrag(tester);
+      _updateDrag(tester, -230);
+      _endDrag(tester, -900);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('page-${index + 1}'), findsOneWidget);
+      expect(tester.hasRunningAnimations, isTrue);
+    }
+    await tester.pumpAndSettle();
+    expect(selectedPages, <int>[1, 1, 1, 1]);
+    expect(find.text('page-5'), findsOneWidget);
+    expect(pageOffsets.last, isNull);
+  });
+
+  testWidgets('同一帧接手并拖到下一页终点使用绝对页码且不重复提交', (WidgetTester tester) async {
+    // 记录两次快滑实际提交的业务变化。
+    final List<int> selectedPages = <int>[];
+    await _pumpSwipeSurface(
+      tester,
+      onPageChanged: selectedPages.add,
+      pageCount: 5,
+    );
+    _startDrag(tester);
+    _updateDrag(tester, -230);
+    _endDrag(tester, -900);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    // 起手、拖动与松手之间不重建父组件，覆盖最激进的快滑时序。
+    _startDrag(tester);
+    _updateDrag(tester, -390);
+    _endDrag(tester, -900);
+    await tester.pumpAndSettle();
+    expect(selectedPages, <int>[1, 1]);
+    expect(find.text('page-3'), findsOneWidget);
+    expect(_currentOffset(tester), 0);
+  });
+
+  testWidgets('吸附中外部缩减页数取消旧提交并清除导航残留', (WidgetTester tester) async {
+    // 记录过期动画是否仍然提交。
+    final List<int> selectedPages = <int>[];
+    // 固定顶部导航当前偏移。
+    final List<double?> pageOffsets = <double?>[];
+    await _pumpSwipeSurface(
+      tester,
+      initialIndex: 0,
+      onPageChanged: selectedPages.add,
+      onPageOffsetChanged: pageOffsets.add,
+    );
+    _startDrag(tester);
+    _updateDrag(tester, -230);
+    _endDrag(tester, -900);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    // 模拟用户切到完成历史或关闭其余功能，仅保留一页。
+    await _pumpSwipeSurface(
+      tester,
+      initialIndex: 0,
+      pageCount: 1,
+      onPageChanged: selectedPages.add,
+      onPageOffsetChanged: pageOffsets.add,
+    );
     await tester.pumpAndSettle();
     expect(selectedPages, isEmpty);
+    expect(pageOffsets.last, isNull);
     expect(_currentOffset(tester), 0);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('内部拖动恰好回到起点时页面和导航偏移同步归零', (WidgetTester tester) async {
@@ -278,9 +380,7 @@ void main() {
     expect(_currentOffset(tester), 0);
     expect(pageOffsets.last, 0);
     expect(
-      find.byKey(
-        const ValueKey<String>('nested-page-swipe-target-translation'),
-      ),
+      find.byKey(const ValueKey<String>('nested-page-swipe-2-translation')),
       findsNothing,
     );
     _endDrag(tester, 0);
@@ -309,9 +409,7 @@ void main() {
     expect(_currentOffset(tester), 0);
     expect(pageOffsets.last, isNull);
     expect(
-      find.byKey(
-        const ValueKey<String>('nested-page-swipe-target-translation'),
-      ),
+      find.byKey(const ValueKey<String>('nested-page-swipe-1-translation')),
       findsNothing,
     );
   });
@@ -342,7 +440,12 @@ Future<void> _pumpSwipeSurface(
   required ValueChanged<int> onPageChanged,
   ValueChanged<double?>? onPageOffsetChanged,
   bool reduceMotion = false,
+  bool accessibleNavigation = false,
+  int pageCount = 3,
+  int initialIndex = 1,
 }) async {
+  // 业务选中页码与分页回调同步，模拟待办和管理父组件的真实更新。
+  int selectedIndex = initialIndex;
   await tester.pumpWidget(
     MaterialApp(
       theme: AppTheme.build(brightness: Brightness.light),
@@ -351,6 +454,7 @@ Future<void> _pumpSwipeSurface(
           size: const Size(390, 600),
           devicePixelRatio: 3,
           disableAnimations: reduceMotion,
+          accessibleNavigation: accessibleNavigation,
         ),
         child: Scaffold(
           body: Align(
@@ -358,15 +462,30 @@ Future<void> _pumpSwipeSurface(
             child: SizedBox(
               width: 390,
               height: 500,
-              child: NestedPageSwipeSurface(
-                surfaceKey: const ValueKey<String>(
-                  'physics-test-swipe-surface',
-                ),
-                onPageChanged: onPageChanged,
-                onPageOffsetChanged: onPageOffsetChanged,
-                previousChild: const ColoredBox(color: Colors.blue),
-                nextChild: const ColoredBox(color: Colors.green),
-                child: const ColoredBox(color: Colors.red),
+              child: StatefulBuilder(
+                builder: (BuildContext context, StateSetter setState) =>
+                    NestedPageSwipeSurface(
+                      surfaceKey: const ValueKey<String>(
+                        'physics-test-swipe-surface',
+                      ),
+                      onPageChanged: (int index) {
+                        // 用绝对页码推导变化量，沿用物理测试的双向回调断言。
+                        final int direction = index - selectedIndex;
+                        setState(() => selectedIndex = index);
+                        onPageChanged(direction);
+                      },
+                      onPageOffsetChanged: onPageOffsetChanged,
+                      pageIndex: selectedIndex,
+                      pageCount: pageCount,
+                      pageBuilder: (int index) => ColoredBox(
+                        color: <Color>[
+                          Colors.blue,
+                          Colors.red,
+                          Colors.green,
+                        ][index % 3],
+                        child: Text('page-$index'),
+                      ),
+                    ),
               ),
             ),
           ),
@@ -412,9 +531,13 @@ void _endDrag(WidgetTester tester, double velocity) {
 
 /// 读取当前卡片的像素位移，不混入卡片自身的缩放变换。
 double _currentOffset(WidgetTester tester) {
+  // 父组件当前业务页码。
+  final int index = tester
+      .widget<NestedPageSwipeSurface>(find.byType(NestedPageSwipeSurface))
+      .pageIndex;
   // 当前页面的外层平移变换。
   final Transform translation = tester.widget<Transform>(
-    find.byKey(const ValueKey<String>('nested-page-swipe-current-translation')),
+    find.byKey(ValueKey<String>('nested-page-swipe-$index-translation')),
   );
   return translation.transform.storage[12];
 }

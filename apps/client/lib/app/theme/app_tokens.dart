@@ -89,12 +89,9 @@ abstract final class OmniSize {
 
 /// Omni Butler 的统一动效 Token。
 abstract final class OmniMotion {
-  /// 聚合系统的减少动画与辅助导航偏好。
+  /// 只依据系统禁用动画偏好，不将辅助服务导航等同于减少动画。
   static bool reduce(BuildContext context) {
-    // 当前窗口的无障碍偏好。
-    final MediaQueryData? media = MediaQuery.maybeOf(context);
-    return (media?.disableAnimations ?? false) ||
-        (media?.accessibleNavigation ?? false);
+    return MediaQuery.maybeOf(context)?.disableAnimations ?? false;
   }
 
   /// 在减少动画模式下保留即时状态反馈，停止位移过渡。

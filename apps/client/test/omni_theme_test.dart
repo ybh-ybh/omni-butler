@@ -298,13 +298,14 @@ void main() {
     );
   });
 
-  testWidgets('减少动态效果聚合两项系统偏好', (WidgetTester tester) async {
+  testWidgets('减少动态效果只依据禁用动画而不依据辅助服务导航', (WidgetTester tester) async {
     // 当前计算后的动画时长。
     Duration? effectiveDuration;
-    // 两种独立系统偏好均应停止位移过渡。
+    // 独立及组合偏好中，只有禁用动画要求停止位移过渡。
     for (final MediaQueryData media in <MediaQueryData>[
       const MediaQueryData(disableAnimations: true),
       const MediaQueryData(accessibleNavigation: true),
+      const MediaQueryData(disableAnimations: true, accessibleNavigation: true),
       const MediaQueryData(),
     ]) {
       await tester.pumpWidget(
@@ -323,9 +324,7 @@ void main() {
       );
       expect(
         effectiveDuration,
-        media.disableAnimations || media.accessibleNavigation
-            ? Duration.zero
-            : OmniMotion.panel,
+        media.disableAnimations ? Duration.zero : OmniMotion.panel,
       );
     }
   });

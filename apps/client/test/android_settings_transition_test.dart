@@ -78,11 +78,37 @@ void main() {
     );
   });
 
-  testWidgets('无障碍导航时更多详情立即进入和返回且没有卡片装饰', (WidgetTester tester) async {
-    await _verifyReducedMotionTransitions(
-      tester,
-      const FakeAccessibilityFeatures(accessibleNavigation: true),
+  testWidgets('辅助服务导航开启时更多详情仍播放进入和返回动画', (WidgetTester tester) async {
+    // 当前完整应用环境。
+    final _SettingsTransitionTestApp app = await _pumpSettingsApp(tester);
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(accessibleNavigation: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    await tester.pump();
+    await tester.tap(
+      find.byKey(
+        const ValueKey<String>('android-settings-category-appearance'),
+      ),
     );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(_cardOffset(tester, 'detail'), inExclusiveRange(0, 1));
+    // 辅助服务不能去掉切换中的卡片缩放和圆角。
+    final PhysicalModel card = tester.widget<PhysicalModel>(
+      find.byKey(const ValueKey<String>('android-settings-detail-card')),
+    );
+    expect(card.elevation, greaterThan(0));
+    expect(card.borderRadius, isNot(BorderRadius.zero));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('android-settings-back')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(_cardOffset(tester, 'overview'), inExclusiveRange(-1, 0));
+    await tester.pumpAndSettle();
+    _expectStationaryCard(tester, 'overview');
+    await _disposeSettingsApp(tester, app);
   });
 
   testWidgets('详情页离开更多主分支后再次进入保留层级并可正常返回', (WidgetTester tester) async {

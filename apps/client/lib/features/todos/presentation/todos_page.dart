@@ -149,21 +149,17 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     });
   }
 
-  /// 切换到当前分类前后相邻的移动端待办象限。
-  void _moveToAdjacentQuadrant(int offset) {
+  /// 根据横滑选中的绝对页码切换移动端待办象限。
+  void _selectSwipeQuadrant(int index) {
     // 全部与四个象限的固定滑动顺序。
     final List<TodoPriorityQuadrant?> options = <TodoPriorityQuadrant?>[
       null,
       ...todoPriorityQuadrantActionOrder,
     ];
-    // 当前分类在滑动顺序中的位置。
-    final int currentIndex = options.indexOf(_priorityQuadrantFilter);
-    // 横滑后的目标分类位置。
-    final int targetIndex = currentIndex + offset;
-    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= options.length) {
+    if (index < 0 || index >= options.length) {
       return;
     }
-    _setPriorityQuadrantFilter(options[targetIndex]);
+    _setPriorityQuadrantFilter(options[index]);
   }
 
   /// 同步待办内容横滑进度到固定顶部象限导航。
@@ -214,15 +210,6 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       ];
       // 当前分类在滑动顺序中的位置。
       final int currentIndex = options.indexOf(_priorityQuadrantFilter);
-      // 当前分类前一页的象限筛选。
-      final TodoPriorityQuadrant? previousFilter = currentIndex > 0
-          ? options[currentIndex - 1]
-          : null;
-      // 当前分类后一页的象限筛选。
-      final TodoPriorityQuadrant? nextFilter =
-          currentIndex >= 0 && currentIndex + 1 < options.length
-          ? options[currentIndex + 1]
-          : null;
       // 当前进行中任务树。
       final List<TodoTreeNode> trees =
           activeAsync.asData?.value ?? <TodoTreeNode>[];
@@ -287,37 +274,21 @@ class _TodosPageState extends ConsumerState<TodosPage> {
                     surfaceKey: const ValueKey<String>(
                       'todo-mobile-swipe-surface',
                     ),
-                    previousChild:
-                        _pageView == _TodoPageView.active && currentIndex > 0
-                        ? _buildMobilePage(
-                            context,
-                            activeAsync: activeAsync,
-                            historyAsync: historyAsync,
-                            now: now,
-                            priorityQuadrantFilter: previousFilter,
-                          )
-                        : null,
-                    nextChild:
-                        _pageView == _TodoPageView.active &&
-                            currentIndex >= 0 &&
-                            currentIndex + 1 < options.length
-                        ? _buildMobilePage(
-                            context,
-                            activeAsync: activeAsync,
-                            historyAsync: historyAsync,
-                            now: now,
-                            priorityQuadrantFilter: nextFilter,
-                          )
-                        : null,
-                    onPageChanged: _moveToAdjacentQuadrant,
-                    onPageOffsetChanged: _updateSwipePageOffset,
-                    child: _buildMobilePage(
+                    pageCount: _pageView == _TodoPageView.active
+                        ? options.length
+                        : 1,
+                    pageIndex: _pageView == _TodoPageView.active
+                        ? currentIndex
+                        : 0,
+                    pageBuilder: (int index) => _buildMobilePage(
                       context,
                       activeAsync: activeAsync,
                       historyAsync: historyAsync,
                       now: now,
-                      priorityQuadrantFilter: _priorityQuadrantFilter,
+                      priorityQuadrantFilter: options[index],
                     ),
+                    onPageChanged: _selectSwipeQuadrant,
+                    onPageOffsetChanged: _updateSwipePageOffset,
                   ),
                 ),
               ],
@@ -574,9 +545,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       );
     }
     // 当前系统是否要求减少动态效果。
-    final bool disableLayoutAnimation =
-        MediaQuery.disableAnimationsOf(context) ||
-        MediaQuery.of(context).accessibleNavigation;
+    final bool disableLayoutAnimation = OmniMotion.reduce(context);
     // 桌面端布局切换时使用的时长。
     final Duration transitionDuration = disableLayoutAnimation
         ? Duration.zero
@@ -2950,9 +2919,7 @@ class _MobileTodoNavigation extends StatelessWidget {
     // 当前主题色。
     final ColorScheme scheme = Theme.of(context).colorScheme;
     // 当前系统是否要求减少动态效果。
-    final bool disableAnimation =
-        MediaQuery.disableAnimationsOf(context) ||
-        MediaQuery.of(context).accessibleNavigation;
+    final bool disableAnimation = OmniMotion.reduce(context);
     // 第二层联动切换时长。
     final Duration transitionDuration = disableAnimation
         ? Duration.zero

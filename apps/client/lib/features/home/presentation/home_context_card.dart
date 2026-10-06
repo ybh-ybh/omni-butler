@@ -474,9 +474,7 @@ class _ExpandableContextSection extends StatelessWidget {
     // 当前是否存在可展开明细。
     final bool expandable = detailRows.isNotEmpty;
     // 尊重系统减少动画偏好。
-    final bool reduceMotion =
-        MediaQuery.of(context).disableAnimations ||
-        MediaQuery.of(context).accessibleNavigation;
+    final bool reduceMotion = OmniMotion.reduce(context);
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
