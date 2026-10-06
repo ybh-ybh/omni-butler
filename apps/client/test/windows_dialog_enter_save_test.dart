@@ -103,12 +103,12 @@ void main() {
     RangeSlider rangeSlider = tester.widget<RangeSlider>(
       find.byKey(const ValueKey<String>('time-range-slider')),
     );
-    rangeSlider.onChanged!(const RangeValues(625, 680));
+    rangeSlider.onChanged!(const RangeValues(565, 680));
     await tester.pumpAndSettle();
     rangeSlider = tester.widget<RangeSlider>(
       find.byKey(const ValueKey<String>('time-range-slider')),
     );
-    rangeSlider.onChanged!(const RangeValues(620, 680));
+    rangeSlider.onChanged!(const RangeValues(560, 680));
     await tester.pumpAndSettle();
     rangeSlider = tester.widget<RangeSlider>(
       find.byKey(const ValueKey<String>('time-range-slider')),

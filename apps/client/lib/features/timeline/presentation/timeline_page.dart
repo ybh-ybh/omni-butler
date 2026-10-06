@@ -1818,9 +1818,11 @@ class _AbsoluteTimeEntryDialogState
       now.hour,
       now.minute ~/ 5 * 5,
     );
-    // 新增记录的默认开始时间。
+    // 新增补记默认回溯一小时，时间轴预填和开始记录沿用原有时间。
     final DateTime defaultStart = widget.initialStartMinute == null
-        ? roundedNow
+        ? widget.mode == _TimeEntryEditorMode.completed
+              ? roundedNow.subtract(const Duration(hours: 1))
+              : roundedNow
         : DateUtils.dateOnly(widget.day)
               .add(Duration(minutes: widget.initialStartMinute!));
     // 待编辑记录。

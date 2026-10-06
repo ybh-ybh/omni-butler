@@ -11,6 +11,46 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证居中弹窗、跨天时间与进行中记录闭环。
 void main() {
+  // 覆盖普通时段和凌晨跨天的补记默认时间。
+  for (final DateTime now in <DateTime>[
+    DateTime(2026, 9, 10, 10, 23),
+    DateTime(2026, 9, 10, 0, 23),
+  ]) {
+    testWidgets('补记默认回溯一小时并可直接保存（${now.hour} 点）', (WidgetTester tester) async {
+      // 测试上下文。
+      final _TimelineTestContext testContext = await _pumpTimeline(
+        tester,
+        now: now,
+      );
+      await tester.tap(find.text('补记时间'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextFormField, '例如：睡眠、学习 Text2SQL'),
+        '补记活动',
+      );
+      await tester.tap(find.text('保存记录'));
+      await tester.pumpAndSettle();
+
+      // 按原有五分钟粒度取整的默认结束时间。
+      final DateTime expectedEnd = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        now.hour,
+        20,
+      );
+      // 未调整区间即保存的补记记录。
+      final TimeEntryRecord record = await testContext.database
+          .select(testContext.database.timeEntries)
+          .getSingle();
+      expect(record.startedAt, expectedEnd.subtract(const Duration(hours: 1)));
+      expect(record.endedAt, expectedEnd);
+      expect(find.byType(Dialog), findsNothing);
+
+      await testContext.dispose(tester);
+    });
+  }
+
   testWidgets('补记时间使用居中弹窗并允许跨天保存', (WidgetTester tester) async {
     // 测试上下文。
     final _TimelineTestContext testContext = await _pumpTimeline(tester);
@@ -36,17 +76,17 @@ void main() {
     RangeSlider slider = tester.widget<RangeSlider>(
       find.byKey(const ValueKey<String>('time-range-slider')),
     );
-    slider.onChanged!(const RangeValues(620, 980));
+    slider.onChanged!(const RangeValues(560, 920));
     await tester.pumpAndSettle();
     slider = tester.widget<RangeSlider>(
       find.byKey(const ValueKey<String>('time-range-slider')),
     );
-    slider.onChanged!(const RangeValues(960, 1340));
+    slider.onChanged!(const RangeValues(900, 1280));
     await tester.pumpAndSettle();
     slider = tester.widget<RangeSlider>(
       find.byKey(const ValueKey<String>('time-range-slider')),
     );
-    slider.onChanged!(const RangeValues(1320, 1700));
+    slider.onChanged!(const RangeValues(1260, 1640));
     await tester.pumpAndSettle();
     slider = tester.widget<RangeSlider>(
       find.byKey(const ValueKey<String>('time-range-slider')),
@@ -94,6 +134,7 @@ void main() {
     TimeEntryRecord record = await testContext.database
         .select(testContext.database.timeEntries)
         .getSingle();
+    expect(record.startedAt, DateTime(2026, 9, 10, 10, 20));
     expect(record.endedAt, isNull);
     expect(record.activity, isNull);
 
@@ -122,7 +163,11 @@ void main() {
 }
 
 /// 创建并打开时间管理页面。
-Future<_TimelineTestContext> _pumpTimeline(WidgetTester tester) async {
+Future<_TimelineTestContext> _pumpTimeline(
+  WidgetTester tester, {
+  // 可覆盖的当前时间，用于验证凌晨跨天默认区间。
+  DateTime? now,
+}) async {
   tester.view.physicalSize = const Size(1440, 900);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
@@ -135,13 +180,13 @@ Future<_TimelineTestContext> _pumpTimeline(WidgetTester tester) async {
   // 测试用内存数据库。
   final AppDatabase database = AppDatabase.forTesting(NativeDatabase.memory());
   // 稳定当前时间。
-  final DateTime now = DateTime(2026, 9, 10, 10, 20);
+  final DateTime effectiveNow = now ?? DateTime(2026, 9, 10, 10, 20);
   // 显式管理的测试依赖容器。
   final ProviderContainer container = ProviderContainer(
     overrides: [
       sharedPreferencesProvider.overrideWithValue(preferences),
       appDatabaseProvider.overrideWithValue(database),
-      nowProvider.overrideWithValue(now),
+      nowProvider.overrideWithValue(effectiveNow),
     ],
   );
   await tester.pumpWidget(
@@ -156,7 +201,7 @@ Future<_TimelineTestContext> _pumpTimeline(WidgetTester tester) async {
   return _TimelineTestContext(
     database: database,
     container: container,
-    today: DateUtils.dateOnly(now),
+    today: DateUtils.dateOnly(effectiveNow),
   );
 }
 
