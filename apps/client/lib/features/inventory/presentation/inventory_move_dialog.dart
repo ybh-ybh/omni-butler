@@ -442,7 +442,7 @@ class _InventoryMoveHeader extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(
+          OmniIconButton(
             tooltip: '关闭',
             onPressed: onClose,
             icon: const Icon(Icons.close_rounded),
@@ -507,7 +507,7 @@ class _InventoryMoveSourcePanel extends StatelessWidget {
         children: <Widget>[
           Text('从现有位置选择', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: OmniSpacing.xs),
-          TextField(
+          OmniTextField(
             key: const ValueKey<String>('inventory-move-search'),
             controller: searchController,
             onChanged: onSearchChanged,
@@ -516,7 +516,7 @@ class _InventoryMoveSourcePanel extends StatelessWidget {
               prefixIcon: const Icon(Icons.search_rounded),
               suffixIcon: query.isEmpty
                   ? null
-                  : IconButton(
+                  : OmniIconButton(
                       tooltip: '清空搜索',
                       onPressed: () {
                         searchController.clear();
@@ -619,7 +619,7 @@ class _InventoryMoveLocationGroup extends StatelessWidget {
         childrenPadding: const EdgeInsets.only(bottom: OmniSpacing.xxs),
         shape: const Border(),
         collapsedShape: const Border(),
-        leading: Checkbox(
+        leading: OmniCheckbox(
           tristate: true,
           value: allSelected
               ? true
@@ -698,7 +698,7 @@ class _InventoryMoveSourceRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 3),
           child: Row(
             children: <Widget>[
-              Checkbox(
+              OmniCheckbox(
                 value: selected,
                 onChanged: autoIncluded ? null : (_) => onToggle(),
               ),
@@ -993,7 +993,7 @@ class _InventoryMoveTargetRow extends StatelessWidget {
             ),
           ),
           if (onRemove != null)
-            IconButton(
+            OmniIconButton(
               tooltip: '移除',
               onPressed: onRemove,
               icon: const Icon(Icons.close_rounded, size: 18),

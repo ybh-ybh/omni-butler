@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
-/// 飞书式下拉菜单的统一尺寸。
+/// 统一下拉菜单的尺寸。
 abstract final class OmniDropdownMetrics {
   /// 独立下拉按钮的默认宽度。
   static const double triggerWidth = 160;
@@ -20,7 +21,7 @@ abstract final class OmniDropdownMetrics {
   static const double actionMenuMaxWidth = 280;
 }
 
-/// 飞书式下拉菜单的统一动效。
+/// 统一下拉菜单的动效。
 abstract final class OmniDropdownMotion {
   /// 菜单内容快速淡入时长。
   static const Duration reveal = Duration(milliseconds: 90);
@@ -79,7 +80,7 @@ class OmniDropdownButton<T> extends StatelessWidget {
     super.key,
   });
 
-  /// 构建固定宽度的飞书式选择控件。
+  /// 构建固定宽度的统一选择控件。
   @override
   Widget build(BuildContext context) {
     return SizedBox(
@@ -214,12 +215,14 @@ class OmniPopupMenuButton<T> extends StatelessWidget {
             minWidth: OmniDropdownMetrics.actionMenuMinWidth,
             maxWidth: OmniDropdownMetrics.actionMenuMaxWidth,
           ),
-      popUpAnimationStyle: const AnimationStyle(
-        duration: OmniMotion.fast,
-        reverseDuration: OmniMotion.fast,
-        curve: OmniMotion.standardCurve,
-        reverseCurve: OmniMotion.standardCurve,
-      ),
+      popUpAnimationStyle: OmniMotion.reduce(context)
+          ? AnimationStyle.noAnimation
+          : const AnimationStyle(
+              duration: OmniMotion.fast,
+              reverseDuration: OmniMotion.fast,
+              curve: OmniMotion.standardCurve,
+              reverseCurve: Curves.easeInCubic,
+            ),
       itemBuilder: itemBuilder,
       child: child,
     );
@@ -306,6 +309,9 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
   /// 内部焦点节点。
   FocusNode? _internalFocusNode;
 
+  /// 键盘展开时优先聚焦的选中项或首个可用项。
+  final FocusNode _entryFocusNode = FocusNode();
+
   /// 菜单是否正在展示。
   bool _menuOpen = false;
 
@@ -319,6 +325,7 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
   /// 释放内部焦点节点。
   @override
   void dispose() {
+    _entryFocusNode.dispose();
     _internalFocusNode?.dispose();
     super.dispose();
   }
@@ -336,14 +343,40 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
   void _handleMenuOpen() {
     if (mounted) {
       setState(() => _menuOpen = true);
+      if (FocusManager.instance.highlightMode ==
+          FocusHighlightMode.traditional) {
+        _focusMenuEntry();
+      }
+    }
+  }
+
+  /// 等菜单挂载后将键盘焦点交给可操作的菜单项。
+  void _focusMenuEntry() {
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (mounted &&
+          _menuController.isOpen &&
+          _entryFocusNode.context != null) {
+        _entryFocusNode.requestFocus();
+      }
+    });
+  }
+
+  /// 使用方向键打开选择菜单，保留菜单内部原生方向键遍历。
+  void _openMenuFromKeyboard() {
+    if (widget.onChanged == null) return;
+    if (_menuController.isOpen) {
+      _focusMenuEntry();
+    } else {
+      // 首次展开的焦点交接由 onOpen 统一调度，避免同帧重复请求。
+      _menuController.open();
     }
   }
 
   /// 记录菜单已关闭。
   void _handleMenuClose() {
     if (mounted) {
-      // 菜单关闭后释放触发器的临时焦点，避免关闭状态残留蓝色边框。
-      _effectiveFocusNode.unfocus();
+      // 菜单关闭后回到触发器，键盘用户可继续选择或 Tab 到下一个字段。
+      _effectiveFocusNode.requestFocus();
       setState(() => _menuOpen = false);
     }
   }
@@ -397,14 +430,21 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
   /// 构建单个选择菜单项样式。
   ButtonStyle _itemStyle(OmniColors colors, {required bool selected}) {
     return ButtonStyle(
-      minimumSize: const WidgetStatePropertyAll<Size>(
-        Size(0, OmniDropdownMetrics.itemHeight),
+      minimumSize: WidgetStatePropertyAll<Size>(
+        Size(
+          0,
+          OmniDensity.isTouch(context)
+              ? OmniSize.touch
+              : OmniDropdownMetrics.itemHeight,
+        ),
       ),
       padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
         EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
       ),
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      visualDensity: VisualDensity.compact,
+      visualDensity: OmniDensity.isTouch(context)
+          ? VisualDensity.standard
+          : VisualDensity.compact,
       alignment: AlignmentDirectional.centerStart,
       shape: WidgetStatePropertyAll<OutlinedBorder>(
         RoundedRectangleBorder(
@@ -432,8 +472,9 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
         return selected ? colors.brandSoft : Colors.transparent;
       }),
       overlayColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
-      textStyle: const WidgetStatePropertyAll<TextStyle>(
-        TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
+      textStyle: WidgetStatePropertyAll<TextStyle>(
+        Theme.of(context).textTheme.bodyMedium!
+            .copyWith(fontSize: 14, fontWeight: FontWeight.w400),
       ),
     );
   }
@@ -441,10 +482,21 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
   /// 构建所有选择菜单项。
   List<Widget> _menuItems(OmniColors colors) {
     // 系统是否要求关闭动画。
-    final bool disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final bool disableAnimations = OmniMotion.reduce(context);
+    // 首选当前已选且可用的项，否则从第一个可用项开始。
+    final int selectedIndex = widget.items.indexWhere(
+      (DropdownMenuItem<T> item) => item.enabled && item.value == widget.value,
+    );
+    // 没有可用项时不分配初始菜单焦点。
+    final int focusIndex = selectedIndex >= 0
+        ? selectedIndex
+        : widget.items.indexWhere((DropdownMenuItem<T> item) => item.enabled);
     return widget.items
-        .map((DropdownMenuItem<T> item) {
+        .asMap()
+        .entries
+        .map((MapEntry<int, DropdownMenuItem<T>> entry) {
+          // 当前菜单项及其稳定顺序。
+          final DropdownMenuItem<T> item = entry.value;
           // 当前菜单项是否被选中。
           final bool selected = item.value == widget.value;
           // 当前菜单项的勾选图标。
@@ -461,6 +513,7 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
               return Opacity(opacity: opacity, child: child);
             },
             child: MenuItemButton(
+              focusNode: entry.key == focusIndex ? _entryFocusNode : null,
               onPressed: item.enabled && widget.onChanged != null
                   ? () => _selectItem(item)
                   : null,
@@ -494,13 +547,12 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
     final Widget content =
         selectedItem?.child ?? widget.hint ?? const SizedBox();
     // 系统是否要求关闭动画。
-    final bool disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final bool disableAnimations = OmniMotion.reduce(context);
     return Row(
       children: <Widget>[
         Expanded(
           child: DefaultTextStyle.merge(
-            style: TextStyle(
+            style: Theme.of(context).textTheme.bodyMedium!.copyWith(
               color: selectedItem == null ? colors.muted : colors.ink,
               fontSize: 14,
               fontWeight: FontWeight.w400,
@@ -530,11 +582,19 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
   /// 构建独立按钮模式的触发器。
   Widget _standaloneTrigger(OmniColors colors) {
     // 当前是否应展示品牌焦点边框。
-    final bool highlighted = _menuOpen || _focused;
+    final bool highlighted =
+        _menuOpen ||
+        (_focused &&
+            FocusManager.instance.highlightMode ==
+                FocusHighlightMode.traditional);
     return AnimatedContainer(
-      duration: OmniMotion.fast,
+      duration: OmniMotion.duration(context, OmniMotion.fast),
       curve: OmniMotion.standardCurve,
-      height: widget.height,
+      constraints: BoxConstraints(
+        minHeight: widget.height < OmniDensity.controlHeight(context)
+            ? OmniDensity.controlHeight(context)
+            : widget.height,
+      ),
       padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
       decoration: BoxDecoration(
         color: widget.onChanged == null ? colors.paperSubtle : colors.paper,
@@ -556,7 +616,11 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
         .copyWith(enabled: widget.onChanged != null);
     return InputDecorator(
       decoration: effectiveDecoration,
-      isFocused: _menuOpen || _focused,
+      isFocused:
+          _menuOpen ||
+          (_focused &&
+              FocusManager.instance.highlightMode ==
+                  FocusHighlightMode.traditional),
       isEmpty: _selectedItem() == null,
       child: _triggerContent(colors),
     );
@@ -583,18 +647,26 @@ class _OmniDropdownControlState<T> extends State<_OmniDropdownControl<T>> {
               button: true,
               enabled: widget.onChanged != null,
               expanded: _menuOpen,
-              child: InkWell(
-                focusNode: _effectiveFocusNode,
-                autofocus: widget.autofocus,
-                onFocusChange: _handleFocusChange,
-                onTap: widget.onChanged == null ? null : _toggleMenu,
-                borderRadius: BorderRadius.circular(OmniRadius.control),
-                hoverColor: colors.paperSubtle,
-                focusColor: Colors.transparent,
-                highlightColor: Colors.transparent,
-                child: formMode
-                    ? _formTrigger(colors)
-                    : _standaloneTrigger(colors),
+              child: CallbackShortcuts(
+                bindings: <ShortcutActivator, VoidCallback>{
+                  const SingleActivator(LogicalKeyboardKey.arrowDown):
+                      _openMenuFromKeyboard,
+                  const SingleActivator(LogicalKeyboardKey.arrowUp):
+                      _openMenuFromKeyboard,
+                },
+                child: InkWell(
+                  focusNode: _effectiveFocusNode,
+                  autofocus: widget.autofocus,
+                  onFocusChange: _handleFocusChange,
+                  onTap: widget.onChanged == null ? null : _toggleMenu,
+                  borderRadius: BorderRadius.circular(OmniRadius.control),
+                  hoverColor: colors.paperSubtle,
+                  focusColor: Colors.transparent,
+                  highlightColor: colors.brandSoft,
+                  child: formMode
+                      ? _formTrigger(colors)
+                      : _standaloneTrigger(colors),
+                ),
               ),
             );
           },
@@ -651,8 +723,16 @@ class _OmniPopupMenuItemContent extends StatelessWidget {
         : danger
         ? colors.danger
         : colors.ink;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
+    return Container(
+      constraints: BoxConstraints(
+        minHeight: OmniDensity.isTouch(context)
+            ? OmniSize.touch
+            : OmniDropdownMetrics.itemHeight,
+      ),
+      padding: const EdgeInsets.symmetric(
+        horizontal: OmniSpacing.sm,
+        vertical: OmniSpacing.xxs,
+      ),
       child: Row(
         children: <Widget>[
           Icon(icon, size: 16, color: foreground),
@@ -662,7 +742,7 @@ class _OmniPopupMenuItemContent extends StatelessWidget {
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
+              style: Theme.of(context).textTheme.bodyMedium!.copyWith(
                 color: foreground,
                 fontSize: 14,
                 fontWeight: FontWeight.w400,

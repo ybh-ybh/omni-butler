@@ -467,6 +467,17 @@ void main() {
       closeTo(OmniSize.control, 0.1),
     );
     expect(tester.getRect(layoutToggle).height, closeTo(OmniSize.control, 0.1));
+    // 两个筛选标签都应位于控件垂直中心，避免内部最小高度顶偏文字。
+    for (final String label in <String>['进行中', '已归档']) {
+      expect(
+        tester
+            .getCenter(
+              find.descendant(of: statusSelector, matching: find.text(label)),
+            )
+            .dy,
+        closeTo(tester.getCenter(statusSelector).dy, 0.1),
+      );
+    }
     // 事件统计卡与物品统计卡等高，状态与说明填充标题行右上角。
     final Finder activeMetric = find.byKey(
       const ValueKey<String>('event-metric-进行中事件'),

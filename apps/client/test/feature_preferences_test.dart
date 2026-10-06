@@ -191,7 +191,7 @@ void main() {
 
     expect(errorTag, findsOneWidget);
     expect(errorText.style?.color, danger);
-    expect(decoration.color, danger.withValues(alpha: 0.12));
+    expect(decoration.color, danger.withValues(alpha: 0.10));
 
     await tester.pumpWidget(const SizedBox.shrink());
     container.dispose();

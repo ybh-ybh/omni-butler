@@ -89,9 +89,14 @@ void main() {
       const ValueKey<String>('floating-todo-viewport-2'),
     );
     expect(tester.getSize(viewport).height, 160);
-    // 溢出象限中的滚动条。
+    // 只定位业务直接包裹列表的滚动条，排除 Windows 自动生成的内部滚动条。
     final Scrollbar quadrantScrollbar = tester.widget<Scrollbar>(
-      find.descendant(of: viewport, matching: find.byType(Scrollbar)),
+      find.descendant(
+        of: viewport,
+        matching: find.byWidgetPredicate(
+          (Widget widget) => widget is Scrollbar && widget.child is ListView,
+        ),
+      ),
     );
     // 溢出象限中的任务列表。
     final ListView quadrantList = tester.widget<ListView>(
@@ -150,7 +155,7 @@ void main() {
     }
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 1));
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
 
   testWidgets('远端同步表更新后悬浮窗重新读取业务数据', (WidgetTester tester) async {
     tester.view.physicalSize = const Size(294, 500);
@@ -252,7 +257,7 @@ void main() {
 
     expect(find.text('多端同步待办'), findsOneWidget);
     expect(find.text('多端同步进行中记录'), findsOneWidget);
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
 
   testWidgets('悬浮窗父任务标题右侧显示未完成子任务数量', (WidgetTester tester) async {
     tester.view.physicalSize = const Size(294, 500);
@@ -357,7 +362,7 @@ void main() {
     await tester.pump();
     expect(find.text('未完成子任务'), findsNothing);
     expect(find.byTooltip('展开全部子任务'), findsOneWidget);
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
 
   testWidgets('悬浮窗可直接新增待办、补记和开始时间记录', (WidgetTester tester) async {
     tester.view.physicalSize = const Size(294, 900);
@@ -667,5 +672,5 @@ void main() {
     // 主动卸载页面并执行分类流的自动释放任务，避免测试结束时遗留计时器。
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 1));
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
 }

@@ -3,6 +3,19 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/shared/ui/omni_icon_button.dart';
+
+/// 根据触控密度与当前视口约束日历宽度。
+double _calendarWidth(BuildContext context) {
+  // 触控端以七列点击热区为目标，窄屏时让浮层留在视口中。
+  final double preferredWidth = OmniDensity.isTouch(context)
+      ? OmniSize.touch * 7 + OmniSpacing.sm * 2
+      : OmniDateTimePickerMetrics.calendarWidth;
+  return math.min(
+    preferredWidth,
+    math.max(0, MediaQuery.sizeOf(context).width - OmniSpacing.md * 2),
+  );
+}
 
 /// 日期与时间浮层的统一尺寸。
 abstract final class OmniDateTimePickerMetrics {
@@ -75,6 +88,12 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
   /// 浮层菜单控制器。
   final MenuController _menuController = MenuController();
 
+  /// 日期浮层关闭后恢复的触发器焦点。
+  final FocusNode _triggerFocus = FocusNode();
+
+  /// 键盘进入日历时聚焦的日期格。
+  final FocusNode _dateFocus = FocusNode();
+
   /// 当前展示的月份。
   late DateTime _visibleMonth;
 
@@ -89,6 +108,14 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
   void initState() {
     super.initState();
     _visibleMonth = _monthFor(_effectiveDate);
+  }
+
+  /// 释放日期触发器焦点。
+  @override
+  void dispose() {
+    _dateFocus.dispose();
+    _triggerFocus.dispose();
+    super.dispose();
   }
 
   /// 在外部日期变化且浮层关闭时同步展示月份。
@@ -152,12 +179,21 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
   void _handleOpen() {
     if (mounted) {
       setState(() => _menuOpen = true);
+      if (FocusManager.instance.highlightMode ==
+          FocusHighlightMode.traditional) {
+        WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+          if (mounted && _menuController.isOpen && _dateFocus.context != null) {
+            _dateFocus.requestFocus();
+          }
+        });
+      }
     }
   }
 
   /// 记录浮层已关闭。
   void _handleClose() {
     if (mounted) {
+      _triggerFocus.requestFocus();
       setState(() {
         _menuOpen = false;
         _showMonthGrid = false;
@@ -238,11 +274,17 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
       padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
         EdgeInsets.zero,
       ),
-      minimumSize: const WidgetStatePropertyAll<Size>(
-        Size(OmniDateTimePickerMetrics.calendarWidth, 0),
+      minimumSize: WidgetStatePropertyAll<Size>(
+        Size(_calendarWidth(context), 0),
       ),
-      maximumSize: const WidgetStatePropertyAll<Size>(
-        Size(OmniDateTimePickerMetrics.calendarWidth, 380),
+      maximumSize: WidgetStatePropertyAll<Size>(
+        Size(
+          _calendarWidth(context),
+          math.min(
+            OmniDensity.isTouch(context) ? 456 : 380,
+            math.max(0, MediaQuery.sizeOf(context).height - OmniSpacing.md * 2),
+          ),
+        ),
       ),
     );
   }
@@ -259,12 +301,14 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
         : widget.style;
     if (widget.icon == null) {
       return OutlinedButton(
+        focusNode: _triggerFocus,
         onPressed: widget.onChanged == null ? null : _toggleMenu,
         style: emphasisStyle,
         child: Text(widget.label, overflow: TextOverflow.ellipsis),
       );
     }
     return OutlinedButton.icon(
+      focusNode: _triggerFocus,
       onPressed: widget.onChanged == null ? null : _toggleMenu,
       style: emphasisStyle,
       icon: Icon(widget.icon, size: 18),
@@ -279,6 +323,7 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
     final OmniColors colors = OmniColors.of(context);
     return MenuAnchor(
       controller: _menuController,
+      childFocusNode: _triggerFocus,
       style: _menuStyle(colors),
       alignmentOffset: const Offset(0, OmniSpacing.xxs),
       crossAxisUnconstrained: true,
@@ -290,6 +335,10 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
         _OmniCalendarPanel(
           visibleMonth: _visibleMonth,
           selectedDate: widget.value,
+          focusDate: DateUtils.isSameMonth(_visibleMonth, _effectiveDate)
+              ? _effectiveDate
+              : _clampDate(_visibleMonth),
+          dateFocus: _dateFocus,
           today: _today,
           firstDate: DateUtils.dateOnly(widget.firstDate),
           lastDate: DateUtils.dateOnly(widget.lastDate),
@@ -322,6 +371,12 @@ class _OmniCalendarPanel extends StatelessWidget {
   /// 当前已选择日期。
   final DateTime? selectedDate;
 
+  /// 键盘进入当前月份时使用的有效日期。
+  final DateTime focusDate;
+
+  /// 初始可操作日期的焦点节点。
+  final FocusNode dateFocus;
+
   /// 用于标记今天的日期。
   final DateTime today;
 
@@ -353,6 +408,8 @@ class _OmniCalendarPanel extends StatelessWidget {
   const _OmniCalendarPanel({
     required this.visibleMonth,
     required this.selectedDate,
+    required this.focusDate,
+    required this.dateFocus,
     required this.today,
     required this.firstDate,
     required this.lastDate,
@@ -403,16 +460,14 @@ class _OmniCalendarPanel extends StatelessWidget {
                           : '${visibleMonth.year}年${visibleMonth.month}月',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w400,
-                      ),
+                      style: Theme.of(context).textTheme.labelLarge!
+                          .copyWith(fontSize: 14, fontWeight: FontWeight.w400),
                     ),
                   ),
                   const SizedBox(width: OmniSpacing.xxs),
                   AnimatedRotation(
                     turns: showMonthGrid ? 0.5 : 0,
-                    duration: OmniMotion.fast,
+                    duration: OmniMotion.duration(context, OmniMotion.fast),
                     child: Icon(
                       Icons.keyboard_arrow_down_rounded,
                       size: 18,
@@ -423,14 +478,14 @@ class _OmniCalendarPanel extends StatelessWidget {
               ),
             ),
           ),
-          IconButton(
+          OmniIconButton(
             tooltip: showMonthGrid ? '上一年' : '上个月',
             onPressed: canMoveBack
                 ? () => showMonthGrid ? onMoveYear(-1) : onMoveMonth(-1)
                 : null,
             icon: const Icon(Icons.chevron_left_rounded, size: 20),
           ),
-          IconButton(
+          OmniIconButton(
             tooltip: showMonthGrid ? '下一年' : '下个月',
             onPressed: canMoveForward
                 ? () => showMonthGrid ? onMoveYear(1) : onMoveMonth(1)
@@ -443,7 +498,7 @@ class _OmniCalendarPanel extends StatelessWidget {
   }
 
   /// 构建星期标题。
-  Widget _buildWeekdays(OmniColors colors) {
+  Widget _buildWeekdays(BuildContext context, OmniColors colors) {
     // 从周一开始展示的中文星期标签。
     const List<String> weekdays = <String>['一', '二', '三', '四', '五', '六', '日'];
     return Row(
@@ -455,7 +510,8 @@ class _OmniCalendarPanel extends StatelessWidget {
                 child: Center(
                   child: Text(
                     weekday,
-                    style: TextStyle(color: colors.muted, fontSize: 12),
+                    style: Theme.of(context).textTheme.bodySmall!
+                        .copyWith(color: colors.muted, fontSize: 12),
                   ),
                 ),
               ),
@@ -466,7 +522,7 @@ class _OmniCalendarPanel extends StatelessWidget {
   }
 
   /// 构建一个日期单元格。
-  Widget _buildDayCell(DateTime date, OmniColors colors) {
+  Widget _buildDayCell(BuildContext context, DateTime date, OmniColors colors) {
     // 日期是否属于当前展示月份。
     final bool inVisibleMonth = date.month == visibleMonth.month;
     // 日期是否是当前选中项。
@@ -482,48 +538,59 @@ class _OmniCalendarPanel extends StatelessWidget {
         : enabled
         ? (inVisibleMonth ? colors.ink : colors.muted.withValues(alpha: 0.68))
         : colors.muted.withValues(alpha: 0.34);
-    return Center(
-      child: SizedBox.square(
-        dimension: 32,
-        child: TextButton(
-          onPressed: enabled ? () => onSelectDate(date) : null,
-          style: ButtonStyle(
-            padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
-              EdgeInsets.zero,
+    return Semantics(
+      label: MaterialLocalizations.of(context).formatFullDate(date),
+      selected: selected,
+      child: Center(
+        child: SizedBox.square(
+          dimension: OmniDensity.isTouch(context) ? OmniSize.touch : 32,
+          child: TextButton(
+            focusNode: DateUtils.isSameDay(date, focusDate) ? dateFocus : null,
+            onPressed: enabled ? () => onSelectDate(date) : null,
+            style: ButtonStyle(
+              padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+                EdgeInsets.zero,
+              ),
+              minimumSize: WidgetStatePropertyAll<Size>(
+                Size.square(OmniDensity.isTouch(context) ? OmniSize.touch : 32),
+              ),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.standard,
+              foregroundColor: WidgetStatePropertyAll<Color>(foreground),
+              backgroundColor: WidgetStateProperty.resolveWith<Color?>((
+                Set<WidgetState> states,
+              ) {
+                if (selected) {
+                  return colors.brand;
+                }
+                if (states.contains(WidgetState.hovered) ||
+                    states.contains(WidgetState.focused)) {
+                  return colors.brandSoft;
+                }
+                return Colors.transparent;
+              }),
+              shape: const WidgetStatePropertyAll<OutlinedBorder>(
+                CircleBorder(),
+              ),
+              side: WidgetStatePropertyAll<BorderSide?>(
+                isToday && !selected
+                    ? BorderSide(color: colors.brand)
+                    : BorderSide.none,
+              ),
+              textStyle: WidgetStatePropertyAll<TextStyle>(
+                Theme.of(context).textTheme.bodyMedium!
+                    .copyWith(fontSize: 13, fontWeight: FontWeight.w400),
+              ),
             ),
-            minimumSize: const WidgetStatePropertyAll<Size>(Size.square(32)),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            foregroundColor: WidgetStatePropertyAll<Color>(foreground),
-            backgroundColor: WidgetStateProperty.resolveWith<Color?>((
-              Set<WidgetState> states,
-            ) {
-              if (selected) {
-                return colors.brand;
-              }
-              if (states.contains(WidgetState.hovered) ||
-                  states.contains(WidgetState.focused)) {
-                return colors.brandSoft;
-              }
-              return Colors.transparent;
-            }),
-            shape: const WidgetStatePropertyAll<OutlinedBorder>(CircleBorder()),
-            side: WidgetStatePropertyAll<BorderSide?>(
-              isToday && !selected
-                  ? BorderSide(color: colors.brand)
-                  : BorderSide.none,
-            ),
-            textStyle: const WidgetStatePropertyAll<TextStyle>(
-              TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
-            ),
+            child: ExcludeSemantics(child: Text('${date.day}')),
           ),
-          child: Text('${date.day}'),
         ),
       ),
     );
   }
 
   /// 构建六行日期网格。
-  Widget _buildDayGrid(OmniColors colors) {
+  Widget _buildDayGrid(BuildContext context, OmniColors colors) {
     // 当月第一天。
     final DateTime firstOfMonth = DateTime(
       visibleMonth.year,
@@ -539,19 +606,22 @@ class _OmniCalendarPanel extends StatelessWidget {
       (int index) => gridStart.add(Duration(days: index)),
       growable: false,
     );
+    // 日期行高度保留触控点击区域，桌面沿用紧凑密度。
+    final double rowHeight = OmniDensity.isTouch(context)
+        ? OmniSize.touch
+        : OmniDateTimePickerMetrics.dayCellHeight;
     return SizedBox(
-      height: OmniDateTimePickerMetrics.dayCellHeight * 6,
-      child: GridView.count(
+      height: rowHeight * 6,
+      child: GridView(
         primary: false,
         physics: const NeverScrollableScrollPhysics(),
         padding: EdgeInsets.zero,
-        crossAxisCount: 7,
-        childAspectRatio:
-            (OmniDateTimePickerMetrics.calendarWidth - OmniSpacing.sm * 2) /
-            7 /
-            OmniDateTimePickerMetrics.dayCellHeight,
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 7,
+          mainAxisExtent: rowHeight,
+        ),
         children: days
-            .map((DateTime day) => _buildDayCell(day, colors))
+            .map((DateTime day) => _buildDayCell(context, day, colors))
             .toList(growable: false),
       ),
     );
@@ -563,12 +633,14 @@ class _OmniCalendarPanel extends StatelessWidget {
     final List<int> months = List<int>.generate(12, (int index) => index + 1);
     return SizedBox(
       height: 248,
-      child: GridView.count(
+      child: GridView(
         primary: false,
         physics: const NeverScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(8, 8, 8, 16),
-        crossAxisCount: 3,
-        childAspectRatio: 1.55,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          mainAxisExtent: 56,
+        ),
         children: months
             .map((int month) {
               // 当前月份候选值。
@@ -605,7 +677,7 @@ class _OmniCalendarPanel extends StatelessWidget {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     return SizedBox(
-      width: OmniDateTimePickerMetrics.calendarWidth,
+      width: _calendarWidth(context),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
         child: Column(
@@ -615,8 +687,8 @@ class _OmniCalendarPanel extends StatelessWidget {
             if (showMonthGrid)
               _buildMonthGrid(colors)
             else ...<Widget>[
-              _buildWeekdays(colors),
-              _buildDayGrid(colors),
+              _buildWeekdays(context, colors),
+              _buildDayGrid(context, colors),
               const SizedBox(height: OmniSpacing.sm),
             ],
           ],
@@ -663,6 +735,12 @@ class _OmniTimePickerButtonState extends State<OmniTimePickerButton> {
   /// 浮层菜单控制器。
   final MenuController _menuController = MenuController();
 
+  /// 时间浮层关闭后恢复的触发器焦点。
+  final FocusNode _triggerFocus = FocusNode();
+
+  /// 键盘打开菜单后使用的当前时间项焦点。
+  final FocusNode _timeFocus = FocusNode();
+
   /// 时间列表滚动控制器。
   final ScrollController _scrollController = ScrollController();
 
@@ -672,6 +750,8 @@ class _OmniTimePickerButtonState extends State<OmniTimePickerButton> {
   /// 释放滚动控制器。
   @override
   void dispose() {
+    _timeFocus.dispose();
+    _triggerFocus.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -723,20 +803,38 @@ class _OmniTimePickerButtonState extends State<OmniTimePickerButton> {
       // 让选中项前方保留两项上下文的目标偏移。
       final double targetOffset = math.max(
         0,
-        (selectedIndex - 2) * OmniDateTimePickerMetrics.timeItemHeight,
+        (selectedIndex - 2) * _itemHeight,
       );
       _scrollController.jumpTo(
         math.min(targetOffset, _scrollController.position.maxScrollExtent),
       );
+      if (FocusManager.instance.highlightMode ==
+          FocusHighlightMode.traditional) {
+        // 等滚动后的目标菜单项挂载，再将焦点交给当前时间。
+        WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+          if (mounted && _menuController.isOpen && _timeFocus.context != null) {
+            _timeFocus.requestFocus();
+          }
+        });
+      }
     });
   }
 
   /// 记录浮层已关闭。
   void _handleClose() {
     if (mounted) {
+      _triggerFocus.requestFocus();
       setState(() => _menuOpen = false);
     }
   }
+
+  /// 时间项高度兼顾触控目标与放大后的文本。
+  double get _itemHeight => math.max(
+    OmniDensity.isTouch(context)
+        ? OmniSize.touch
+        : OmniDateTimePickerMetrics.timeItemHeight,
+    MediaQuery.textScalerOf(context).scale(13) + OmniSpacing.md,
+  );
 
   /// 提交时间选择并关闭浮层。
   void _selectTime(int minutes) {
@@ -781,18 +879,18 @@ class _OmniTimePickerButtonState extends State<OmniTimePickerButton> {
     // 当前项是否被选中。
     final bool selected = minutes == _selectedMinutes;
     return MenuItemButton(
+      focusNode: selected ? _timeFocus : null,
       onPressed: widget.onChanged == null ? null : () => _selectTime(minutes),
       style: ButtonStyle(
-        minimumSize: const WidgetStatePropertyAll<Size>(
-          Size(0, OmniDateTimePickerMetrics.timeItemHeight),
-        ),
-        fixedSize: const WidgetStatePropertyAll<Size>(
-          Size.fromHeight(OmniDateTimePickerMetrics.timeItemHeight),
-        ),
+        minimumSize: WidgetStatePropertyAll<Size>(Size(0, _itemHeight)),
+        fixedSize: WidgetStatePropertyAll<Size>(Size.fromHeight(_itemHeight)),
         padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
           EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
         ),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: OmniDensity.isTouch(context)
+            ? VisualDensity.standard
+            : VisualDensity.compact,
         alignment: Alignment.center,
         foregroundColor: WidgetStatePropertyAll<Color>(
           selected ? colors.accentInk : colors.ink,
@@ -814,8 +912,9 @@ class _OmniTimePickerButtonState extends State<OmniTimePickerButton> {
             borderRadius: BorderRadius.circular(OmniRadius.control),
           ),
         ),
-        textStyle: const WidgetStatePropertyAll<TextStyle>(
-          TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
+        textStyle: WidgetStatePropertyAll<TextStyle>(
+          Theme.of(context).textTheme.bodyMedium!
+              .copyWith(fontSize: 13, fontWeight: FontWeight.w400),
         ),
       ),
       child: Text(_formatMinutes(minutes)),
@@ -832,12 +931,14 @@ class _OmniTimePickerButtonState extends State<OmniTimePickerButton> {
         : null;
     if (widget.icon == null) {
       return OutlinedButton(
+        focusNode: _triggerFocus,
         onPressed: widget.onChanged == null ? null : _toggleMenu,
         style: style,
         child: Text(widget.label, overflow: TextOverflow.ellipsis),
       );
     }
     return OutlinedButton.icon(
+      focusNode: _triggerFocus,
       onPressed: widget.onChanged == null ? null : _toggleMenu,
       style: style,
       icon: Icon(widget.icon, size: 18),
@@ -854,6 +955,7 @@ class _OmniTimePickerButtonState extends State<OmniTimePickerButton> {
     final List<int> values = _minuteValues();
     return MenuAnchor(
       controller: _menuController,
+      childFocusNode: _triggerFocus,
       style: _menuStyle(colors),
       alignmentOffset: const Offset(0, OmniSpacing.xxs),
       crossAxisUnconstrained: true,

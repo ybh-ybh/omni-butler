@@ -136,7 +136,7 @@ void main() {
 
   testWidgets('日期浮层视觉基线', (WidgetTester tester) async {
     // 视觉基线使用的固定视口。
-    const Size viewport = Size(420, 420);
+    const Size viewport = Size(420, 520);
     tester.view.physicalSize = viewport;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);

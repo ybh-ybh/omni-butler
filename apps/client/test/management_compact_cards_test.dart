@@ -185,7 +185,8 @@ void main() {
         of: eventCard,
         matching: find.byType(OmniPopupMenuButton<String>),
       );
-      expect(tester.getSize(eventCard).height, lessThanOrEqualTo(176));
+      // 顶部菜单与底部操作改用 48 像素热区，卡片仍须保持紧凑高度。
+      expect(tester.getSize(eventCard).height, lessThanOrEqualTo(178));
       _expectTouchTarget(tester, historyButton);
       _expectTouchTarget(tester, recordButton);
       expect(tester.getSize(recordButtonSurface).height, 28);

@@ -2,9 +2,11 @@ import 'dart:math' as math;
 import 'dart:ui' show SemanticsRole;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/shared/ui/omni_dropdown.dart';
+import 'package:omni_butler/shared/ui/omni_icon_button.dart';
 
 /// 拆分按钮菜单中的一项次要操作。
 class OmniSplitAction<T> {
@@ -129,7 +131,7 @@ class _OmniSplitActionButtonState<T> extends State<OmniSplitActionButton<T>> {
     // 菜单比整个按钮窄 8px，并与按钮右边缘对齐。
     final double menuWidth = anchor.width - OmniSpacing.xs;
     // 用户是否要求减少动画。
-    final bool reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final bool reduceMotion = OmniMotion.reduce(context);
     setState(() => _menuOpen = true);
     // 用户选中的次要操作；点击外部或返回时为空。
     final T? action = await showGeneralDialog<T>(
@@ -198,13 +200,23 @@ class _OmniSplitActionButtonState<T> extends State<OmniSplitActionButton<T>> {
                                       OmniSpacing.md,
                                 ),
                               ),
-                              child: SingleChildScrollView(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: OmniSpacing.xxs,
-                                ),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: _buildMenuChildren(colors),
+                              child: Shortcuts(
+                                shortcuts: const <ShortcutActivator, Intent>{
+                                  SingleActivator(LogicalKeyboardKey.arrowDown):
+                                      NextFocusIntent(),
+                                  SingleActivator(LogicalKeyboardKey.arrowUp):
+                                      PreviousFocusIntent(),
+                                },
+                                child: FocusTraversalGroup(
+                                  child: SingleChildScrollView(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: OmniSpacing.xxs,
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: _buildMenuChildren(colors),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
@@ -302,7 +314,7 @@ class _OmniSplitActionButtonState<T> extends State<OmniSplitActionButton<T>> {
               child: MergeSemantics(
                 child: Semantics(
                   label: widget.menuTooltip,
-                  child: IconButton(
+                  child: OmniIconButton(
                     key: ValueKey<String>('${widget.keyPrefix}-more-actions'),
                     tooltip: widget.menuTooltip,
                     onPressed: () => _showActions(context),
@@ -353,7 +365,7 @@ class _OmniSplitMenuToggleIcon extends StatelessWidget {
       dimension: OmniSize.icon,
       child: TweenAnimationBuilder<double>(
         tween: Tween<double>(begin: 0, end: expanded ? 1 : 0),
-        duration: MediaQuery.disableAnimationsOf(context)
+        duration: OmniMotion.reduce(context)
             ? Duration.zero
             : const Duration(milliseconds: 500),
         curve: const Cubic(0.25, 0.1, 0.25, 1),

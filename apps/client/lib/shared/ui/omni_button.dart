@@ -4,23 +4,23 @@ import 'package:omni_butler/app/theme/app_tokens.dart';
 
 /// Omni Butler 按钮视觉类型。
 enum OmniButtonVariant {
-  /// 蓝色主要操作。
+  /// 品牌色主要操作。
   primary,
 
-  /// 浅蓝底与实蓝图标块组成的页面主操作。
+  /// 页面主要操作，与 primary 共用外观并采用较大桌面尺寸。
   pagePrimary,
 
-  /// 白底描边次要操作。
+  /// 中性描边次要操作。
   secondary,
 
   /// 无边框文字操作。
   text,
 
-  /// 红色危险操作。
+  /// 危险操作。
   danger,
 }
 
-/// 统一承载飞书式状态与尺寸的按钮。
+/// 统一承载语义、密度和交互状态的按钮。
 class OmniButton extends StatelessWidget {
   /// 按钮文字。
   final String label;
@@ -34,7 +34,7 @@ class OmniButton extends StatelessWidget {
   /// 可选前置图标。
   final IconData? icon;
 
-  /// 是否显示加载状态。
+  /// 是否显示加载状态并阻止重复提交。
   final bool loading;
 
   /// 是否使用大尺寸。
@@ -56,130 +56,139 @@ class OmniButton extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    // 当前按钮是否可用。
+    // 实色填色单独保障文字对比度，保留业务品牌语义色。
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    // 加载时保持标签可读，但不再接受重复操作。
     final VoidCallback? effectiveOnPressed = loading ? null : onPressed;
-    // 当前视口是否为移动端。
-    final bool compact = OmniBreakpoint.isCompact(
-      MediaQuery.sizeOf(context).width,
+    // 页面主操作仅通过尺寸强调，与其他主操作共享外观。
+    final double height = OmniDensity.controlHeight(
+      context,
+      large: large || variant == OmniButtonVariant.pagePrimary,
     );
-    // 当前按钮目标高度。
-    final double height = compact
-        ? OmniSize.touch
-        : variant == OmniButtonVariant.pagePrimary
-        ? OmniSize.pageAction
-        : large
-        ? OmniSize.controlLarge
-        : OmniSize.control;
-    // 当前页面主操作是否处于不可用状态。
-    final bool pagePrimaryDisabled = onPressed == null && !loading;
-    // 当前按钮内容。
+    // 实色操作使用相应语义颜色。
+    final bool filled =
+        variant == OmniButtonVariant.primary ||
+        variant == OmniButtonVariant.pagePrimary ||
+        variant == OmniButtonVariant.danger;
+    // 危险按钮与品牌按钮共用状态规则。
+    final Color fill = variant == OmniButtonVariant.danger
+        ? scheme.error
+        : scheme.primary;
+    // 主操作的文字与图标颜色。
+    final Color foreground = variant == OmniButtonVariant.danger
+        ? scheme.onError
+        : scheme.onPrimary;
+    // 浅色文字加深背景，深色文字提亮背景，交互反馈不会降低对比度。
+    final Color stateTint =
+        foreground.computeLuminance() > fill.computeLuminance()
+        ? Colors.black
+        : Colors.white;
+    // 各按钮共享密度、键盘焦点、即时按下反馈和减少动效规则。
+    final ButtonStyle style = ButtonStyle(
+      minimumSize: WidgetStatePropertyAll<Size>(Size(0, height)),
+      visualDensity: VisualDensity.standard,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      animationDuration: OmniMotion.duration(context, OmniMotion.fast),
+      textStyle: WidgetStatePropertyAll<TextStyle?>(
+        Theme.of(context).textTheme.labelLarge
+            ?.copyWith(fontSize: 14, fontWeight: FontWeight.w500),
+      ),
+      shape: WidgetStatePropertyAll<OutlinedBorder>(
+        RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(OmniRadius.control),
+        ),
+      ),
+      side: WidgetStateProperty.resolveWith<BorderSide>((
+        Set<WidgetState> states,
+      ) {
+        if (states.contains(WidgetState.focused)) {
+          return BorderSide(color: colors.ink.withValues(alpha: 0.7), width: 2);
+        }
+        return BorderSide(
+          color: variant == OmniButtonVariant.secondary
+              ? colors.line
+              : Colors.transparent,
+          width: 1,
+        );
+      }),
+      backgroundColor: filled
+          ? WidgetStateProperty.resolveWith<Color>((Set<WidgetState> states) {
+              if (states.contains(WidgetState.disabled) && !loading) {
+                return colors.mist;
+              }
+              if (states.contains(WidgetState.pressed)) {
+                return Color.alphaBlend(
+                  stateTint.withValues(alpha: 0.14),
+                  fill,
+                );
+              }
+              if (states.contains(WidgetState.hovered)) {
+                return Color.alphaBlend(
+                  stateTint.withValues(alpha: 0.06),
+                  fill,
+                );
+              }
+              return fill;
+            })
+          : WidgetStateProperty.resolveWith<Color>((Set<WidgetState> states) {
+              if (variant == OmniButtonVariant.secondary) {
+                if (states.contains(WidgetState.pressed)) return colors.mist;
+                if (states.contains(WidgetState.hovered)) {
+                  return Color.alphaBlend(
+                    colors.ink.withValues(alpha: 0.04),
+                    colors.paper,
+                  );
+                }
+                return colors.paper;
+              }
+              if (states.contains(WidgetState.pressed)) return colors.brandSoft;
+              if (states.contains(WidgetState.hovered)) {
+                return colors.brand.withValues(alpha: 0.06);
+              }
+              return Colors.transparent;
+            }),
+      foregroundColor: filled
+          ? WidgetStateProperty.resolveWith<Color>((Set<WidgetState> states) {
+              return states.contains(WidgetState.disabled) && !loading
+                  ? colors.muted
+                  : foreground;
+            })
+          : loading
+          ? WidgetStatePropertyAll<Color>(colors.ink)
+          : null,
+      overlayColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
+    );
+    // 内容保留原操作名称，加载状态不会改变按钮语义。
     final Widget content = _ButtonContent(
       label: label,
       icon: icon,
       loading: loading,
-      color: variant == OmniButtonVariant.danger
-          ? Theme.of(context).colorScheme.onError
-          : null,
-      tiledIcon: variant == OmniButtonVariant.pagePrimary,
-      disabled: pagePrimaryDisabled,
     );
-    // 当前按钮尺寸覆盖。
-    final ButtonStyle sizeStyle = ButtonStyle(
-      minimumSize: WidgetStatePropertyAll<Size>(Size(0, height)),
-    );
-
-    return switch (variant) {
-      OmniButtonVariant.primary => FilledButton(
+    // 按钮使用 Flutter 的焦点、键盘、语义与点击取消能力。
+    final Widget button = switch (variant) {
+      OmniButtonVariant.primary ||
+      OmniButtonVariant.pagePrimary ||
+      OmniButtonVariant.danger => FilledButton(
         onPressed: effectiveOnPressed,
-        style: sizeStyle,
-        child: content,
-      ),
-      OmniButtonVariant.pagePrimary => FilledButton(
-        onPressed: effectiveOnPressed,
-        style: ButtonStyle(
-          minimumSize: WidgetStatePropertyAll<Size>(Size(0, height)),
-          padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
-            EdgeInsets.only(left: 6, right: 14),
-          ),
-          backgroundColor: WidgetStateProperty.resolveWith<Color?>((
-            Set<WidgetState> states,
-          ) {
-            if (states.contains(WidgetState.disabled) && !loading) {
-              return colors.mist;
-            }
-            if (states.contains(WidgetState.pressed)) {
-              return Color.alphaBlend(
-                colors.brand.withValues(alpha: 0.18),
-                colors.brandSoft,
-              );
-            }
-            if (states.contains(WidgetState.hovered)) {
-              return Color.alphaBlend(
-                colors.brand.withValues(alpha: 0.09),
-                colors.brandSoft,
-              );
-            }
-            return colors.brandSoft;
-          }),
-          foregroundColor: WidgetStateProperty.resolveWith<Color?>((
-            Set<WidgetState> states,
-          ) {
-            if (states.contains(WidgetState.disabled) && !loading) {
-              return colors.muted;
-            }
-            return colors.brandStrong;
-          }),
-          side: WidgetStateProperty.resolveWith<BorderSide?>((
-            Set<WidgetState> states,
-          ) {
-            if (states.contains(WidgetState.focused)) {
-              return BorderSide(
-                color: colors.brand.withValues(alpha: 0.30),
-                width: 2,
-              );
-            }
-            return const BorderSide(color: Colors.transparent, width: 2);
-          }),
-          shape: WidgetStatePropertyAll<OutlinedBorder>(
-            RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(OmniRadius.panel),
-            ),
-          ),
-          elevation: const WidgetStatePropertyAll<double>(0),
-          visualDensity: VisualDensity.standard,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          animationDuration: OmniMotion.fast,
-          textStyle: const WidgetStatePropertyAll<TextStyle>(
-            TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
-          ),
-        ),
+        style: style,
         child: content,
       ),
       OmniButtonVariant.secondary => OutlinedButton(
         onPressed: effectiveOnPressed,
-        style: sizeStyle,
+        style: style,
         child: content,
       ),
       OmniButtonVariant.text => TextButton(
         onPressed: effectiveOnPressed,
-        style: sizeStyle,
-        child: content,
-      ),
-      OmniButtonVariant.danger => FilledButton(
-        onPressed: effectiveOnPressed,
-        style: FilledButton.styleFrom(
-          minimumSize: Size(0, height),
-          backgroundColor: colors.danger,
-          foregroundColor: Theme.of(context).colorScheme.onError,
-          disabledBackgroundColor: colors.mist,
-          disabledForegroundColor: colors.muted,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(OmniRadius.control),
-          ),
-        ),
+        style: style,
         child: content,
       ),
     };
+    return Semantics(
+      liveRegion: loading,
+      value: loading ? '正在处理' : null,
+      child: button,
+    );
   }
 }
 
@@ -194,85 +203,34 @@ class _ButtonContent extends StatelessWidget {
   /// 是否加载中。
   final bool loading;
 
-  /// 可选内容颜色。
-  final Color? color;
-
-  /// 是否使用页面主操作图标块。
-  final bool tiledIcon;
-
-  /// 页面主操作是否处于不可用状态。
-  final bool disabled;
-
   /// 创建按钮内部内容。
   const _ButtonContent({
     required this.label,
     required this.icon,
     required this.loading,
-    required this.color,
-    required this.tiledIcon,
-    required this.disabled,
   });
 
-  /// 构建图标、加载状态与文字。
+  /// 构建统一图标、加载状态与文字。
   @override
   Widget build(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
-    // 加载或业务图标。
-    final Widget? leading = _buildLeading(context, colors);
-
-    if (leading == null) {
-      return Text(label);
-    }
+    if (icon == null && !loading) return Text(label);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        leading,
+        if (loading)
+          SizedBox.square(
+            dimension: OmniSize.icon,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: DefaultTextStyle.of(context).style.color,
+              value: OmniMotion.reduce(context) ? 0.75 : null,
+            ),
+          )
+        else
+          Icon(icon, size: OmniSize.icon),
         const SizedBox(width: OmniSpacing.xs),
-        Text(label),
+        Flexible(child: Text(label)),
       ],
     );
-  }
-
-  /// 构建普通图标或页面主操作图标块。
-  Widget? _buildLeading(BuildContext context, OmniColors colors) {
-    if (icon == null && !loading) {
-      return null;
-    }
-    if (tiledIcon) {
-      // 页面主操作图标块背景色。
-      final Color tileColor = disabled ? colors.line : colors.brand;
-      // 页面主操作图标颜色。
-      final Color tileIconColor = disabled ? colors.muted : colors.accentInk;
-      return Container(
-        key: const ValueKey<String>('omni-page-primary-icon'),
-        width: 24,
-        height: 24,
-        decoration: BoxDecoration(
-          color: tileColor,
-          borderRadius: BorderRadius.circular(OmniRadius.control),
-        ),
-        alignment: Alignment.center,
-        child: loading
-            ? SizedBox.square(
-                dimension: 14,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: tileIconColor,
-                ),
-              )
-            : Icon(icon, size: 16, color: tileIconColor),
-      );
-    }
-    if (loading) {
-      return SizedBox.square(
-        dimension: 14,
-        child: CircularProgressIndicator(
-          strokeWidth: 2,
-          color: color ?? IconTheme.of(context).color,
-        ),
-      );
-    }
-    return Icon(icon, size: OmniSize.icon, color: color);
   }
 }

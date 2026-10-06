@@ -14,16 +14,37 @@ import 'package:omni_butler/features/timeline/presentation/timeline_page.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 首页今日与本周时间状态卡片。
-class HomeTimeStatusCard extends ConsumerWidget {
+class HomeTimeStatusCard extends ConsumerStatefulWidget {
   /// 当前时间。
   final DateTime now;
 
   /// 创建首页时间状态卡片。
   const HomeTimeStatusCard({required this.now, super.key});
 
+  /// 创建仅用于当前卡片的类别筛选状态。
+  @override
+  ConsumerState<HomeTimeStatusCard> createState() => _HomeTimeStatusCardState();
+}
+
+/// 管理双圆环共用的类别可见性，不修改记录或持久化偏好。
+class _HomeTimeStatusCardState extends ConsumerState<HomeTimeStatusCard> {
+  /// 用户暂时隐藏的类别；未出现过的新类别默认显示。
+  final Set<String> _hiddenCategories = <String>{};
+
+  /// 切换类别在两个圆环中的可见性。
+  void _toggleCategory(String category) {
+    setState(() {
+      if (!_hiddenCategories.remove(category)) {
+        _hiddenCategories.add(category);
+      }
+    });
+  }
+
   /// 构建双圆环和今天的时间记录清单。
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
+    // 当前业务时刻。
+    final DateTime now = widget.now;
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     // 当前是否使用由悬浮拆分按钮提供新增入口的 Android 紧凑布局。
@@ -147,7 +168,8 @@ class HomeTimeStatusCard extends ConsumerWidget {
                 Expanded(
                   child: _TimeDonut(
                     label: '今日',
-                    summary: todaySummary,
+                    summary: _visibleSummary(todaySummary, _hiddenCategories),
+                    filtered: _hiddenCategories.isNotEmpty,
                     emptyColor: colors.mist,
                   ),
                 ),
@@ -155,7 +177,8 @@ class HomeTimeStatusCard extends ConsumerWidget {
                 Expanded(
                   child: _TimeDonut(
                     label: '本周',
-                    summary: weekSummary,
+                    summary: _visibleSummary(weekSummary, _hiddenCategories),
+                    filtered: _hiddenCategories.isNotEmpty,
                     emptyColor: colors.mist,
                   ),
                 ),
@@ -163,7 +186,11 @@ class HomeTimeStatusCard extends ConsumerWidget {
             ),
             if (legendSlices.isNotEmpty) ...<Widget>[
               const SizedBox(height: OmniSpacing.md),
-              _TimeCategoryLegend(slices: legendSlices.values.toList()),
+              _TimeCategoryLegend(
+                slices: legendSlices.values.toList(),
+                hiddenCategories: _hiddenCategories,
+                onToggle: _toggleCategory,
+              ),
             ],
           ],
           Padding(
@@ -324,6 +351,9 @@ class _TimeSlice {
 
 /// 单个周期时间圆环。
 class _TimeDonut extends StatelessWidget {
+  /// 当前是否应用了类别筛选。
+  final bool filtered;
+
   /// 周期名称。
   final String label;
 
@@ -338,6 +368,7 @@ class _TimeDonut extends StatelessWidget {
     required this.label,
     required this.summary,
     required this.emptyColor,
+    required this.filtered,
   });
 
   /// 构建带中心时长和完整辅助功能摘要的圆环。
@@ -345,7 +376,9 @@ class _TimeDonut extends StatelessWidget {
   Widget build(BuildContext context) {
     // 辅助功能可读的完整摘要。
     final String semanticsLabel = summary.totalMinutes == 0
-        ? '$label还没有时间记录'
+        ? filtered
+              ? '$label所选类别暂无时间记录'
+              : '$label还没有时间记录'
         : '$label记录${_formatDuration(summary.totalMinutes)}，${summary.detail}；${summary.breakdown}';
     return Semantics(
       label: semanticsLabel,
@@ -371,7 +404,7 @@ class _TimeDonut extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 14),
                     child: Text(
-                      _formatDuration(summary.totalMinutes),
+                      '${summary.totalMinutes ~/ 60}h${summary.totalMinutes % 60}m',
                       textAlign: TextAlign.center,
                       maxLines: 2,
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
@@ -396,8 +429,18 @@ class _TimeCategoryLegend extends StatelessWidget {
   /// 已按类别名称去重的圆环分段。
   final List<_TimeSlice> slices;
 
+  /// 当前隐藏的类别，仍保留图例入口以便恢复。
+  final Set<String> hiddenCategories;
+
+  /// 点击或键盘激活类别时的回调。
+  final ValueChanged<String> onToggle;
+
   /// 创建共用图例。
-  const _TimeCategoryLegend({required this.slices});
+  const _TimeCategoryLegend({
+    required this.slices,
+    required this.hiddenCategories,
+    required this.onToggle,
+  });
 
   /// 构建可自动换行的小圆角色块与真实类别名称。
   @override
@@ -409,27 +452,48 @@ class _TimeCategoryLegend extends StatelessWidget {
       runSpacing: OmniSpacing.xs,
       children: <Widget>[
         for (final _TimeSlice slice in slices)
-          Row(
+          Semantics(
             key: ValueKey<String>('home-time-legend-item-${slice.label}'),
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Container(
-                key: ValueKey<String>('home-time-legend-color-${slice.label}'),
-                width: 24,
-                height: 10,
-                decoration: BoxDecoration(
-                  color: slice.color,
-                  borderRadius: BorderRadius.circular(3),
+            button: true,
+            selected: !hiddenCategories.contains(slice.label),
+            child: InkWell(
+              onTap: () => onToggle(slice.label),
+              borderRadius: BorderRadius.circular(OmniRadius.control),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: OmniDensity.controlHeight(context),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Container(
+                      key: ValueKey<String>(
+                        'home-time-legend-color-${slice.label}',
+                      ),
+                      width: 24,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: hiddenCategories.contains(slice.label)
+                            ? OmniColors.of(context).line
+                            : slice.color,
+                        borderRadius: BorderRadius.circular(OmniRadius.tiny),
+                      ),
+                    ),
+                    const SizedBox(width: OmniSpacing.xs),
+                    Flexible(
+                      child: Text(
+                        slice.label,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: hiddenCategories.contains(slice.label)
+                              ? OmniColors.of(context).muted
+                              : OmniColors.of(context).ink,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: OmniSpacing.xs),
-              Flexible(
-                child: Text(
-                  slice.label,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            ],
+            ),
           ),
       ],
     );
@@ -589,6 +653,23 @@ class _TimeEmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 从原始摘要排除隐藏类别，重新计算总时长、占比及读屏摘要。
+_TimeSummary _visibleSummary(
+  _TimeSummary summary,
+  Set<String> hiddenCategories,
+) {
+  return _buildSummary(
+    <String, int>{
+      for (final _TimeSlice slice in summary.slices)
+        if (!hiddenCategories.contains(slice.label)) slice.label: slice.minutes,
+    },
+    <String, Color>{
+      for (final _TimeSlice slice in summary.slices) slice.label: slice.color,
+    },
+    Colors.transparent,
+  );
 }
 
 /// 将分类分钟数转换为圆环摘要。

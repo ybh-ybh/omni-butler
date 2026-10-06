@@ -95,7 +95,7 @@ class _HomeCardManagerSheet extends ConsumerWidget {
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
-                      IconButton(
+                      OmniIconButton(
                         tooltip: '移除${card.label}',
                         onPressed: () => ref
                             .read(homeCardPreferenceProvider.notifier)
@@ -152,7 +152,7 @@ class _HomeCardManagerSheet extends ConsumerWidget {
                   card: card,
                   subtitle: unavailableReason ?? card.description,
                   enabled: enabled,
-                  trailing: IconButton(
+                  trailing: OmniIconButton(
                     tooltip: enabled ? '添加${card.label}' : '需要先开启相关功能',
                     onPressed: enabled
                         ? () => ref

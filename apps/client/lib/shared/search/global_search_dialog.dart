@@ -69,7 +69,7 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
       height: 560,
       child: Column(
         children: <Widget>[
-          TextField(
+          OmniTextField(
             controller: _controller,
             autofocus: true,
             decoration: const InputDecoration(

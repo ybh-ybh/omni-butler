@@ -2,9 +2,11 @@ import 'dart:ui';
 
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:omni_butler/shared/ui/omni_button.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/router/app_router.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
@@ -14,6 +16,7 @@ import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
+import 'package:omni_butler/shared/ui/omni_icon_button.dart';
 import 'package:omni_butler/shared/ui/omni_panel.dart';
 import 'package:omni_butler/shared/ui/omni_sliding_segmented_control.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -178,7 +181,7 @@ void main() {
     // 勾选框热区本身不再绘制向外溢出的悬停底色。
     final InkWell checkboxInkWell = tester.widget<InkWell>(checkboxAction);
     expect(checkboxInkWell.hoverColor, Colors.transparent);
-    // 深灰悬停底色仅由实际 18px 勾选框绘制。
+    // 统一表面与悬停边框仅由实际 18px 勾选框绘制。
     final Finder checkboxIndicatorFinder = find.descendant(
       of: checkboxAction,
       matching: find.byType(AnimatedContainer),
@@ -192,10 +195,19 @@ void main() {
     );
     await mouse.removePointer();
 
-    // 点击任务名称只打开编辑器。
+    // 名称点击保留子任务展开语义，编辑操作使用右键菜单。
     await tester.tap(
       find.byKey(ValueKey<String>('home-todo-title-action-${task.id}')),
     );
+    await tester.pumpAndSettle();
+    expect(find.byType(TodoEditorDialog), findsNothing);
+    await tester.tap(
+      taskRow,
+      kind: PointerDeviceKind.mouse,
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('编辑任务'));
     await tester.pumpAndSettle();
     expect(find.text('编辑待办'), findsOneWidget);
     expect(
@@ -695,7 +707,7 @@ void main() {
     );
     expect(completionCheckbox, findsOneWidget);
     expect(tester.getSize(completionCheckbox), const Size.square(32));
-    expect(tester.getSize(completionBox), const Size.square(16));
+    expect(tester.getSize(completionBox), const Size.square(18));
     await tester.tap(completionCheckbox);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 399));
@@ -1061,8 +1073,9 @@ void main() {
       final Finder mobileChildRow = find.byKey(
         ValueKey<String>('todo-child-${mobileChild.id}'),
       );
-      expect(tester.getSize(mobileRootRow).height, 48);
-      expect(tester.getSize(mobileChildRow).height, 48);
+      // 48 像素触控热区加上下各 2 像素留白，父子任务保持同一行高。
+      expect(tester.getSize(mobileRootRow).height, OmniSize.touch + 4);
+      expect(tester.getSize(mobileChildRow).height, OmniSize.touch + 4);
       expect(tester.takeException(), isNull);
     }
     // 移动端父任务行中的新增子任务操作。
@@ -1135,9 +1148,12 @@ void main() {
       final Finder mobileCreate = find.byKey(
         ValueKey<String>('todo-quadrant-create-${quadrant.value}'),
       );
-      expect(tester.getSize(mobileHeading).height, OmniSize.control);
-      expect(tester.getSize(mobileToggleAll), const Size.square(32));
-      expect(tester.getSize(mobileCreate), const Size.square(32));
+      expect(tester.getSize(mobileHeading).height, OmniSize.touch);
+      expect(
+        tester.getSize(mobileToggleAll),
+        const Size.square(OmniSize.touch),
+      );
+      expect(tester.getSize(mobileCreate), const Size.square(OmniSize.touch));
       expect(
         find.descendant(
           of: mobileHeading,
@@ -1311,7 +1327,8 @@ void main() {
       final Finder focusedMobileHeading = find.byKey(
         const ValueKey<String>('todo-quadrant-heading-1'),
       );
-      expect(tester.getSize(focusedMobileHeading).height, OmniSize.control);
+      // 聚焦视图与总览视图共用 Android 的完整触控标题操作区。
+      expect(tester.getSize(focusedMobileHeading).height, OmniSize.touch);
       expect(tester.takeException(), isNull);
     }
 
@@ -1681,7 +1698,7 @@ void main() {
       ),
     );
     // 当前象限批量按钮的初始配置。
-    final IconButton initialToggleAllButton = tester.widget<IconButton>(
+    final OmniIconButton initialToggleAllButton = tester.widget<OmniIconButton>(
       quadrantToggleAll,
     );
     expect(initialToggleAllButton.tooltip, '收起全部子任务');
@@ -1706,11 +1723,11 @@ void main() {
     await tester.tap(quadrantToggleAll);
     await tester.pump();
     expect(find.text('发布子任务'), findsNothing);
-    expect(tester.widget<IconButton>(quadrantToggleAll).tooltip, '展开全部子任务');
+    expect(tester.widget<OmniIconButton>(quadrantToggleAll).tooltip, '展开全部子任务');
     await tester.tap(quadrantToggleAll);
     await tester.pump();
     expect(find.text('发布子任务'), findsOneWidget);
-    expect(tester.widget<IconButton>(quadrantToggleAll).tooltip, '收起全部子任务');
+    expect(tester.widget<OmniIconButton>(quadrantToggleAll).tooltip, '收起全部子任务');
     // 同行展示的任务名称与描述。
     final Finder rootTitle = find.byKey(
       ValueKey<String>('todo-title-${root.id}'),
@@ -1743,7 +1760,7 @@ void main() {
       findsNothing,
     );
     expect(find.byTooltip('展开子任务'), findsOneWidget);
-    expect(tester.widget<IconButton>(quadrantToggleAll).tooltip, '展开全部子任务');
+    expect(tester.widget<OmniIconButton>(quadrantToggleAll).tooltip, '展开全部子任务');
     await tester.tap(treeToggle);
     await tester.pump();
     expect(find.text('发布子任务'), findsOneWidget);
@@ -1751,7 +1768,7 @@ void main() {
       find.byKey(ValueKey<String>('todo-tree-branch-${pendingChild.id}')),
       findsOneWidget,
     );
-    expect(tester.widget<IconButton>(quadrantToggleAll).tooltip, '收起全部子任务');
+    expect(tester.widget<OmniIconButton>(quadrantToggleAll).tooltip, '收起全部子任务');
     // 父任务行上直接展示的添加子任务按钮。
     final Finder addChildButton = find.byKey(
       ValueKey<String>('todo-add-child-${root.id}'),
@@ -1840,7 +1857,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('每日待办回收站弹窗使用一致的边框揭示按钮', (WidgetTester tester) async {
+  testWidgets('每日待办回收站使用统一语义按钮并保留取消和删除结果', (WidgetTester tester) async {
     // 桌面测试视口。
     const Size viewport = Size(1440, 900);
     tester.view.physicalSize = viewport;
@@ -1892,11 +1909,11 @@ void main() {
     await tester.tap(find.text('移入回收站'));
     await tester.pumpAndSettle();
 
-    // 取消边框揭示按钮。
+    // 取消按钮。
     final Finder cancelButton = find.byKey(
       const ValueKey<String>('todo-recycle-cancel-button'),
     );
-    // 确认边框揭示按钮。
+    // 危险确认按钮。
     final Finder confirmButton = find.byKey(
       const ValueKey<String>('todo-recycle-confirm-button'),
     );
@@ -1916,79 +1933,31 @@ void main() {
     expect(recycleDialogCenter.dx, closeTo(viewport.width / 2, 1));
     expect(recycleDialogCenter.dy, closeTo(viewport.height / 2, 1));
     expect(find.byType(ModalBarrier), findsWidgets);
-    // 取消按钮的自定义边框绘制区。
-    final Finder cancelPaint = find.byKey(
-      const ValueKey<String>('todo-recycle-cancel-border'),
-    );
-    // 确认按钮的自定义边框绘制区。
-    final Finder confirmPaint = find.byKey(
-      const ValueKey<String>('todo-recycle-confirm-border'),
-    );
-    // 取消按钮的原生点击区域。
-    final Finder cancelAction = find.byKey(
-      const ValueKey<String>('todo-recycle-cancel-action'),
-    );
-    // 确认按钮的原生点击区域。
-    final Finder confirmAction = find.byKey(
-      const ValueKey<String>('todo-recycle-confirm-action'),
-    );
-    expect(cancelPaint, findsOneWidget);
-    expect(confirmPaint, findsOneWidget);
-    expect(tester.getSize(cancelAction), const Size(48, 24));
-    expect(tester.getSize(confirmAction), const Size(102, 24));
-    expect(tester.getSize(cancelPaint).height, 24);
-    expect(tester.getSize(confirmPaint).height, 24);
-    // 取消按钮保留原 TextButton 的水平内边距。
-    final Padding cancelPadding = tester.widget<Padding>(
-      find.byKey(const ValueKey<String>('todo-recycle-cancel-padding')),
-    );
-    // 确认按钮保留原 FilledButton 的水平内边距。
-    final Padding confirmPadding = tester.widget<Padding>(
-      find.byKey(const ValueKey<String>('todo-recycle-confirm-padding')),
-    );
-    expect(cancelPadding.padding, const EdgeInsets.symmetric(horizontal: 10));
-    expect(confirmPadding.padding, const EdgeInsets.symmetric(horizontal: 16));
-    // 取消按钮的原生交互层。
-    final TextButton cancelTextButton = tester.widget<TextButton>(cancelAction);
-    // 确认按钮的原生交互层。
-    final TextButton confirmTextButton = tester.widget<TextButton>(
-      confirmAction,
-    );
-    // 取消按钮恢复后的交互形状。
-    final RoundedRectangleBorder cancelShape =
-        cancelTextButton.style!.shape!.resolve(<WidgetState>{})!
-            as RoundedRectangleBorder;
-    // 确认按钮恢复后的交互形状。
-    final RoundedRectangleBorder confirmShape =
-        confirmTextButton.style!.shape!.resolve(<WidgetState>{})!
-            as RoundedRectangleBorder;
-    expect(cancelShape.borderRadius, BorderRadius.circular(OmniRadius.control));
     expect(
-      confirmShape.borderRadius,
-      BorderRadius.circular(OmniRadius.control),
+      tester.widget<OmniButton>(cancelButton).variant,
+      OmniButtonVariant.secondary,
     );
-    cancelTextButton.onHover?.call(true);
-    confirmTextButton.onHover?.call(true);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 150));
-    // 取消按钮动画中点的绘制器。
-    final dynamic cancelPainter = tester
-        .widget<CustomPaint>(cancelPaint)
-        .painter;
-    // 确认按钮动画中点的绘制器。
-    final dynamic confirmPainter = tester
-        .widget<CustomPaint>(confirmPaint)
-        .painter;
-    expect(cancelPainter.progress as double, closeTo(0.5, 0.02));
-    expect(confirmPainter.progress as double, closeTo(0.5, 0.02));
-    cancelTextButton.onHover?.call(false);
-    confirmTextButton.onHover?.call(false);
-    await tester.pumpAndSettle();
-
+    expect(
+      tester.widget<OmniButton>(confirmButton).variant,
+      OmniButtonVariant.danger,
+    );
     await tester.tap(cancelButton);
     await tester.pumpAndSettle();
     expect(find.text('移入回收站？'), findsNothing);
     expect(find.text('待回收任务'), findsOneWidget);
+    await tester.tap(find.byTooltip('更多操作'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('移入回收站'));
+    await tester.pumpAndSettle();
+    await tester.tap(confirmButton);
+    await tester.pumpAndSettle();
+    expect(find.text('移入回收站？'), findsNothing);
+    expect(find.text('待回收任务'), findsNothing);
+    // 确认操作仍按原业务规则软删除，避免视觉迁移改变数据语义。
+    final TodoRecord recycled = await database
+        .select(database.todoItems)
+        .getSingle();
+    expect(recycled.deletedAt, isNotNull);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 1));

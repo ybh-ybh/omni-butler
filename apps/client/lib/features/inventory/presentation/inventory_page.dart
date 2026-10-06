@@ -204,7 +204,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
           barrierDismissible: true,
           barrierLabel: '关闭物品详情',
           barrierColor: Colors.black54,
-          transitionDuration: OmniMotion.panel,
+          transitionDuration: OmniMotion.duration(context, OmniMotion.panel),
           pageBuilder:
               (
                 BuildContext context,
@@ -226,8 +226,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                 Widget child,
               ) {
                 // 尊重系统的减少动态效果设置，仅保留轻量淡入淡出。
-                final bool disableAnimations = MediaQuery.of(context)
-                    .disableAnimations;
+                final bool disableAnimations = OmniMotion.reduce(context);
                 // 弹性较弱的缓动避免翻转显得拖沓。
                 final Animation<double> curvedAnimation = CurvedAnimation(
                   parent: animation,
@@ -599,7 +598,7 @@ class _InventoryCreateSplitButtonState
     // 菜单比整个按钮窄 8px，且与按钮右边缘对齐。
     final double menuWidth = anchor.width - OmniSpacing.xs;
     // 用户的减少动画偏好。
-    final bool reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final bool reduceMotion = OmniMotion.reduce(context);
     setState(() => _menuOpen = true);
     // 用户选中的次要操作；点击外部或返回时为空。
     final _InventoryQuickAction?
@@ -832,7 +831,7 @@ class _InventoryCreateSplitButtonState
               child: MergeSemantics(
                 child: Semantics(
                   label: '更多物品操作',
-                  child: IconButton(
+                  child: OmniIconButton(
                     key: const ValueKey<String>(
                       'inventory-mobile-more-actions',
                     ),
@@ -1360,7 +1359,7 @@ class _InventoryFilterButton extends StatelessWidget {
     return SizedBox.square(
       key: const ValueKey<String>('inventory-filter-toggle'),
       dimension: size,
-      child: IconButton(
+      child: OmniIconButton(
         tooltip: expanded ? '收起筛选' : '展开筛选',
         onPressed: onPressed,
         isSelected: expanded,
@@ -1433,7 +1432,7 @@ class _InventorySearchField extends StatelessWidget {
       key: const ValueKey<String>('inventory-search-field'),
       width: width,
       height: height,
-      child: TextField(
+      child: OmniTextField(
         controller: controller,
         onChanged: onChanged,
         textInputAction: TextInputAction.search,
@@ -1466,19 +1465,11 @@ class _InventorySearchField extends StatelessWidget {
           ),
           suffixIcon: query.isEmpty
               ? null
-              : IconButton(
+              : OmniIconButton(
                   tooltip: '清空搜索',
                   onPressed: onClear,
                   icon: const Icon(Icons.close_rounded),
                 ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(OmniRadius.panel),
-            borderSide: BorderSide(color: colors.line),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(OmniRadius.panel),
-            borderSide: BorderSide(color: colors.item, width: 1.5),
-          ),
         ),
       ),
     );
@@ -2488,7 +2479,7 @@ class _InventoryCard extends ConsumerWidget {
                       ),
                     ),
                     if (accessoryCount > 0) ...<Widget>[
-                      IconButton(
+                      OmniIconButton(
                         key: ValueKey<String>(
                           'inventory-accessories-button-${item.id}',
                         ),
@@ -2722,7 +2713,7 @@ class _InventoryCard extends ConsumerWidget {
           const SizedBox(width: OmniSpacing.xs),
           SizedBox(
             key: ValueKey<String>('inventory-card-trailing-${item.id}'),
-            width: 88,
+            width: OmniSize.touch * 2,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: <Widget>[
@@ -2734,7 +2725,7 @@ class _InventoryCard extends ConsumerWidget {
                       if (accessoryCount > 0)
                         SizedBox.square(
                           dimension: OmniSize.touch,
-                          child: IconButton(
+                          child: OmniIconButton(
                             key: ValueKey<String>(
                               'inventory-accessories-button-${item.id}',
                             ),
@@ -2982,7 +2973,7 @@ class _InventoryDetailDialog extends ConsumerWidget {
                             ],
                           ),
                         ),
-                        IconButton(
+                        OmniIconButton(
                           tooltip: '关闭',
                           onPressed: () => Navigator.of(context).pop(),
                           padding: EdgeInsets.zero,
@@ -3686,7 +3677,7 @@ class _InventoryEditorDialogState
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                TextFormField(
+                OmniTextFormField(
                   controller: _nameController,
                   autofocus: true,
                   decoration: const InputDecoration(labelText: '物品名称 *'),
@@ -3697,7 +3688,7 @@ class _InventoryEditorDialogState
                 Row(
                   children: <Widget>[
                     Expanded(
-                      child: TextFormField(
+                      child: OmniTextFormField(
                         controller: _quantityController,
                         keyboardType: TextInputType.number,
                         decoration: const InputDecoration(labelText: '数量 *'),
@@ -3793,7 +3784,7 @@ class _InventoryEditorDialogState
                 Row(
                   children: <Widget>[
                     Expanded(
-                      child: TextFormField(
+                      child: OmniTextFormField(
                         controller: _priceController,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
@@ -3839,14 +3830,14 @@ class _InventoryEditorDialogState
                 Row(
                   children: <Widget>[
                     Expanded(
-                      child: TextField(
+                      child: OmniTextField(
                         controller: _platformController,
                         decoration: const InputDecoration(labelText: '购买平台'),
                       ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: TextField(
+                      child: OmniTextField(
                         controller: _urlController,
                         decoration: const InputDecoration(
                           labelText: '购买链接',
@@ -3874,7 +3865,7 @@ class _InventoryEditorDialogState
                   ),
                 ),
                 const SizedBox(height: 14),
-                TextField(
+                OmniTextField(
                   controller: _notesController,
                   maxLines: 3,
                   decoration: const InputDecoration(labelText: '备注'),
@@ -4275,7 +4266,7 @@ class _AccessoryListItem extends StatelessWidget {
               ),
             ],
           ),
-          IconButton(
+          OmniIconButton(
             tooltip: '删除配套物品',
             onPressed: onDelete,
             icon: Icon(Icons.delete_outline_rounded, color: colors.danger),

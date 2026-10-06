@@ -1,10 +1,13 @@
 export 'omni_button.dart';
 export 'omni_date_time_picker.dart';
 export 'omni_dropdown.dart';
+export 'omni_icon_button.dart';
+export 'omni_input.dart';
 export 'omni_message.dart';
 export 'omni_overlay.dart';
 export 'omni_page_header.dart';
 export 'omni_panel.dart';
+export 'omni_selection.dart';
 export 'omni_sliding_segmented_control.dart';
 export 'omni_split_action_button.dart';
 export 'omni_statistics_carousel.dart';

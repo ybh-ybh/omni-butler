@@ -39,7 +39,7 @@ class OmniTag extends StatelessWidget {
         horizontal: compact ? OmniSpacing.xxs : OmniSpacing.xs,
       ),
       decoration: BoxDecoration(
-        color: effectiveColor.withValues(alpha: 0.12),
+        color: effectiveColor.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(
           compact ? OmniRadius.tiny : OmniRadius.control,
         ),
@@ -57,7 +57,7 @@ class OmniTag extends StatelessWidget {
               color: effectiveColor,
               fontSize: compact ? 11 : 12,
               height: 1.5,
-              fontWeight: FontWeight.w400,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],

@@ -624,13 +624,13 @@ class _FloatingTitleBar extends StatelessWidget {
               ),
             ),
           ),
-          IconButton(
+          OmniIconButton(
             key: const ValueKey<String>('floating-window-open-todos'),
             tooltip: '打开每日待办',
             onPressed: onOpenTodos,
             icon: const Icon(Icons.checklist_rounded, size: OmniSize.icon),
           ),
-          IconButton(
+          OmniIconButton(
             key: const ValueKey<String>('floating-window-close-button'),
             tooltip: '关闭桌面悬浮框',
             onPressed: () => unawaited(onClose()),
@@ -790,7 +790,7 @@ class _FloatingTodosState extends ConsumerState<_FloatingTodos> {
             ),
             SizedBox.square(
               dimension: OmniSize.control,
-              child: IconButton(
+              child: OmniIconButton(
                 key: const ValueKey<String>('floating-todo-toggle-all'),
                 tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
                 padding: EdgeInsets.zero,
@@ -840,7 +840,7 @@ class _FloatingTodosState extends ConsumerState<_FloatingTodos> {
             const SizedBox(width: OmniSpacing.xxs),
             SizedBox.square(
               dimension: OmniSize.control,
-              child: IconButton(
+              child: OmniIconButton(
                 key: const ValueKey<String>('floating-todo-create'),
                 tooltip: composerOpen ? '取消新增待办' : '新增待办',
                 padding: EdgeInsets.zero,
@@ -969,7 +969,7 @@ class _FloatingComposerFrame extends StatelessWidget {
                   ),
                   SizedBox.square(
                     dimension: 28,
-                    child: IconButton(
+                    child: OmniIconButton(
                       tooltip: '取消',
                       padding: EdgeInsets.zero,
                       onPressed: onClose,
@@ -988,7 +988,7 @@ class _FloatingComposerFrame extends StatelessWidget {
   }
 }
 
-/// 创建适配毛玻璃悬浮窗的飞书式紧凑输入装饰。
+/// 创建适配毛玻璃悬浮窗的统一紧凑输入装饰。
 InputDecoration _floatingFieldDecoration(
   BuildContext context, {
   String? hintText,
@@ -999,17 +999,17 @@ InputDecoration _floatingFieldDecoration(
   final bool isDark = Theme.of(context).brightness == Brightness.dark;
   // 默认输入边框。
   final OutlineInputBorder enabledBorder = OutlineInputBorder(
-    borderRadius: BorderRadius.circular(6),
+    borderRadius: BorderRadius.circular(OmniRadius.control),
     borderSide: BorderSide(color: colors.line.withValues(alpha: 0.88)),
   );
   // 聚焦输入边框。
   final OutlineInputBorder focusedBorder = OutlineInputBorder(
-    borderRadius: BorderRadius.circular(6),
+    borderRadius: BorderRadius.circular(OmniRadius.control),
     borderSide: BorderSide(color: colors.brand, width: 1.5),
   );
   // 错误输入边框。
   final OutlineInputBorder errorBorder = OutlineInputBorder(
-    borderRadius: BorderRadius.circular(6),
+    borderRadius: BorderRadius.circular(OmniRadius.control),
     borderSide: BorderSide(color: colors.danger),
   );
   return InputDecoration(
@@ -1155,7 +1155,7 @@ class _FloatingTodoComposerState extends ConsumerState<_FloatingTodoComposer> {
           children: <Widget>[
             _FloatingLabeledField(
               label: '待办标题',
-              child: TextFormField(
+              child: OmniTextFormField(
                 key: const ValueKey<String>('floating-todo-title-field'),
                 controller: _titleController,
                 autofocus: true,
@@ -1454,7 +1454,7 @@ class _FloatingTimeComposerState extends ConsumerState<_FloatingTimeComposer> {
           children: <Widget>[
             _FloatingLabeledField(
               label: backfill ? '活动内容' : '正在做什么',
-              child: TextFormField(
+              child: OmniTextFormField(
                 key: const ValueKey<String>('floating-time-activity-field'),
                 controller: _activityController,
                 autofocus: true,
@@ -1515,7 +1515,7 @@ class _FloatingTimeComposerState extends ConsumerState<_FloatingTimeComposer> {
                 Expanded(
                   child: _FloatingLabeledField(
                     label: '开始时间',
-                    child: TextFormField(
+                    child: OmniTextFormField(
                       key: const ValueKey<String>('floating-time-start-field'),
                       controller: _startController,
                       keyboardType: TextInputType.datetime,
@@ -1538,7 +1538,7 @@ class _FloatingTimeComposerState extends ConsumerState<_FloatingTimeComposer> {
                   Expanded(
                     child: _FloatingLabeledField(
                       label: '结束时间',
-                      child: TextFormField(
+                      child: OmniTextFormField(
                         key: const ValueKey<String>('floating-time-end-field'),
                         controller: _endController,
                         keyboardType: TextInputType.datetime,
@@ -1725,33 +1725,38 @@ class _FloatingTodoQuadrantState extends State<_FloatingTodoQuadrant> {
                     child: Text('暂无任务', style: TextStyle(color: colors.muted)),
                   ),
                 )
-              : Scrollbar(
-                  controller: _scrollController,
-                  child: ListView.builder(
-                    key: PageStorageKey<String>(
-                      'floating-quadrant-${widget.quadrant.value}',
-                    ),
+              : ScrollConfiguration(
+                  // 保留显式滚动条，避免 Windows 再自动绘制第二层。
+                  behavior: ScrollConfiguration.of(context)
+                      .copyWith(scrollbars: false),
+                  child: Scrollbar(
                     controller: _scrollController,
-                    primary: false,
-                    padding: EdgeInsets.zero,
-                    itemCount: widget.todoTrees.length,
-                    itemBuilder: (BuildContext context, int index) {
-                      // 当前滚动位置对应的根任务树。
-                      final TodoTreeNode tree = widget.todoTrees[index];
-                      return _FloatingTodoTree(
-                        key: ValueKey<String>(
-                          'floating-todo-tree-${tree.root.id}',
-                        ),
-                        tree: tree,
-                        accent: accent,
-                        expanded: !widget.collapsedTreeIds.contains(
-                          tree.root.id,
-                        ),
-                        onToggleExpanded: () =>
-                            widget.onToggleTree(tree.root.id),
-                        onComplete: widget.onComplete,
-                      );
-                    },
+                    child: ListView.builder(
+                      key: PageStorageKey<String>(
+                        'floating-quadrant-${widget.quadrant.value}',
+                      ),
+                      controller: _scrollController,
+                      primary: false,
+                      padding: EdgeInsets.zero,
+                      itemCount: widget.todoTrees.length,
+                      itemBuilder: (BuildContext context, int index) {
+                        // 当前滚动位置对应的根任务树。
+                        final TodoTreeNode tree = widget.todoTrees[index];
+                        return _FloatingTodoTree(
+                          key: ValueKey<String>(
+                            'floating-todo-tree-${tree.root.id}',
+                          ),
+                          tree: tree,
+                          accent: accent,
+                          expanded: !widget.collapsedTreeIds.contains(
+                            tree.root.id,
+                          ),
+                          onToggleExpanded: () =>
+                              widget.onToggleTree(tree.root.id),
+                          onComplete: widget.onComplete,
+                        );
+                      },
+                    ),
                   ),
                 ),
         ),
@@ -1875,7 +1880,7 @@ class _FloatingTodoRow extends StatelessWidget {
           SizedBox(
             width: 30,
             height: 30,
-            child: IconButton(
+            child: OmniIconButton(
               key: ValueKey<String>('floating-todo-complete-${todo.id}'),
               tooltip: todo.isCompleted ? '已完成' : '完成任务',
               padding: EdgeInsets.zero,
@@ -1932,7 +1937,9 @@ class _FloatingTodoRow extends StatelessWidget {
                             padding: const EdgeInsets.symmetric(horizontal: 5),
                             decoration: BoxDecoration(
                               color: accent.withValues(alpha: 0.14),
-                              borderRadius: BorderRadius.circular(9),
+                              borderRadius: BorderRadius.circular(
+                                OmniRadius.pill,
+                              ),
                             ),
                             child: Text(
                               '$pendingChildCount',
@@ -1966,7 +1973,7 @@ class _FloatingTodoRow extends StatelessWidget {
             SizedBox(
               width: 30,
               height: 30,
-              child: IconButton(
+              child: OmniIconButton(
                 key: ValueKey<String>('floating-todo-expand-${todo.id}'),
                 tooltip: expanded! ? '收起子任务' : '展开子任务',
                 padding: EdgeInsets.zero,
@@ -2151,7 +2158,7 @@ class _FloatingCompactButton extends StatelessWidget {
       ),
       overlayColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
       elevation: const WidgetStatePropertyAll<double>(0),
-      animationDuration: OmniMotion.fast,
+      animationDuration: OmniMotion.duration(context, OmniMotion.fast),
     );
     // 保存状态下显示的按钮内容。
     final Widget child = loading
@@ -2160,7 +2167,11 @@ class _FloatingCompactButton extends StatelessWidget {
             child: CircularProgressIndicator(strokeWidth: 2),
           )
         : Text(label);
-    return OutlinedButton(onPressed: onPressed, style: style, child: child);
+    return OutlinedButton(
+      onPressed: loading ? null : onPressed,
+      style: style,
+      child: child,
+    );
   }
 }
 

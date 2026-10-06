@@ -106,14 +106,14 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
           },
           child: Column(
             children: <Widget>[
-              RadioListTile<SyncConnectionStrategy>(
+              OmniRadioListTile<SyncConnectionStrategy>(
                 value: SyncConnectionStrategy.replaceLocal,
                 title: const Text('保留服务器数据'),
                 subtitle: const Text('替换本机业务数据及待上传修改；保留应用设置，匹配记录恢复本机图片。'),
                 enabled: !_isLoading,
                 contentPadding: EdgeInsets.zero,
               ),
-              RadioListTile<SyncConnectionStrategy>(
+              OmniRadioListTile<SyncConnectionStrategy>(
                 value: SyncConnectionStrategy.replaceServer,
                 title: const Text('保留本机数据'),
                 subtitle: const Text('完整替换目标服务器的业务数据；本机图片和应用设置全部保留。'),
@@ -162,47 +162,34 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
         title: preview == null ? '连接自托管同步服务' : '确认数据处理方式',
         canClose: !isLoading,
         actions: <Widget>[
-          Expanded(
-            child: Wrap(
-              alignment: WrapAlignment.end,
-              spacing: OmniSpacing.xs,
-              runSpacing: OmniSpacing.xs,
-              children: <Widget>[
-                OmniButton(
-                  label: '取消',
-                  variant: OmniButtonVariant.secondary,
-                  onPressed: isLoading
-                      ? null
-                      : () => Navigator.pop(context, false),
-                ),
-                if (preview != null)
-                  OmniButton(
-                    label: '返回修改',
-                    variant: OmniButtonVariant.text,
-                    onPressed: isLoading
-                        ? null
-                        : () => setState(() {
-                            _preview = null;
-                            _error = null;
-                          }),
-                  ),
-                OmniButton(
-                  label: preview == null
-                      ? '检查服务器'
-                      : _confirmationLabel(preview),
-                  variant:
-                      preview != null &&
-                          !preview.isReconnect &&
-                          _strategy != SyncConnectionStrategy.mergeInitial
-                      ? OmniButtonVariant.danger
-                      : OmniButtonVariant.primary,
-                  loading: isLoading,
-                  onPressed: isLoading
-                      ? null
-                      : (preview == null ? _submit : _confirm),
-                ),
-              ],
+          OmniButton(
+            label: '取消',
+            variant: OmniButtonVariant.secondary,
+            onPressed: isLoading ? null : () => Navigator.pop(context, false),
+          ),
+          if (preview != null)
+            OmniButton(
+              label: '返回修改',
+              variant: OmniButtonVariant.text,
+              onPressed: isLoading
+                  ? null
+                  : () => setState(() {
+                      _preview = null;
+                      _error = null;
+                    }),
             ),
+          OmniButton(
+            label: preview == null ? '检查服务器' : _confirmationLabel(preview),
+            variant:
+                preview != null &&
+                    !preview.isReconnect &&
+                    _strategy != SyncConnectionStrategy.mergeInitial
+                ? OmniButtonVariant.danger
+                : OmniButtonVariant.primary,
+            loading: isLoading,
+            onPressed: isLoading
+                ? null
+                : (preview == null ? _submit : _confirm),
           ),
         ],
         child: SingleChildScrollView(
@@ -219,7 +206,7 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: OmniSpacing.lg),
-                  TextFormField(
+                  OmniTextFormField(
                     controller: _serverController,
                     enabled: !isLoading,
                     decoration: const InputDecoration(
@@ -231,7 +218,7 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
                     validator: _validateServerAddress,
                   ),
                   const SizedBox(height: OmniSpacing.md),
-                  TextFormField(
+                  OmniTextFormField(
                     controller: _portController,
                     enabled: !isLoading,
                     decoration: const InputDecoration(
@@ -242,14 +229,14 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
                     validator: _validatePort,
                   ),
                   const SizedBox(height: OmniSpacing.md),
-                  TextFormField(
+                  OmniTextFormField(
                     controller: _syncKeyController,
                     enabled: !isLoading,
                     obscureText: _obscureSyncKey,
                     decoration: InputDecoration(
                       labelText: '同步密钥',
                       helperText: '与服务器 SYNC_SECRET 配置保持一致，至少 16 个字符',
-                      suffixIcon: IconButton(
+                      suffixIcon: OmniIconButton(
                         onPressed: isLoading
                             ? null
                             : () => setState(

@@ -207,7 +207,7 @@ class OmniColors extends ThemeExtension<OmniColors> {
 
 /// 应用主题工厂。
 abstract final class AppTheme {
-  /// 根据设备配色和明暗模式构建主题，默认保留原有品牌外观。
+  /// 根据设备配色和明暗模式构建共享的克制主题。
   static ThemeData build({
     required Brightness brightness,
     AppThemePalette palette = AppThemePalette.classicBlue,
@@ -223,7 +223,7 @@ abstract final class AppTheme {
                   )
                 : palette.colorScheme(brightness))
             .copyWith(
-              primary: colors.brand,
+              primary: _readableFill(colors.brand, colors.accentInk),
               onPrimary: colors.accentInk,
               primaryContainer: colors.brandSoft,
               onPrimaryContainer: colors.brandStrong,
@@ -235,7 +235,7 @@ abstract final class AppTheme {
               outline: colors.line,
               outlineVariant: colors.mist,
               surfaceContainerHighest: colors.paperSubtle,
-              error: colors.danger,
+              error: _readableFill(colors.danger, Colors.white),
               onError: Colors.white,
             );
     // 控件统一圆角。
@@ -252,6 +252,21 @@ abstract final class AppTheme {
       borderRadius: BorderRadius.circular(OmniRadius.control),
       borderSide: BorderSide(color: colors.line),
     );
+    // 平台决定默认热区，窄桌面窗口仍保留桌面密度。
+    final bool desktop = OmniBreakpoint.isDesktopPlatform(
+      defaultTargetPlatform,
+    );
+    // 原生后备控件也使用相同的最小尺寸。
+    final double controlHeight = desktop ? OmniSize.control : OmniSize.touch;
+    // 所有基础控件共享标准触控或紧凑桌面密度。
+    final VisualDensity density = desktop
+        ? VisualDensity.compact
+        : VisualDensity.standard;
+    // 交互时向远离文字亮度的方向变化，保持深浅文字色对均可读。
+    final Color primaryStateTint =
+        scheme.onPrimary.computeLuminance() > scheme.primary.computeLuminance()
+        ? Colors.black
+        : Colors.white;
 
     return ThemeData(
       useMaterial3: true,
@@ -259,29 +274,20 @@ abstract final class AppTheme {
       colorScheme: scheme,
       scaffoldBackgroundColor: colors.canvas,
       canvasColor: colors.canvas,
-      fontFamily: defaultTargetPlatform == TargetPlatform.windows
-          ? 'Microsoft YaHei UI'
-          : 'Inter',
-      fontFamilyFallback: defaultTargetPlatform == TargetPlatform.windows
-          ? const <String>['Microsoft YaHei', 'Segoe UI Emoji', 'sans-serif']
-          : const <String>[
-              'Segoe UI',
-              'PingFang SC',
-              'Microsoft YaHei UI',
-              'Microsoft YaHei',
-              'Noto Sans CJK SC',
-              'Segoe UI Emoji',
-              'sans-serif',
-            ],
+      fontFamily: _fontFamily,
+      fontFamilyFallback: _fontFamilyFallback,
       extensions: <ThemeExtension<dynamic>>[colors],
       textTheme: _textTheme(colors),
       dividerColor: colors.line,
       disabledColor: colors.muted.withValues(alpha: 0.45),
-      hoverColor: colors.ink.withValues(alpha: 0.08),
+      hoverColor: colors.ink.withValues(alpha: 0.05),
       highlightColor: colors.brand.withValues(alpha: 0.08),
       focusColor: colors.brand.withValues(alpha: 0.16),
       splashFactory: NoSplash.splashFactory,
-      visualDensity: VisualDensity.compact,
+      visualDensity: density,
+      materialTapTargetSize: desktop
+          ? MaterialTapTargetSize.shrinkWrap
+          : MaterialTapTargetSize.padded,
       scrollbarTheme: ScrollbarThemeData(
         thickness: const WidgetStatePropertyAll<double>(4),
         radius: const Radius.circular(999),
@@ -309,6 +315,7 @@ abstract final class AppTheme {
       ),
       cardTheme: CardThemeData(
         color: colors.paper,
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
         margin: EdgeInsets.zero,
         clipBehavior: Clip.antiAlias,
@@ -346,19 +353,19 @@ abstract final class AppTheme {
           borderRadius: BorderRadius.circular(OmniRadius.control),
           borderSide: BorderSide(color: colors.mist),
         ),
-        labelStyle: TextStyle(color: colors.muted, fontSize: 14),
-        floatingLabelStyle: TextStyle(color: colors.brand, fontSize: 13),
-        hintStyle: TextStyle(color: colors.muted, fontSize: 14),
-        helperStyle: TextStyle(color: colors.muted, fontSize: 12),
-        errorStyle: TextStyle(color: colors.danger, fontSize: 12),
+        labelStyle: _textStyle(color: colors.muted, fontSize: 14),
+        floatingLabelStyle: _textStyle(color: colors.brand, fontSize: 13),
+        hintStyle: _textStyle(color: colors.muted, fontSize: 14),
+        helperStyle: _textStyle(color: colors.muted, fontSize: 12),
+        errorStyle: _textStyle(color: colors.danger, fontSize: 12),
+        errorMaxLines: 3,
         prefixIconColor: colors.muted,
         suffixIconColor: colors.muted,
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: ButtonStyle(
-          minimumSize: const WidgetStatePropertyAll<Size>(
-            Size(0, OmniSize.control),
-          ),
+          visualDensity: VisualDensity.standard,
+          minimumSize: WidgetStatePropertyAll<Size>(Size(0, controlHeight)),
           padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
             EdgeInsets.symmetric(horizontal: 16),
           ),
@@ -369,20 +376,32 @@ abstract final class AppTheme {
               return colors.mist;
             }
             if (states.contains(WidgetState.pressed)) {
-              return colors.brandStrong;
+              return Color.alphaBlend(
+                primaryStateTint.withValues(alpha: 0.14),
+                scheme.primary,
+              );
             }
             if (states.contains(WidgetState.hovered)) {
-              return colors.brand.withValues(alpha: 0.88);
+              return Color.alphaBlend(
+                primaryStateTint.withValues(alpha: 0.06),
+                scheme.primary,
+              );
             }
-            return colors.brand;
+            return scheme.primary;
           }),
           foregroundColor: WidgetStateProperty.resolveWith<Color?>(
             (Set<WidgetState> states) => states.contains(WidgetState.disabled)
                 ? colors.muted
-                : colors.accentInk,
+                : scheme.onPrimary,
           ),
-          textStyle: const WidgetStatePropertyAll<TextStyle>(
-            TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
+          overlayColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
+          side: WidgetStateProperty.resolveWith<BorderSide>(
+            (Set<WidgetState> states) => states.contains(WidgetState.focused)
+                ? BorderSide(color: colors.ink.withValues(alpha: 0.7), width: 2)
+                : const BorderSide(color: Colors.transparent),
+          ),
+          textStyle: WidgetStatePropertyAll<TextStyle>(
+            _textStyle(fontSize: 14, fontWeight: FontWeight.w500),
           ),
           shape: WidgetStatePropertyAll<OutlinedBorder>(controlShape),
           elevation: const WidgetStatePropertyAll<double>(0),
@@ -390,9 +409,8 @@ abstract final class AppTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: ButtonStyle(
-          minimumSize: const WidgetStatePropertyAll<Size>(
-            Size(0, OmniSize.control),
-          ),
+          visualDensity: VisualDensity.standard,
+          minimumSize: WidgetStatePropertyAll<Size>(Size(0, controlHeight)),
           padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
             EdgeInsets.symmetric(horizontal: 14),
           ),
@@ -419,8 +437,8 @@ abstract final class AppTheme {
                   : colors.line,
             ),
           ),
-          textStyle: const WidgetStatePropertyAll<TextStyle>(
-            TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
+          textStyle: WidgetStatePropertyAll<TextStyle>(
+            _textStyle(fontSize: 14, fontWeight: FontWeight.w500),
           ),
           shape: WidgetStatePropertyAll<OutlinedBorder>(controlShape),
           elevation: const WidgetStatePropertyAll<double>(0),
@@ -428,9 +446,8 @@ abstract final class AppTheme {
       ),
       textButtonTheme: TextButtonThemeData(
         style: ButtonStyle(
-          minimumSize: const WidgetStatePropertyAll<Size>(
-            Size(0, OmniSize.control),
-          ),
+          visualDensity: VisualDensity.standard,
+          minimumSize: WidgetStatePropertyAll<Size>(Size(0, controlHeight)),
           padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
             EdgeInsets.symmetric(horizontal: 10),
           ),
@@ -445,16 +462,15 @@ abstract final class AppTheme {
                 : Colors.transparent,
           ),
           shape: WidgetStatePropertyAll<OutlinedBorder>(controlShape),
-          textStyle: const WidgetStatePropertyAll<TextStyle>(
-            TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
+          textStyle: WidgetStatePropertyAll<TextStyle>(
+            _textStyle(fontSize: 14, fontWeight: FontWeight.w500),
           ),
         ),
       ),
       iconButtonTheme: IconButtonThemeData(
         style: ButtonStyle(
-          minimumSize: const WidgetStatePropertyAll<Size>(
-            Size.square(OmniSize.control),
-          ),
+          visualDensity: VisualDensity.standard,
+          minimumSize: WidgetStatePropertyAll<Size>(Size.square(controlHeight)),
           iconSize: const WidgetStatePropertyAll<double>(OmniSize.icon),
           foregroundColor: WidgetStateProperty.resolveWith<Color?>(
             (Set<WidgetState> states) => states.contains(WidgetState.disabled)
@@ -476,8 +492,37 @@ abstract final class AppTheme {
         ),
       ),
       checkboxTheme: CheckboxThemeData(
-        visualDensity: VisualDensity.compact,
-        side: BorderSide(color: colors.muted),
+        visualDensity: density,
+        checkColor: WidgetStateProperty.resolveWith<Color?>((
+          Set<WidgetState> states,
+        ) {
+          if (states.contains(WidgetState.disabled)) {
+            return colors.muted.withValues(alpha: 0.45);
+          }
+          if (states.contains(WidgetState.error)) {
+            return scheme.onError;
+          }
+          return colors.accentInk;
+        }),
+        side: WidgetStateBorderSide.resolveWith((Set<WidgetState> states) {
+          if (states.contains(WidgetState.disabled)) {
+            return BorderSide(
+              color: states.contains(WidgetState.selected)
+                  ? Colors.transparent
+                  : colors.muted.withValues(alpha: 0.45),
+              width: 1.5,
+            );
+          }
+          if (states.contains(WidgetState.error)) {
+            return BorderSide(color: scheme.error, width: 1.5);
+          }
+          return BorderSide(
+            color: states.contains(WidgetState.selected)
+                ? Colors.transparent
+                : colors.muted,
+            width: 1.5,
+          );
+        }),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(OmniRadius.tiny),
         ),
@@ -488,13 +533,15 @@ abstract final class AppTheme {
             return colors.mist;
           }
           if (states.contains(WidgetState.selected)) {
-            return colors.brand;
+            return states.contains(WidgetState.error)
+                ? scheme.error
+                : colors.brand;
           }
           return Colors.transparent;
         }),
       ),
       radioTheme: RadioThemeData(
-        visualDensity: VisualDensity.compact,
+        visualDensity: density,
         fillColor: WidgetStateProperty.resolveWith<Color?>(
           (Set<WidgetState> states) => states.contains(WidgetState.disabled)
               ? colors.muted.withValues(alpha: 0.45)
@@ -502,8 +549,13 @@ abstract final class AppTheme {
         ),
       ),
       switchTheme: SwitchThemeData(
-        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        materialTapTargetSize: desktop
+            ? MaterialTapTargetSize.shrinkWrap
+            : MaterialTapTargetSize.padded,
         padding: EdgeInsets.zero,
+        trackOutlineColor: const WidgetStatePropertyAll<Color>(
+          Colors.transparent,
+        ),
         overlayColor: WidgetStateProperty.resolveWith<Color?>((
           Set<WidgetState> states,
         ) {
@@ -528,15 +580,23 @@ abstract final class AppTheme {
         thumbColor: WidgetStateProperty.resolveWith<Color?>(
           (Set<WidgetState> states) => states.contains(WidgetState.disabled)
               ? colors.paperSubtle
-              : colors.paper,
+              : Colors.white,
         ),
       ),
       chipTheme: ChipThemeData(
         backgroundColor: colors.paperSubtle,
         selectedColor: colors.brandSoft,
         disabledColor: colors.mist,
-        labelStyle: TextStyle(color: colors.ink, fontSize: 12),
-        secondaryLabelStyle: TextStyle(color: colors.brandStrong, fontSize: 12),
+        labelStyle: _textStyle(
+          color: colors.ink,
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        ),
+        secondaryLabelStyle: _textStyle(
+          color: colors.brandStrong,
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        ),
         side: BorderSide.none,
         padding: const EdgeInsets.symmetric(horizontal: 8),
         shape: RoundedRectangleBorder(
@@ -544,16 +604,16 @@ abstract final class AppTheme {
         ),
       ),
       listTileTheme: ListTileThemeData(
-        minTileHeight: 44,
+        minTileHeight: desktop ? OmniSize.controlLarge : OmniSize.touch,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
         iconColor: colors.muted,
         textColor: colors.ink,
-        titleTextStyle: TextStyle(
+        titleTextStyle: _textStyle(
           color: colors.ink,
           fontSize: 14,
           fontWeight: FontWeight.w400,
         ),
-        subtitleTextStyle: TextStyle(
+        subtitleTextStyle: _textStyle(
           color: colors.muted,
           fontSize: 12,
           height: 1.45,
@@ -564,9 +624,8 @@ abstract final class AppTheme {
       ),
       segmentedButtonTheme: SegmentedButtonThemeData(
         style: ButtonStyle(
-          minimumSize: const WidgetStatePropertyAll<Size>(
-            Size(0, OmniSize.control),
-          ),
+          visualDensity: VisualDensity.standard,
+          minimumSize: WidgetStatePropertyAll<Size>(Size(0, controlHeight)),
           padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
             EdgeInsets.symmetric(horizontal: 12),
           ),
@@ -584,10 +643,29 @@ abstract final class AppTheme {
             BorderSide(color: colors.line),
           ),
           shape: WidgetStatePropertyAll<OutlinedBorder>(controlShape),
-          textStyle: const WidgetStatePropertyAll<TextStyle>(
-            TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
+          textStyle: WidgetStatePropertyAll<TextStyle>(
+            _textStyle(fontSize: 13, fontWeight: FontWeight.w500),
           ),
         ),
+      ),
+      sliderTheme: SliderThemeData(
+        activeTrackColor: colors.brand,
+        inactiveTrackColor: colors.mist,
+        thumbColor: colors.brand,
+        overlayColor: colors.brand.withValues(alpha: 0.12),
+        disabledActiveTrackColor: colors.line,
+        disabledInactiveTrackColor: colors.mist,
+        disabledThumbColor: colors.muted,
+        valueIndicatorColor: colors.ink,
+        valueIndicatorTextStyle: _textStyle(color: colors.paper, fontSize: 12),
+        trackHeight: 4,
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(
+        color: colors.brand,
+        circularTrackColor: colors.mist,
+        linearTrackColor: colors.mist,
+        linearMinHeight: 4,
+        borderRadius: BorderRadius.circular(OmniRadius.pill),
       ),
       dialogTheme: DialogThemeData(
         backgroundColor: colors.paper,
@@ -598,12 +676,12 @@ abstract final class AppTheme {
           borderRadius: BorderRadius.circular(OmniRadius.dialog),
           side: BorderSide(color: colors.line),
         ),
-        titleTextStyle: TextStyle(
+        titleTextStyle: _textStyle(
           color: colors.ink,
           fontSize: 18,
           fontWeight: FontWeight.w600,
         ),
-        contentTextStyle: TextStyle(
+        contentTextStyle: _textStyle(
           color: colors.ink,
           fontSize: 14,
           height: 1.5,
@@ -627,7 +705,7 @@ abstract final class AppTheme {
         shadowColor: Colors.black.withValues(alpha: 0.12),
         menuPadding: const EdgeInsets.all(OmniSpacing.xxs),
         position: PopupMenuPosition.under,
-        textStyle: TextStyle(
+        textStyle: _textStyle(
           color: colors.ink,
           fontSize: 14,
           fontWeight: FontWeight.w400,
@@ -635,7 +713,7 @@ abstract final class AppTheme {
         labelTextStyle: WidgetStateProperty.resolveWith<TextStyle?>((
           Set<WidgetState> states,
         ) {
-          return TextStyle(
+          return _textStyle(
             color: states.contains(WidgetState.disabled)
                 ? colors.muted.withValues(alpha: 0.45)
                 : colors.ink,
@@ -663,12 +741,12 @@ abstract final class AppTheme {
           color: colors.muted,
           size: OmniSize.navigationIcon,
         ),
-        selectedLabelTextStyle: TextStyle(
+        selectedLabelTextStyle: _textStyle(
           color: colors.brand,
           fontSize: 11,
           fontWeight: FontWeight.w600,
         ),
-        unselectedLabelTextStyle: TextStyle(color: colors.muted, fontSize: 11),
+        unselectedLabelTextStyle: _textStyle(color: colors.muted, fontSize: 11),
       ),
       navigationBarTheme: NavigationBarThemeData(
         height: 64,
@@ -687,7 +765,7 @@ abstract final class AppTheme {
           ),
         ),
         labelTextStyle: WidgetStateProperty.resolveWith<TextStyle?>(
-          (Set<WidgetState> states) => TextStyle(
+          (Set<WidgetState> states) => _textStyle(
             color: states.contains(WidgetState.selected)
                 ? colors.brand
                 : colors.muted,
@@ -714,10 +792,10 @@ abstract final class AppTheme {
           BorderSide(color: colors.line),
         ),
         textStyle: WidgetStatePropertyAll<TextStyle>(
-          TextStyle(color: colors.ink, fontSize: 14),
+          _textStyle(color: colors.ink, fontSize: 14),
         ),
         hintStyle: WidgetStatePropertyAll<TextStyle>(
-          TextStyle(color: colors.muted, fontSize: 14),
+          _textStyle(color: colors.muted, fontSize: 14),
         ),
         padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
           EdgeInsets.symmetric(horizontal: 12),
@@ -728,7 +806,7 @@ abstract final class AppTheme {
         backgroundColor: brightness == Brightness.dark
             ? const Color(0xFFF5F6F7)
             : const Color(0xFF1F2329),
-        contentTextStyle: TextStyle(
+        contentTextStyle: _textStyle(
           color: brightness == Brightness.dark
               ? const Color(0xFF1F2329)
               : const Color(0xFFFFFFFF),
@@ -756,70 +834,163 @@ abstract final class AppTheme {
           color: colors.ink,
           borderRadius: BorderRadius.circular(OmniRadius.control),
         ),
-        textStyle: TextStyle(color: colors.canvas, fontSize: 12),
+        textStyle: _textStyle(color: colors.canvas, fontSize: 12),
       ),
+    );
+  }
+
+  /// 用最小亮度调整获得可读实色填色，品牌与业务状态语义色保持不变。
+  static Color _readableFill(Color semanticColor, Color foreground) {
+    // 比普通文字最低对比度略高，给颜色量化保留余量。
+    const double contrastTarget = 4.6;
+    // 当前文字亮度决定可读填色的调整方向。
+    final double foregroundLuminance = foreground.computeLuminance();
+    // 计算候选背景与固定文字的实际对比度。
+    double contrastFor(Color background) {
+      // 候选背景的线性亮度。
+      final double backgroundLuminance = background.computeLuminance();
+      return foregroundLuminance > backgroundLuminance
+          ? (foregroundLuminance + 0.05) / (backgroundLuminance + 0.05)
+          : (backgroundLuminance + 0.05) / (foregroundLuminance + 0.05);
+    }
+
+    if (contrastFor(semanticColor) >= contrastTarget) {
+      return semanticColor;
+    }
+    // 非经典深色主题使用深色文字，必要时须提亮而非加深背景。
+    final Color tint = contrastFor(Colors.black) > contrastFor(Colors.white)
+        ? Colors.black
+        : Colors.white;
+    // 混合比例的不可读下界。
+    double lower = 0;
+    // 混合比例的可读上界。
+    double upper = 1;
+    // 二分逼近保留原有色相的最小调整量。
+    for (int iteration = 0; iteration < 16; iteration += 1) {
+      // 本轮候选混合比例。
+      final double blend = (lower + upper) / 2;
+      // 当前候选的实色背景。
+      final Color candidate = Color.alphaBlend(
+        tint.withValues(alpha: blend),
+        semanticColor,
+      );
+      if (contrastFor(candidate) >= contrastTarget) {
+        upper = blend;
+      } else {
+        lower = blend;
+      }
+    }
+    return Color.alphaBlend(tint.withValues(alpha: upper), semanticColor);
+  }
+
+  /// 根据平台选择生产环境已有的系统字体。
+  static String get _fontFamily => switch (defaultTargetPlatform) {
+    TargetPlatform.windows => 'Microsoft YaHei UI',
+    TargetPlatform.iOS || TargetPlatform.macOS => '.SF UI Text',
+    TargetPlatform.android ||
+    TargetPlatform.linux ||
+    TargetPlatform.fuchsia => 'Roboto',
+  };
+
+  /// 中文和表情使用系统回退字体，不依赖开发机上的测试字体资源。
+  static List<String> get _fontFamilyFallback =>
+      defaultTargetPlatform == TargetPlatform.windows
+      ? const <String>['Microsoft YaHei', 'Segoe UI Emoji', 'sans-serif']
+      : const <String>[
+          'Noto Sans CJK SC',
+          'Noto Sans SC',
+          'PingFang SC',
+          'Microsoft YaHei UI',
+          'Microsoft YaHei',
+          'Segoe UI Emoji',
+          'sans-serif',
+        ];
+
+  /// 组件局部文字样式与正文共用字体，避免局部样式丢失中文字体回退。
+  static TextStyle _textStyle({
+    Color? color,
+    double? fontSize,
+    double? height,
+    double? letterSpacing,
+    FontWeight? fontWeight,
+  }) {
+    return TextStyle(
+      fontFamily: _fontFamily,
+      fontFamilyFallback: _fontFamilyFallback,
+      color: color,
+      fontSize: fontSize,
+      height: height,
+      letterSpacing: letterSpacing,
+      fontWeight: fontWeight,
     );
   }
 
   /// 构建界面文字层级。
   static TextTheme _textTheme(OmniColors colors) {
     return TextTheme(
-      displaySmall: TextStyle(
+      displaySmall: _textStyle(
         color: colors.ink,
         fontSize: 24,
-        height: 1.35,
+        height: 1.3,
+        letterSpacing: -0.4,
         fontWeight: FontWeight.w600,
       ),
-      headlineLarge: TextStyle(
+      headlineLarge: _textStyle(
         color: colors.ink,
         fontSize: 22,
-        height: 1.4,
+        height: 1.3,
+        letterSpacing: -0.3,
         fontWeight: FontWeight.w600,
       ),
-      headlineMedium: TextStyle(
+      headlineMedium: _textStyle(
         color: colors.ink,
         fontSize: 20,
+        height: 1.35,
+        letterSpacing: -0.2,
+        fontWeight: FontWeight.w600,
+      ),
+      headlineSmall: _textStyle(
+        color: colors.ink,
+        fontSize: 18,
         height: 1.4,
         fontWeight: FontWeight.w600,
       ),
-      headlineSmall: TextStyle(
+      titleLarge: _textStyle(
         color: colors.ink,
         fontSize: 18,
-        height: 1.45,
+        height: 1.4,
         fontWeight: FontWeight.w600,
       ),
-      titleLarge: TextStyle(
-        color: colors.ink,
-        fontSize: 18,
-        height: 1.45,
-        fontWeight: FontWeight.w600,
-      ),
-      titleMedium: TextStyle(
+      titleMedium: _textStyle(
         color: colors.ink,
         fontSize: 16,
         height: 1.5,
         fontWeight: FontWeight.w600,
       ),
-      titleSmall: TextStyle(
+      titleSmall: _textStyle(
         color: colors.ink,
         fontSize: 14,
         height: 1.5,
         fontWeight: FontWeight.w600,
       ),
-      bodyLarge: TextStyle(color: colors.ink, fontSize: 16, height: 1.5),
-      bodyMedium: TextStyle(color: colors.ink, fontSize: 14, height: 1.55),
-      bodySmall: TextStyle(color: colors.muted, fontSize: 12, height: 1.5),
-      labelLarge: TextStyle(
+      bodyLarge: _textStyle(color: colors.ink, fontSize: 16, height: 1.5),
+      bodyMedium: _textStyle(color: colors.ink, fontSize: 14, height: 1.55),
+      bodySmall: _textStyle(color: colors.muted, fontSize: 12, height: 1.5),
+      labelLarge: _textStyle(
         color: colors.ink,
         fontSize: 14,
-        fontWeight: FontWeight.w400,
+        fontWeight: FontWeight.w500,
       ),
-      labelMedium: TextStyle(
+      labelMedium: _textStyle(
         color: colors.ink,
         fontSize: 12,
         fontWeight: FontWeight.w400,
       ),
-      labelSmall: TextStyle(color: colors.muted, fontSize: 11),
+      labelSmall: _textStyle(
+        color: colors.muted,
+        fontSize: 11,
+        letterSpacing: 0.1,
+      ),
     );
   }
 
@@ -851,7 +1022,7 @@ abstract final class AppTheme {
     );
   }
 
-  /// 飞书式浅色语义色。
+  /// 经典蓝浅色语义色，保留品牌和业务状态颜色。
   static const OmniColors _feishuLight = OmniColors(
     brand: Color(0xFF3370FF),
     brandStrong: Color(0xFF245BDB),
@@ -879,7 +1050,7 @@ abstract final class AppTheme {
     heroInk: Color(0xFFFFFFFF),
   );
 
-  /// 飞书式深色语义色。
+  /// 经典蓝深色语义色，保留品牌和业务状态颜色。
   static const OmniColors _feishuDark = OmniColors(
     brand: Color(0xFF4C88FF),
     brandStrong: Color(0xFF82A7FC),

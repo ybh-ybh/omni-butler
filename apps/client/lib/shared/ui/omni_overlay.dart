@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/shared/ui/omni_button.dart';
+import 'package:omni_butler/shared/ui/omni_icon_button.dart';
 import 'package:omni_butler/shared/ui/omni_windows_enter_submit.dart';
 
 /// 显示桌面右侧面板或移动端全屏编辑器。
@@ -19,7 +20,7 @@ Future<T?> showOmniSideSheet<T>(
     barrierDismissible: true,
     barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
     barrierColor: Colors.black.withValues(alpha: 0.42),
-    transitionDuration: OmniMotion.panel,
+    transitionDuration: OmniMotion.duration(context, OmniMotion.panel),
     pageBuilder:
         (
           BuildContext dialogContext,
@@ -28,12 +29,16 @@ Future<T?> showOmniSideSheet<T>(
         ) {
           // 业务提供的编辑器内容。
           final Widget content = builder(dialogContext);
-          return Align(
-            alignment: Alignment.centerRight,
-            child: SizedBox(
-              width: compact ? MediaQuery.sizeOf(context).width : desktopWidth,
-              height: MediaQuery.sizeOf(context).height,
-              child: Material(color: Colors.transparent, child: content),
+          return FocusTraversalGroup(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: SizedBox(
+                width: compact
+                    ? MediaQuery.sizeOf(context).width
+                    : desktopWidth,
+                height: MediaQuery.sizeOf(context).height,
+                child: Material(color: Colors.transparent, child: content),
+              ),
             ),
           );
         },
@@ -44,6 +49,9 @@ Future<T?> showOmniSideSheet<T>(
           Animation<double> secondaryAnimation,
           Widget child,
         ) {
+          if (OmniMotion.reduce(dialogContext)) {
+            return child;
+          }
           // 从右侧进入的位移动画。
           final Animation<Offset> slide =
               Tween<Offset>(
@@ -92,12 +100,12 @@ Future<T?> showOmniDialog<T>({
     from: context,
     to: navigator.context,
   );
-  // 与 Material 默认弹窗一致的遮罩颜色。
+  // 为模态任务提供统一且克制的背景遮罩。
   final Color resolvedBarrierColor =
       barrierColor ??
       DialogTheme.of(context).barrierColor ??
       Theme.of(context).dialogTheme.barrierColor ??
-      Colors.black54;
+      Colors.black.withValues(alpha: 0.42);
 
   return navigator.push<T>(
     DialogRoute<T>(
@@ -114,7 +122,15 @@ Future<T?> showOmniDialog<T>({
           traversalEdgeBehavior ?? TraversalEdgeBehavior.closedLoop,
       fullscreenDialog: fullscreenDialog,
       requestFocus: requestFocus,
-      animationStyle: animationStyle,
+      animationStyle: OmniMotion.reduce(context)
+          ? AnimationStyle.noAnimation
+          : animationStyle ??
+                const AnimationStyle(
+                  duration: OmniMotion.panel,
+                  reverseDuration: OmniMotion.normal,
+                  curve: OmniMotion.standardCurve,
+                  reverseCurve: Curves.easeInCubic,
+                ),
     ),
   );
 }
@@ -151,60 +167,61 @@ class OmniSideSheetScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
+    // showGeneralDialog 不会自动避让软键盘，由侧栏结构统一保留可用高度。
+    final double keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     // 侧滑编辑器的完整内容。
     final Widget content = Material(
       color: colors.paper,
-      child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Container(
-              height: 56,
-              padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
-              decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: colors.line)),
-              ),
-              child: Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
+      child: AnimatedPadding(
+        padding: EdgeInsets.only(bottom: keyboardInset),
+        duration: OmniMotion.duration(context, OmniMotion.normal),
+        curve: OmniMotion.standardCurve,
+        child: MediaQuery.removeViewInsets(
+          context: context,
+          removeBottom: true,
+          child: SafeArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Container(
+                  constraints: const BoxConstraints(minHeight: 56),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: OmniSpacing.md,
                   ),
-                  IconButton(
-                    tooltip: '关闭',
-                    onPressed: canClose
-                        ? () => Navigator.of(context).maybePop()
-                        : null,
-                    icon: const Icon(Icons.close_rounded),
+                  decoration: BoxDecoration(
+                    border: Border(bottom: BorderSide(color: colors.line)),
                   ),
-                ],
-              ),
-            ),
-            Expanded(child: child),
-            if (actions.isNotEmpty)
-              Container(
-                padding: const EdgeInsets.all(OmniSpacing.md),
-                decoration: BoxDecoration(
-                  color: colors.paper,
-                  border: Border(top: BorderSide(color: colors.line)),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: <Widget>[
-                    for (
-                      int index = 0;
-                      index < actions.length;
-                      index += 1
-                    ) ...<Widget>[
-                      if (index > 0) const SizedBox(width: OmniSpacing.xs),
-                      actions[index],
+                  child: Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      OmniIconButton(
+                        tooltip: '关闭',
+                        onPressed: canClose
+                            ? () => Navigator.of(context).maybePop()
+                            : null,
+                        icon: const Icon(Icons.close_rounded),
+                      ),
                     ],
-                  ],
+                  ),
                 ),
-              ),
-          ],
+                Expanded(child: child),
+                if (actions.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.all(OmniSpacing.md),
+                    decoration: BoxDecoration(
+                      color: colors.paper,
+                      border: Border(top: BorderSide(color: colors.line)),
+                    ),
+                    child: _OmniDialogActions(actions: actions),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -254,10 +271,14 @@ class OmniDialogScaffold extends StatelessWidget {
     final Size viewport = MediaQuery.sizeOf(context);
     // 标准弹窗的完整内容。
     final Widget content = Dialog(
+      insetPadding: const EdgeInsets.all(OmniSpacing.xl),
+      insetAnimationDuration: OmniMotion.duration(context, OmniMotion.normal),
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: width,
-          maxHeight: height ?? viewport.height - 48,
+          maxHeight: (height ?? viewport.height - OmniSpacing.xl * 2)
+              .clamp(0, viewport.height)
+              .toDouble(),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -273,7 +294,7 @@ class OmniDialogScaffold extends StatelessWidget {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                   ),
-                  IconButton(
+                  OmniIconButton(
                     tooltip: '关闭',
                     onPressed: () => Navigator.of(context).maybePop(),
                     icon: const Icon(Icons.close_rounded),
@@ -292,19 +313,7 @@ class OmniDialogScaffold extends StatelessWidget {
               Divider(color: colors.line),
               Padding(
                 padding: const EdgeInsets.all(OmniSpacing.md),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: <Widget>[
-                    for (
-                      int index = 0;
-                      index < actions.length;
-                      index += 1
-                    ) ...<Widget>[
-                      if (index > 0) const SizedBox(width: OmniSpacing.xs),
-                      actions[index],
-                    ],
-                  ],
-                ),
+                child: _OmniDialogActions(actions: actions),
               ),
             ],
           ],
@@ -314,6 +323,27 @@ class OmniDialogScaffold extends StatelessWidget {
     return onWindowsEnter == null
         ? content
         : OmniWindowsEnterSubmit(onSubmit: onWindowsEnter, child: content);
+  }
+}
+
+/// 弹窗和侧栏共用的可换行操作区。
+class _OmniDialogActions extends StatelessWidget {
+  /// 按业务优先级排列的操作。
+  final List<Widget> actions;
+
+  /// 创建统一操作区。
+  const _OmniDialogActions({required this.actions});
+
+  /// 保留操作顺序，并在窄屏或大字号下换行。
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      alignment: WrapAlignment.end,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: OmniSpacing.xs,
+      runSpacing: OmniSpacing.xs,
+      children: actions,
+    );
   }
 }
 
@@ -345,7 +375,7 @@ Future<bool> showOmniConfirmDialog(
           onPressed: () => Navigator.of(dialogContext).pop(true),
         ),
       ],
-      child: Text(message),
+      child: SingleChildScrollView(child: Text(message)),
     ),
   );
   return confirmed ?? false;

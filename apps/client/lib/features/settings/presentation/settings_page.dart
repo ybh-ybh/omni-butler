@@ -486,7 +486,7 @@ class _AndroidSettingsHeader extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: Padding(
                 padding: const EdgeInsets.only(left: OmniSpacing.xxs),
-                child: IconButton(
+                child: OmniIconButton(
                   key: const ValueKey<String>('android-settings-back'),
                   tooltip: '返回设置',
                   onPressed: onBack,

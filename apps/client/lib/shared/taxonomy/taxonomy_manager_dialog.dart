@@ -437,7 +437,7 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             ),
-            IconButton(
+            OmniIconButton(
               tooltip: '关闭',
               onPressed: () => Navigator.of(context).maybePop(),
               icon: const Icon(Icons.close_rounded),
@@ -545,29 +545,13 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
         color: colors.brandSoft.withValues(alpha: 0.65),
         border: Border(bottom: BorderSide(color: colors.line)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          _buildColorPicker(
-            color: _newColor,
-            onSelected: (Color color) => setState(() => _newColor = color),
-          ),
-          const SizedBox(width: OmniSpacing.xs),
-          Expanded(
-            child: TextField(
-              controller: _nameController,
-              autofocus: true,
-              enabled: !_savingName,
-              decoration: InputDecoration(
-                labelText: '$_typeName名称',
-                errorText: _nameError,
-              ),
-              onSubmitted: (_) => _add(entries),
-            ),
-          ),
-          const SizedBox(width: OmniSpacing.xs),
-          _buildNameActions(onSave: () => _add(entries), saveLabel: '添加'),
-        ],
+      child: _buildNameEditor(
+        leading: _buildColorPicker(
+          color: _newColor,
+          onSelected: (Color color) => setState(() => _newColor = color),
+        ),
+        onSave: () => _add(entries),
+        saveLabel: '添加',
       ),
     );
   }
@@ -626,22 +610,22 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
                     ),
                   ),
                 ),
-                PopupMenuButton<_TaxonomyRowAction>(
+                OmniPopupMenuButton<_TaxonomyRowAction>(
                   tooltip: '更多操作',
                   onSelected: (_TaxonomyRowAction action) =>
                       _handleRowAction(action, entry),
                   itemBuilder: (BuildContext popupContext) =>
                       <PopupMenuEntry<_TaxonomyRowAction>>[
-                        const PopupMenuItem<_TaxonomyRowAction>(
+                        OmniPopupMenuItem<_TaxonomyRowAction>(
                           value: _TaxonomyRowAction.rename,
-                          child: Text('重命名'),
+                          label: '重命名',
+                          icon: Icons.edit_outlined,
                         ),
-                        PopupMenuItem<_TaxonomyRowAction>(
+                        OmniPopupMenuItem<_TaxonomyRowAction>(
                           value: _TaxonomyRowAction.delete,
-                          child: Text(
-                            '删除$_typeName',
-                            style: TextStyle(color: colors.danger),
-                          ),
+                          label: '删除$_typeName',
+                          icon: Icons.delete_outline_rounded,
+                          danger: true,
                         ),
                       ],
                 ),
@@ -669,25 +653,61 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: colors.line)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Expanded(
-            child: TextField(
-              controller: _nameController,
-              autofocus: true,
-              enabled: !_savingName,
-              decoration: InputDecoration(
-                labelText: '$_typeName名称',
-                errorText: _nameError,
-              ),
-              onSubmitted: (_) => _rename(entry),
-            ),
+      child: _buildNameEditor(onSave: () => _rename(entry), saveLabel: '保存'),
+    );
+  }
+
+  /// 构建能在窄屏和大字号下换行的名称编辑与操作区。
+  Widget _buildNameEditor({
+    Widget? leading,
+    required VoidCallback onSave,
+    required String saveLabel,
+  }) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 名称输入需要优先获得足够宽度，大字号时将按钮移到下一行。
+        final bool stacked =
+            constraints.maxWidth < 380 ||
+            MediaQuery.textScalerOf(context).scale(14) > 20;
+        // 新增与重命名共享的输入字段。
+        final Widget field = OmniTextField(
+          controller: _nameController,
+          autofocus: true,
+          enabled: !_savingName,
+          decoration: InputDecoration(
+            labelText: '$_typeName名称',
+            errorText: _nameError,
           ),
-          const SizedBox(width: OmniSpacing.xs),
-          _buildNameActions(onSave: () => _rename(entry), saveLabel: '保存'),
-        ],
-      ),
+          onSubmitted: (_) => onSave(),
+        );
+        // 当前编辑操作保持原有保存与取消行为。
+        final Widget actions = _buildNameActions(
+          onSave: onSave,
+          saveLabel: saveLabel,
+        );
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                if (leading != null) ...<Widget>[
+                  leading,
+                  const SizedBox(width: OmniSpacing.xs),
+                ],
+                Expanded(child: field),
+                if (!stacked) ...<Widget>[
+                  const SizedBox(width: OmniSpacing.xs),
+                  actions,
+                ],
+              ],
+            ),
+            if (stacked)
+              Align(alignment: Alignment.centerRight, child: actions),
+          ],
+        );
+      },
     );
   }
 
@@ -722,7 +742,7 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
     required Color color,
     required ValueChanged<Color> onSelected,
   }) {
-    return PopupMenuButton<Color>(
+    return OmniPopupMenuButton<Color>(
       tooltip: '修改颜色',
       onSelected: onSelected,
       itemBuilder: (BuildContext popupContext) => <PopupMenuEntry<Color>>[
@@ -736,8 +756,8 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
         button: true,
         label: '修改颜色',
         child: SizedBox(
-          width: 36,
-          height: 44,
+          width: OmniDensity.controlHeight(context),
+          height: OmniDensity.controlHeight(context),
           child: Center(
             child: Container(
               width: 18,
@@ -745,7 +765,7 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: color,
-                border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
+                border: Border.all(color: OmniColors.of(context).line),
               ),
             ),
           ),
@@ -781,24 +801,36 @@ class _ColorPalette extends StatelessWidget {
                   item.$2.toARGB32() == selectedColor.toARGB32();
               return Tooltip(
                 message: item.$1,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(OmniRadius.pill),
-                  onTap: () => Navigator.of(context).pop(item.$2),
-                  child: SizedBox(
-                    width: 28,
-                    height: 28,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: item.$2,
+                child: Semantics(
+                  label: item.$1,
+                  selected: selected,
+                  button: true,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(OmniRadius.pill),
+                    onTap: () => Navigator.of(context).pop(item.$2),
+                    child: SizedBox(
+                      width: OmniDensity.isTouch(context) ? OmniSize.touch : 28,
+                      height: OmniDensity.isTouch(context)
+                          ? OmniSize.touch
+                          : 28,
+                      child: Padding(
+                        padding: EdgeInsets.all(
+                          OmniDensity.isTouch(context) ? 8 : 0,
+                        ),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: item.$2,
+                          ),
+                          child: selected
+                              ? const Icon(
+                                  Icons.check_rounded,
+                                  color: Colors.white,
+                                  size: 16,
+                                )
+                              : null,
+                        ),
                       ),
-                      child: selected
-                          ? const Icon(
-                              Icons.check_rounded,
-                              color: Colors.white,
-                              size: 16,
-                            )
-                          : null,
                     ),
                   ),
                 ),

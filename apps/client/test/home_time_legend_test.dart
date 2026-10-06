@@ -92,8 +92,8 @@ void main() {
       expect(find.textContaining('主要用于'), findsNothing);
       expect(find.text('工作 1小时 · 学习 30分钟'), findsNothing);
       expect(find.text('工作 1小时 · 运动 40分钟'), findsNothing);
-      expect(find.text('1小时30分'), findsOneWidget);
-      expect(find.text('1小时40分'), findsOneWidget);
+      expect(find.text('1h30m'), findsOneWidget);
+      expect(find.text('1h40m'), findsOneWidget);
       expect(
         find.bySemanticsLabel(
           RegExp(RegExp.escape('今日记录1小时30分，主要用于工作 67%；工作 1小时 · 学习 30分钟')),
@@ -107,6 +107,54 @@ void main() {
         findsOneWidget,
       );
       expect(tester.takeException(), isNull);
+      // 隐藏共同类别后，两图都移除该颜色并重新计算中心总时长。
+      await tester.tap(
+        find.byKey(const ValueKey<String>('home-time-legend-item-工作')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        await _paintedDonutColors(tester, '今日'),
+        isNot(contains(categoryColors['工作']!.toARGB32())),
+      );
+      expect(
+        await _paintedDonutColors(tester, '本周'),
+        isNot(contains(categoryColors['工作']!.toARGB32())),
+      );
+      expect(find.text('1h30m'), findsNothing);
+      expect(find.text('1h40m'), findsNothing);
+      // 未选中色块使用主题灰色，并保留选项及原始记录。
+      final OmniColors colors = OmniColors.of(
+        tester.element(find.byType(HomeTimeStatusCard)),
+      );
+      expect(_legendColor(tester, '工作'), colors.line);
+      expect(
+        tester
+            .widget<Semantics>(
+              find.byKey(const ValueKey<String>('home-time-legend-item-工作')),
+            )
+            .properties
+            .selected,
+        isFalse,
+      );
+      expect(find.text('09:00–10:00 · 工作'), findsOneWidget);
+      // 全部取消后显示零时长，仍能通过保留的图例恢复。
+      for (final String category in <String>['学习', '运动']) {
+        await tester.tap(
+          find.byKey(ValueKey<String>('home-time-legend-item-$category')),
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('0h0m'), findsNWidgets(2));
+      expect(find.bySemanticsLabel(RegExp('今日所选类别暂无时间记录')), findsOneWidget);
+      for (final String category in categoryColors.keys) {
+        await tester.tap(
+          find.byKey(ValueKey<String>('home-time-legend-item-$category')),
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('1h30m'), findsOneWidget);
+      expect(find.text('1h40m'), findsOneWidget);
+      expect(_legendColor(tester, '工作'), categoryColors['工作']);
     } finally {
       semantics.dispose();
     }
@@ -157,7 +205,7 @@ void main() {
         find.byKey(const ValueKey<String>('home-time-category-legend')),
         findsNothing,
       );
-      expect(find.text('0分钟'), findsNWidgets(2));
+      expect(find.text('0h0m'), findsNWidgets(2));
       expect(find.text('今天还没有时间记录'), findsOneWidget);
       expect(find.text('还没有时间记录'), findsNothing);
       expect(find.bySemanticsLabel(RegExp('今日还没有时间记录')), findsOneWidget);

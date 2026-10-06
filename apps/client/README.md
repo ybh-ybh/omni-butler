@@ -6,7 +6,7 @@ Flutter 客户端，当前支持 Windows 桌面布局和 Android 紧凑布局。
 
 - 首页、每日待办、事件管理、物品管理、24 小时时间记录、会员管理和设置共 7 个路由。
 - Drift 管理本地数据；开启同步后，PowerSync 与 Drift 访问同一 SQLite 文件。
-- 单一飞书蓝语义主题，支持跟随系统、浅色和深色。
+- 统一 Omni 组件与克制 Apple 风格；保留六套配色及跟随系统、浅色和深色模式。
 - 物品与会员主图在服务器开启图片同步后自动补传、下载到本机缓存；首页背景始终仅保存在本机。图片通过已认证 API 传输，不进入 PowerSync Schema。
 - 设置中的服务器连接先预检，再选择首次合并、以本机覆盖服务器或使用服务器数据；跨数据源时保留旧库，候选库确认同步检查点后才启用。
 - Windows 与 Android 本地通知框架；发布包与真机验收状态见根目录 `剩余功能与验收清单.md`。
@@ -22,6 +22,18 @@ flutter build windows --release
 ```
 
 需要真实同步链路的测试依赖根目录 `deploy/` 中的 PostgreSQL、NestJS 与 PowerSync 服务。项目范围、架构和剩余工作分别见根目录 `需求书.md`、`系统架构设计.md` 与 `剩余功能与验收清单.md`。
+
+## 界面规范与组件预览
+
+新增页面、弹窗和控件遵守根目录 [style.md](../../style.md)，优先从 `shared/ui/omni_ui.dart` 选择公共组件。入口、受控例外与验收范围见 [UI 迁移清单](docs/ui-migration.md)。
+
+```powershell
+flutter run -t lib/main_ui_catalog.dart -d windows
+dart tool/check_ui_style.dart
+flutter test test/ui_catalog_test.dart
+```
+
+组件目录只使用内存状态，不连接业务数据库。`flutter test tool/ui_pages_preview_test.dart` 可生成带真实中文字体的业务预览；字体配置见 `style.md`。CI 会检查新增绕过公共控件的入口及组件契约。
 
 ## 更换服务器与迁移恢复
 

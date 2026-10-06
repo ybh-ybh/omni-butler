@@ -378,12 +378,12 @@ class _QuoteLibraryDialogState extends ConsumerState<QuoteLibraryDialog> {
                           },
                         ),
                         if (!compact) ...<Widget>[
-                          IconButton(
+                          OmniIconButton(
                             tooltip: '编辑',
                             onPressed: () => _edit(quote),
                             icon: const Icon(Icons.edit_outlined),
                           ),
-                          IconButton(
+                          OmniIconButton(
                             tooltip: '移入回收站',
                             onPressed: () => _delete(quote),
                             icon: const Icon(Icons.delete_outline_rounded),
@@ -525,7 +525,7 @@ class _QuoteImportPreviewDialogState extends State<QuoteImportPreviewDialog> {
               },
               child: Column(
                 children: <Widget>[
-                  RadioListTile<QuoteImportMode>(
+                  OmniRadioListTile<QuoteImportMode>(
                     key: const ValueKey<String>('quote-import-mode-merge'),
                     value: QuoteImportMode.merge,
                     title: const Text('合并导入'),
@@ -534,7 +534,7 @@ class _QuoteImportPreviewDialogState extends State<QuoteImportPreviewDialog> {
                     ),
                     contentPadding: EdgeInsets.zero,
                   ),
-                  RadioListTile<QuoteImportMode>(
+                  OmniRadioListTile<QuoteImportMode>(
                     key: const ValueKey<String>('quote-import-mode-replace'),
                     value: QuoteImportMode.replace,
                     title: const Text('替换导入'),
@@ -637,14 +637,14 @@ class _QuoteEditorDialogState extends State<_QuoteEditorDialog> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            TextField(
+            OmniTextField(
               controller: _contentController,
               autofocus: true,
               maxLines: 4,
               decoration: const InputDecoration(labelText: '正文 *'),
             ),
             const SizedBox(height: OmniSpacing.md),
-            TextField(
+            OmniTextField(
               controller: _sourceController,
               decoration: const InputDecoration(labelText: '出处'),
             ),

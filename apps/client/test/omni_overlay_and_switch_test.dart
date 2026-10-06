@@ -1,6 +1,10 @@
 // ignore_for_file: implementation_imports, invalid_use_of_internal_member
 
+import 'dart:ui' show SemanticsAction, Tristate;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/src/foundation/_features.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -68,14 +72,15 @@ void main() {
     expect(find.text('侧栏内容'), findsNothing);
   });
 
-  testWidgets('统一开关使用立体样式并保留完整交互能力', (WidgetTester tester) async {
+  testWidgets('统一开关保持完整热区且动画可中途反向', (WidgetTester tester) async {
     // 开关当前值。
     bool value = false;
     // 开关回调次数。
     int changeCount = 0;
     await tester.pumpWidget(
       MaterialApp(
-        theme: AppTheme.build(brightness: Brightness.light),
+        theme: AppTheme.build(brightness: Brightness.light)
+            .copyWith(platform: TargetPlatform.windows),
         home: Scaffold(
           body: StatefulBuilder(
             builder: (BuildContext context, StateSetter setState) => Center(
@@ -91,7 +96,6 @@ void main() {
         ),
       ),
     );
-
     expect(
       tester.getSize(find.byType(OmniSwitch)),
       const Size(OmniSize.switchTapWidth, OmniSize.controlLarge),
@@ -100,77 +104,151 @@ void main() {
       tester.getSize(find.byKey(const ValueKey<String>('omni-switch-track'))),
       const Size(OmniSize.switchTrackWidth, OmniSize.switchTrackHeight),
     );
-    // 浅色主题轨道容器。
-    final Container track = tester.widget<Container>(
-      find.byKey(const ValueKey<String>('omni-switch-track')),
+    // 关闭时滑块的实际中心点。
+    final Offset offCenter = tester.getCenter(
+      find.byKey(const ValueKey<String>('omni-switch-thumb')),
     );
-    // 浅色主题轨道装饰。
-    final BoxDecoration trackDecoration = track.decoration! as BoxDecoration;
-    // 浅色主题轨道渐变。
-    final LinearGradient trackGradient =
-        trackDecoration.gradient! as LinearGradient;
-    expect(trackGradient.colors.first, const Color(0xFFC3CBD6));
-    expect(trackDecoration.border, isNotNull);
-    // 当前开关交互层。
-    final InkWell interaction = tester.widget<InkWell>(
-      find.byKey(const ValueKey<String>('omni-switch-interaction')),
-    );
-    expect(
-      interaction.overlayColor?.resolve(<WidgetState>{WidgetState.hovered}),
-      Colors.transparent,
-    );
-    expect(
-      interaction.overlayColor?.resolve(<WidgetState>{WidgetState.focused}),
-      isNot(Colors.transparent),
-    );
-    // 关闭状态滑块位置。
-    AnimatedAlign thumbPosition = tester.widget<AnimatedAlign>(
-      find.byKey(const ValueKey<String>('omni-switch-thumb-position')),
-    );
-    expect(thumbPosition.alignment, Alignment.centerLeft);
-    expect(thumbPosition.duration, const Duration(milliseconds: 210));
-    expect(thumbPosition.curve, Curves.easeIn);
-    // 关闭状态环位置。
-    final AnimatedAlign indicatorPosition = tester.widget<AnimatedAlign>(
-      find.byKey(const ValueKey<String>('omni-switch-indicator-position')),
-    );
-    expect(indicatorPosition.duration, const Duration(milliseconds: 700));
-    // 状态环左右内收间距。
-    final Padding indicatorInset = tester.widget<Padding>(
-      find.byKey(const ValueKey<String>('omni-switch-indicator-inset')),
-    );
-    expect(
-      indicatorInset.padding,
-      const EdgeInsets.symmetric(horizontal: OmniSize.switchIndicatorInset),
-    );
-    // 轻点视觉开关外、触控区域内的边缘。
+    // 轻点视觉轨道以外、完整热区以内。
     final Offset switchTopLeft = tester.getTopLeft(find.byType(OmniSwitch));
     await tester.tapAt(switchTopLeft + const Offset(2, 20));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 210));
+    await tester.pump(const Duration(milliseconds: 60));
+    // 动画进行中的实际滑块位置。
+    final Offset intermediate = tester.getCenter(
+      find.byKey(const ValueKey<String>('omni-switch-thumb')),
+    );
     expect(value, isTrue);
-    expect(changeCount, 1);
-    // 运行到 CSS 30% 关键帧时的状态环淡出值。
-    FadeTransition indicatorFade = tester.widget<FadeTransition>(
-      find.byKey(const ValueKey<String>('omni-switch-indicator-fade')),
-    );
-    expect(indicatorFade.opacity.value, closeTo(0, 0.01));
-    thumbPosition = tester.widget<AnimatedAlign>(
-      find.byKey(const ValueKey<String>('omni-switch-thumb-position')),
-    );
-    expect(thumbPosition.alignment, Alignment.centerRight);
-    await tester.pump(const Duration(milliseconds: 490));
-    indicatorFade = tester.widget<FadeTransition>(
-      find.byKey(const ValueKey<String>('omni-switch-indicator-fade')),
-    );
-    expect(indicatorFade.opacity.value, closeTo(1, 0.01));
-
-    await tester.tap(
-      find.byKey(const ValueKey<String>('omni-switch-interaction')),
+    expect(intermediate.dx, greaterThan(offCenter.dx));
+    await tester.tap(find.byType(OmniSwitch));
+    await tester.pump();
+    expect(
+      tester
+          .getCenter(find.byKey(const ValueKey<String>('omni-switch-thumb')))
+          .dx,
+      closeTo(intermediate.dx, 0.1),
     );
     await tester.pumpAndSettle();
     expect(value, isFalse);
     expect(changeCount, 2);
+    expect(
+      tester
+          .getCenter(find.byKey(const ValueKey<String>('omni-switch-thumb')))
+          .dx,
+      closeTo(offCenter.dx, 0.1),
+    );
+    expect(
+      find.byKey(const ValueKey<String>('omni-switch-indicator')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('开关支持键盘并尊重减少动效和触控热区', (WidgetTester tester) async {
+    // 当前开关状态。
+    bool value = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.build(brightness: Brightness.light)
+            .copyWith(platform: TargetPlatform.android),
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: Scaffold(
+            body: StatefulBuilder(
+              builder: (BuildContext context, StateSetter setState) =>
+                  OmniSwitch(
+                    value: value,
+                    onChanged: (bool nextValue) =>
+                        setState(() => value = nextValue),
+                  ),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(tester.getSize(find.byType(OmniSwitch)).height, OmniSize.touch);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    expect(value, isTrue);
+    // 减少动效时滑块立即到达目标位置。
+    final AnimatedAlign position = tester.widget<AnimatedAlign>(
+      find.byKey(const ValueKey<String>('omni-switch-thumb-position')),
+    );
+    expect(position.duration, Duration.zero);
+    expect(position.alignment, AlignmentDirectional.centerEnd);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(value, isFalse);
+  });
+
+  testWidgets('禁用开关不接收点击且整行开关只有一次状态变更', (WidgetTester tester) async {
+    // 整行开关累计操作次数。
+    int changeCount = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.build(brightness: Brightness.light),
+        home: Scaffold(
+          body: Column(
+            children: <Widget>[
+              const OmniSwitch(
+                key: ValueKey<String>('disabled-switch'),
+                value: false,
+                onChanged: null,
+              ),
+              OmniSwitchListTile(
+                value: false,
+                onChanged: (bool value) => changeCount += 1,
+                title: const Text('自动保存'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('disabled-switch')),
+      warnIfMissed: false,
+    );
+    await tester.pump();
+    expect(changeCount, 0);
+    await tester.tap(find.byType(OmniSwitch).last);
+    await tester.pumpAndSettle();
+    expect(changeCount, 1);
+  });
+  testWidgets('开关向读屏暴露切换状态和可操作状态', (WidgetTester tester) async {
+    // 启用语义树以验证辅助技术使用的真实节点。
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    try {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.build(brightness: Brightness.light),
+          home: Scaffold(
+            body: Column(
+              children: <Widget>[
+                OmniSwitch(value: true, onChanged: (bool value) {}),
+                const OmniSwitch(value: false, onChanged: null),
+              ],
+            ),
+          ),
+        ),
+      );
+      // 可交互开关的语义状态。
+      final SemanticsData enabled = tester
+          .getSemantics(find.byType(OmniSwitch).first)
+          .getSemanticsData();
+      // 禁用开关的语义状态。
+      final SemanticsData disabled = tester
+          .getSemantics(find.byType(OmniSwitch).last)
+          .getSemanticsData();
+      expect(enabled.flagsCollection.isToggled, Tristate.isTrue);
+      expect(enabled.flagsCollection.isEnabled, Tristate.isTrue);
+      expect(enabled.hasAction(SemanticsAction.tap), isTrue);
+      expect(disabled.flagsCollection.isToggled, Tristate.isFalse);
+      expect(disabled.flagsCollection.isEnabled, Tristate.isFalse);
+      expect(disabled.hasAction(SemanticsAction.tap), isFalse);
+    } finally {
+      semantics.dispose();
+    }
   });
 
   testWidgets('统一开关列表项保留悬停底色内边距', (WidgetTester tester) async {

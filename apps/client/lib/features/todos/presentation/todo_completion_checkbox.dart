@@ -8,7 +8,7 @@ import 'package:omni_butler/app/theme/app_tokens.dart';
 /// 每日待办专用的完成复选框。
 class TodoCompletionCheckbox extends StatefulWidget {
   /// 与任务正文形成更协调比例的视觉方框尺寸。
-  static const double visualSize = 16;
+  static const double visualSize = Checkbox.width;
 
   /// 填充、弹跳与延迟勾线全部播放完毕所需时长。
   static const Duration animationDuration = Duration(milliseconds: 400);
@@ -54,15 +54,13 @@ class TodoCompletionCheckbox extends StatefulWidget {
     return Size.square(baseSize) + density.baseSizeAdjustment;
   }
 
-  /// 返回未选中边框色，供同层级的树状引导线复用。
+  /// 返回共享复选框的未选中边框色，供树状引导线复用。
   static Color idleBorderColorOf(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
-    // 深色模式需要略高的品牌色占比以维持可见度。
-    final double brandWeight = Theme.of(context).brightness == Brightness.dark
-        ? 0.88
-        : 0.78;
-    return Color.lerp(colors.paper, colors.brand, brandWeight)!;
+    return WidgetStateProperty.resolveAs<BorderSide?>(
+          CheckboxTheme.of(context).side,
+          const <WidgetState>{},
+        )?.color ??
+        OmniColors.of(context).muted;
   }
 }
 
@@ -100,8 +98,7 @@ class _TodoCompletionCheckboxState extends State<TodoCompletionCheckbox>
       return;
     }
     // 当前是否关闭非必要动画。
-    final bool disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final bool disableAnimations = OmniMotion.reduce(context);
     if (disableAnimations) {
       _selectionController.value = widget.value ? 1 : 0;
       return;
@@ -149,23 +146,19 @@ class _TodoCompletionCheckboxState extends State<TodoCompletionCheckbox>
     // 当前是否允许切换状态。
     final bool enabled = widget.onChanged != null;
     // 当前是否关闭非必要动画。
-    final bool disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final bool disableAnimations = OmniMotion.reduce(context);
     // 与替换前原生 Checkbox 完全相同的点击区域尺寸。
     final Size tapSize = TodoCompletionCheckbox.tapSizeOf(context);
     // 未选中边框使用更清晰的品牌同色阶。
     final Color idleBorder = TodoCompletionCheckbox.idleBorderColorOf(context);
-    // 悬停或按压对应的外层缩放比例。
-    final double interactionScale = _pressed
-        ? 0.95
-        : _hovered && enabled
-        ? 1.05
-        : 1;
+    // 按压轻微收缩；减少动态效果时以颜色提供反馈。
+    final double interactionScale = _pressed && !disableAnimations ? 0.96 : 1;
 
     return Semantics(
       checked: widget.value,
       enabled: enabled,
       label: widget.semanticLabel,
+      onTap: enabled ? () => widget.onChanged!(!widget.value) : null,
       child: SizedBox(
         width: tapSize.width,
         height: tapSize.height,
@@ -190,21 +183,15 @@ class _TodoCompletionCheckboxState extends State<TodoCompletionCheckbox>
             child: Center(
               child: AnimatedScale(
                 scale: interactionScale,
-                duration: disableAnimations
-                    ? Duration.zero
-                    : const Duration(milliseconds: 200),
-                curve: Curves.ease,
+                duration: OmniMotion.duration(context, OmniMotion.fast),
+                curve: OmniMotion.standardCurve,
                 child: AnimatedBuilder(
                   animation: _selectionController,
                   builder: (BuildContext context, Widget? child) {
                     // 当前选择动画进度。
                     final double progress = _selectionController.value;
-                    // 仅在选中时播放一次 1 → 1.1 → 1 的弹跳。
-                    final double bounceScale = widget.value
-                        ? _selectionBounce(progress)
-                        : 1;
-                    return Transform.scale(
-                      scale: bounceScale,
+                    return Opacity(
+                      opacity: enabled ? 1 : 0.45,
                       child: CustomPaint(
                         key: const ValueKey<String>('todo-completion-box'),
                         size: const Size.square(
@@ -213,8 +200,9 @@ class _TodoCompletionCheckboxState extends State<TodoCompletionCheckbox>
                         painter: _TodoCompletionCheckboxPainter(
                           progress: progress,
                           activeColor: colors.brand,
-                          idleBorderColor: idleBorder,
+                          idleBorderColor: _hovered ? colors.brand : idleBorder,
                           surfaceColor: colors.paper,
+                          checkColor: colors.accentInk,
                           focusColor: colors.brand.withValues(alpha: 0.16),
                           focused: _focused,
                         ),
@@ -228,17 +216,6 @@ class _TodoCompletionCheckboxState extends State<TodoCompletionCheckbox>
         ),
       ),
     );
-  }
-
-  /// 计算参考关键帧中的选中弹跳比例。
-  double _selectionBounce(double progress) {
-    // 弹跳占完整四百毫秒动画的前三百毫秒。
-    final double bounceProgress = (progress / 0.75).clamp(0, 1);
-    // 前半段放大，后半段回到原尺寸。
-    final double segmentProgress = bounceProgress <= 0.5
-        ? bounceProgress * 2
-        : (1 - bounceProgress) * 2;
-    return 1 + (0.1 * Curves.easeInOut.transform(segmentProgress));
   }
 }
 
@@ -256,6 +233,9 @@ class _TodoCompletionCheckboxPainter extends CustomPainter {
   /// 未选中表面色。
   final Color surfaceColor;
 
+  /// 与共享复选框一致的勾线对比色。
+  final Color checkColor;
+
   /// 键盘焦点环颜色。
   final Color focusColor;
 
@@ -268,6 +248,7 @@ class _TodoCompletionCheckboxPainter extends CustomPainter {
     required this.activeColor,
     required this.idleBorderColor,
     required this.surfaceColor,
+    required this.checkColor,
     required this.focusColor,
     required this.focused,
   });
@@ -318,9 +299,9 @@ class _TodoCompletionCheckboxPainter extends CustomPainter {
       0,
       metric.length * pathProgress,
     );
-    // 白色勾线画笔。
+    // 使用主题对比色的勾线画笔。
     final Paint checkPaint = Paint()
-      ..color = Colors.white
+      ..color = checkColor
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2
       ..strokeCap = StrokeCap.round
@@ -343,6 +324,7 @@ class _TodoCompletionCheckboxPainter extends CustomPainter {
         activeColor != oldDelegate.activeColor ||
         idleBorderColor != oldDelegate.idleBorderColor ||
         surfaceColor != oldDelegate.surfaceColor ||
+        checkColor != oldDelegate.checkColor ||
         focusColor != oldDelegate.focusColor ||
         focused != oldDelegate.focused;
   }

@@ -84,7 +84,7 @@ void main() {
     );
     await _pumpManager(tester, database);
 
-    await tester.tap(find.byIcon(Icons.more_vert).first);
+    await tester.tap(find.byTooltip('更多操作').first);
     await _pumpUi(tester);
     await tester.tap(find.text('删除标签'));
     await _pumpUi(tester);

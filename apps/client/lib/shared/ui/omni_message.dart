@@ -4,6 +4,8 @@ import 'package:flutter/gestures.dart' show PointerEnterEvent, PointerExitEvent;
 import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/shared/ui/omni_button.dart';
+import 'package:omni_butler/shared/ui/omni_icon_button.dart';
 
 /// 顶部浮动消息的语义类型。
 enum OmniMessageTone {
@@ -160,6 +162,12 @@ class _OmniMessagePopupState extends State<_OmniMessagePopup>
   /// 同时驱动边框进度和自动关闭的动画控制器。
   late final AnimationController _countdownController;
 
+  /// 鼠标当前是否停留在消息内。
+  bool _hovered = false;
+
+  /// 键盘焦点当前是否位于消息内。
+  bool _focused = false;
+
   /// 初始化并启动消息倒计时。
   @override
   void initState() {
@@ -192,14 +200,41 @@ class _OmniMessagePopupState extends State<_OmniMessagePopup>
 
   /// 鼠标进入消息时暂停倒计时。
   void _handlePointerEnter(PointerEnterEvent event) {
-    if (!_countdownController.isCompleted) {
-      _countdownController.stop();
-    }
+    _hovered = true;
+    _syncCountdown();
   }
 
   /// 鼠标离开消息时继续剩余倒计时。
   void _handlePointerExit(PointerExitEvent event) {
-    if (!_countdownController.isCompleted && widget.duration > Duration.zero) {
+    _hovered = false;
+    _syncCountdown();
+  }
+
+  /// 辅助导航开启时保留带操作的消息，给用户足够时间完成操作。
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncCountdown();
+  }
+
+  /// 焦点停留在操作或关闭按钮时暂停倒计时。
+  void _handleFocusChange(bool focused) {
+    _focused = focused;
+    _syncCountdown();
+  }
+
+  /// 根据悬停、焦点和辅助导航状态管理剩余倒计时。
+  void _syncCountdown() {
+    if (_countdownController.isCompleted || widget.duration <= Duration.zero) {
+      return;
+    }
+    // 带操作的辅助导航消息必须由用户主动关闭。
+    final bool persistentAction =
+        (MediaQuery.maybeOf(context)?.accessibleNavigation ?? false) &&
+        widget.onAction != null;
+    if (_hovered || _focused || persistentAction) {
+      _countdownController.stop();
+    } else {
       _countdownController.forward();
     }
   }
@@ -231,84 +266,121 @@ class _OmniMessagePopupState extends State<_OmniMessagePopup>
       OmniMessageTone.error => Icons.error_rounded,
     };
     // 当前系统是否要求关闭非必要动画。
-    final bool disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
-    return MouseRegion(
-      onEnter: _handlePointerEnter,
-      onExit: _handlePointerExit,
-      child: TweenAnimationBuilder<double>(
-        tween: Tween<double>(begin: 0, end: 1),
-        duration: OmniMotion.fast,
-        curve: OmniMotion.standardCurve,
-        builder: (BuildContext context, double value, Widget? child) => Opacity(
-          opacity: value,
-          child: Transform.translate(
-            offset: Offset(0, -8 * (1 - value)),
-            child: child,
-          ),
-        ),
-        child: Semantics(
-          liveRegion: true,
-          child: Material(
-            key: const ValueKey<String>('omni-message-popup'),
-            color: colors.paper,
-            elevation: 10,
-            shadowColor: colors.ink.withValues(alpha: 0.2),
-            borderRadius: BorderRadius.circular(OmniRadius.control),
-            clipBehavior: Clip.antiAlias,
-            child: AnimatedBuilder(
-              animation: _countdownController,
-              builder: (BuildContext context, Widget? child) {
-                // 当前边框的剩余进度，关闭动画时保持完整边框。
-                final double remainingProgress = disableAnimations
-                    ? 1
-                    : 1 - _countdownController.value;
-                return CustomPaint(
-                  key: const ValueKey<String>('omni-message-countdown-border'),
-                  foregroundPainter: _OmniMessageCountdownBorderPainter(
-                    remainingProgress: remainingProgress,
-                    color: accent,
-                    strokeWidth: _countdownStrokeWidth,
-                  ),
+    final bool disableAnimations = OmniMotion.reduce(context);
+    return Focus(
+      onFocusChange: _handleFocusChange,
+      child: MouseRegion(
+        onEnter: _handlePointerEnter,
+        onExit: _handlePointerExit,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween<double>(begin: 0, end: 1),
+          duration: OmniMotion.duration(context, OmniMotion.fast),
+          curve: OmniMotion.standardCurve,
+          builder: (BuildContext context, double value, Widget? child) =>
+              Opacity(
+                opacity: value,
+                child: Transform.translate(
+                  offset: disableAnimations
+                      ? Offset.zero
+                      : Offset(0, -8 * (1 - value)),
                   child: child,
-                );
-              },
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 48),
-                padding: const EdgeInsets.only(left: OmniSpacing.md),
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.1),
-                  border: Border.all(color: accent.withValues(alpha: 0.3)),
-                  borderRadius: BorderRadius.circular(OmniRadius.control),
                 ),
-                child: Row(
-                  children: <Widget>[
-                    Icon(icon, color: accent, size: 18),
-                    const SizedBox(width: OmniSpacing.xs),
-                    Expanded(
-                      child: Text(
-                        widget.message,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+              ),
+          child: Semantics(
+            liveRegion: true,
+            child: Material(
+              key: const ValueKey<String>('omni-message-popup'),
+              color: colors.paper,
+              elevation: 4,
+              shadowColor: colors.ink.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(OmniRadius.control),
+              clipBehavior: Clip.antiAlias,
+              child: AnimatedBuilder(
+                animation: _countdownController,
+                builder: (BuildContext context, Widget? child) {
+                  // 当前边框的剩余进度，关闭动画时保持完整边框。
+                  final double remainingProgress = disableAnimations
+                      ? 1
+                      : 1 - _countdownController.value;
+                  return CustomPaint(
+                    key: const ValueKey<String>(
+                      'omni-message-countdown-border',
                     ),
-                    if (widget.actionLabel != null && widget.onAction != null)
-                      TextButton(
-                        onPressed: widget.onAction,
-                        child: Text(widget.actionLabel!),
-                      ),
-                    IconButton(
-                      tooltip: '关闭提示',
-                      onPressed: widget.onDismiss,
-                      icon: const Icon(Icons.close_rounded, size: 18),
+                    foregroundPainter: _OmniMessageCountdownBorderPainter(
+                      remainingProgress: remainingProgress,
+                      color: accent,
+                      strokeWidth: _countdownStrokeWidth,
                     ),
-                  ],
+                    child: child,
+                  );
+                },
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 48),
+                  padding: const EdgeInsets.only(left: OmniSpacing.md),
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.1),
+                    border: Border.all(color: accent.withValues(alpha: 0.3)),
+                    borderRadius: BorderRadius.circular(OmniRadius.control),
+                  ),
+                  child: _buildContent(context, icon, accent),
                 ),
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  /// 让消息操作在紧凑宽度或大字号下换到下一行。
+  Widget _buildContent(BuildContext context, IconData icon, Color accent) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 文本放大或窄屏时为操作独立保留一行。
+        final bool stacked =
+            constraints.maxWidth < 400 ||
+            MediaQuery.textScalerOf(context).scale(14) > 20;
+        // 当前消息的可选操作。
+        final Widget? action =
+            widget.actionLabel != null && widget.onAction != null
+            ? OmniButton(
+                label: widget.actionLabel!,
+                variant: OmniButtonVariant.text,
+                onPressed: widget.onAction,
+              )
+            : null;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Icon(icon, color: accent, size: 18),
+                const SizedBox(width: OmniSpacing.xs),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: OmniSpacing.xs,
+                    ),
+                    child: Text(
+                      widget.message,
+                      maxLines: 6,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                if (!stacked && action != null) action,
+                OmniIconButton(
+                  tooltip: '关闭提示',
+                  onPressed: widget.onDismiss,
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                ),
+              ],
+            ),
+            if (stacked && action != null)
+              Align(alignment: Alignment.centerRight, child: action),
+          ],
+        );
+      },
     );
   }
 }

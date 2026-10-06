@@ -265,7 +265,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: OmniSpacing.lg),
-              TextFormField(
+              OmniTextFormField(
                 controller: _titleController,
                 autofocus: true,
                 maxLength: 200,
@@ -281,7 +281,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
                 },
               ),
               const SizedBox(height: OmniSpacing.sm),
-              TextFormField(
+              OmniTextFormField(
                 controller: _descriptionController,
                 maxLines: 3,
                 decoration: const InputDecoration(labelText: '描述（可选）'),
@@ -478,7 +478,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
           ),
         ),
         if (value != null)
-          IconButton(
+          OmniIconButton(
             tooltip: clearTooltip,
             onPressed: () => onChanged(null),
             icon: const Icon(Icons.close_rounded),

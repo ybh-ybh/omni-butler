@@ -46,6 +46,7 @@ design/
 # === Root-level Markdown docs (keep README) ===
 /*.md
 !/README.md
+!/style.md
 
 # === Logs ===
 *.log

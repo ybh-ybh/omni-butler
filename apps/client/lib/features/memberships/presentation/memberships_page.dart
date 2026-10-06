@@ -1362,7 +1362,7 @@ class _MembershipFilterButton extends StatelessWidget {
     return SizedBox.square(
       key: const ValueKey<String>('membership-filter-toggle'),
       dimension: size,
-      child: IconButton(
+      child: OmniIconButton(
         tooltip: expanded ? '收起筛选' : '展开筛选',
         onPressed: onPressed,
         isSelected: expanded,
@@ -1438,7 +1438,7 @@ class _MembershipSearchField extends StatelessWidget {
       key: const ValueKey<String>('membership-search-field'),
       width: width,
       height: height,
-      child: TextField(
+      child: OmniTextField(
         controller: controller,
         onChanged: onChanged,
         textInputAction: TextInputAction.search,
@@ -1471,19 +1471,11 @@ class _MembershipSearchField extends StatelessWidget {
           ),
           suffixIcon: query.isEmpty
               ? null
-              : IconButton(
+              : OmniIconButton(
                   tooltip: '清空搜索',
                   onPressed: onClear,
                   icon: const Icon(Icons.close_rounded),
                 ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(OmniRadius.panel),
-            borderSide: BorderSide(color: colors.line),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(OmniRadius.panel),
-            borderSide: BorderSide(color: colors.member, width: 1.5),
-          ),
         ),
       ),
     );
@@ -2552,7 +2544,7 @@ class _MembershipEditorDialogState
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                TextFormField(
+                OmniTextFormField(
                   controller: _nameController,
                   autofocus: true,
                   decoration: const InputDecoration(labelText: '会员名称 *'),
@@ -2621,7 +2613,7 @@ class _MembershipEditorDialogState
                   ],
                 ),
                 const SizedBox(height: 14),
-                TextField(
+                OmniTextField(
                   controller: _descriptionController,
                   maxLines: 2,
                   decoration: const InputDecoration(labelText: '描述'),
@@ -2631,14 +2623,14 @@ class _MembershipEditorDialogState
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Expanded(
-                      child: TextField(
+                      child: OmniTextField(
                         controller: _platformController,
                         decoration: const InputDecoration(labelText: '购买平台'),
                       ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: TextField(
+                      child: OmniTextField(
                         controller: _websiteController,
                         decoration: const InputDecoration(
                           labelText: '官方网站',
@@ -2649,7 +2641,7 @@ class _MembershipEditorDialogState
                   ],
                 ),
                 const SizedBox(height: 14),
-                TextFormField(
+                OmniTextFormField(
                   controller: _priceController,
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
@@ -2729,7 +2721,7 @@ class _MembershipEditorDialogState
                     Row(
                       children: <Widget>[
                         Expanded(
-                          child: TextFormField(
+                          child: OmniTextFormField(
                             controller: _expirationReminderDaysController,
                             keyboardType: TextInputType.number,
                             decoration: const InputDecoration(
@@ -2939,7 +2931,7 @@ class _PaymentHistoryDialog extends ConsumerWidget {
                         ),
                         const SizedBox(width: OmniSpacing.xxs),
                       ],
-                      IconButton(
+                      OmniIconButton(
                         key: ValueKey<String>(
                           'membership-payment-delete-${payment.id}',
                         ),
@@ -3088,7 +3080,7 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
           Row(
             children: <Widget>[
               Expanded(
-                child: TextField(
+                child: OmniTextField(
                   controller: _amountController,
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
@@ -3151,7 +3143,7 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
             ),
           ],
           const SizedBox(height: 14),
-          TextField(
+          OmniTextField(
             controller: _notesController,
             decoration: const InputDecoration(labelText: '备注'),
           ),

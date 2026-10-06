@@ -431,13 +431,13 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     // 桌面日期导航控件。
     final Widget dateControls = OmniToolbar(
       children: <Widget>[
-        IconButton(
+        OmniIconButton(
           tooltip: '上一周期',
           onPressed: () => _moveSelection(-1),
           icon: const Icon(Icons.chevron_left_rounded),
         ),
         datePicker,
-        IconButton(
+        OmniIconButton(
           tooltip: '下一周期',
           onPressed: () => _moveSelection(1),
           icon: const Icon(Icons.chevron_right_rounded),
@@ -546,13 +546,13 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
           // 移动端单行日期导航，避免 Wrap 将四个控件拆成多行。
           final Widget compactDateControls = Row(
             children: <Widget>[
-              IconButton(
+              OmniIconButton(
                 tooltip: '上一周期',
                 onPressed: () => _moveSelection(-1),
                 icon: const Icon(Icons.chevron_left_rounded),
               ),
               Expanded(child: datePicker),
-              IconButton(
+              OmniIconButton(
                 tooltip: '下一周期',
                 onPressed: () => _moveSelection(1),
                 icon: const Icon(Icons.chevron_right_rounded),
@@ -844,7 +844,7 @@ class _TimeEntryEditorDialogState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              TextFormField(
+              OmniTextFormField(
                 controller: _activityController,
                 autofocus: true,
                 decoration: const InputDecoration(labelText: '做了什么 *'),
@@ -876,7 +876,7 @@ class _TimeEntryEditorDialogState
                 },
               ),
               const SizedBox(height: OmniSpacing.md),
-              TextField(
+              OmniTextField(
                 controller: _notesController,
                 maxLines: 3,
                 decoration: const InputDecoration(
@@ -2118,7 +2118,7 @@ class _AbsoluteTimeEntryDialogState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              TextFormField(
+              OmniTextFormField(
                 controller: _activityController,
                 autofocus: widget.mode != _TimeEntryEditorMode.startOnly,
                 decoration: InputDecoration(
@@ -2237,7 +2237,7 @@ class _AbsoluteTimeEntryDialogState
                 },
               ),
               const SizedBox(height: OmniSpacing.md),
-              TextField(
+              OmniTextField(
                 controller: _notesController,
                 maxLines: 3,
                 decoration: const InputDecoration(

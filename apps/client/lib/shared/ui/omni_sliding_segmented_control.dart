@@ -58,9 +58,7 @@ class OmniSlidingSegmentedControl<T> extends StatelessWidget {
     final int selectedIndex = options.indexOf(selected);
     assert(selectedIndex >= 0);
     // 当前系统是否要求减少动态效果。
-    final bool disableAnimation =
-        MediaQuery.disableAnimationsOf(context) ||
-        MediaQuery.of(context).accessibleNavigation;
+    final bool disableAnimation = OmniMotion.reduce(context);
     // 横滑跟手时直接使用连续索引，静态切换时使用当前选中项。
     final double resolvedIndicatorIndex = (indicatorIndex ?? selectedIndex)
         .clamp(0, options.length - 1)
@@ -77,12 +75,14 @@ class OmniSlidingSegmentedControl<T> extends StatelessWidget {
 
     return Container(
       width: width,
-      height: height,
+      height: height < OmniDensity.controlHeight(context)
+          ? OmniDensity.controlHeight(context)
+          : height,
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         color: embedded ? Colors.transparent : scheme.surface,
         borderRadius: BorderRadius.circular(
-          embedded ? OmniRadius.control : OmniRadius.dialog,
+          embedded ? OmniRadius.control : OmniRadius.panel,
         ),
         border: embedded ? null : Border.all(color: scheme.outline),
       ),

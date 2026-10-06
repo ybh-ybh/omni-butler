@@ -814,6 +814,15 @@ class _EventToolbar extends StatelessWidget {
               key: const ValueKey<String>('event-status-selector'),
               height: actionHeight,
               child: SegmentedButton<bool>(
+                // 分段按钮内部默认按 40px 布局，桌面紧凑密度使其匹配 32px 外框。
+                style: ButtonStyle(
+                  visualDensity: compact
+                      ? VisualDensity.standard
+                      : const VisualDensity(vertical: -2),
+                  tapTargetSize: compact
+                      ? MaterialTapTargetSize.padded
+                      : MaterialTapTargetSize.shrinkWrap,
+                ),
                 showSelectedIcon: false,
                 segments: const <ButtonSegment<bool>>[
                   ButtonSegment<bool>(value: false, label: Text('进行中')),
@@ -1775,7 +1784,7 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                TextFormField(
+                OmniTextFormField(
                   controller: _nameController,
                   autofocus: true,
                   decoration: const InputDecoration(labelText: '事件名称 *'),
@@ -1783,12 +1792,12 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
                       value == null || value.trim().isEmpty ? '请输入事件名称' : null,
                 ),
                 const SizedBox(height: 14),
-                TextField(
+                OmniTextField(
                   controller: _categoryController,
                   decoration: const InputDecoration(labelText: '分类'),
                 ),
                 const SizedBox(height: 14),
-                TextField(
+                OmniTextField(
                   controller: _descriptionController,
                   maxLines: 2,
                   decoration: const InputDecoration(labelText: '事件说明'),
@@ -1797,7 +1806,7 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
                 Row(
                   children: <Widget>[
                     Expanded(
-                      child: TextFormField(
+                      child: OmniTextFormField(
                         controller: _intervalController,
                         keyboardType: TextInputType.number,
                         decoration: const InputDecoration(labelText: '每隔 *'),
@@ -1844,7 +1853,7 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
                   Row(
                     children: <Widget>[
                       Expanded(
-                        child: TextFormField(
+                        child: OmniTextFormField(
                           controller: _reminderController,
                           keyboardType: TextInputType.number,
                           decoration: const InputDecoration(labelText: '提前天数'),
@@ -1881,7 +1890,7 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
                     ],
                   ),
                 const SizedBox(height: 14),
-                TextField(
+                OmniTextField(
                   controller: _notesController,
                   maxLines: 3,
                   decoration: const InputDecoration(labelText: '备注'),
@@ -2851,7 +2860,7 @@ class _EventHistoryEditorDialogState extends State<_EventHistoryEditorDialog> {
             ],
           ),
           const SizedBox(height: 14),
-          TextField(
+          OmniTextField(
             controller: _notesController,
             maxLines: 3,
             decoration: const InputDecoration(labelText: '备注'),

@@ -1,0 +1,111 @@
+# Omni Butler 界面规范
+
+本文件约束 Windows、Android 主应用及桌面悬浮窗。设计方向为克制的 Apple 风格：清楚的层级、即时反馈、连续可接管的动作，以及适合效率工具的信息密度。保留现有业务流程、导航关系和六套配色。
+
+## 规范来源
+
+- 颜色：`apps/client/lib/app/theme/app_theme.dart` 的 `OmniColors` 与 `ColorScheme`；配色标识由 `app_theme_palette.dart` 管理。
+- 间距、圆角、尺寸、动效和平台密度：`apps/client/lib/app/theme/app_tokens.dart`。具体数值以代码为唯一来源，本文件不复制数值表。
+- 公共控件入口：`apps/client/lib/shared/ui/omni_ui.dart`。
+- 可交互样例：在客户端运行 `flutter run -t lib/main_ui_catalog.dart -d windows`。展示页不连接真实业务数据库，不保存偏好。
+- 迁移与验收记录：`apps/client/docs/ui-migration.md`。
+
+## 视觉原则
+
+1. 内容区使用清晰实底、适量留白和轻边界。圆角表达层级，避免每个控件自定一套轮廓。
+2. 主操作使用当前配色的品牌色；普通次操作使用中性表面；危险操作使用危险语义。成功、警告、危险与业务分类颜色不随品牌主题改变。
+3. 标题、正文、说明使用主题文字样式。系统中文字体优先，保留用户文本缩放；不将字号缩放固定为 1。
+4. 毛玻璃只用于确有内容穿透意义的表面。桌面悬浮窗保留 Acrylic 适配；普通卡片和表单保持实底，避免多层模糊。
+5. 桌面窄窗口仍按桌面输入方式确定控件密度。触控热区独立于图标和复选框的视觉尺寸。
+6. 六套配色共用组件形状、排版和交互规则。不要给开关另设固定红绿配色，也不要在页面内重新定义品牌色。
+7. 实色按钮通过 `ColorScheme.primary/error` 承载文字，主题会按前景色推导足够对比度的填色；`OmniColors.brand/danger` 继续表达原有品牌与业务语义。不要在页面里复制该推导。
+
+## 组件选择
+
+| 需求 | 统一入口 | 使用约定 |
+|---|---|---|
+| 主、次、危险操作 | `OmniButton` | 用 variant 表达操作含义；异步提交传 loading，阻止重复触发 |
+| 图标操作 | `OmniIconButton` | 提供 tooltip 或明确的语义标签；不可只有悬停才能操作 |
+| 内容卡片、分组列表 | `OmniPanel`、`OmniListPanel`、`OmniListRow` | 保留固定卡头与内部滚动契约，避免无界布局中的 Expanded |
+| 文本、搜索、表单输入 | `OmniTextField`、`OmniTextFormField` | 由 Flutter 保留文本编辑、输入法、焦点和 Form 行为 |
+| 布尔选择、互斥选项 | `OmniCheckbox`、`OmniRadioListTile`、`OmniSwitch` | 勾选表示选择/完成；开关表示立即生效的设置 |
+| 下拉与菜单 | `OmniDropdownButton`、`OmniDropdownButtonFormField`、`OmniPopupMenuButton` | 保留选中标识、禁用态、键盘操作与关闭后焦点恢复 |
+| 日期与时间 | `OmniDatePickerButton`、`OmniTimePickerButton` | 通过应用浮层选择；禁用日期与当前日期含义不同 |
+| 分段切换 | `OmniSlidingSegmentedControl` | 需要跟手指示器时使用连续索引；保留既有横滑协调 |
+| 编辑与确认 | `showOmniDialog`、`OmniDialogScaffold`、`OmniSideSheetScaffold` | 不绕过 Windows 应用内弹窗路径；操作区允许换行 |
+| 操作结果 | `showOmniMessage` | 保留业务撤销，错误说明具体原因；进行中用持续状态表达 |
+
+### 表单约定
+
+- 标签描述字段含义；说明描述格式或限制；错误靠近对应字段。不要把错误只放在短暂消息中。
+- 必填、只读、禁用和加载需要分别表达。保留原业务校验时机与校验条件。
+- 编辑器按内容分组，操作区统一对齐；长内容可滚动，软键盘出现后活动字段仍可访问。
+- Windows Enter 提交继续使用 `OmniWindowsEnterSubmit`；多行换行、中文输入法组词、下拉选项确认不得误提交。
+- 组件只负责呈现与输入，业务仓储、保存、撤销和错误恢复由调用方负责。
+
+以下片段展示组件选择；`controller`、`validateName`、`save` 与 `isSaving` 由业务模块管理，间距和排版从共享参数读取：
+
+```dart
+OmniTextFormField(
+  controller: controller,
+  decoration: const InputDecoration(labelText: '名称'),
+  validator: validateName,
+  enabled: !isSaving,
+)
+
+OmniButton(
+  label: '保存',
+  loading: isSaving,
+  onPressed: save,
+)
+
+OmniButton(
+  label: '删除',
+  variant: OmniButtonVariant.danger,
+  onPressed: confirmDelete,
+)
+```
+
+## 状态与交互
+
+| 状态 | 视觉与行为 |
+|---|---|
+| 常态 | 清晰标签与稳定尺寸；可点区域与外观一致 |
+| 悬停 | 轻微表面变化，保持轮廓；触控用户不依赖悬停说明 |
+| 按下 | 立即反馈；移出取消由底层手势识别处理，释放才提交 |
+| 焦点 | 可见焦点标记；保留 Tab、Shift+Tab、Enter、Space |
+| 选中 | 语义色与勾选/滑块共同表达，不只依赖颜色 |
+| 禁用/只读 | 禁用不响应操作；只读字段仍可阅读、选择或复制 |
+| 加载 | 保留动作标签，阻止重复提交，避免控件宽度大幅变化 |
+| 错误 | 靠近问题来源说明，允许修正或重试 |
+
+- 同一浮层进入和退出保持空间关系；菜单从触发位置展开。
+- 交互动画从当前显示状态继续，避免切换时重置起点。现有横滑和惯性物理保持不变。
+- 使用 `OmniMotion` 的减少动效策略；设备关闭动画或开启无障碍导航时可立即落位。
+- 导航、编辑弹窗维持焦点范围；关闭后回到调用入口。系统返回、Esc、遮罩关闭遵循该业务原有允许条件。
+- 阅读顺序与焦点顺序保持一致；自绘图形需要语义，装饰内容应排除重复朗读。
+
+## 受控例外
+
+- 系统文件选择器、权限窗口和系统通知由操作系统控制，保留其原生呈现。
+- Flutter `Form`、布局、滚动、文本编辑、路由、焦点、语义和绘制基础能力可继续使用。
+- 纯文字次操作允许使用继承统一主题的 `TextButton`，不得另建视觉主题。
+- 分类图表、时间区间 `RangeSlider`、拖拽代理和悬浮窗紧凑操作具有专用几何或材质，可以保留底层实现；颜色、轮廓、焦点和减少动效仍须对齐统一规范。
+- 例外须在 `apps/client/tool/ui_style_exceptions.json` 记录位置、数量上限和原因。新增例外需要代码评审说明，不能通过扩大整目录白名单绕过检查。
+
+## 新页面验收
+
+- 使用统一组件和语义色；新增变化先检查能否作为现有组件的语义变体。
+- 覆盖明暗、六套配色、Windows 宽/窄窗、Android 紧凑布局，以及文本放大。
+- 验证中文输入法、焦点移动、菜单关闭、系统返回、禁用、错误和异步提交。
+- 在 `apps/client/` 运行 `dart tool/check_ui_style.dart`、相关 widget 测试和 `flutter analyze --no-pub`。
+- 视觉基线只在确认目标呈现后更新；记录字体与运行环境。编译与截图通过不能代替真机手感验收。
+- 修改组件时同步展示页、此规范及迁移记录。所有新增方法和变量继续遵守仓库中文注释要求。
+
+## 预览与检查维护
+
+- `flutter test test/ui_catalog_test.dart` 验证组件的配色、尺寸、文字放大与表单行为；设置 `OMNI_UI_PREVIEW_DIR` 可额外生成中文预览。
+- `flutter test tool/ui_pages_preview_test.dart` 使用内存数据库和虚构数据输出七路由、事件编辑器及分类管理器的中文预览。它不会启动正式应用的同步、通知或自动业务服务。
+- 中文字体与图标由 `OMNI_UI_FONT`、`OMNI_UI_ICONS` 指定；本机默认使用 Windows 微软雅黑和 Flutter SDK Material 图标。预览不把平台中文字体提交为项目资产。
+- 常规 golden 使用测试字体核对结构，中文预览核对实际文字；两者用途不同。按图审查后才能更新基线。
+- `tool/check_ui_style.dart` 是源码边界检查，支持常用原生控件族、具名构造和颜色/圆角字面量；它不替代代码审查或实际渲染验证。例外按文件和类型设上限，减少后必须同步收紧。

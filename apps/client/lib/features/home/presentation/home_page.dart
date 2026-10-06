@@ -1007,13 +1007,13 @@ class _QuoteHero extends ConsumerWidget {
               Row(
                 children: <Widget>[
                   const Spacer(),
-                  IconButton(
+                  OmniIconButton(
                     tooltip: '名言库',
                     onPressed: onManage,
                     color: colors.heroInk,
                     icon: const Icon(Icons.library_books_outlined),
                   ),
-                  IconButton(
+                  OmniIconButton(
                     tooltip: '设置横幅背景',
                     onPressed: onBackground,
                     color: colors.heroInk,
@@ -1024,7 +1024,7 @@ class _QuoteHero extends ConsumerWidget {
                     visualDensity: dense ? VisualDensity.compact : null,
                     icon: const Icon(Icons.wallpaper_rounded),
                   ),
-                  IconButton(
+                  OmniIconButton(
                     tooltip: '换一条',
                     onPressed: onChange,
                     color: colors.heroInk,
@@ -1360,7 +1360,7 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
             if (androidCompact)
               SizedBox.square(
                 dimension: 30,
-                child: IconButton(
+                child: OmniIconButton(
                   key: const ValueKey<String>('home-todo-toggle-all'),
                   tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
                   onPressed: expandableTreeIds.isEmpty
@@ -1628,8 +1628,7 @@ class _HomeTodoTree extends StatelessWidget {
     // 当前任务树是否存在需要展示的子任务。
     final bool hasChildren = pendingChildren.isNotEmpty;
     // 当前是否关闭非必要动画。
-    final bool disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final bool disableAnimations = OmniMotion.reduce(context);
     // 子任务展开收起动画时长。
     final Duration duration = disableAnimations
         ? Duration.zero
@@ -1844,6 +1843,14 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
       // 用户选中的任务操作，关闭菜单时为空。
       final _HomeTodoAction? action = await showMenu<_HomeTodoAction>(
         context: context,
+        popUpAnimationStyle: OmniMotion.reduce(context)
+            ? AnimationStyle.noAnimation
+            : const AnimationStyle(
+                duration: OmniMotion.fast,
+                reverseDuration: OmniMotion.fast,
+                curve: OmniMotion.standardCurve,
+                reverseCurve: Curves.easeInCubic,
+              ),
         position: RelativeRect.fromRect(
           position & Size.zero,
           Offset.zero & overlay.size,
@@ -1930,8 +1937,7 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
   /// 仅控制视觉反馈；页面销毁只结束动画，不取消完成操作。
   Future<void> _animateCompletion() async {
     // 当前是否关闭非必要动画。
-    final bool disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final bool disableAnimations = OmniMotion.reduce(context);
     // 勾选反馈停留时长。
     final Duration checkDuration = disableAnimations
         ? Duration.zero
@@ -1967,8 +1973,7 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     // 当前是否关闭非必要动画。
-    final bool disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final bool disableAnimations = OmniMotion.reduce(context);
     // 当前淡出动画时长。
     final Duration fadeDuration = disableAnimations
         ? Duration.zero
@@ -2061,7 +2066,6 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                                       checked: _checked,
                                       highlighted:
                                           _checkboxHovered || _checkboxFocused,
-                                      accentColor: widget.accentColor,
                                     ),
                                   ),
                                 ),
@@ -2090,15 +2094,18 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                                             ? Duration.zero
                                             : OmniMotion.fast,
                                         curve: OmniMotion.standardCurve,
-                                        style: TextStyle(
-                                          color: _checked
-                                              ? colors.muted
-                                              : colors.ink,
-                                          fontWeight: FontWeight.w400,
-                                          decoration: _checked
-                                              ? TextDecoration.lineThrough
-                                              : TextDecoration.none,
-                                        ),
+                                        // 动画样式替换默认文字样式时保留平台字体与排版。
+                                        style: DefaultTextStyle.of(context)
+                                            .style
+                                            .copyWith(
+                                              color: _checked
+                                                  ? colors.muted
+                                                  : colors.ink,
+                                              fontWeight: FontWeight.w400,
+                                              decoration: _checked
+                                                  ? TextDecoration.lineThrough
+                                                  : TextDecoration.none,
+                                            ),
                                         child: Text(
                                           widget.todo.title,
                                           maxLines: 1,
@@ -2126,7 +2133,7 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                               const SizedBox(width: OmniSpacing.xxs),
                               SizedBox.square(
                                 dimension: 28,
-                                child: IconButton(
+                                child: OmniIconButton(
                                   key: ValueKey<String>(
                                     'home-todo-tree-toggle-${widget.todo.id}',
                                   ),
@@ -2178,7 +2185,7 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
   }
 }
 
-/// 首页任务的自定义勾选反馈。
+/// 首页任务的统一勾选反馈，完成流程继续由任务行控制。
 class _HomeTodoCheckIndicator extends StatelessWidget {
   /// 是否处于完成状态。
   final bool checked;
@@ -2186,75 +2193,38 @@ class _HomeTodoCheckIndicator extends StatelessWidget {
   /// 是否处于悬停或键盘焦点状态。
   final bool highlighted;
 
-  /// 当前任务所属象限强调色。
-  final Color accentColor;
-
   /// 创建首页任务勾选反馈。
   const _HomeTodoCheckIndicator({
     required this.checked,
     required this.highlighted,
-    required this.accentColor,
   });
 
-  /// 构建带填色与勾号缩放效果的方形指示器。
+  /// 构建统一方框与无弹跳勾线，不改变任务完成等待时序。
   @override
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    // 当前是否关闭非必要动画。
-    final bool disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
-    // 勾选状态切换时长。
-    final Duration duration = disableAnimations
-        ? Duration.zero
-        : OmniMotion.fast;
-
-    return AnimatedScale(
-      scale: checked ? 1.08 : 1,
+    // 两项系统无障碍偏好共同决定颜色与透明度过渡时长。
+    final Duration duration = OmniMotion.duration(context, OmniMotion.fast);
+    return AnimatedContainer(
+      width: Checkbox.width,
+      height: Checkbox.width,
       duration: duration,
-      curve: Curves.easeOutBack,
-      child: AnimatedContainer(
-        width: 18,
-        height: 18,
+      curve: OmniMotion.standardCurve,
+      decoration: BoxDecoration(
+        color: checked ? colors.brand : colors.paper,
+        borderRadius: BorderRadius.circular(OmniRadius.tiny),
+        border: Border.all(
+          color: checked || highlighted ? colors.brand : colors.muted,
+          width: 1.5,
+        ),
+      ),
+      child: AnimatedOpacity(
+        key: const ValueKey<String>('home-todo-check-mark'),
+        opacity: checked ? 1 : 0,
         duration: duration,
         curve: OmniMotion.standardCurve,
-        decoration: BoxDecoration(
-          color: checked
-              ? accentColor
-              : highlighted
-              ? colors.ink.withValues(alpha: 0.1)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(
-            color: checked ? accentColor : colors.muted.withValues(alpha: 0.72),
-            width: checked ? 1.5 : 1,
-          ),
-          boxShadow: checked
-              ? <BoxShadow>[
-                  BoxShadow(
-                    color: accentColor.withValues(alpha: 0.22),
-                    blurRadius: 6,
-                    spreadRadius: 1,
-                  ),
-                ]
-              : const <BoxShadow>[],
-        ),
-        child: AnimatedOpacity(
-          key: const ValueKey<String>('home-todo-check-mark'),
-          opacity: checked ? 1 : 0,
-          duration: duration,
-          curve: OmniMotion.standardCurve,
-          child: AnimatedScale(
-            scale: checked ? 1 : 0.45,
-            duration: duration,
-            curve: Curves.easeOutBack,
-            child: const Icon(
-              Icons.check_rounded,
-              size: 14,
-              color: Colors.white,
-            ),
-          ),
-        ),
+        child: Icon(Icons.check_rounded, size: 14, color: colors.accentInk),
       ),
     );
   }

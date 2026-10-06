@@ -1,0 +1,162 @@
+{
+  "lib/features/events/presentation/events_page.dart :: SegmentedButton": {
+    "count": 1,
+    "reason": "使用统一 Theme 的筛选选择控件，保留原有键盘与选择语义。"
+  },
+  "lib/features/floating/presentation/floating_window_page.dart :: Color(0xA8EAF0F6)": {
+    "count": 1,
+    "reason": "Windows Acrylic 表面的浅深色透射底色，专用材质适配。"
+  },
+  "lib/features/floating/presentation/floating_window_page.dart :: Color(0xB8182233)": {
+    "count": 1,
+    "reason": "Windows Acrylic 表面的浅深色透射底色，专用材质适配。"
+  },
+  "lib/features/floating/presentation/floating_window_page.dart :: OutlinedButton": {
+    "count": 1,
+    "reason": "悬浮材质或已有专用紧凑操作，继承统一主题并保留显式尺寸。"
+  },
+  "lib/features/floating/presentation/floating_window_page.dart :: TextButton": {
+    "count": 1,
+    "reason": "文字次操作继承统一 TextButtonTheme，保留现有撤销和更多入口。"
+  },
+  "lib/features/home/presentation/home_card_manager.dart :: TextButton": {
+    "count": 1,
+    "reason": "文字次操作继承统一 TextButtonTheme，保留现有撤销和更多入口。"
+  },
+  "lib/features/home/presentation/home_context_card.dart :: TextButton": {
+    "count": 1,
+    "reason": "文字次操作继承统一 TextButtonTheme，保留现有撤销和更多入口。"
+  },
+  "lib/features/home/presentation/home_page.dart :: TextButton": {
+    "count": 1,
+    "reason": "文字次操作继承统一 TextButtonTheme，保留现有撤销和更多入口。"
+  },
+  "lib/features/home/presentation/home_page.dart :: showMenu": {
+    "count": 1,
+    "reason": "首页右键与长按坐标锚定菜单，继承统一 popupMenuTheme 并保留原定位和操作语义。"
+  },
+  "lib/features/home/presentation/home_time_status_card.dart :: TextButton": {
+    "count": 2,
+    "reason": "文字次操作继承统一 TextButtonTheme，保留现有撤销和更多入口。"
+  },
+  "lib/features/inventory/presentation/inventory_move_dialog.dart :: Dialog": {
+    "count": 1,
+    "reason": "物品迁移双栏或分类管理自适应容器，继承统一 DialogTheme，保留特定内容布局。"
+  },
+  "lib/features/inventory/presentation/inventory_move_dialog.dart :: TextButton": {
+    "count": 1,
+    "reason": "文字次操作继承统一 TextButtonTheme，保留现有撤销和更多入口。"
+  },
+  "lib/features/inventory/presentation/inventory_page.dart :: ChoiceChip": {
+    "count": 1,
+    "reason": "使用统一 Theme 的筛选选择控件，保留原有键盘与选择语义。"
+  },
+  "lib/features/inventory/presentation/inventory_page.dart :: Color(0xFF1EA7A1)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/features/inventory/presentation/inventory_page.dart :: Color(0xFF3370FF)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/features/inventory/presentation/inventory_page.dart :: Color(0xFF5B8FF9)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/features/inventory/presentation/inventory_page.dart :: Color(0xFF8E5CD9)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/features/inventory/presentation/inventory_page.dart :: Color(0xFFD97904)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/features/inventory/presentation/inventory_page.dart :: Color(0xFFF54A45)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/features/inventory/presentation/inventory_page.dart :: showGeneralDialog": {
+    "count": 2,
+    "reason": "物品详情卡翻转及新增拆分菜单保留原定位，使用统一主题与减少动效策略。"
+  },
+  "lib/features/management/presentation/desktop_management_switcher.dart :: PopupMenuItem": {
+    "count": 1,
+    "reason": "标题分区说明或颜色网格的定制内容，外层使用 OmniPopupMenuButton 统一入口。"
+  },
+  "lib/features/memberships/presentation/memberships_page.dart :: ChoiceChip": {
+    "count": 1,
+    "reason": "使用统一 Theme 的筛选选择控件，保留原有键盘与选择语义。"
+  },
+  "lib/features/settings/presentation/settings_page.dart :: ChoiceChip": {
+    "count": 1,
+    "reason": "使用统一 Theme 的筛选选择控件，保留原有键盘与选择语义。"
+  },
+  "lib/features/timeline/presentation/timeline_page.dart :: RangeSlider": {
+    "count": 1,
+    "reason": "时间区间选择带业务占用段绘制，主题统一颜色，保留范围拖动逻辑。"
+  },
+  "lib/features/timeline/presentation/timeline_page.dart :: SegmentedButton": {
+    "count": 2,
+    "reason": "使用统一 Theme 的筛选选择控件，保留原有键盘与选择语义。"
+  },
+  "lib/features/todos/presentation/todos_page.dart :: AlertDialog": {
+    "count": 1,
+    "reason": "待办重复系列范围选择确认，继承统一 DialogTheme 且通过 showOmniDialog 打开。"
+  },
+  "lib/features/todos/presentation/todos_page.dart :: SegmentedButton": {
+    "count": 1,
+    "reason": "使用统一 Theme 的筛选选择控件，保留原有键盘与选择语义。"
+  },
+  "lib/features/todos/presentation/todos_page.dart :: TextButton": {
+    "count": 3,
+    "reason": "文字次操作继承统一 TextButtonTheme，保留现有撤销和更多入口。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: Color(0xFF1EA7A1)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: Color(0xFF2EA121)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: Color(0xFF3370FF)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: Color(0xFF5B65C9)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: Color(0xFF646A73)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: Color(0xFF8E5CD9)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: Color(0xFFD84A8B)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: Color(0xFFD97904)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: Color(0xFFD9A514)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: Color(0xFFE94444)": {
+    "count": 1,
+    "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: Dialog": {
+    "count": 1,
+    "reason": "物品迁移双栏或分类管理自适应容器，继承统一 DialogTheme，保留特定内容布局。"
+  },
+  "lib/shared/taxonomy/taxonomy_manager_dialog.dart :: PopupMenuItem": {
+    "count": 1,
+    "reason": "标题分区说明或颜色网格的定制内容，外层使用 OmniPopupMenuButton 统一入口。"
+  }
+}

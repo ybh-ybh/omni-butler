@@ -26,7 +26,7 @@ class OmniPanelScrollScope extends InheritedWidget {
   }
 }
 
-/// 统一的飞书式内容面板。
+/// 统一的清晰实底内容面板。
 class OmniPanel extends StatelessWidget {
   /// 可选固定头部；自身间距由调用方控制，不随面板内容滚动。
   final Widget? header;
@@ -120,6 +120,8 @@ class OmniPanel extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         hoverColor: colors.ink.withValues(alpha: 0.04),
+        highlightColor: colors.ink.withValues(alpha: 0.08),
+        focusColor: colors.brand.withValues(alpha: 0.12),
         child: header == null
             ? Padding(padding: padding, child: panelContent)
             : panelContent,
@@ -253,10 +255,13 @@ class OmniListRow extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: borderRadius,
-        hoverColor: colors.ink.withValues(alpha: 0.06),
+        hoverColor: colors.ink.withValues(alpha: 0.04),
+        highlightColor: colors.ink.withValues(alpha: 0.08),
         focusColor: colors.brand.withValues(alpha: 0.12),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: OmniSize.touch),
+          constraints: BoxConstraints(
+            minHeight: OmniDensity.controlHeight(context, large: true),
+          ),
           child: content,
         ),
       ),

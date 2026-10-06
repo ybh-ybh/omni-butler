@@ -27,16 +27,16 @@ abstract final class OmniSpacing {
 /// Omni Butler 的统一圆角 Token。
 abstract final class OmniRadius {
   /// 复选框等微型控件圆角。
-  static const double tiny = 3;
+  static const double tiny = 4;
 
   /// 按钮、输入框与标签圆角。
-  static const double control = 6;
+  static const double control = 8;
 
   /// 卡片与菜单圆角。
-  static const double panel = 8;
+  static const double panel = 12;
 
   /// 模态框与侧边面板圆角。
-  static const double dialog = 12;
+  static const double dialog = 16;
 
   /// 胶囊标签圆角。
   static const double pill = 999;
@@ -54,28 +54,19 @@ abstract final class OmniSize {
   static const double controlLarge = 40;
 
   /// 移动端最小触控高度。
-  static const double touch = 44;
+  static const double touch = 48;
 
-  /// 开关视觉相对原生控件的缩放比例。
-  static const double switchVisualScale = 0.76;
+  /// 开关的完整点击宽度。
+  static const double switchTapWidth = 52;
 
-  /// 立体开关的完整点击宽度。
-  static const double switchTapWidth = 60;
+  /// 开关轨道宽度。
+  static const double switchTrackWidth = 46;
 
-  /// 立体开关轨道宽度。
-  static const double switchTrackWidth = 56;
-
-  /// 立体开关轨道高度。
+  /// 开关轨道高度。
   static const double switchTrackHeight = 28;
 
-  /// 立体开关滑块直径。
-  static const double switchThumb = 20;
-
-  /// 立体开关状态环直径。
-  static const double switchIndicator = 12;
-
-  /// 立体开关状态环与左右边缘的额外间距。
-  static const double switchIndicatorInset = 4;
+  /// 开关滑块直径。
+  static const double switchThumb = 22;
 
   /// 桌面顶栏高度。
   static const double topBar = 48;
@@ -98,6 +89,19 @@ abstract final class OmniSize {
 
 /// Omni Butler 的统一动效 Token。
 abstract final class OmniMotion {
+  /// 聚合系统的减少动画与辅助导航偏好。
+  static bool reduce(BuildContext context) {
+    // 当前窗口的无障碍偏好。
+    final MediaQueryData? media = MediaQuery.maybeOf(context);
+    return (media?.disableAnimations ?? false) ||
+        (media?.accessibleNavigation ?? false);
+  }
+
+  /// 在减少动画模式下保留即时状态反馈，停止位移过渡。
+  static Duration duration(BuildContext context, Duration duration) {
+    return reduce(context) ? Duration.zero : duration;
+  }
+
   /// 即时状态反馈时长。
   static const Duration fast = Duration(milliseconds: 120);
 
@@ -107,14 +111,25 @@ abstract final class OmniMotion {
   /// 面板进入与退出时长。
   static const Duration panel = Duration(milliseconds: 220);
 
-  /// 立体开关滑块移动时长，在参考 CSS 基础上加快 30%。
-  static const Duration switchThumb = Duration(milliseconds: 210);
-
-  /// 立体开关状态环动画时长，在参考 CSS 基础上加快 30%。
-  static const Duration switchIndicator = Duration(milliseconds: 700);
+  /// 开关滑块移动时长。
+  static const Duration switchThumb = Duration(milliseconds: 180);
 
   /// 常规缓动曲线。
   static const Curve standardCurve = Curves.easeOutCubic;
+}
+
+/// 以输入平台决定控件密度，避免窄桌面窗口变成触控控件。
+abstract final class OmniDensity {
+  /// 当前平台是否默认使用触控热区。
+  static bool isTouch(BuildContext context) {
+    return !OmniBreakpoint.isDesktopPlatform(Theme.of(context).platform);
+  }
+
+  /// 按平台与强调层级返回控件最小高度。
+  static double controlHeight(BuildContext context, {bool large = false}) {
+    if (isTouch(context)) return OmniSize.touch;
+    return large ? OmniSize.controlLarge : OmniSize.control;
+  }
 }
 
 /// Omni Butler 的统一响应式断点。
