@@ -9,6 +9,7 @@ import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/events/data/event_repository.dart';
+import 'package:omni_butler/features/management/presentation/desktop_management_switcher.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 周期事件页面。
@@ -203,6 +204,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
             children: <Widget>[
               OmniPageHeader(
                 title: '事件记录',
+                titleWidget: const DesktopManagementSwitcher(
+                  selectedSection: ManagementSection.events,
+                ),
                 actions: <Widget>[
                   OmniButton(
                     label: '新增事件',

@@ -173,6 +173,9 @@ class OmniPopupMenuButton<T> extends StatelessWidget {
   /// 自定义菜单尺寸约束；为空时使用默认操作菜单尺寸。
   final BoxConstraints? menuConstraints;
 
+  /// 自定义按钮悬停与点击反馈的圆角。
+  final BorderRadius? borderRadius;
+
   /// 创建统一操作菜单按钮。
   const OmniPopupMenuButton({
     required this.itemBuilder,
@@ -185,6 +188,7 @@ class OmniPopupMenuButton<T> extends StatelessWidget {
     this.child,
     this.enabled = true,
     this.menuConstraints,
+    this.borderRadius,
     super.key,
   }) : assert(child == null || icon == null, 'child 与 icon 不能同时设置');
 
@@ -197,6 +201,7 @@ class OmniPopupMenuButton<T> extends StatelessWidget {
       onSelected: onSelected,
       onCanceled: onCanceled,
       tooltip: tooltip,
+      borderRadius: borderRadius,
       icon:
           icon ?? (child == null ? const Icon(Icons.more_horiz_rounded) : null),
       enabled: enabled,

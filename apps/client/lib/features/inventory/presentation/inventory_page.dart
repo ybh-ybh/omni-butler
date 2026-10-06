@@ -16,6 +16,7 @@ import 'package:omni_butler/features/inventory/data/inventory_repository.dart';
 import 'package:omni_butler/features/inventory/presentation/inventory_move_dialog.dart';
 import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
 import 'package:omni_butler/shared/attachments/attachment_picker_dialog.dart';
+import 'package:omni_butler/features/management/presentation/desktop_management_switcher.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 物品网格列数的本机偏好键。
@@ -488,6 +489,9 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
             children: <Widget>[
               OmniPageHeader(
                 title: '物品管理',
+                titleWidget: const DesktopManagementSwitcher(
+                  selectedSection: ManagementSection.inventory,
+                ),
                 actions: <Widget>[
                   OmniButton(
                     label: '新增物品',

@@ -198,7 +198,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('关闭会员管理后导航隐藏且直接访问返回首页', (WidgetTester tester) async {
+  testWidgets('关闭会员管理后切换菜单隐藏该分区且直接访问返回首页', (WidgetTester tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     tester.view.physicalSize = const Size(1440, 900);
     tester.view.devicePixelRatio = 1;
@@ -242,6 +242,26 @@ void main() {
       find.byKey(const ValueKey<String>('navigation-/memberships')),
       findsNothing,
     );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('navigation-/inventory')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('desktop-management-switcher')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(
+        const ValueKey<String>('desktop-management-option-memberships'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('desktop-management-option-inventory')),
+      findsOneWidget,
+    );
+    await tester.tapAt(const Offset(1300, 800));
+    await tester.pumpAndSettle();
 
     router.go('/memberships');
     await tester.pump();

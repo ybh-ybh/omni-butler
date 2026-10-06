@@ -6,6 +6,9 @@ class OmniPageHeader extends StatelessWidget {
   /// 页面标题。
   final String title;
 
+  /// 可选的交互式标题；为空时显示普通标题文字。
+  final Widget? titleWidget;
+
   /// 可选页面说明。
   final String? description;
 
@@ -15,6 +18,7 @@ class OmniPageHeader extends StatelessWidget {
   /// 创建页面标题区。
   const OmniPageHeader({
     required this.title,
+    this.titleWidget,
     this.description,
     this.actions = const <Widget>[],
     super.key,
@@ -48,7 +52,8 @@ class OmniPageHeader extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Text(title, style: Theme.of(context).textTheme.headlineLarge),
+            titleWidget ??
+                Text(title, style: Theme.of(context).textTheme.headlineLarge),
             if (showDescription) ...<Widget>[
               const SizedBox(height: OmniSpacing.xxs),
               Text(description!, style: Theme.of(context).textTheme.bodySmall),

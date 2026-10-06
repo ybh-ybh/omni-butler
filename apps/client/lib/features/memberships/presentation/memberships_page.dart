@@ -12,6 +12,7 @@ import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/features/memberships/data/membership_repository.dart';
 import 'package:omni_butler/shared/attachments/attachment_picker_dialog.dart';
 import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
+import 'package:omni_butler/features/management/presentation/desktop_management_switcher.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 打开会员续费表单，供管理页与首页共用。
@@ -334,6 +335,9 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
             children: <Widget>[
               OmniPageHeader(
                 title: '会员管理',
+                titleWidget: const DesktopManagementSwitcher(
+                  selectedSection: ManagementSection.memberships,
+                ),
                 actions: <Widget>[
                   OmniButton(
                     label: '新增会员',

@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 
-/// Android 管理页可切换的业务分区。
+/// 管理页可切换的业务分区。
 enum ManagementSection {
   /// 事件记录。
   events,
@@ -15,7 +15,7 @@ enum ManagementSection {
 
 /// 管理分区的展示与导航信息。
 extension ManagementSectionPresentation on ManagementSection {
-  /// 顶部滑块展示文案。
+  /// 顶部切换控件的展示文案。
   String get label => switch (this) {
     ManagementSection.inventory => '物品管理',
     ManagementSection.events => '事件记录',

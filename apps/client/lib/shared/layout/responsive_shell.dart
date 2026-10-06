@@ -37,7 +37,7 @@ class _AppDestination {
   /// 可以命中该入口选中态的额外路由。
   final List<String> selectionPaths;
 
-  /// 是否为 Android 管理聚合入口。
+  /// 是否为管理聚合入口。
   final bool managementGroup;
 
   /// 对应的一级有状态导航分支。
@@ -66,38 +66,30 @@ const List<_AppDestination> _desktopDestinations = <_AppDestination>[
   ),
   _AppDestination(
     path: '/todos',
-    label: '每日待办',
+    label: '待办',
     icon: Icons.check_box_outlined,
     selectedIcon: Icons.check_box_rounded,
     features: <AppFeature>[AppFeature.todos],
   ),
   _AppDestination(
     path: '/timeline',
-    label: '时间管理',
+    label: '时间',
     icon: Icons.access_time_outlined,
     selectedIcon: Icons.access_time_filled,
     features: <AppFeature>[AppFeature.timeline],
   ),
   _AppDestination(
-    path: '/events',
-    label: '事件管理',
-    icon: Icons.calendar_today_outlined,
-    selectedIcon: Icons.calendar_today_rounded,
-    features: <AppFeature>[AppFeature.events],
-  ),
-  _AppDestination(
     path: '/inventory',
-    label: '物品管理',
-    icon: Icons.inventory_2_outlined,
-    selectedIcon: Icons.inventory_2_rounded,
-    features: <AppFeature>[AppFeature.inventory],
-  ),
-  _AppDestination(
-    path: '/memberships',
-    label: '会员管理',
-    icon: Icons.credit_card_outlined,
-    selectedIcon: Icons.credit_card_rounded,
-    features: <AppFeature>[AppFeature.memberships],
+    label: '管理',
+    icon: Icons.dashboard_customize_outlined,
+    selectedIcon: Icons.dashboard_customize_rounded,
+    features: <AppFeature>[
+      AppFeature.events,
+      AppFeature.inventory,
+      AppFeature.memberships,
+    ],
+    selectionPaths: <String>['/events', '/inventory', '/memberships'],
+    managementGroup: true,
   ),
 ];
 
@@ -238,7 +230,7 @@ class ResponsiveShell extends ConsumerWidget {
     final FeaturePreference featurePreference = ref.watch(
       featurePreferenceProvider,
     );
-    // 当前 Android 管理页记住的分区。
+    // 当前管理页记住的分区。
     final ManagementSection managementSection = ref.watch(
       managementSectionProvider,
     );
@@ -314,7 +306,7 @@ class ResponsiveShell extends ConsumerWidget {
                     location: location,
                     destinations: compactDestinations,
                     onSelected: (_AppDestination destination) =>
-                        _selectCompactDestination(
+                        _selectDestination(
                           context,
                           ref,
                           destination,
@@ -334,13 +326,29 @@ class ResponsiveShell extends ConsumerWidget {
                       _ExpandedSidebar(
                         location: location,
                         destinations: desktopDestinations,
-                        onSelected: (String path) => context.go(path),
+                        onSelected: (_AppDestination destination) =>
+                            _selectDestination(
+                              context,
+                              ref,
+                              destination,
+                              featurePreference,
+                              managementSection,
+                              navigationShell,
+                            ),
                       )
                     else
                       _MediumNavigation(
                         location: location,
                         destinations: desktopDestinations,
-                        onSelected: (String path) => context.go(path),
+                        onSelected: (_AppDestination destination) =>
+                            _selectDestination(
+                              context,
+                              ref,
+                              destination,
+                              featurePreference,
+                              managementSection,
+                              navigationShell,
+                            ),
                       ),
                     Expanded(
                       child: Column(
@@ -365,8 +373,8 @@ class ResponsiveShell extends ConsumerWidget {
     GlobalSearchDialog.show(context);
   }
 
-  /// 打开普通底栏路由或记住的 Android 管理分区。
-  void _selectCompactDestination(
+  /// 打开普通导航路由或记住的可用管理分区。
+  void _selectDestination(
     BuildContext context,
     WidgetRef ref,
     _AppDestination destination,
@@ -416,7 +424,7 @@ class _ExpandedSidebar extends ConsumerWidget {
   final List<_AppDestination> destinations;
 
   /// 选择回调。
-  final ValueChanged<String> onSelected;
+  final ValueChanged<_AppDestination> onSelected;
 
   /// 创建展开桌面侧栏。
   const _ExpandedSidebar({
@@ -477,8 +485,8 @@ class _ExpandedSidebar extends ConsumerWidget {
                   padding: const EdgeInsets.only(bottom: 4),
                   child: _SidebarDestination(
                     destination: destination,
-                    selected: _isSelected(destination.path, location),
-                    onTap: () => onSelected(destination.path),
+                    selected: _isDestinationSelected(destination, location),
+                    onTap: () => onSelected(destination),
                   ),
                 ),
               const Spacer(),
@@ -489,7 +497,7 @@ class _ExpandedSidebar extends ConsumerWidget {
               _SidebarDestination(
                 destination: _settingsDestination,
                 selected: _isSelected(_settingsDestination.path, location),
-                onTap: () => onSelected(_settingsDestination.path),
+                onTap: () => onSelected(_settingsDestination),
               ),
             ],
           ),
@@ -508,7 +516,7 @@ class _MediumNavigation extends StatelessWidget {
   final List<_AppDestination> destinations;
 
   /// 选择回调。
-  final ValueChanged<String> onSelected;
+  final ValueChanged<_AppDestination> onSelected;
 
   /// 创建中等宽度导航轨。
   const _MediumNavigation({
@@ -541,8 +549,8 @@ class _MediumNavigation extends StatelessWidget {
                 padding: const EdgeInsets.only(bottom: OmniSpacing.xxs),
                 child: _RailDestination(
                   destination: destination,
-                  selected: _isSelected(destination.path, location),
-                  onTap: () => onSelected(destination.path),
+                  selected: _isDestinationSelected(destination, location),
+                  onTap: () => onSelected(destination),
                 ),
               ),
             const Spacer(),
@@ -551,7 +559,7 @@ class _MediumNavigation extends StatelessWidget {
               child: _RailDestination(
                 destination: _settingsDestination,
                 selected: _isSelected(_settingsDestination.path, location),
-                onTap: () => onSelected(_settingsDestination.path),
+                onTap: () => onSelected(_settingsDestination),
               ),
             ),
           ],
