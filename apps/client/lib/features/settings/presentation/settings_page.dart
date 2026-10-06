@@ -94,12 +94,41 @@ class SettingsPage extends ConsumerStatefulWidget {
 }
 
 /// 设置页面状态。
-class _SettingsPageState extends ConsumerState<SettingsPage> {
+class _SettingsPageState extends ConsumerState<SettingsPage>
+    with SingleTickerProviderStateMixin {
   /// 当前选中的一级分类。
   _SettingsCategory _selectedCategory = _SettingsCategory.features;
 
   /// Android 紧凑布局当前打开的二级分类，空值表示分类主页。
   _SettingsCategory? _androidSelectedCategory;
+
+  /// Android 层级切换进度，0 为分类主页，1 为二级详情。
+  late final AnimationController _androidPageController;
+
+  /// 返回动画结束前保留详情，同时防止重复返回重启动画。
+  bool _androidClosingCategory = false;
+
+  /// 初始化 Android 两张页面卡片共用的切换进度。
+  @override
+  void initState() {
+    super.initState();
+    _androidPageController = AnimationController(
+      vsync: this,
+      duration: OmniMotion.panel,
+    );
+  }
+
+  /// 释放层级切换动画，取消尚未完成的返回回调。
+  @override
+  void dispose() {
+    _androidPageController.dispose();
+    super.dispose();
+  }
+
+  /// 系统减少动态效果时立即完成层级切换。
+  bool get _disableAndroidPageAnimations =>
+      MediaQuery.disableAnimationsOf(context) ||
+      MediaQuery.of(context).accessibleNavigation;
 
   /// 构建桌面双栏或窄窗口单栏设置布局。
   @override
@@ -165,15 +194,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     // 当前 Android 二级分类。
     final _SettingsCategory? selectedCategory = _androidSelectedCategory;
     // 当前系统是否要求关闭页面切换动画。
-    final bool disableAnimations =
-        MediaQuery.disableAnimationsOf(context) ||
-        MediaQuery.of(context).accessibleNavigation;
-    // 当前 Android 设置层级对应的完整页面卡片。
-    final Widget page = selectedCategory == null
-        ? _AndroidSettingsOverview(
-            key: const ValueKey<String>('android-settings-page-overview'),
-            onSelected: _openAndroidCategory,
-          )
+    final bool disableAnimations = _disableAndroidPageAnimations;
+    // 分类主页保持挂载，返回时恢复原有列表滚动位置。
+    final Widget overview = _AndroidSettingsOverview(
+      key: const ValueKey<String>('android-settings-page-overview'),
+      onSelected: _openAndroidCategory,
+    );
+    // 返回动画结束前保留真实详情卡片，避免退出时内容提前消失。
+    final Widget? detail = selectedCategory == null
+        ? null
         : _AndroidSettingsDetail(
             key: ValueKey<String>(
               'android-settings-page-${selectedCategory.name}',
@@ -193,35 +222,134 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           _closeAndroidCategory();
         }
       },
-      child: AnimatedSwitcher(
+      child: AnimatedBuilder(
         key: const ValueKey<String>('android-settings-page-switcher'),
-        duration: disableAnimations ? Duration.zero : OmniMotion.panel,
-        reverseDuration: disableAnimations ? Duration.zero : OmniMotion.panel,
-        switchInCurve: OmniMotion.standardCurve,
-        switchOutCurve: OmniMotion.standardCurve,
-        layoutBuilder: (Widget? currentChild, List<Widget> previousChildren) =>
-            Stack(
-              fit: StackFit.expand,
-              children: <Widget>[...previousChildren, ?currentChild],
+        animation: _androidPageController,
+        builder: (BuildContext context, Widget? child) {
+          // 两张卡片共用同一进度，进入左移、返回右移，中途返回从当前位置接手。
+          final double progress = disableAnimations
+              ? (selectedCategory != null && !_androidClosingCategory ? 1 : 0)
+              : _androidPageController.value;
+          // 动画期间禁止卡片内容响应点击，系统返回仍由外层 PopScope 处理。
+          final bool transitioning = _androidPageController.isAnimating;
+          return ClipRect(
+            child: ColoredBox(
+              color: colors.canvas,
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  Offstage(
+                    offstage: progress == 1,
+                    child: TickerMode(
+                      enabled: progress < 1,
+                      child: _buildAndroidPageCard(
+                        role: 'overview',
+                        offset: -progress,
+                        inactive: transitioning || selectedCategory != null,
+                        disableAnimations: disableAnimations,
+                        colors: colors,
+                        child: overview,
+                      ),
+                    ),
+                  ),
+                  if (detail != null)
+                    _buildAndroidPageCard(
+                      role: 'detail',
+                      offset: 1 - progress,
+                      inactive: transitioning || _androidClosingCategory,
+                      disableAnimations: disableAnimations,
+                      colors: colors,
+                      child: detail,
+                    ),
+                ],
+              ),
             ),
-        transitionBuilder: (Widget child, Animation<double> animation) =>
-            FadeTransition(opacity: animation, child: child),
-        child: page,
+          );
+        },
+      ),
+    );
+  }
+
+  /// 复用一级导航的卡片外观参数，按离开视口中心的距离缩放和抬起。
+  Widget _buildAndroidPageCard({
+    required String role,
+    required double offset,
+    required bool inactive,
+    required bool disableAnimations,
+    required OmniColors colors,
+    required Widget child,
+  }) {
+    // 当前卡片离开完整展示位置的归一化距离。
+    final double distance = disableAnimations ? 0 : offset.abs();
+    return IgnorePointer(
+      ignoring: inactive,
+      child: ExcludeSemantics(
+        excluding: inactive,
+        child: FractionalTranslation(
+          key: ValueKey<String>('android-settings-$role-translation'),
+          translation: Offset(offset, 0),
+          child: Transform.scale(
+            key: ValueKey<String>('android-settings-$role-scale'),
+            scale: 1 - 0.015 * distance,
+            child: PhysicalModel(
+              key: ValueKey<String>('android-settings-$role-card'),
+              color: colors.canvas,
+              elevation: 8 * distance,
+              shadowColor: Colors.black.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(12 * distance),
+              clipBehavior: Clip.antiAlias,
+              child: child,
+            ),
+          ),
+        ),
       ),
     );
   }
 
   /// 打开 Android 指定二级分类并同步桌面选中状态。
   void _openAndroidCategory(_SettingsCategory category) {
+    if (_androidSelectedCategory != null) {
+      return;
+    }
     setState(() {
       _selectedCategory = category;
       _androidSelectedCategory = category;
     });
+    _androidPageController.animateTo(
+      1,
+      duration: _disableAndroidPageAnimations
+          ? Duration.zero
+          : OmniMotion.panel,
+      curve: OmniMotion.standardCurve,
+    );
   }
 
   /// 返回 Android 设置分类主页。
-  void _closeAndroidCategory() {
-    setState(() => _androidSelectedCategory = null);
+  Future<void> _closeAndroidCategory() async {
+    if (_androidSelectedCategory == null || _androidClosingCategory) {
+      return;
+    }
+    setState(() => _androidClosingCategory = true);
+    try {
+      await _androidPageController
+          .animateTo(
+            0,
+            duration: _disableAndroidPageAnimations
+                ? Duration.zero
+                : OmniMotion.panel,
+            curve: OmniMotion.standardCurve,
+          )
+          .orCancel;
+    } on TickerCanceled {
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _androidSelectedCategory = null;
+      _androidClosingCategory = false;
+    });
   }
 }
 

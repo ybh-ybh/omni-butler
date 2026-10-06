@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -111,13 +110,22 @@ class PrimaryNavigationSwipeScope extends InheritedWidget {
   bool updateShouldNotify(PrimaryNavigationSwipeScope oldWidget) => false;
 }
 
-/// 与原生分页组件一致的横滑提交判定。
+/// 与统计卡片共用原生分页的目标判定与弹簧落位。
 abstract final class OmniPageSwipePhysics {
-  /// 慢速拖动至少跨过半页才切换，避免轻微横移误触发吸附。
-  static const double distanceFraction = 0.5;
+  /// 统计卡片使用的原生分页物理参数。
+  static const PageScrollPhysics _pagePhysics = PageScrollPhysics();
 
-  /// 快速横扫触发切换所需的最小横向速度。
-  static const double velocityThreshold = 500;
+  /// 为原生分页提供当前设备的逻辑像素与停止容差信息。
+  static FixedScrollMetrics _metrics(double width, double devicePixelRatio) {
+    return FixedScrollMetrics(
+      minScrollExtent: 0,
+      maxScrollExtent: width,
+      pixels: 0,
+      viewportDimension: width,
+      axisDirection: AxisDirection.right,
+      devicePixelRatio: devicePixelRatio,
+    );
+  }
 
   /// 根据页宽、拖动距离与离手方向判断是否吸附到相邻页面。
   static bool shouldCommit({
@@ -125,21 +133,85 @@ abstract final class OmniPageSwipePhysics {
     required double velocity,
     required double viewportWidth,
     required int targetDirection,
+    double devicePixelRatio = 1,
   }) {
     if (viewportWidth <= 0 || targetDirection == 0) {
       return false;
     }
-    // 慢速拖动需要越过当前页与目标页的中点。
-    final bool reachedDistance =
-        distance.abs() >= viewportWidth * distanceFraction;
-    // 向后一页滑动时离手速度应为负，向前一页滑动时应为正。
-    final bool velocityMatchesDirection = targetDirection > 0
-        ? velocity < 0
-        : velocity > 0;
-    // 快速横扫仅在离手方向与目标页面一致时生效。
-    final bool reachedVelocity =
-        velocity.abs() >= velocityThreshold && velocityMatchesDirection;
-    return reachedDistance || reachedVelocity;
+    // 将手指位移转换为朝相邻页递增的原生页码。
+    double page = (-distance * targetDirection / viewportWidth).clamp(0, 1);
+    // 原生分页按设备像素比判断速度是否足以影响落点。
+    final Tolerance tolerance = _pagePhysics.toleranceFor(
+      _metrics(viewportWidth, devicePixelRatio),
+    );
+    // 与 PageScrollPhysics 一致，离手方向为页码增加或减少半页偏置。
+    final double pageVelocity = -velocity * targetDirection;
+    if (pageVelocity < -tolerance.velocity) {
+      page -= 0.5;
+    } else if (pageVelocity > tolerance.velocity) {
+      page += 0.5;
+    }
+    return page.round() > 0;
+  }
+
+  /// 沿用原生分页弹簧，并在可见两页的边界停止，防止高速甩动露白。
+  static Simulation createSettlingSimulation({
+    required double offset,
+    required double targetOffset,
+    required double velocity,
+    required double viewportWidth,
+    required int targetDirection,
+    required double devicePixelRatio,
+  }) {
+    return _BoundedPageSwipeSimulation(
+      simulation: ScrollSpringSimulation(
+        _pagePhysics.spring,
+        offset,
+        targetOffset,
+        // 原生分页已到落点时不再发起惯性运动，避免反向速度把卡片拉回。
+        offset == targetOffset ? 0 : velocity,
+        tolerance: _pagePhysics.toleranceFor(
+          _metrics(viewportWidth, devicePixelRatio),
+        ),
+      ),
+      minOffset: targetDirection < 0 ? 0 : -viewportWidth,
+      maxOffset: targetDirection > 0 ? 0 : viewportWidth,
+    );
+  }
+}
+
+/// 限制两张可见卡片的边界，边界以内保持原生弹簧轨迹。
+class _BoundedPageSwipeSimulation extends Simulation {
+  /// 使用真实离手速度驱动的原生分页弹簧。
+  final Simulation simulation;
+
+  /// 当前两页允许的最小位移。
+  final double minOffset;
+
+  /// 当前两页允许的最大位移。
+  final double maxOffset;
+
+  /// 创建带可见页面边界的分页模拟。
+  _BoundedPageSwipeSimulation({
+    required this.simulation,
+    required this.minOffset,
+    required this.maxOffset,
+  });
+
+  /// 在页面边缘截断位移，避免目标卡片滑过最终位置。
+  @override
+  double x(double time) => simulation.x(time).clamp(minOffset, maxOffset);
+
+  /// 返回边界内的实际速度，结束后不再移动。
+  @override
+  double dx(double time) => isDone(time) ? 0 : simulation.dx(time);
+
+  /// 弹簧收敛或触达页面外边界时结束吸附。
+  @override
+  bool isDone(double time) {
+    // 当前弹簧计算的未截断位置。
+    final double offset = simulation.x(time);
+    return offset < minOffset || offset > maxOffset || simulation.isDone(time);
   }
 }
 
@@ -197,12 +269,6 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
   /// 本次手势累计的原始横向距离。
   double _rawDragDistance = 0;
 
-  /// 自动落位动画的起始横向位移。
-  double _animationStartOffset = 0;
-
-  /// 自动落位动画的目标横向位移。
-  double _animationEndOffset = 0;
-
   /// 当前页面区域的可用宽度。
   double _viewportWidth = 0;
 
@@ -225,10 +291,8 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
   @override
   void initState() {
     super.initState();
-    _settleController = AnimationController(
-      vsync: this,
-      duration: OmniMotion.panel,
-    )..addListener(_updateSettlingOffset);
+    _settleController = AnimationController.unbounded(vsync: this)
+      ..addListener(_updateSettlingOffset);
   }
 
   /// 释放内部分页落位动画控制器。
@@ -246,11 +310,7 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
       return;
     }
     setState(() {
-      _dragOffset = lerpDouble(
-        _animationStartOffset,
-        _animationEndOffset,
-        OmniMotion.standardCurve.transform(_settleController.value),
-      )!;
+      _dragOffset = _settleController.value;
     });
     _notifyPageOffset();
   }
@@ -289,11 +349,10 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
     setState(() {
       _gestureActive = true;
       _delegatingToPrimary = false;
-      _targetDirection = 0;
-      _dragOffset = 0;
-      _rawDragDistance = 0;
+      // 连续拖动从当前弹簧位置接手，避免吸附中途重新按下时跳回原位。
+      _rawDragDistance = _dragOffset;
     });
-    widget.onPageOffsetChanged?.call(0);
+    _notifyPageOffset();
   }
 
   /// 累计横向拖动并更新内部卡片或一级导航卡片。
@@ -303,6 +362,15 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
     }
     _rawDragDistance += details.primaryDelta ?? 0;
     if (_rawDragDistance == 0) {
+      if (_delegatingToPrimary) {
+        PrimaryNavigationSwipeScope.maybeOf(context)?.updatePrimarySwipe(0);
+      } else {
+        setState(() {
+          _dragOffset = 0;
+          _targetDirection = 0;
+        });
+        _notifyPageOffset();
+      }
       return;
     }
     // 当前拖动指向的页面方向。
@@ -346,20 +414,21 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
     }
     // 当前手势是否达到原生分页风格的提交条件。
     final bool shouldCommit = OmniPageSwipePhysics.shouldCommit(
-      distance: _rawDragDistance,
+      distance: _dragOffset,
       velocity: velocity,
       viewportWidth: _viewportWidth,
       targetDirection: _targetDirection,
+      devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
     );
     if (shouldCommit && _targetDirection != 0) {
-      unawaited(_commitPageChange());
+      unawaited(_commitPageChange(velocity));
       return;
     }
     if (_targetDirection == 0) {
       _resetSwipeState();
       return;
     }
-    unawaited(_animateBack());
+    unawaited(_animateBack(velocity: velocity));
   }
 
   /// 取消当前横滑并让内部或一级导航卡片回弹。
@@ -377,7 +446,7 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
   }
 
   /// 完成内部页面卡片落位并提交选中项。
-  Future<void> _commitPageChange() async {
+  Future<void> _commitPageChange(double velocity) async {
     // 动画开始时锁定的目标页面方向。
     final int direction = _targetDirection;
     if (direction == 0) {
@@ -385,7 +454,10 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
       return;
     }
     // 目标页面落位动画是否完整结束。
-    final bool completed = await _animateOffsetTo(-direction * _viewportWidth);
+    final bool completed = await _animateOffsetTo(
+      -direction * _viewportWidth,
+      velocity: velocity,
+    );
     if (!mounted || !completed) {
       return;
     }
@@ -394,12 +466,9 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
   }
 
   /// 将当前卡片平滑恢复到原位。
-  Future<void> _animateBack() async {
+  Future<void> _animateBack({double velocity = 0}) async {
     // 回弹动画是否完整结束。
-    final bool completed = await _animateOffsetTo(
-      0,
-      duration: OmniMotion.normal,
-    );
+    final bool completed = await _animateOffsetTo(0, velocity: velocity);
     if (!mounted || !completed) {
       return;
     }
@@ -409,23 +478,31 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
   /// 将当前卡片位移动画到指定位置。
   Future<bool> _animateOffsetTo(
     double targetOffset, {
-    Duration duration = OmniMotion.panel,
+    double velocity = 0,
   }) async {
     if (!mounted) {
       return false;
     }
-    if (_reduceMotion) {
+    if (_reduceMotion || _dragOffset == targetOffset) {
       setState(() => _dragOffset = targetOffset);
       return true;
     }
     // 本轮动画的唯一序号。
     final int animationEpoch = ++_animationEpoch;
     _animating = true;
-    _animationStartOffset = _dragOffset;
-    _animationEndOffset = targetOffset;
-    _settleController.duration = duration;
     try {
-      await _settleController.forward(from: 0).orCancel;
+      await _settleController
+          .animateWith(
+            OmniPageSwipePhysics.createSettlingSimulation(
+              offset: _dragOffset,
+              targetOffset: targetOffset,
+              velocity: velocity,
+              viewportWidth: _viewportWidth,
+              targetDirection: _targetDirection,
+              devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+            ),
+          )
+          .orCancel;
       return animationEpoch == _animationEpoch;
     } on TickerCanceled {
       return false;
@@ -609,14 +686,8 @@ class _PrimaryNavigationBranchContainerState
   /// 当前页面卡片的横向位移。
   double _dragOffset = 0;
 
-  /// 本次手势累计的原始横向距离。
-  double _rawDragDistance = 0;
-
-  /// 自动落位动画的起始横向位移。
-  double _animationStartOffset = 0;
-
-  /// 自动落位动画的目标横向位移。
-  double _animationEndOffset = 0;
+  /// 本次手势接手时的卡片位移，用于连续打断吸附时保持位置。
+  double _dragStartOffset = 0;
 
   /// 当前页面区域的可用宽度。
   double _viewportWidth = 0;
@@ -641,10 +712,8 @@ class _PrimaryNavigationBranchContainerState
   void initState() {
     super.initState();
     _displayedIndex = widget.navigationShell.currentIndex;
-    _settleController = AnimationController(
-      vsync: this,
-      duration: OmniMotion.panel,
-    )..addListener(_updateSettlingOffset);
+    _settleController = AnimationController.unbounded(vsync: this)
+      ..addListener(_updateSettlingOffset);
     widget.coordinator.attach(this);
   }
 
@@ -684,11 +753,7 @@ class _PrimaryNavigationBranchContainerState
       return;
     }
     setState(() {
-      _dragOffset = lerpDouble(
-        _animationStartOffset,
-        _animationEndOffset,
-        OmniMotion.standardCurve.transform(_settleController.value),
-      )!;
+      _dragOffset = _settleController.value;
     });
   }
 
@@ -749,10 +814,10 @@ class _PrimaryNavigationBranchContainerState
     }
     setState(() {
       _gestureActive = true;
-      _targetIndex = null;
-      _targetDirection = 0;
-      _dragOffset = 0;
-      _rawDragDistance = 0;
+      // 边界阻尼将可见位移换回原始距离，避免下一帧重复施加阻尼。
+      _dragStartOffset = _targetIndex == null
+          ? _dragOffset / 0.12
+          : _dragOffset;
     });
   }
 
@@ -762,24 +827,29 @@ class _PrimaryNavigationBranchContainerState
     if (_animating || !_gestureActive || _viewportWidth <= 0) {
       return;
     }
+    // 累计距离基于接手位置，吸附期间重新拖动不会重置页面。
+    final double cumulativeDistance = _dragStartOffset + distance;
     // 当前拖动指向的可见分支方向。
-    final int direction = distance < 0 ? 1 : -1;
+    final int direction = cumulativeDistance < 0 ? 1 : -1;
     // 当前拖动方向上的相邻一级分支。
-    final int? targetIndex = distance == 0 ? null : _adjacentBranch(direction);
+    final int? targetIndex = cumulativeDistance == 0
+        ? null
+        : _targetDirection == direction && _targetIndex != null
+        ? _targetIndex
+        : _adjacentBranch(direction);
     setState(() {
-      _rawDragDistance = distance;
       _targetIndex = targetIndex;
       _targetDirection = targetIndex == null ? 0 : direction;
       if (targetIndex == null) {
         // 一级导航首尾只提供轻微阻尼，不循环到另一端。
-        _dragOffset = (distance * 0.12).clamp(
+        _dragOffset = (cumulativeDistance * 0.12).clamp(
           -_viewportWidth * 0.08,
           _viewportWidth * 0.08,
         );
       } else if (direction > 0) {
-        _dragOffset = distance.clamp(-_viewportWidth, 0);
+        _dragOffset = cumulativeDistance.clamp(-_viewportWidth, 0);
       } else {
-        _dragOffset = distance.clamp(0, _viewportWidth);
+        _dragOffset = cumulativeDistance.clamp(0, _viewportWidth);
       }
     });
   }
@@ -794,17 +864,18 @@ class _PrimaryNavigationBranchContainerState
     final bool canCommit = _targetIndex != null;
     // 当前手势是否达到原生分页风格的提交条件。
     final bool shouldCommit = OmniPageSwipePhysics.shouldCommit(
-      distance: _rawDragDistance,
+      distance: _dragOffset,
       velocity: velocity,
       viewportWidth: _viewportWidth,
       targetDirection: _targetDirection,
+      devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
     );
     _gestureActive = false;
     if (canCommit && shouldCommit) {
-      unawaited(_commitPrimarySwipe());
+      unawaited(_commitPrimarySwipe(velocity));
       return;
     }
-    unawaited(_animateBack());
+    unawaited(_animateBack(velocity: canCommit ? velocity : 0));
   }
 
   /// 取消一级页面横滑并让卡片返回原位。
@@ -818,7 +889,7 @@ class _PrimaryNavigationBranchContainerState
   }
 
   /// 提交当前手势目标并完成两张真实页面卡片的落位。
-  Future<void> _commitPrimarySwipe() async {
+  Future<void> _commitPrimarySwipe(double velocity) async {
     // 当前手势已经解析出的目标分支。
     final int? targetIndex = _targetIndex;
     if (targetIndex == null || _targetDirection == 0) {
@@ -828,6 +899,7 @@ class _PrimaryNavigationBranchContainerState
     // 一级目标页面落位动画是否完整结束。
     final bool completed = await _animateOffsetTo(
       -_targetDirection * _viewportWidth,
+      velocity: velocity,
     );
     if (!mounted || !completed) {
       return;
@@ -852,7 +924,7 @@ class _PrimaryNavigationBranchContainerState
       _targetIndex = targetIndex;
       _targetDirection = targetPosition > currentPosition ? 1 : -1;
       _dragOffset = 0;
-      _rawDragDistance = 0;
+      _dragStartOffset = 0;
     });
     // 底栏请求的目标页面落位动画是否完整结束。
     final bool completed = await _animateOffsetTo(
@@ -886,7 +958,7 @@ class _PrimaryNavigationBranchContainerState
       _targetIndex = targetIndex;
       _targetDirection = targetPosition > currentPosition ? 1 : -1;
       _dragOffset = 0;
-      _rawDragDistance = 0;
+      _dragStartOffset = 0;
     });
     // 外部路由目标页面落位动画是否完整结束。
     final bool completed = await _animateOffsetTo(
@@ -923,42 +995,57 @@ class _PrimaryNavigationBranchContainerState
   }
 
   /// 将当前卡片平滑恢复到原位。
-  Future<void> _animateBack() async {
+  Future<void> _animateBack({double velocity = 0}) async {
     // 一级页面回弹动画是否完整结束。
-    final bool completed = await _animateOffsetTo(
-      0,
-      duration: OmniMotion.normal,
-    );
+    final bool completed = await _animateOffsetTo(0, velocity: velocity);
     if (!mounted || !completed) {
       return;
     }
     setState(() {
       _targetIndex = null;
       _targetDirection = 0;
-      _rawDragDistance = 0;
+      _dragStartOffset = 0;
     });
   }
 
   /// 将当前卡片位移动画到指定位置。
-  Future<bool> _animateOffsetTo(
-    double targetOffset, {
-    Duration duration = OmniMotion.panel,
-  }) async {
+  Future<bool> _animateOffsetTo(double targetOffset, {double? velocity}) async {
     if (!mounted) {
       return false;
     }
-    if (_reduceMotion) {
+    if (_reduceMotion || _dragOffset == targetOffset) {
       setState(() => _dragOffset = targetOffset);
       return true;
     }
     // 本轮动画的唯一序号。
     final int animationEpoch = ++_animationEpoch;
     _animating = true;
-    _animationStartOffset = _dragOffset;
-    _animationEndOffset = targetOffset;
-    _settleController.duration = duration;
     try {
-      await _settleController.forward(from: 0).orCancel;
+      if (velocity == null) {
+        // 底栏点击没有离手速度，保留原有程序化切换时长。
+        _settleController.value = _dragOffset;
+        await _settleController
+            .animateTo(
+              targetOffset,
+              duration: OmniMotion.panel,
+              curve: OmniMotion.standardCurve,
+            )
+            .orCancel;
+      } else {
+        // 手势松手直接承接当前位移与速度，不再套用固定时长缓动。
+        await _settleController
+            .animateWith(
+              OmniPageSwipePhysics.createSettlingSimulation(
+                offset: _dragOffset,
+                targetOffset: targetOffset,
+                velocity: velocity,
+                viewportWidth: _viewportWidth,
+                targetDirection: _targetDirection,
+                devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+              ),
+            )
+            .orCancel;
+      }
       return animationEpoch == _animationEpoch;
     } on TickerCanceled {
       return false;
@@ -979,7 +1066,7 @@ class _PrimaryNavigationBranchContainerState
       _targetIndex = null;
       _targetDirection = 0;
       _dragOffset = 0;
-      _rawDragDistance = 0;
+      _dragStartOffset = 0;
       _gestureActive = false;
       _animating = false;
       _ownedNavigationTarget = null;

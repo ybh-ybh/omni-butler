@@ -2035,6 +2035,13 @@ class _AbsoluteTimeEntryDialogState
             ?.value
             .toList(growable: false) ??
         const <TaxonomyEntry>[];
+    // 类别名称对应的配置颜色，供下拉选项和选中值共同使用。
+    final Map<String, Color> categoryColors = <String, Color>{
+      for (final TaxonomyEntry category in categories)
+        category.name: Color(category.colorValue),
+    };
+    // 已移除类别沿用时间模块的默认颜色。
+    final Color fallbackCategoryColor = OmniColors.of(context).time;
     // 当前类别文本。
     final String currentCategory = _categoryController.text;
     // 下拉选项名称。
@@ -2198,11 +2205,28 @@ class _AbsoluteTimeEntryDialogState
               OmniDropdownButtonFormField<String>(
                 initialValue: currentCategory.isEmpty ? null : currentCategory,
                 decoration: const InputDecoration(labelText: '类别'),
+                selectionIndicatorPosition:
+                    OmniDropdownSelectionIndicatorPosition.trailing,
                 items: categoryNames
                     .map(
                       (String value) => DropdownMenuItem<String>(
                         value: value,
-                        child: Text(value),
+                        child: Row(
+                          children: <Widget>[
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color:
+                                    categoryColors[value] ??
+                                    fallbackCategoryColor,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: OmniSpacing.xs),
+                            Expanded(child: Text(value)),
+                          ],
+                        ),
                       ),
                     )
                     .toList(growable: false),

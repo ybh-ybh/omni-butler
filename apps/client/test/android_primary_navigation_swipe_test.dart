@@ -162,6 +162,85 @@ void main() {
     await _disposePrimaryNavigationApp(tester, app);
   });
 
+  testWidgets('一级页面吸附逐帧匹配原生分页且连续拖动不跳回', (WidgetTester tester) async {
+    // 当前测试使用的完整 Android 应用。
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+    );
+    // 页面真实手势使用的一级横滑控制器。
+    final PrimaryNavigationSwipeController controller = _primaryController(
+      tester,
+    );
+    // 统计卡片原生分页在同样距离和离手速度下的参考轨迹。
+    final Simulation reference = const PageScrollPhysics()
+        .createBallisticSimulation(
+          FixedScrollMetrics(
+            minScrollExtent: 0,
+            maxScrollExtent: 390,
+            pixels: 120,
+            viewportDimension: 390,
+            axisDirection: AxisDirection.right,
+            devicePixelRatio: 1,
+          ),
+          900,
+        )!;
+    controller.beginPrimarySwipe();
+    controller.updatePrimarySwipe(-120);
+    controller.endPrimarySwipe(-900);
+    await tester.pump();
+
+    // 逐帧累计时间，用于与原生弹簧的秒数对齐。
+    int elapsedMilliseconds = 0;
+    // 松手后早期、中段和接近落位的采样间隔。
+    for (final int deltaMilliseconds in <int>[16, 84, 200]) {
+      elapsedMilliseconds += deltaMilliseconds;
+      await tester.pump(Duration(milliseconds: deltaMilliseconds));
+      expect(
+        _primaryOffset(tester, 0),
+        closeTo(-reference.x(elapsedMilliseconds / 1000), 0.01),
+      );
+    }
+    expect(_currentPath(app.container), '/home');
+
+    // 尚未结束的弹簧位置应成为下一次拖动起点。
+    final double interruptedOffset = _primaryOffset(tester, 0);
+    controller.beginPrimarySwipe();
+    await tester.pump();
+    expect(_primaryOffset(tester, 0), closeTo(interruptedOffset, 0.01));
+    controller.updatePrimarySwipe(12);
+    await tester.pump();
+    expect(_primaryOffset(tester, 0), closeTo(interruptedOffset + 12, 0.01));
+    controller.endPrimarySwipe(900);
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/home');
+    expect(_primaryOffset(tester, 0), 0);
+
+    // 临近终点高速甩动不能越界露白，也不能留下未完成的路由切换。
+    controller.beginPrimarySwipe();
+    controller.updatePrimarySwipe(-380);
+    controller.endPrimarySwipe(-8000);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(_currentPath(app.container), '/todos');
+    expect(_primaryOffset(tester, 1), 0);
+    await tester.pumpAndSettle();
+
+    // 反向拖过半页后向原页甩回，原生落点应取消提交。
+    await _swipePrimary(tester, 220, velocity: -900);
+    expect(_currentPath(app.container), '/todos');
+    await _swipePrimary(tester, 120, velocity: 900);
+    expect(_currentPath(app.container), '/home');
+
+    // 已经完整到位时，即便离手反向也应原地提交，不能先退回再吸附。
+    controller.beginPrimarySwipe();
+    controller.updatePrimarySwipe(-390);
+    controller.endPrimarySwipe(600);
+    await tester.pump();
+    expect(_currentPath(app.container), '/todos');
+    expect(_primaryOffset(tester, 1), 0);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
   testWidgets('系统减少动态效果时立即切页且不保留卡片装饰', (WidgetTester tester) async {
     // 当前测试使用的应用环境。
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
@@ -279,6 +358,16 @@ PrimaryNavigationSwipeController _primaryController(WidgetTester tester) {
         find.byType(PrimaryNavigationSwipeScope),
       );
   return scope.controller;
+}
+
+/// 读取指定一级页面真实绘制的横向位移。
+double _primaryOffset(WidgetTester tester, int index) {
+  return tester
+      .widget<Transform>(
+        find.byKey(ValueKey<String>('primary-navigation-translation-$index')),
+      )
+      .transform
+      .storage[12];
 }
 
 /// 使用累计距离执行一次一级页面横滑并等待落位。

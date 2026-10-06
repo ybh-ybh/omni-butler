@@ -96,37 +96,37 @@ void main() {
 
     await tester.tap(categoryRows.first);
     await tester.pump();
-    // 页面层级切换期间主页和详情页通过同一组淡出淡入动画交接。
-    final Finder overviewFade = find.ancestor(
-      of: find.byKey(const ValueKey<String>('android-settings-overview')),
-      matching: find.byType(FadeTransition),
-    );
-    // 功能管理详情页的淡入动画。
-    final Finder detailFade = find.ancestor(
-      of: find.byKey(
-        const ValueKey<String>('android-settings-detail-features'),
-      ),
-      matching: find.byType(FadeTransition),
-    );
-    expect(overviewFade, findsOneWidget);
-    expect(detailFade, findsOneWidget);
+    expect(_settingsCardOffset(tester, 'overview'), 0);
+    expect(_settingsCardOffset(tester, 'detail'), 1);
     // 页面切换动画的中点等待时长。
     final Duration transitionHalfway = Duration(
       microseconds: OmniMotion.panel.inMicroseconds ~/ 2,
     );
     await tester.pump(transitionHalfway);
-    // 动画中点的主页透明度。
-    final double overviewOpacity = tester
-        .widget<FadeTransition>(overviewFade)
-        .opacity
-        .value;
-    // 动画中点的详情页透明度。
-    final double detailOpacity = tester
-        .widget<FadeTransition>(detailFade)
-        .opacity
-        .value;
-    expect(overviewOpacity, inExclusiveRange(0, 1));
-    expect(detailOpacity, inExclusiveRange(0, 1));
+    // 进入时主页向左退场，详情从右进入，两张卡片保持相邻。
+    final double enteringOverviewOffset = _settingsCardOffset(
+      tester,
+      'overview',
+    );
+    // 详情卡片进入中点的相对页宽位移。
+    final double enteringDetailOffset = _settingsCardOffset(tester, 'detail');
+    expect(enteringOverviewOffset, inExclusiveRange(-1, 0));
+    expect(enteringDetailOffset, inExclusiveRange(0, 1));
+    expect(enteringDetailOffset - enteringOverviewOffset, closeTo(1, 0.001));
+    // 两张卡片使用与一级导航相同的缩放、圆角与阴影。
+    for (final String role in <String>['overview', 'detail']) {
+      // 当前层级卡片的缩放变换。
+      final Transform scale = tester.widget<Transform>(
+        find.byKey(ValueKey<String>('android-settings-$role-scale')),
+      );
+      // 当前层级卡片的物理外观。
+      final PhysicalModel card = tester.widget<PhysicalModel>(
+        find.byKey(ValueKey<String>('android-settings-$role-card')),
+      );
+      expect(scale.transform.storage[0], inExclusiveRange(0.985, 1));
+      expect(card.elevation, greaterThan(0));
+      expect(card.borderRadius, isNot(BorderRadius.zero));
+    }
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('android-settings-detail-features')),
@@ -149,6 +149,19 @@ void main() {
     await tester.tap(
       find.byKey(const ValueKey<String>('android-settings-back')),
     );
+    await tester.pump();
+    await tester.pump(transitionHalfway);
+    // 返回时详情向右退场，主页从左恢复，不能仍按进入方向播放。
+    expect(
+      _settingsCardOffset(tester, 'overview'),
+      greaterThan(enteringOverviewOffset),
+    );
+    expect(
+      _settingsCardOffset(tester, 'detail'),
+      greaterThan(enteringDetailOffset),
+    );
+    expect(_settingsCardOffset(tester, 'overview'), inExclusiveRange(-1, 0));
+    expect(_settingsCardOffset(tester, 'detail'), inExclusiveRange(0, 1));
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('android-settings-overview')),
@@ -162,6 +175,15 @@ void main() {
       findsOneWidget,
     );
     await tester.binding.handlePopRoute();
+    await tester.pump();
+    await tester.pump(transitionHalfway);
+    // Android 系统返回复用同样的右移退场，而不是直接替换页面。
+    expect(_settingsCardOffset(tester, 'overview'), inExclusiveRange(-1, 0));
+    expect(_settingsCardOffset(tester, 'detail'), inExclusiveRange(0, 1));
+    expect(
+      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
+      '/settings',
+    );
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('android-settings-overview')),
@@ -469,7 +491,41 @@ void main() {
     // 向左横滑进入新顺序中的下一个分区会员管理。
     await _dragManagementPage(tester, -260);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump(const Duration(milliseconds: 100));
+    // 松手后的弹簧位移也必须持续驱动顶部滑块，导航区域本身保持固定。
+    final double settlingOffset = tester
+        .widget<Transform>(
+          find.byKey(
+            const ValueKey<String>('nested-page-swipe-current-translation'),
+          ),
+        )
+        .transform
+        .storage[12];
+    // 三个分区中从第一项向第二项移动时的连续滑块坐标。
+    final double settlingIndicator = tester
+        .widget<AnimatedAlign>(
+          find.descendant(
+            of: find.byKey(
+              const ValueKey<String>('management-section-control'),
+            ),
+            matching: find.byType(AnimatedAlign),
+          ),
+        )
+        .alignment
+        .resolve(TextDirection.ltr)
+        .x;
+    expect(
+      tester.getRect(
+        find.byKey(const ValueKey<String>('management-section-control')),
+      ),
+      managementNavigationRect,
+    );
+    expect(
+      settlingIndicator,
+      closeTo(-1 - settlingOffset / managementSwipeRect.width, 0.001),
+    );
+    // 原生弹簧按距离和速度自然收敛，不依赖固定 600ms 时长。
+    await tester.pumpAndSettle();
     expect(
       container.read(appRouterProvider).routeInformationProvider.value.uri.path,
       '/memberships',
@@ -488,16 +544,14 @@ void main() {
     );
     // 再次向左横滑进入新顺序中的最后一个分区物品管理。
     await _dragManagementPage(tester, -260);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
     expect(
       container.read(appRouterProvider).routeInformationProvider.value.uri.path,
       '/inventory',
     );
     // 向右横滑可以返回上一个管理分区。
     await _dragManagementPage(tester, 260);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
     expect(
       container.read(appRouterProvider).routeInformationProvider.value.uri.path,
       '/memberships',
@@ -1189,8 +1243,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
 
     await _dragManagementPage(tester, -260);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
 
     expect(
       container.read(appRouterProvider).routeInformationProvider.value.uri.path,
@@ -1212,6 +1265,16 @@ void main() {
     await database.close();
     debugDefaultTargetPlatformOverride = null;
   });
+}
+
+/// 读取 Android 更多层级卡片相对于视口宽度的水平位移。
+double _settingsCardOffset(WidgetTester tester, String role) {
+  return tester
+      .widget<FractionalTranslation>(
+        find.byKey(ValueKey<String>('android-settings-$role-translation')),
+      )
+      .translation
+      .dx;
 }
 
 /// 配置 Android 紧凑布局测试视口。
