@@ -168,6 +168,9 @@ class _OmniMessagePopupState extends State<_OmniMessagePopup>
   /// 键盘焦点当前是否位于消息内。
   bool _focused = false;
 
+  /// 读屏焦点当前是否位于消息正文或操作内。
+  bool _accessibilityFocused = false;
+
   /// 初始化并启动消息倒计时。
   @override
   void initState() {
@@ -210,29 +213,30 @@ class _OmniMessagePopupState extends State<_OmniMessagePopup>
     _syncCountdown();
   }
 
-  /// 辅助导航开启时保留带操作的消息，给用户足够时间完成操作。
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _syncCountdown();
-  }
-
   /// 焦点停留在操作或关闭按钮时暂停倒计时。
   void _handleFocusChange(bool focused) {
     _focused = focused;
     _syncCountdown();
   }
 
-  /// 根据悬停、焦点和辅助导航状态管理剩余倒计时。
+  /// 读屏开始访问消息内容时暂停倒计时。
+  void _handleAccessibilityFocusGain() {
+    _accessibilityFocused = true;
+    _syncCountdown();
+  }
+
+  /// 读屏离开消息内容时继续剩余倒计时。
+  void _handleAccessibilityFocusLoss() {
+    _accessibilityFocused = false;
+    _syncCountdown();
+  }
+
+  /// 仅在用户实际悬停或聚焦消息时暂停，辅助服务开启本身不阻止超时。
   void _syncCountdown() {
     if (_countdownController.isCompleted || widget.duration <= Duration.zero) {
       return;
     }
-    // 带操作的辅助导航消息必须由用户主动关闭。
-    final bool persistentAction =
-        (MediaQuery.maybeOf(context)?.accessibleNavigation ?? false) &&
-        widget.onAction != null;
-    if (_hovered || _focused || persistentAction) {
+    if (_hovered || _focused || _accessibilityFocused) {
       _countdownController.stop();
     } else {
       _countdownController.forward();
@@ -288,6 +292,8 @@ class _OmniMessagePopupState extends State<_OmniMessagePopup>
               ),
           child: Semantics(
             liveRegion: true,
+            onDidGainAccessibilityFocus: _handleAccessibilityFocusGain,
+            onDidLoseAccessibilityFocus: _handleAccessibilityFocusLoss,
             child: Material(
               key: const ValueKey<String>('omni-message-popup'),
               color: colors.paper,
@@ -350,15 +356,27 @@ class _OmniMessagePopupState extends State<_OmniMessagePopup>
           ),
         ),
         if (widget.actionLabel != null && widget.onAction != null)
-          OmniButton(
-            label: widget.actionLabel!,
-            variant: OmniButtonVariant.text,
-            onPressed: widget.onAction,
+          MergeSemantics(
+            child: Semantics(
+              onDidGainAccessibilityFocus: _handleAccessibilityFocusGain,
+              onDidLoseAccessibilityFocus: _handleAccessibilityFocusLoss,
+              child: OmniButton(
+                label: widget.actionLabel!,
+                variant: OmniButtonVariant.text,
+                onPressed: widget.onAction,
+              ),
+            ),
           ),
-        OmniIconButton(
-          tooltip: '关闭提示',
-          onPressed: widget.onDismiss,
-          icon: const Icon(Icons.close_rounded, size: 18),
+        MergeSemantics(
+          child: Semantics(
+            onDidGainAccessibilityFocus: _handleAccessibilityFocusGain,
+            onDidLoseAccessibilityFocus: _handleAccessibilityFocusLoss,
+            child: OmniIconButton(
+              tooltip: '关闭提示',
+              onPressed: widget.onDismiss,
+              icon: const Icon(Icons.close_rounded, size: 18),
+            ),
+          ),
         ),
       ],
     );

@@ -202,6 +202,183 @@ void main() {
     );
   });
 
+  testWidgets('安卓辅助服务开启时撤销横幅仍倒计时并在六秒后关闭', (WidgetTester tester) async {
+    // 当前消息句柄，断言失败时也清理浮层。
+    OmniMessageHandle? handle;
+    addTearDown(() => handle?.dismiss());
+    // 关闭回调次数，确认超时不会重复关闭。
+    int dismissedCount = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.build(brightness: Brightness.light)
+            .copyWith(platform: TargetPlatform.android),
+        builder: (BuildContext context, Widget? child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(accessibleNavigation: true),
+          child: child!,
+        ),
+        home: Builder(
+          builder: (BuildContext context) => Scaffold(
+            body: FilledButton(
+              onPressed: () => handle = showOmniMessage(
+                context,
+                message: '已记录“剪头发”为现在完成',
+                tone: OmniMessageTone.success,
+                duration: const Duration(seconds: 6),
+                actionLabel: '撤销',
+                onAction: () {},
+                onDismissed: () => dismissedCount++,
+              ),
+              child: const Text('显示消息'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('显示消息'));
+    await tester.pump();
+    expect(_countdownProgress(tester), closeTo(1, 0.01));
+    await tester.pump(const Duration(seconds: 3));
+    expect(_countdownProgress(tester), closeTo(0.5, 0.02));
+    expect(handle!.isVisible, isTrue);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(find.text('已记录“剪头发”为现在完成'), findsNothing);
+    expect(handle!.isVisible, isFalse);
+    expect(dismissedCount, 1);
+    handle!.dismiss();
+    expect(dismissedCount, 1);
+  });
+
+  testWidgets('辅助导航下操作按钮获得焦点时暂停并在离开后继续', (WidgetTester tester) async {
+    // 当前消息句柄，断言失败时也清理浮层。
+    OmniMessageHandle? handle;
+    addTearDown(() => handle?.dismiss());
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.build(brightness: Brightness.light),
+        builder: (BuildContext context, Widget? child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(accessibleNavigation: true),
+          child: child!,
+        ),
+        home: Builder(
+          builder: (BuildContext context) => Scaffold(
+            body: FilledButton(
+              onPressed: () => handle = showOmniMessage(
+                context,
+                message: '可聚焦消息',
+                actionLabel: '撤销',
+                onAction: () {},
+              ),
+              child: const Text('显示消息'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('显示消息'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    // 撤销按钮实际使用的键盘焦点。
+    final FocusNode actionFocus = Focus.of(tester.element(find.text('撤销')));
+    actionFocus.requestFocus();
+    await tester.pump();
+    // 按钮聚焦后冻结的剩余进度。
+    final double pausedProgress = _countdownProgress(tester);
+    expect(pausedProgress, closeTo(0.75, 0.02));
+    await tester.pump(const Duration(seconds: 5));
+    expect(_countdownProgress(tester), closeTo(pausedProgress, 0.001));
+    expect(handle!.isVisible, isTrue);
+    // 将焦点移回横幅之外，避免只从按钮退到横幅父焦点。
+    final FocusNode triggerFocus = Focus.of(tester.element(find.text('显示消息')));
+    triggerFocus.requestFocus();
+    await tester.pump();
+    expect(actionFocus.hasFocus, isFalse);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(find.text('可聚焦消息'), findsNothing);
+  });
+
+  testWidgets('读屏聚焦正文、撤销或关闭时暂停并在离开后继续', (WidgetTester tester) async {
+    // 显式启用语义树，测试结束前释放。
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    // 当前消息句柄，断言失败时也清理浮层。
+    OmniMessageHandle? handle;
+    try {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.build(brightness: Brightness.light)
+              .copyWith(platform: TargetPlatform.android),
+          builder: (BuildContext context, Widget? child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(accessibleNavigation: true),
+            child: child!,
+          ),
+          home: Builder(
+            builder: (BuildContext context) => Scaffold(
+              body: FilledButton(
+                onPressed: () => handle = showOmniMessage(
+                  context,
+                  message: '读屏消息',
+                  actionLabel: '撤销',
+                  onAction: () {},
+                ),
+                child: const Text('显示消息'),
+              ),
+            ),
+          ),
+        ),
+      );
+      // 分别验证正文与两个可操作语义节点。
+      for (final Finder target in <Finder>[
+        find.text('读屏消息'),
+        find.text('撤销'),
+        find.byTooltip('关闭提示'),
+      ]) {
+        await tester.tap(find.text('显示消息'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        // 当前被读屏访问的实际语义节点。
+        final int nodeId = tester.getSemantics(target).id;
+        expect(
+          tester
+              .getSemantics(target)
+              .getSemanticsData()
+              .hasAction(SemanticsAction.didGainAccessibilityFocus),
+          isTrue,
+          reason: target.toString(),
+        );
+        // 当前渲染树对应的语义管理器。
+        final semanticsOwner = tester
+            .element(target)
+            .findRenderObject()!
+            .owner!
+            .semanticsOwner!;
+        semanticsOwner.performAction(
+          nodeId,
+          SemanticsAction.didGainAccessibilityFocus,
+        );
+        await tester.pump();
+        // 读屏聚焦后冻结的剩余进度。
+        final double pausedProgress = _countdownProgress(tester);
+        expect(pausedProgress, closeTo(0.75, 0.02));
+        await tester.pump(const Duration(seconds: 5));
+        expect(_countdownProgress(tester), closeTo(pausedProgress, 0.001));
+        expect(handle!.isVisible, isTrue);
+        semanticsOwner.performAction(
+          nodeId,
+          SemanticsAction.didLoseAccessibilityFocus,
+        );
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 3));
+        await tester.pump(const Duration(milliseconds: 1));
+        expect(find.text('读屏消息'), findsNothing);
+      }
+    } finally {
+      handle?.dismiss();
+      semantics.dispose();
+    }
+  });
+
   testWidgets('鼠标悬停暂停边框和自动关闭并在移开后继续', (WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(

@@ -242,7 +242,7 @@ void main() {
     );
   });
 
-  testWidgets('辅助导航保留可撤销消息直到用户操作', (WidgetTester tester) async {
+  testWidgets('辅助导航下仍可在倒计时内撤销消息', (WidgetTester tester) async {
     // 记录撤销动作是否仍可访问。
     bool undone = false;
     await tester.pumpWidget(
@@ -264,7 +264,7 @@ void main() {
     );
     await tester.tap(find.text('显示消息'));
     await tester.pump();
-    await tester.pump(const Duration(seconds: 5));
+    await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('事项已归档'), findsOneWidget);
     await tester.tap(find.text('撤销'));
     await tester.pump();
