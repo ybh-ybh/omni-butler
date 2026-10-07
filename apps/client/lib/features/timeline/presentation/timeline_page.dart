@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -9,6 +10,7 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
+import 'package:omni_butler/features/timeline/presentation/time_entry_time_picker.dart';
 import 'package:omni_butler/features/timeline/presentation/timeline_review.dart';
 import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
@@ -920,6 +922,25 @@ class _TimeEntryEditorDialogState
   }
 }
 
+/// 滑轨吸附与阻挡后的合法范围，以及需要反馈的端点。
+class _TimeRangeAdjustment {
+  /// 实际允许提交的分钟区间。
+  final RangeValues values;
+
+  /// 是否阻挡开始端向左越过已有记录。
+  final bool blockedStart;
+
+  /// 是否阻挡结束端向右越过已有记录。
+  final bool blockedEnd;
+
+  /// 创建吸附和占用校验结果。
+  const _TimeRangeAdjustment(
+    this.values, {
+    this.blockedStart = false,
+    this.blockedEnd = false,
+  });
+}
+
 /// 可动态扩展时间维度的双手柄区间编辑器。
 class _TimeRangeEditor extends StatefulWidget {
   /// 开始分钟数。
@@ -937,6 +958,24 @@ class _TimeRangeEditor extends StatefulWidget {
   /// 时间范围变更回调。
   final ValueChanged<RangeValues> onChanged;
 
+  /// 是否显示原有时间摘要，补记新布局在卡片中统一展示。
+  final bool showSummary;
+
+  /// 是否在滑轨内显示冲突提示，补记新布局统一放在时间区。
+  final bool showConflict;
+
+  /// 是否保留逐分钟值，由调用方仅吸附正在调整的一端。
+  final bool preservesMinutes;
+
+  /// 滑轨可覆盖的连续分钟上限，长记录按实际结束日期扩展。
+  final int maxMinutes;
+
+  /// 滑轨连续分钟下限，负值表示基准日之前的时间。
+  final int minMinutes;
+
+  /// 在扩展窗口之前吸附并限制本次拖动，防止跳过已有记录。
+  final _TimeRangeAdjustment Function(RangeValues)? adjustRange;
+
   /// 创建可动态扩展的双手柄时间区间编辑器。
   const _TimeRangeEditor({
     required this.startMinute,
@@ -944,6 +983,13 @@ class _TimeRangeEditor extends StatefulWidget {
     required this.occupiedRecords,
     required this.conflict,
     required this.onChanged,
+    this.showSummary = true,
+    this.showConflict = true,
+    this.preservesMinutes = false,
+    this.maxMinutes = 2880,
+    this.minMinutes = 0,
+    this.adjustRange,
+    super.key,
   });
 
   /// 创建动态时间窗口状态。
@@ -952,12 +998,26 @@ class _TimeRangeEditor extends StatefulWidget {
 }
 
 /// 动态时间窗口状态。
-class _TimeRangeEditorState extends State<_TimeRangeEditor> {
+class _TimeRangeEditorState extends State<_TimeRangeEditor>
+    with SingleTickerProviderStateMixin {
+  /// 手柄在空闲侧回弹的当前像素位移。
+  late final AnimationController _blockController;
+
+  /// 当前反馈的被阻挡端点。
+  Thumb? _blockedThumb;
+
+  /// 临界阻尼保证回弹始终位于空闲侧，不进入已占用区间。
+  static final SpringDescription _blockSpring =
+      SpringDescription.withDampingRatio(mass: 1, stiffness: 320, ratio: 1);
+
   /// 单次展示或扩展的时间长度。
   static const int _windowMinutes = 360;
 
-  /// 补记滑动条允许覆盖的最大时长范围。
-  static const int _maxMinutes = 2880;
+  /// 允许覆盖的实际分钟范围。
+  int get _maxMinutes => widget.maxMinutes;
+
+  /// 允许向基准日之前扩展的分钟范围。
+  int get _minMinutes => widget.minMinutes;
 
   /// 时间窗口扩展的过渡时长。
   static const Duration _expansionDuration = Duration(milliseconds: 600);
@@ -972,7 +1032,37 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
   @override
   void initState() {
     super.initState();
+    _blockController = AnimationController.unbounded(vsync: this);
     _setInitialWindow(widget.startMinute, widget.endMinute);
+  }
+
+  /// 释放回弹时钟，避免弹窗关闭后继续更新。
+  @override
+  void dispose() {
+    _blockController.dispose();
+    super.dispose();
+  }
+
+  /// 在边界空闲侧给出一次回弹，持续顶住时不反复重启动画。
+  void _showBlock(Thumb thumb) {
+    if (_blockedThumb == thumb && _blockController.isAnimating) return;
+    _blockedThumb = thumb;
+    if (OmniMotion.reduce(context)) {
+      _blockController.stop();
+      _blockController.value = 0;
+      return;
+    }
+    _blockController.value = 4;
+    _blockController.animateWith(
+      SpringSimulation(_blockSpring, _blockController.value, 0, 0),
+    );
+  }
+
+  /// 用户反向拖动时立即解除反馈，不等待动画结束。
+  void _clearBlock() {
+    _blockedThumb = null;
+    _blockController.stop();
+    _blockController.value = 0;
   }
 
   /// 在外部时间值超出窗口时重新覆盖它。
@@ -985,6 +1075,22 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
         widget.endMinute > _visibleEndMinute;
     if (outsideWindow) {
       _setInitialWindow(widget.startMinute, widget.endMinute);
+    } else {
+      // 到达旧边界后父级会放宽范围，保持同一手势并继续扩展窗口。
+      if (widget.minMinutes < oldWidget.minMinutes &&
+          widget.startMinute <= _visibleStartMinute) {
+        _visibleStartMinute = (_visibleStartMinute - _windowMinutes).clamp(
+          _minMinutes,
+          _maxMinutes,
+        );
+      }
+      if (widget.maxMinutes > oldWidget.maxMinutes &&
+          widget.endMinute >= _visibleEndMinute) {
+        _visibleEndMinute = (_visibleEndMinute + _windowMinutes).clamp(
+          _minMinutes,
+          _maxMinutes,
+        );
+      }
     }
   }
 
@@ -1044,48 +1150,50 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Row(
-          children: <Widget>[
-            Text('时间范围', style: Theme.of(context).textTheme.labelLarge),
-            const Spacer(),
-            Text(
-              '共 ${_duration(durationMinutes)}',
-              key: const ValueKey<String>('time-range-duration'),
-              style: Theme.of(context).textTheme.bodySmall
-                  ?.copyWith(color: rangeColor, fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
-        const SizedBox(height: OmniSpacing.xs),
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: _TimeValueCard(
-                key: const ValueKey<String>('time-start-display'),
-                label: '开始',
-                value: _time(widget.startMinute),
-                accent: startColor,
+        if (widget.showSummary) ...<Widget>[
+          Row(
+            children: <Widget>[
+              Text('时间范围', style: Theme.of(context).textTheme.labelLarge),
+              const Spacer(),
+              Text(
+                '共 ${_duration(durationMinutes)}',
+                key: const ValueKey<String>('time-range-duration'),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: rangeColor, fontWeight: FontWeight.w600),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
-              child: Icon(
-                Icons.arrow_forward_rounded,
-                size: OmniSize.icon,
-                color: colors.muted,
+            ],
+          ),
+          const SizedBox(height: OmniSpacing.xs),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _TimeValueCard(
+                  key: const ValueKey<String>('time-start-display'),
+                  label: '开始',
+                  value: _time(widget.startMinute),
+                  accent: startColor,
+                ),
               ),
-            ),
-            Expanded(
-              child: _TimeValueCard(
-                key: const ValueKey<String>('time-end-display'),
-                label: '结束',
-                value: _time(widget.endMinute),
-                accent: endColor,
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+                child: Icon(
+                  Icons.arrow_forward_rounded,
+                  size: OmniSize.icon,
+                  color: colors.muted,
+                ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: OmniSpacing.xs),
+              Expanded(
+                child: _TimeValueCard(
+                  key: const ValueKey<String>('time-end-display'),
+                  label: '结束',
+                  value: _time(widget.endMinute),
+                  accent: endColor,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: OmniSpacing.xs),
+        ],
         Semantics(
           label: semanticLabel,
           child: TweenAnimationBuilder<_TimeWindow>(
@@ -1107,62 +1215,99 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
                   _TimeWindow animatedWindow,
                   Widget? child,
                 ) {
+                  // 外部输入可以跨越旧窗口，动画每帧也必须包含真实选中区间。
+                  final double visibleStart = animatedWindow.start.clamp(
+                    _minMinutes.toDouble(),
+                    widget.startMinute.toDouble(),
+                  );
+                  // 日期修改后的结束值不能在窗口动画期间被裁掉。
+                  final double visibleEnd =
+                      animatedWindow.end < widget.endMinute
+                      ? widget.endMinute.toDouble()
+                      : animatedWindow.end;
                   // 动画当前帧的可见时间长度。
-                  final double animatedSpan =
-                      animatedWindow.end - animatedWindow.start;
+                  final double animatedSpan = visibleEnd - visibleStart;
                   // 动画过程中近似五分钟的离散段数。
                   final int animatedDivisions = (animatedSpan / 5)
                       .round()
                       .clamp(1, 576);
-                  return SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 8,
-                      activeTrackColor: rangeColor,
-                      inactiveTrackColor: colors.mist,
-                      disabledActiveTrackColor: colors.mist,
-                      disabledInactiveTrackColor: colors.mist,
-                      overlayColor: rangeColor.withValues(alpha: 0.12),
-                      overlayShape: const RoundSliderOverlayShape(
-                        overlayRadius: 14,
-                      ),
-                      valueIndicatorColor: rangeColor,
-                      valueIndicatorTextStyle: TextStyle(
-                        color: colors.accentInk,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      showValueIndicator: ShowValueIndicator.onlyForDiscrete,
-                      rangeTrackShape: _OccupiedRangeSliderTrackShape(
-                        occupiedRecords: visibleOccupiedRecords,
-                        visibleStartMinute: animatedWindow.start,
-                        visibleEndMinute: animatedWindow.end,
-                        occupiedColor: colors.muted.withValues(alpha: 0.42),
-                        conflictColor: colors.danger,
-                        tickColor: colors.paper.withValues(alpha: 0.62),
-                      ),
-                      rangeThumbShape: _OutlinedRangeSliderThumbShape(
-                        fillColor: colors.paper,
-                        startBorderColor: startColor,
-                        endBorderColor: endColor,
-                      ),
-                    ),
-                    child: RangeSlider(
-                      key: const ValueKey<String>('time-range-slider'),
-                      values: RangeValues(
-                        widget.startMinute.toDouble(),
-                        widget.endMinute.toDouble(),
-                      ),
-                      min: animatedWindow.start,
-                      max: animatedWindow.end,
-                      divisions: animatedDivisions,
-                      labels: RangeLabels(
-                        _time(widget.startMinute),
-                        _time(widget.endMinute),
-                      ),
-                      semanticFormatterCallback: (double value) =>
-                          _time(value.round()),
-                      onChanged: _handleChanged,
-                    ),
+                  return AnimatedBuilder(
+                    key: const ValueKey<String>('time-range-block-animation'),
+                    animation: _blockController,
+                    builder: (BuildContext context, Widget? child) {
+                      // 回弹只移动被阻挡手柄，合法区间与另一端保持不变。
+                      final double rebound = _blockController.value.clamp(0, 4);
+                      return SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 8,
+                          activeTrackColor: rangeColor,
+                          inactiveTrackColor: colors.mist,
+                          disabledActiveTrackColor: colors.mist,
+                          disabledInactiveTrackColor: colors.mist,
+                          overlayColor: rangeColor.withValues(alpha: 0.12),
+                          overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 14,
+                          ),
+                          valueIndicatorColor: rangeColor,
+                          valueIndicatorTextStyle: TextStyle(
+                            color: colors.accentInk,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          showValueIndicator: ShowValueIndicator.onDrag,
+                          rangeTrackShape: _OccupiedRangeSliderTrackShape(
+                            occupiedRecords: visibleOccupiedRecords,
+                            visibleStartMinute: visibleStart,
+                            visibleEndMinute: visibleEnd,
+                            occupiedColor: colors.muted.withValues(alpha: 0.42),
+                            conflictColor: colors.danger,
+                            tickColor: colors.paper.withValues(alpha: 0.62),
+                          ),
+                          rangeThumbShape: _OutlinedRangeSliderThumbShape(
+                            fillColor: colors.paper,
+                            startBorderColor: _blockedThumb == Thumb.start
+                                ? Color.lerp(
+                                    startColor,
+                                    colors.warning,
+                                    rebound / 4,
+                                  )!
+                                : startColor,
+                            endBorderColor: _blockedThumb == Thumb.end
+                                ? Color.lerp(
+                                    endColor,
+                                    colors.warning,
+                                    rebound / 4,
+                                  )!
+                                : endColor,
+                            startRebound: _blockedThumb == Thumb.start
+                                ? rebound
+                                : 0,
+                            endRebound: _blockedThumb == Thumb.end
+                                ? -rebound
+                                : 0,
+                          ),
+                        ),
+                        child: RangeSlider(
+                          key: const ValueKey<String>('time-range-slider'),
+                          values: RangeValues(
+                            widget.startMinute.toDouble(),
+                            widget.endMinute.toDouble(),
+                          ),
+                          min: visibleStart,
+                          max: visibleEnd,
+                          divisions: widget.preservesMinutes
+                              ? null
+                              : animatedDivisions,
+                          labels: RangeLabels(
+                            _time(widget.startMinute),
+                            _time(widget.endMinute),
+                          ),
+                          semanticFormatterCallback: (double value) =>
+                              _time(value.round()),
+                          onChanged: _handleChanged,
+                        ),
+                      );
+                    },
                   );
                 },
           ),
@@ -1197,8 +1342,9 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
             ),
           ),
         ),
-        if (_visibleStartMinute > 0 ||
-            _visibleEndMinute < _maxMinutes) ...<Widget>[
+        if (widget.showSummary &&
+            (_visibleStartMinute > _minMinutes ||
+                _visibleEndMinute < _maxMinutes)) ...<Widget>[
           const SizedBox(height: OmniSpacing.xxs),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
@@ -1212,10 +1358,11 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
             ],
           ),
         ],
-        if (hasConflict) ...<Widget>[
+        if (hasConflict && widget.showConflict) ...<Widget>[
           const SizedBox(height: OmniSpacing.xs),
           _TimeConflictMessage(record: widget.conflict!),
-        ] else if (visibleOccupiedRecords.isNotEmpty) ...<Widget>[
+        ] else if (!hasConflict &&
+            visibleOccupiedRecords.isNotEmpty) ...<Widget>[
           const SizedBox(height: OmniSpacing.xs),
           Row(
             children: <Widget>[
@@ -1229,7 +1376,7 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
               ),
               const SizedBox(width: OmniSpacing.xs),
               Text(
-                '灰色区段表示当天已记录时间',
+                widget.showSummary ? '灰色区段表示当天已记录时间' : '已记录',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
@@ -1241,22 +1388,24 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
 
   /// 根据选中区间创建从开始时间起算的六小时窗口。
   void _setInitialWindow(int startMinute, int endMinute) {
-    // 以选中开始时间作为初始起点。
-    int windowStart = startMinute;
+    // 补记开始端左侧留出一小时，首次拖动也能直接触发左扩展。
+    int windowStart = widget.preservesMinutes
+        ? (startMinute - 60).clamp(_minMinutes, _maxMinutes - _windowMinutes)
+        : startMinute;
     // 覆盖当前区间所需的六小时窗口数。
     final int windowCount =
         ((endMinute - windowStart + _windowMinutes - 1) ~/ _windowMinutes)
-            .clamp(1, 8);
+            .clamp(1, ((_maxMinutes - _minMinutes) / _windowMinutes).ceil());
     // 当前初始窗口总时长。
     final int windowSpan = windowCount * _windowMinutes;
-    // 不超过次日末尾的窗口结束。
+    // 窗口包含全部选择值并保留合法的左右边界。
     final int windowEnd = (windowStart + windowSpan).clamp(
-      _windowMinutes,
+      _minMinutes + _windowMinutes,
       _maxMinutes,
     );
     if (windowEnd - windowStart < windowSpan) {
       windowStart = (windowEnd - windowSpan).clamp(
-        0,
+        _minMinutes,
         _maxMinutes - _windowMinutes,
       );
     }
@@ -1266,10 +1415,20 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
 
   /// 在手柄到达边缘时扩展六小时并同步选中值。
   void _handleChanged(RangeValues values) {
+    // 吸附后再检查障碍，快速拖过整个占用区间也不能穿越。
+    final _TimeRangeAdjustment adjustment =
+        widget.adjustRange?.call(values) ?? _TimeRangeAdjustment(values);
+    if (adjustment.blockedStart) {
+      _showBlock(Thumb.start);
+    } else if (adjustment.blockedEnd) {
+      _showBlock(Thumb.end);
+    } else {
+      _clearBlock();
+    }
     // 滑动后的开始分钟数。
-    final int nextStart = values.start.round();
+    final int nextStart = adjustment.values.start.round();
     // 滑动后的结束分钟数。
-    final int nextEnd = values.end.round();
+    final int nextEnd = adjustment.values.end.round();
     // 本次是否调整了开始手柄。
     final bool startChanged = nextStart != widget.startMinute;
     // 本次是否调整了结束手柄。
@@ -1280,13 +1439,13 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
     int nextVisibleEnd = _visibleEndMinute;
     if (startChanged && nextStart <= _visibleStartMinute) {
       nextVisibleStart = (_visibleStartMinute - _windowMinutes).clamp(
-        0,
+        _minMinutes,
         _maxMinutes,
       );
     }
     if (endChanged && nextEnd >= _visibleEndMinute) {
       nextVisibleEnd = (_visibleEndMinute + _windowMinutes).clamp(
-        0,
+        _minMinutes,
         _maxMinutes,
       );
     }
@@ -1297,16 +1456,20 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
         _visibleEndMinute = nextVisibleEnd;
       });
     }
-    widget.onChanged(values);
+    widget.onChanged(adjustment.values);
   }
 
-  /// 返回当前窗口内均匀分布的七个刻度。
+  /// 新布局显示四个刻度，旧编辑器保留七个。
   List<int> _scaleMinutes() {
+    // 当前布局所需的刻度间隔数。
+    final int intervals = widget.showSummary ? 6 : 3;
     // 相邻两个文字刻度的分钟间隔。
-    final int step = (_visibleEndMinute - _visibleStartMinute) ~/ 6;
+    final int step = (_visibleEndMinute - _visibleStartMinute) ~/ intervals;
     return List<int>.generate(
-      7,
-      (int index) => _visibleStartMinute + step * index,
+      intervals + 1,
+      (int index) => index == intervals
+          ? _visibleEndMinute
+          : _visibleStartMinute + step * index,
       growable: false,
     );
   }
@@ -1317,13 +1480,19 @@ class _TimeRangeEditorState extends State<_TimeRangeEditor> {
       return '24:00';
     }
     // 相对起始自然日的天数。
-    final int dayOffset = minute ~/ 1440;
+    final int dayOffset = (minute / 1440).floor();
     // 当前自然日内的分钟数。
     final int minuteOfDay = minute % 1440;
     // 二十四小时制时间。
     final String clock =
         '${(minuteOfDay ~/ 60).toString().padLeft(2, '0')}:${(minuteOfDay % 60).toString().padLeft(2, '0')}';
-    return dayOffset == 0 ? clock : '次日 $clock';
+    return dayOffset == 0
+        ? clock
+        : '${dayOffset == -1
+              ? '昨日'
+              : dayOffset == 1
+              ? '次日'
+              : '${dayOffset > 0 ? '+' : ''}$dayOffset 天'} $clock';
   }
 
   /// 将区间分钟数格式化为时长文案。
@@ -1398,14 +1567,22 @@ class _TimeConflictMessage extends StatelessWidget {
   /// 与当前范围冲突的记录。
   final TimeEntryRecord record;
 
+  /// 是否显示真实起止日期，进行中记录不伪造结束时刻。
+  final bool absolute;
+
   /// 创建时间范围冲突提示。
-  const _TimeConflictMessage({required this.record});
+  const _TimeConflictMessage({required this.record, this.absolute = false});
 
   /// 构建可定位到具体记录的错误文案。
   @override
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
+    // 补记使用完整时间，旧编辑器继续使用自然日分钟轴。
+    final String rangeLabel = absolute
+        ? '${DateFormat('MM/dd HH:mm').format(record.startedAt)}–'
+              '${record.endedAt == null ? '进行中' : DateFormat('MM/dd HH:mm').format(record.endedAt!)}'
+        : '${_time(record.startMinute)}–${_time(record.endMinute)}';
     return Container(
       key: const ValueKey<String>('time-conflict-message'),
       padding: const EdgeInsets.symmetric(
@@ -1423,8 +1600,7 @@ class _TimeConflictMessage extends StatelessWidget {
           const SizedBox(width: OmniSpacing.xs),
           Expanded(
             child: Text(
-              '与 ${_time(record.startMinute)}–${_time(record.endMinute)}'
-              '的“${record.activity}”重叠，请调整时间范围',
+              '与 $rangeLabel 的“${record.activity ?? '进行中记录'}”重叠，请调整时间范围',
               style: Theme.of(context).textTheme.bodySmall
                   ?.copyWith(color: colors.danger),
             ),
@@ -1646,7 +1822,7 @@ class _OccupiedRangeSliderTrackShape extends RangeSliderTrackShape
       ..color = tickColor
       ..strokeWidth = 1;
     // 窗口内第一个需要绘制的整点。
-    final int firstHourMinute = (visibleStartMinute ~/ 60 + 1) * 60;
+    final int firstHourMinute = ((visibleStartMinute / 60).floor() + 1) * 60;
     for (
       int minute = firstHourMinute;
       minute < visibleEndMinute;
@@ -1680,6 +1856,12 @@ class _OutlinedRangeSliderThumbShape extends RangeSliderThumbShape {
   /// 结束手柄边框色。
   final Color endBorderColor;
 
+  /// 开始手柄向空闲侧的阻挡回弹位移。
+  final double startRebound;
+
+  /// 结束手柄向空闲侧的阻挡回弹位移。
+  final double endRebound;
+
   /// 手柄视觉半径。
   static const double _radius = 10;
 
@@ -1688,6 +1870,8 @@ class _OutlinedRangeSliderThumbShape extends RangeSliderThumbShape {
     required this.fillColor,
     required this.startBorderColor,
     required this.endBorderColor,
+    this.startRebound = 0,
+    this.endRebound = 0,
   });
 
   /// 返回手柄所需的视觉尺寸。
@@ -1711,6 +1895,11 @@ class _OutlinedRangeSliderThumbShape extends RangeSliderThumbShape {
     Thumb thumb = Thumb.start,
     bool isPressed = false,
   }) {
+    // 回弹不改变逻辑选中值，且始终朝向可选的空闲区间。
+    final Offset paintCenter = center.translate(
+      thumb == Thumb.start ? startRebound : endRebound,
+      0,
+    );
     // 当前按压态下的手柄缩放半径。
     final double effectiveRadius = _radius + activationAnimation.value;
     // 当前绘制画布。
@@ -1720,14 +1909,16 @@ class _OutlinedRangeSliderThumbShape extends RangeSliderThumbShape {
         ? startBorderColor
         : endBorderColor;
     canvas.drawShadow(
-      Path()..addOval(Rect.fromCircle(center: center, radius: effectiveRadius)),
+      Path()..addOval(
+        Rect.fromCircle(center: paintCenter, radius: effectiveRadius),
+      ),
       Colors.black.withValues(alpha: 0.18),
       2,
       true,
     );
-    canvas.drawCircle(center, effectiveRadius, Paint()..color = fillColor);
+    canvas.drawCircle(paintCenter, effectiveRadius, Paint()..color = fillColor);
     canvas.drawCircle(
-      center,
+      paintCenter,
       effectiveRadius - 1,
       Paint()
         ..color = effectiveBorderColor
@@ -1783,6 +1974,12 @@ class _AbsoluteTimeEntryDialog extends ConsumerStatefulWidget {
 /// 使用绝对时间的居中时间记录弹窗状态。
 class _AbsoluteTimeEntryDialogState
     extends ConsumerState<_AbsoluteTimeEntryDialog> {
+  /// 日期控件支持范围内的固定查询，扩展窗口时不清空占用快照。
+  static final (DateTime, DateTime) _recordRange = (
+    DateTime(1970),
+    DateTime(2101),
+  );
+
   /// 表单键。
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
@@ -1801,8 +1998,35 @@ class _AbsoluteTimeEntryDialogState
   /// 当前选择的结束时间。
   late DateTime _endedAt;
 
+  /// 滑轨固定的基准自然日，拖动跨日时不重建控件或重算坐标。
+  late DateTime _sliderDay;
+
   /// 是否正在保存。
   bool _saving = false;
+
+  /// 安卓滚轮当前编辑开始时间还是结束时间。
+  bool _editingStart = true;
+
+  /// 备注是否展开，编辑已有备注时自动展开。
+  late bool _notesExpanded;
+
+  /// 桌面开始时刻输入是否完整有效。
+  bool _startInputValid = true;
+
+  /// 桌面结束时刻输入是否完整有效。
+  bool _endInputValid = true;
+
+  /// 保存失败后常驻显示的错误信息。
+  String? _saveError;
+
+  /// 默认补记区间必须读取已有记录后才能编辑或保存。
+  bool _defaultRangeReady = true;
+
+  /// 是否正在计算默认空闲区间。
+  bool _loadingDefaultRange = false;
+
+  /// 打开时的结束候选，重试时不随等待改变。
+  late final DateTime _defaultEnd;
 
   /// 初始化绝对时间表单。
   @override
@@ -1818,6 +2042,7 @@ class _AbsoluteTimeEntryDialogState
       now.hour,
       now.minute ~/ 5 * 5,
     );
+    _defaultEnd = roundedNow;
     // 新增补记默认回溯一小时，时间轴预填和开始记录沿用原有时间。
     final DateTime defaultStart = widget.initialStartMinute == null
         ? widget.mode == _TimeEntryEditorMode.completed
@@ -1828,6 +2053,7 @@ class _AbsoluteTimeEntryDialogState
     // 待编辑记录。
     final TimeEntryRecord? record = widget.record;
     _startedAt = record?.startedAt ?? defaultStart;
+    _sliderDay = DateUtils.dateOnly(_startedAt);
     _endedAt = switch (widget.mode) {
       _TimeEntryEditorMode.finish =>
         roundedNow.isAfter(_startedAt)
@@ -1838,6 +2064,82 @@ class _AbsoluteTimeEntryDialogState
     _activityController = TextEditingController(text: record?.activity ?? '');
     _categoryController = TextEditingController(text: record?.category ?? '');
     _notesController = TextEditingController(text: record?.notes ?? '');
+    _notesExpanded = _notesController.text.isNotEmpty;
+    if (widget.mode == _TimeEntryEditorMode.completed &&
+        record == null &&
+        widget.initialStartMinute == null) {
+      _defaultRangeReady = false;
+      _loadDefaultRange();
+    }
+  }
+
+  /// 向下取整到一分钟，结束端不得延伸到占用区间里。
+  DateTime _floorMinute(DateTime value) =>
+      DateTime(value.year, value.month, value.day, value.hour, value.minute);
+
+  /// 向上取整到一分钟，开始端不得覆盖记录末尾的秒数。
+  DateTime _ceilMinute(DateTime value) {
+    // 秒和微秒均为零时完整保留原有分钟。
+    final DateTime floor = _floorMinute(value);
+    return value.isAfter(floor) ? floor.add(const Duration(minutes: 1)) : floor;
+  }
+
+  /// 从当前时刻往前寻找最近空闲段，上限一小时，不跳过中间占用。
+  (DateTime, DateTime) _defaultFreeRange(List<TimeEntryRecord> records) {
+    // 按开始时间倒序遍历，合并相邻或重叠的占用边界。
+    final List<TimeEntryRecord> ordered = records.toList()
+      ..sort(
+        (TimeEntryRecord a, TimeEntryRecord b) =>
+            b.startedAt.compareTo(a.startedAt),
+      );
+    // 当前最近可用的结束边界。
+    DateTime end = _defaultEnd;
+    // 默认最多回溯一小时。
+    DateTime start = end.subtract(const Duration(hours: 1));
+    for (final TimeEntryRecord record in ordered) {
+      if (!record.startedAt.isBefore(end)) continue;
+      if (record.endedAt == null || !record.endedAt!.isBefore(end)) {
+        end = _floorMinute(record.startedAt);
+        start = end.subtract(const Duration(hours: 1));
+      } else {
+        // 对齐到完整分钟后的开始时间，保留非五分钟边界。
+        final DateTime boundary = _ceilMinute(record.endedAt!);
+        if (boundary.isAfter(start)) start = boundary;
+        if (!start.isBefore(end)) {
+          end = _floorMinute(record.startedAt);
+          start = end.subtract(const Duration(hours: 1));
+        }
+      }
+    }
+    return (start, end);
+  }
+
+  /// 默认值只在打开时计算一次，失败可重试，不覆盖之后的用户输入。
+  Future<void> _loadDefaultRange() async {
+    if (_loadingDefaultRange) return;
+    setState(() {
+      _loadingDefaultRange = true;
+      _saveError = null;
+    });
+    try {
+      // 使用同一绝对时间口径，包含进行中、跨日及未来开始的记录。
+      final List<TimeEntryRecord> records = await ref
+          .read(timeEntryRepositoryProvider)
+          .loadForRange(_recordRange.$1, _recordRange.$2);
+      if (!mounted) return;
+      // 得到最靠近打开时刻的一段空闲时间。
+      final (DateTime start, DateTime end) = _defaultFreeRange(records);
+      setState(() {
+        _startedAt = start;
+        _endedAt = end;
+        _sliderDay = DateUtils.dateOnly(start);
+        _defaultRangeReady = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _saveError = '读取已有记录失败，请重试');
+    } finally {
+      if (mounted) setState(() => _loadingDefaultRange = false);
+    }
   }
 
   /// 释放文本控制器。
@@ -1851,10 +2153,14 @@ class _AbsoluteTimeEntryDialogState
 
   /// 保存当前记录。
   Future<void> _save() async {
+    if (_saving || !_defaultRangeReady) return;
     if (!_formKey.currentState!.validate()) {
       return;
     }
-    setState(() => _saving = true);
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
     try {
       await ref
           .read(timeEntryRepositoryProvider)
@@ -1893,7 +2199,11 @@ class _AbsoluteTimeEntryDialogState
     if (!mounted) {
       return;
     }
-    showOmniMessage(context, message: message, tone: OmniMessageTone.error);
+    if (widget.mode == _TimeEntryEditorMode.completed) {
+      setState(() => _saveError = message);
+    } else {
+      showOmniMessage(context, message: message, tone: OmniMessageTone.error);
+    }
   }
 
   /// 更新日期并保留原时分。
@@ -1921,31 +2231,90 @@ class _AbsoluteTimeEntryDialogState
   /// 将补记滑动条结果换算为绝对开始与结束时间。
   void _updateSliderRange(RangeValues values) {
     // 当前滑动条基准自然日。
-    final DateTime day = DateUtils.dateOnly(_startedAt);
-    // 按五分钟步进换算的开始分钟数。
-    final int startMinute = ((values.start / 5).round() * 5).clamp(0, 2875);
-    // 按五分钟步进换算的结束分钟数。
-    final int endMinute = ((values.end / 5).round() * 5).clamp(5, 2880);
+    final DateTime day = _sliderDay;
+    // 当前开始分钟，用于判断正在移动的手柄。
+    final int currentStart = _startedAt.difference(day).inMinutes;
+    // 当前结束分钟，保留非整五分钟和较短记录。
+    final int currentEnd = _endedAt.difference(day).inMinutes;
+    // 应用吸附与阻挡后的开始分钟，未移动的一端保留绝对时间。
+    final int startMinute = values.start.round();
+    // 应用吸附与阻挡后的结束分钟。
+    final int endMinute = values.end.round();
     if (endMinute <= startMinute) {
       return;
     }
     setState(() {
-      _startedAt = day.add(Duration(minutes: startMinute));
-      _endedAt = day.add(Duration(minutes: endMinute));
+      if (startMinute != currentStart) {
+        _startedAt = day.add(Duration(minutes: startMinute));
+        _startInputValid = true;
+      }
+      if (endMinute != currentEnd) {
+        _endedAt = day.add(Duration(minutes: endMinute));
+        _endInputValid = true;
+      }
+      _saveError = null;
     });
   }
 
-  /// 切换补记日期并整体平移当前时间范围。
-  void _shiftSliderDate(DateTime date) {
-    // 当前滑动条基准自然日。
-    final DateTime currentDay = DateUtils.dateOnly(_startedAt);
-    // 新选择的基准自然日。
-    final DateTime nextDay = DateUtils.dateOnly(date);
-    // 两个自然日之间的位移。
-    final Duration shift = nextDay.difference(currentDay);
+  /// 吸附被拖端点后限制在当前空闲段内，不允许越过整个占用区间。
+  _TimeRangeAdjustment _adjustSliderRange(
+    RangeValues values,
+    List<TimeEntryRecord> occupied,
+  ) {
+    // 当前开始和结束分钟，未拖动的一端不重新取整。
+    final int currentStart = _startedAt.difference(_sliderDay).inMinutes;
+    // 当前结束端的精确分钟。
+    final int currentEnd = _endedAt.difference(_sliderDay).inMinutes;
+    // 仅对发生移动的端点应用五分钟吸附。
+    int start = values.start.round() == currentStart
+        ? currentStart
+        : (values.start / 5).round() * 5;
+    // 吸附后的结束候选。
+    int end = values.end.round() == currentEnd
+        ? currentEnd
+        : (values.end / 5).round() * 5;
+    // 本次实际触碰的左侧障碍。
+    bool blockedStart = false;
+    // 本次实际触碰的右侧障碍。
+    bool blockedEnd = false;
+    for (final TimeEntryRecord record in occupied) {
+      if (start < currentStart &&
+          record.endedAt != null &&
+          !record.endedAt!.isAfter(_startedAt) &&
+          record.endMinute > start) {
+        // 已编辑记录带秒时，阻挡不能反向改变其合法开始时刻。
+        start = record.endMinute > currentStart
+            ? currentStart
+            : record.endMinute;
+        blockedStart = true;
+      }
+      if (end > currentEnd &&
+          !record.startedAt.isBefore(_endedAt) &&
+          record.startMinute < end) {
+        end = record.startMinute < currentEnd ? currentEnd : record.startMinute;
+        blockedEnd = true;
+      }
+    }
+    return _TimeRangeAdjustment(
+      start < end
+          ? RangeValues(start.toDouble(), end.toDouble())
+          : RangeValues(currentStart.toDouble(), currentEnd.toDouble()),
+      blockedStart: blockedStart,
+      blockedEnd: blockedEnd,
+    );
+  }
+
+  /// 更新单个端点的时分，保留日期并反馈无效的部分输入。
+  void _updateEndpointTime(bool start, TimeOfDay? time) {
     setState(() {
-      _startedAt = _startedAt.add(shift);
-      _endedAt = _endedAt.add(shift);
+      if (start) {
+        _startInputValid = time != null;
+        if (time != null) _startedAt = _withTime(_startedAt, time);
+      } else {
+        _endInputValid = time != null;
+        if (time != null) _endedAt = _withTime(_endedAt, time);
+      }
+      _saveError = null;
     });
   }
 
@@ -1953,7 +2322,8 @@ class _AbsoluteTimeEntryDialogState
   List<TimeEntryRecord> _relativeSliderRecords({
     required List<TimeEntryRecord> records,
     required DateTime day,
-    required DateTime now,
+    required int minMinutes,
+    required int maxMinutes,
   }) {
     // 投影后的占用区间。
     final List<TimeEntryRecord> relativeRecords = <TimeEntryRecord>[];
@@ -1961,18 +2331,21 @@ class _AbsoluteTimeEntryDialogState
       if (record.id == widget.record?.id) {
         continue;
       }
-      // 进行中记录以当前时刻作为临时结束时间。
-      final DateTime effectiveEnd = record.endedAt ?? now;
+      // 进行中持续占用后续区间，与仓储保存语义保持一致。
+      final DateTime effectiveEnd =
+          record.endedAt ?? day.add(Duration(minutes: maxMinutes));
       // 相对基准日的裁切开始分钟。
-      final int startMinute = record.startedAt
-          .difference(day)
-          .inMinutes
-          .clamp(0, 2880);
+      final int startMinute =
+          (record.startedAt.difference(day).inMicroseconds /
+                  Duration.microsecondsPerMinute)
+              .floor()
+              .clamp(minMinutes, maxMinutes);
       // 相对基准日的裁切结束分钟。
-      final int endMinute = effectiveEnd
-          .difference(day)
-          .inMinutes
-          .clamp(0, 2880);
+      final int endMinute =
+          (effectiveEnd.difference(day).inMicroseconds /
+                  Duration.microsecondsPerMinute)
+              .ceil()
+              .clamp(minMinutes, maxMinutes);
       if (endMinute <= startMinute) {
         continue;
       }
@@ -1987,16 +2360,14 @@ class _AbsoluteTimeEntryDialogState
     return relativeRecords;
   }
 
-  /// 查找补记滑动区间命中的第一条冲突记录。
-  TimeEntryRecord? _findSliderConflict(
-    List<TimeEntryRecord> occupiedRecords,
-    int startMinute,
-    int endMinute,
-  ) {
-    for (final TimeEntryRecord record in occupiedRecords) {
+  /// 按完整绝对时间检查冲突，供安卓滚轮和桌面滑轨共同使用。
+  TimeEntryRecord? _findTimeConflict(List<TimeEntryRecord> records) {
+    for (final TimeEntryRecord record in records) {
+      if (record.id == widget.record?.id) continue;
       // 当前选择是否与已有记录重叠。
       final bool overlaps =
-          startMinute < record.endMinute && endMinute > record.startMinute;
+          _startedAt.isBefore(record.endedAt ?? DateTime(9999, 12, 31)) &&
+          _endedAt.isAfter(record.startedAt);
       if (overlaps) {
         return record;
       }
@@ -2055,51 +2426,112 @@ class _AbsoluteTimeEntryDialogState
     final bool hasEndTime =
         widget.mode != _TimeEntryEditorMode.startOnly &&
         widget.mode != _TimeEntryEditorMode.ongoing;
-    // 补记与编辑完成记录是否使用双手柄滑动条。
-    final bool usesRangeSlider = widget.mode == _TimeEntryEditorMode.completed;
+    // 已完成记录使用重构后的时间区间布局。
+    final bool completed = widget.mode == _TimeEntryEditorMode.completed;
+    // 按平台选择输入方式，平板和窄桌面窗口保持各自交互。
+    final bool usesWheel = Theme.of(context).platform == TargetPlatform.android;
     // 补记滑动条的基准自然日。
-    final DateTime sliderDay = DateUtils.dateOnly(_startedAt);
+    final DateTime sliderDay = _sliderDay;
     // 补记滑动条的开始分钟数。
     final int sliderStartMinute = _startedAt.difference(sliderDay).inMinutes;
     // 补记滑动条的结束分钟数，跨天时允许超过 1440。
-    final int sliderEndMinute = _endedAt
-        .difference(sliderDay)
-        .inMinutes
-        .clamp(sliderStartMinute + 5, 2880);
-    // 滑动条覆盖范围内的逻辑记录。
-    final List<TimeEntryRecord> sliderRecords = usesRangeSlider
-        ? ref
-                  .watch(
-                    timeEntriesForRangeProvider((
-                      sliderDay,
-                      sliderDay.add(const Duration(days: 2)),
-                    )),
-                  )
-                  .asData
-                  ?.value ??
-              const <TimeEntryRecord>[]
-        : const <TimeEntryRecord>[];
+    final int sliderEndMinute = _endedAt.difference(sliderDay).inMinutes;
+    // 左侧至少可到昨日，继续向左拖动时按真实开始时间扩展。
+    final int sliderMinMinute = sliderStartMinute - 360 < -1440
+        ? sliderStartMinute - 360
+        : -1440;
+    // 滑轨覆盖较长跨日记录，并在右侧保留扩展空间。
+    final int sliderMaxMinute = sliderEndMinute + 360 > 2880
+        ? sliderEndMinute + 360
+        : 2880;
+    // 固定读取全部可选日期的记录，快速跨日扩展也不丢失阻挡边界。
+    final AsyncValue<List<TimeEntryRecord>> recordsState = completed
+        ? ref.watch(timeEntriesForRangeProvider(_recordRange))
+        : const AsyncData<List<TimeEntryRecord>>(<TimeEntryRecord>[]);
+    // 查询尚未准备好时不允许拖动或保存。
+    final bool recordsReady = recordsState.asData != null;
+    // 保留最新完整占用快照。
+    final List<TimeEntryRecord> sliderRecords =
+        recordsState.asData?.value ?? const <TimeEntryRecord>[];
     // 投影到连续分钟轴的已占用区间。
-    final List<TimeEntryRecord> occupiedSliderRecords = usesRangeSlider
+    final List<TimeEntryRecord> occupiedSliderRecords = completed
         ? _relativeSliderRecords(
             records: sliderRecords,
             day: sliderDay,
-            now: ref.watch(nowProvider),
+            minMinutes: sliderMinMinute,
+            maxMinutes: sliderMaxMinute,
           )
         : const <TimeEntryRecord>[];
     // 当前滑动选择命中的冲突记录。
-    final TimeEntryRecord? sliderConflict = usesRangeSlider
-        ? _findSliderConflict(
-            occupiedSliderRecords,
-            sliderStartMinute,
-            sliderEndMinute,
-          )
+    final TimeEntryRecord? sliderConflict = completed
+        ? _findTimeConflict(sliderRecords)
         : null;
+    // 时间区间与手动输入均合法时才允许保存。
+    final bool invalidTime =
+        completed &&
+        (!_endedAt.isAfter(_startedAt) || !_startInputValid || !_endInputValid);
+    // 当前页面的活动内容输入，共用校验和原有输入提示。
+    final Widget activityField = OmniTextFormField(
+      key: const ValueKey<String>('time-entry-activity'),
+      controller: _activityController,
+      autofocus: !completed && widget.mode != _TimeEntryEditorMode.startOnly,
+      decoration: InputDecoration(
+        labelText: completed
+            ? null
+            : hasEndTime
+            ? '做了什么 *'
+            : '正在做什么（可稍后填写）',
+        hintText: hasEndTime ? '例如：睡眠、学习 Text2SQL' : '留空也可以直接开始',
+      ),
+      validator: (String? value) =>
+          hasEndTime && (value == null || value.trim().isEmpty)
+          ? '请输入活动内容'
+          : null,
+    );
+    // 沿用原有分类色点，菜单项及选中值均保持左侧业务颜色。
+    final Widget categoryField = OmniDropdownButtonFormField<String>(
+      key: const ValueKey<String>('time-entry-category'),
+      initialValue: currentCategory.isEmpty ? null : currentCategory,
+      decoration: InputDecoration(labelText: completed ? null : '类别'),
+      hint: const Text('选择类别'),
+      selectionIndicatorPosition:
+          OmniDropdownSelectionIndicatorPosition.trailing,
+      items: categoryNames
+          .map(
+            (String value) => DropdownMenuItem<String>(
+              value: value,
+              child: Row(
+                children: <Widget>[
+                  Container(
+                    key: ValueKey<String>('time-category-color-$value'),
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: categoryColors[value] ?? fallbackCategoryColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: OmniSpacing.xs),
+                  Expanded(child: Text(value)),
+                ],
+              ),
+            ),
+          )
+          .toList(growable: false),
+      onChanged: (String? value) => _categoryController.text = value ?? '',
+    );
     return OmniDialogScaffold(
-      onWindowsEnter: _saving || sliderConflict != null ? null : _save,
+      onWindowsEnter:
+          _saving ||
+              !_defaultRangeReady ||
+              !recordsReady ||
+              sliderConflict != null ||
+              invalidTime
+          ? null
+          : _save,
       key: const ValueKey<String>('time-entry-editor'),
       title: _title,
-      width: 620,
+      width: completed ? (usesWheel ? 440 : 680) : 620,
       actions: <Widget>[
         OmniButton(
           label: '取消',
@@ -2109,146 +2541,412 @@ class _AbsoluteTimeEntryDialogState
         OmniButton(
           label: _saving ? '保存中…' : _actionLabel,
           loading: _saving,
-          onPressed: _saving || sliderConflict != null ? null : _save,
+          onPressed:
+              _saving ||
+                  !_defaultRangeReady ||
+                  !recordsReady ||
+                  sliderConflict != null ||
+                  invalidTime
+              ? null
+              : _save,
         ),
       ],
-      child: SingleChildScrollView(
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              OmniTextFormField(
-                controller: _activityController,
-                autofocus: widget.mode != _TimeEntryEditorMode.startOnly,
-                decoration: InputDecoration(
-                  labelText: hasEndTime ? '做了什么 *' : '正在做什么（可稍后填写）',
-                  hintText: hasEndTime ? '例如：睡眠、学习 Text2SQL' : '留空也可以直接开始',
-                ),
-                validator: (String? value) {
-                  if (hasEndTime && (value == null || value.trim().isEmpty)) {
-                    return '请输入活动内容';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: OmniSpacing.lg),
-              if (usesRangeSlider) ...<Widget>[
-                Row(
-                  children: <Widget>[
-                    Text('开始日期', style: Theme.of(context).textTheme.labelLarge),
-                    const SizedBox(width: OmniSpacing.xs),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerRight,
-                        child: OmniDatePickerButton(
-                          value: sliderDay,
-                          initialDate: sliderDay,
-                          firstDate: DateTime(1970),
-                          lastDate: DateTime(2100),
-                          label: DateFormat('yyyy 年 M 月 d 日').format(sliderDay),
-                          onChanged: _shiftSliderDate,
-                        ),
-                      ),
-                    ),
+      child: !_defaultRangeReady
+          ? Padding(
+              padding: const EdgeInsets.all(OmniSpacing.lg),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  if (_loadingDefaultRange) ...<Widget>[
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: OmniSpacing.md),
+                    const Text('正在计算空闲时间…'),
+                  ] else ...<Widget>[
+                    Text(_saveError ?? '读取已有记录失败，请重试'),
+                    const SizedBox(height: OmniSpacing.md),
+                    OmniButton(label: '重试', onPressed: _loadDefaultRange),
                   ],
-                ),
-                const SizedBox(height: OmniSpacing.sm),
-                _TimeRangeEditor(
-                  startMinute: sliderStartMinute,
-                  endMinute: sliderEndMinute,
-                  occupiedRecords: occupiedSliderRecords,
-                  conflict: sliderConflict,
-                  onChanged: _updateSliderRange,
-                ),
-                if (sliderEndMinute > 1440) ...<Widget>[
-                  const SizedBox(height: OmniSpacing.xs),
-                  Text(
-                    '跨天记录将保存为一条完整记录，并按自然日拆分统计。',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
                 ],
-              ] else ...<Widget>[
-                _AbsoluteDateTimeField(
-                  label: '开始时间',
-                  value: _startedAt,
-                  onDateChanged: widget.mode == _TimeEntryEditorMode.finish
-                      ? null
-                      : (DateTime date) {
-                          setState(
-                            () => _startedAt = _withDate(_startedAt, date),
-                          );
-                        },
-                  onTimeChanged: widget.mode == _TimeEntryEditorMode.finish
-                      ? null
-                      : (TimeOfDay time) {
-                          setState(
-                            () => _startedAt = _withTime(_startedAt, time),
-                          );
-                        },
-                ),
-                if (hasEndTime) ...<Widget>[
-                  const SizedBox(height: OmniSpacing.md),
-                  _AbsoluteDateTimeField(
-                    label: '结束时间',
-                    value: _endedAt,
-                    onDateChanged: (DateTime date) {
-                      setState(() => _endedAt = _withDate(_endedAt, date));
-                    },
-                    onTimeChanged: (TimeOfDay time) {
-                      setState(() => _endedAt = _withTime(_endedAt, time));
-                    },
-                  ),
-                  const SizedBox(height: OmniSpacing.sm),
-                  _TimeSpanHint(startedAt: _startedAt, endedAt: _endedAt),
-                ],
-              ],
-              const SizedBox(height: OmniSpacing.lg),
-              OmniDropdownButtonFormField<String>(
-                initialValue: currentCategory.isEmpty ? null : currentCategory,
-                decoration: const InputDecoration(labelText: '类别'),
-                selectionIndicatorPosition:
-                    OmniDropdownSelectionIndicatorPosition.trailing,
-                items: categoryNames
-                    .map(
-                      (String value) => DropdownMenuItem<String>(
-                        value: value,
-                        child: Row(
-                          children: <Widget>[
-                            Container(
-                              width: 6,
-                              height: 6,
-                              decoration: BoxDecoration(
-                                color:
-                                    categoryColors[value] ??
-                                    fallbackCategoryColor,
-                                shape: BoxShape.circle,
+              ),
+            )
+          : SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  if (!recordsReady)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: OmniSpacing.md),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Text(
+                            recordsState.hasError
+                                ? '读取已记录时间失败，请重试'
+                                : '正在读取已记录时间…',
+                          ),
+                          if (recordsState.hasError)
+                            OmniButton(
+                              label: '重试',
+                              onPressed: () => ref.invalidate(
+                                timeEntriesForRangeProvider(_recordRange),
                               ),
                             ),
-                            const SizedBox(width: OmniSpacing.xs),
-                            Expanded(child: Text(value)),
+                        ],
+                      ),
+                    ),
+                  AbsorbPointer(
+                    absorbing: _saving || !recordsReady,
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: <Widget>[
+                          if (completed) ...<Widget>[
+                            _buildCompletedTimeSection(
+                              usesWheel: usesWheel,
+                              sliderDay: sliderDay,
+                              startMinute: sliderStartMinute,
+                              endMinute: sliderEndMinute,
+                              minMinute: sliderMinMinute,
+                              maxMinute: sliderMaxMinute,
+                              occupiedRecords: occupiedSliderRecords,
+                              conflict: sliderConflict,
+                              invalidTime: invalidTime,
+                            ),
+                            const SizedBox(height: OmniSpacing.lg),
+                            const Divider(),
+                            const SizedBox(height: OmniSpacing.lg),
+                            LayoutBuilder(
+                              builder:
+                                  (
+                                    BuildContext context,
+                                    BoxConstraints constraints,
+                                  ) {
+                                    // 桌面宽窗口让活动和类别同行，触控或大字号则自然分行。
+                                    final bool horizontal =
+                                        !usesWheel &&
+                                        constraints.maxWidth >= 520 &&
+                                        MediaQuery.textScalerOf(context)
+                                                .scale(14) <=
+                                            21;
+                                    // 活动输入的外置标签。
+                                    final Widget activity = _labelledField(
+                                      '做了什么 *',
+                                      activityField,
+                                    );
+                                    // 类别输入的外置标签，内部保留原有颜色圆点。
+                                    final Widget category = _labelledField(
+                                      '类别',
+                                      categoryField,
+                                    );
+                                    return horizontal
+                                        ? Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: <Widget>[
+                                              Expanded(
+                                                flex: 2,
+                                                child: activity,
+                                              ),
+                                              const SizedBox(
+                                                width: OmniSpacing.md,
+                                              ),
+                                              Expanded(child: category),
+                                            ],
+                                          )
+                                        : Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.stretch,
+                                            children: <Widget>[
+                                              activity,
+                                              const SizedBox(
+                                                height: OmniSpacing.md,
+                                              ),
+                                              category,
+                                            ],
+                                          );
+                                  },
+                            ),
+                            const SizedBox(height: OmniSpacing.sm),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: OmniButton(
+                                key: const ValueKey<String>(
+                                  'time-entry-notes-toggle',
+                                ),
+                                variant: OmniButtonVariant.text,
+                                onPressed: _saving
+                                    ? null
+                                    : () => setState(
+                                        () => _notesExpanded = !_notesExpanded,
+                                      ),
+                                icon: _notesExpanded
+                                    ? Icons.expand_less_rounded
+                                    : Icons.expand_more_rounded,
+                                label: _notesExpanded ? '收起备注' : '添加备注（可选）',
+                              ),
+                            ),
+                            if (_notesExpanded)
+                              OmniTextField(
+                                key: const ValueKey<String>('time-entry-notes'),
+                                controller: _notesController,
+                                maxLines: 3,
+                                decoration: const InputDecoration(
+                                  hintText: '补充地点、结果或其他信息',
+                                ),
+                              ),
+                            if (_saveError != null) ...<Widget>[
+                              const SizedBox(height: OmniSpacing.sm),
+                              Text(
+                                _saveError!,
+                                key: const ValueKey<String>(
+                                  'time-entry-save-error',
+                                ),
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      color: OmniColors.of(context).danger,
+                                    ),
+                              ),
+                            ],
+                          ] else ...<Widget>[
+                            activityField,
+                            const SizedBox(height: OmniSpacing.lg),
+                            _AbsoluteDateTimeField(
+                              label: '开始时间',
+                              value: _startedAt,
+                              onDateChanged:
+                                  widget.mode == _TimeEntryEditorMode.finish
+                                  ? null
+                                  : (DateTime date) => setState(
+                                      () => _startedAt = _withDate(
+                                        _startedAt,
+                                        date,
+                                      ),
+                                    ),
+                              onTimeChanged:
+                                  widget.mode == _TimeEntryEditorMode.finish
+                                  ? null
+                                  : (TimeOfDay time) => setState(
+                                      () => _startedAt = _withTime(
+                                        _startedAt,
+                                        time,
+                                      ),
+                                    ),
+                            ),
+                            if (hasEndTime) ...<Widget>[
+                              const SizedBox(height: OmniSpacing.md),
+                              _AbsoluteDateTimeField(
+                                label: '结束时间',
+                                value: _endedAt,
+                                onDateChanged: (DateTime date) => setState(
+                                  () => _endedAt = _withDate(_endedAt, date),
+                                ),
+                                onTimeChanged: (TimeOfDay time) => setState(
+                                  () => _endedAt = _withTime(_endedAt, time),
+                                ),
+                              ),
+                              const SizedBox(height: OmniSpacing.sm),
+                              _TimeSpanHint(
+                                startedAt: _startedAt,
+                                endedAt: _endedAt,
+                              ),
+                            ],
+                            const SizedBox(height: OmniSpacing.lg),
+                            categoryField,
+                            const SizedBox(height: OmniSpacing.md),
+                            OmniTextField(
+                              controller: _notesController,
+                              maxLines: 3,
+                              decoration: const InputDecoration(
+                                labelText: '详细描述（可选）',
+                                hintText: '补充地点、结果或其他上下文',
+                              ),
+                            ),
                           ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+
+  /// 用外置标签明确活动和类别所属字段。
+  Widget _labelledField(String label, Widget field) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Text(label, style: Theme.of(context).textTheme.bodyMedium),
+        const SizedBox(height: OmniSpacing.xs),
+        field,
+      ],
+    );
+  }
+
+  /// 构建一侧起止卡片，日期与时刻均写入同一份绝对时间。
+  Widget _buildEndpointCard({required bool start, required bool usesWheel}) {
+    return TimeEntryEndpointCard(
+      key: ValueKey<String>(start ? 'time-start-display' : 'time-end-display'),
+      endpoint: start ? 'start' : 'end',
+      value: start ? _startedAt : _endedAt,
+      usesWheel: usesWheel,
+      selected: _editingStart == start,
+      nextDay:
+          !start &&
+          DateUtils.isSameDay(
+            _endedAt,
+            DateTime(_startedAt.year, _startedAt.month, _startedAt.day + 1),
+          ),
+      enabled: !_saving,
+      onSelect: () {
+        FocusManager.instance.primaryFocus?.unfocus();
+        setState(() => _editingStart = start);
+      },
+      onDateChanged: (DateTime date) => setState(() {
+        if (start) {
+          _startedAt = _withDate(_startedAt, date);
+          _sliderDay = DateUtils.dateOnly(_startedAt);
+        } else {
+          _endedAt = _withDate(_endedAt, date);
+        }
+        _saveError = null;
+      }),
+      onTimeChanged: (TimeOfDay? time) => _updateEndpointTime(start, time),
+    );
+  }
+
+  /// 构建两端一致的时间摘要及平台专用输入。
+  Widget _buildCompletedTimeSection({
+    required bool usesWheel,
+    required DateTime sliderDay,
+    required int startMinute,
+    required int endMinute,
+    required int minMinute,
+    required int maxMinute,
+    required List<TimeEntryRecord> occupiedRecords,
+    required TimeEntryRecord? conflict,
+    required bool invalidTime,
+  }) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 用实际时间差显示唯一一处时长。
+    final int minutes = _endedAt.difference(_startedAt).inMinutes;
+    // 精简时长文本，避免零小时或零分钟占据注意力。
+    final String duration = minutes <= 0
+        ? '不足 1 分钟'
+        : '${minutes >= 60 ? '${minutes ~/ 60} 小时' : ''}'
+                  '${minutes % 60 != 0 ? ' ${minutes % 60} 分钟' : ''}'
+              .trim();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: OmniSpacing.sm,
+          runSpacing: OmniSpacing.xxs,
+          children: <Widget>[
+            Text('时间区间', style: Theme.of(context).textTheme.labelLarge),
+            Text(
+              invalidTime ? '待调整' : '共 $duration',
+              key: const ValueKey<String>('time-range-duration'),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: colors.muted),
+            ),
+          ],
+        ),
+        const SizedBox(height: OmniSpacing.sm),
+        LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            // 窄屏和放大文字时分行，日期和精确时刻都完整可见。
+            final bool stacked =
+                constraints.maxWidth < 260 ||
+                MediaQuery.textScalerOf(context).scale(14) > 21;
+            return stacked
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      _buildEndpointCard(start: true, usesWheel: usesWheel),
+                      const SizedBox(height: OmniSpacing.sm),
+                      _buildEndpointCard(start: false, usesWheel: usesWheel),
+                    ],
+                  )
+                : Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Expanded(
+                        child: _buildEndpointCard(
+                          start: true,
+                          usesWheel: usesWheel,
                         ),
                       ),
-                    )
-                    .toList(growable: false),
-                onChanged: (String? value) {
-                  _categoryController.text = value ?? '';
-                },
-              ),
-              const SizedBox(height: OmniSpacing.md),
-              OmniTextField(
-                controller: _notesController,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  labelText: '详细描述（可选）',
-                  hintText: '补充地点、结果或其他上下文',
-                ),
-              ),
-            ],
-          ),
+                      const SizedBox(width: OmniSpacing.sm),
+                      Expanded(
+                        child: _buildEndpointCard(
+                          start: false,
+                          usesWheel: usesWheel,
+                        ),
+                      ),
+                    ],
+                  );
+          },
         ),
-      ),
+        if (usesWheel) ...<Widget>[
+          const SizedBox(height: OmniSpacing.sm),
+          Text(
+            _editingStart ? '调整开始时间' : '调整结束时间',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: colors.muted),
+          ),
+          TimeEntryWheelPicker(
+            key: ValueKey<String>(
+              'time-wheel-${_editingStart ? 'start' : 'end'}',
+            ),
+            value: TimeOfDay.fromDateTime(
+              _editingStart ? _startedAt : _endedAt,
+            ),
+            label: _editingStart ? '开始' : '结束',
+            enabled: !_saving,
+            onChanged: (TimeOfDay time) =>
+                _updateEndpointTime(_editingStart, time),
+          ),
+        ] else if (_endedAt.isAfter(_startedAt)) ...<Widget>[
+          const SizedBox(height: OmniSpacing.sm),
+          _TimeRangeEditor(
+            // 开始日期变化时重新建立自然日对应的滑轨窗口。
+            key: ValueKey<DateTime>(sliderDay),
+            startMinute: startMinute,
+            endMinute: endMinute,
+            minMinutes: minMinute,
+            maxMinutes: maxMinute,
+            occupiedRecords: occupiedRecords,
+            conflict: conflict,
+            showSummary: false,
+            showConflict: false,
+            preservesMinutes: true,
+            adjustRange: (RangeValues values) =>
+                _adjustSliderRange(values, occupiedRecords),
+            onChanged: _updateSliderRange,
+          ),
+        ],
+        if (invalidTime) ...<Widget>[
+          const SizedBox(height: OmniSpacing.xs),
+          Text(
+            !_startInputValid || !_endInputValid
+                ? '请输入有效时刻（HH:mm）'
+                : '结束时间必须晚于开始时间',
+            key: const ValueKey<String>('time-entry-time-error'),
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: colors.danger),
+          ),
+        ] else if (conflict != null) ...<Widget>[
+          const SizedBox(height: OmniSpacing.xs),
+          _TimeConflictMessage(record: conflict, absolute: true),
+        ],
+      ],
     );
   }
 }
@@ -2329,8 +3027,6 @@ class _TimeSpanHint extends StatelessWidget {
     final OmniColors colors = OmniColors.of(context);
     // 结束时间是否合法。
     final bool valid = endedAt.isAfter(startedAt);
-    // 当前是否跨越自然日。
-    final bool crossesDay = !DateUtils.isSameDay(startedAt, endedAt);
     // 当前时长。
     final Duration duration = endedAt.difference(startedAt);
     // 分钟总数。
@@ -2348,9 +3044,7 @@ class _TimeSpanHint extends StatelessWidget {
         const SizedBox(width: OmniSpacing.xs),
         Expanded(
           child: Text(
-            valid
-                ? '共 $durationLabel${crossesDay ? ' · 跨天记录，将按自然日拆分统计' : ''}'
-                : '结束时间必须晚于开始时间',
+            valid ? '共 $durationLabel' : '结束时间必须晚于开始时间',
             style: Theme.of(context).textTheme.bodySmall
                 ?.copyWith(color: valid ? colors.muted : colors.danger),
           ),

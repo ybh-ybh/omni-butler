@@ -62,7 +62,10 @@ void main() {
       find.byKey(const ValueKey<String>('time-entry-editor')),
       findsOneWidget,
     );
-    expect(find.text('开始日期'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('time-start-date')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey<String>('time-range-slider')),
       findsOneWidget,
@@ -97,7 +100,8 @@ void main() {
       find.widgetWithText(TextFormField, '例如：睡眠、学习 Text2SQL'),
       '睡眠',
     );
-    expect(find.textContaining('跨天记录'), findsOneWidget);
+    expect(find.textContaining('跨天记录'), findsNothing);
+    expect(find.text('结束 · 次日'), findsOneWidget);
     await tester.tap(find.text('保存记录'));
     await tester.pumpAndSettle();
 
@@ -110,7 +114,7 @@ void main() {
     expect(record.endMinute, 31 * 60);
 
     await testContext.dispose(tester);
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
 
   testWidgets('开始记录可留空活动并在结束时补全', (WidgetTester tester) async {
     // 测试上下文。

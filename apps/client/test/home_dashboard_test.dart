@@ -882,7 +882,10 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('补记一段时间'), findsOneWidget);
-    expect(find.text('开始日期'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('time-start-date')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey<String>('time-range-slider')),
       findsOneWidget,

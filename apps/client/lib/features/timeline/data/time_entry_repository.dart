@@ -94,6 +94,27 @@ class TimeEntryRepository {
 
   /// 监听左闭右开日期范围内有交集的有效时间记录。
   Stream<List<TimeEntryRecord>> watchForRange(DateTime start, DateTime end) {
+    return _queryForRange(start, end).watch().map(
+      (List<TimeEntryRecord> records) =>
+          records.map(_localizeTimeEntryRecord).toList(growable: false),
+    );
+  }
+
+  /// 读取一次有效记录快照，供补记默认空闲区间初始化使用。
+  Future<List<TimeEntryRecord>> loadForRange(
+    DateTime start,
+    DateTime end,
+  ) async {
+    // 读取与监听完全相同的范围和软删除口径。
+    final List<TimeEntryRecord> records = await _queryForRange(
+      start,
+      end,
+    ).get();
+    return records.map(_localizeTimeEntryRecord).toList(growable: false);
+  }
+
+  /// 共用绝对时间查询，避免初始化与实时占用使用不同规则。
+  Selectable<TimeEntryRecord> _queryForRange(DateTime start, DateTime end) {
     // 规范化范围起点。
     final DateTime normalizedStart = DateUtils.dateOnly(start);
     // 规范化范围终点。
@@ -110,10 +131,7 @@ class TimeEntryRepository {
       ..orderBy(<OrderingTerm Function(TimeEntries)>[
         (TimeEntries table) => OrderingTerm.asc(table.startedAt),
       ]);
-    return query.watch().map(
-      (List<TimeEntryRecord> records) =>
-          records.map(_localizeTimeEntryRecord).toList(growable: false),
-    );
+    return query;
   }
 
   /// 监听当前设备上的全部进行中记录。

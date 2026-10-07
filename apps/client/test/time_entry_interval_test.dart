@@ -53,6 +53,65 @@ void main() {
     await database.close();
   });
 
+  test('默认补记快照与实时查询共用跨日、本地时间及软删除口径', () async {
+    // 初始化快照需要和监听获得同一组有效记录。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 正式仓储复用同一个查询构建器。
+    final TimeEntryRepository repository = TimeEntryRepository(database);
+    try {
+      await repository.save(
+        TimeEntryDraft(
+          startedAt: DateTime(2026, 9, 9, 23).toUtc(),
+          endedAt: DateTime(2026, 9, 10, 7).toUtc(),
+          activity: '跨日有效',
+        ),
+      );
+      await repository.save(
+        TimeEntryDraft(
+          startedAt: DateTime(2026, 9, 10, 8),
+          endedAt: DateTime(2026, 9, 10, 9),
+          activity: '已删除记录',
+        ),
+      );
+      // 软删除后不得参与默认区间或滑轨阻挡。
+      final List<TimeEntryRecord> beforeDelete = await repository.loadForRange(
+        DateTime(2026, 9, 10),
+        DateTime(2026, 9, 11),
+      );
+      await repository.delete(
+        beforeDelete
+            .singleWhere((TimeEntryRecord record) => record.activity == '已删除记录')
+            .id,
+      );
+      await repository.save(
+        TimeEntryDraft(startedAt: DateTime(2026, 9, 10, 10), activity: '进行中有效'),
+      );
+      // 一次读取和第一份实时快照覆盖相同自然日交集。
+      final List<TimeEntryRecord> loaded = await repository.loadForRange(
+        DateTime(2026, 9, 10),
+        DateTime(2026, 9, 11),
+      );
+      final List<TimeEntryRecord> watched = await repository
+          .watchForRange(DateTime(2026, 9, 10), DateTime(2026, 9, 11))
+          .first;
+      expect(
+        loaded.map((TimeEntryRecord record) => record.id),
+        watched.map((TimeEntryRecord record) => record.id),
+      );
+      expect(loaded.map((TimeEntryRecord record) => record.activity), <String>[
+        '跨日有效',
+        '进行中有效',
+      ]);
+      expect(loaded.first.startedAt, DateTime(2026, 9, 9, 23));
+      expect(loaded.first.startedAt.isUtc, isFalse);
+      expect(loaded.last.endedAt, isNull);
+    } finally {
+      await database.close();
+    }
+  });
+
   test('同一设备只允许一条进行中记录', () async {
     // 测试数据库。
     final AppDatabase database = AppDatabase.forTesting(
