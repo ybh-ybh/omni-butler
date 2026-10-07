@@ -32,8 +32,8 @@
     "reason": "首页右键与长按坐标锚定菜单，继承统一 popupMenuTheme 并保留原定位和操作语义。"
   },
   "lib/features/home/presentation/home_time_status_card.dart :: TextButton": {
-    "count": 2,
-    "reason": "文字次操作继承统一 TextButtonTheme，保留现有撤销和更多入口。"
+    "count": 1,
+    "reason": "今日记录空态的开始记录入口继承统一 TextButtonTheme；查看全部入口已移除。"
   },
   "lib/features/inventory/presentation/inventory_move_dialog.dart :: Dialog": {
     "count": 1,
@@ -94,6 +94,10 @@
   "lib/features/timeline/presentation/timeline_page.dart :: SegmentedButton": {
     "count": 2,
     "reason": "使用统一 Theme 的筛选选择控件，保留原有键盘与选择语义。"
+  },
+  "lib/features/timeline/presentation/timeline_review.dart :: Color(0xFFD6D6D6)": {
+    "count": 1,
+    "reason": "周时间指纹类别标签叠加在业务分类色块上，保留固定浅灰低对比图表标注；不用于普通文字或品牌控件。"
   },
   "lib/features/todos/presentation/todos_page.dart :: AlertDialog": {
     "count": 1,
