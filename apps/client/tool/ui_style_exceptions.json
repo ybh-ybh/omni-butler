@@ -27,10 +27,6 @@
     "count": 1,
     "reason": "文字次操作继承统一 TextButtonTheme，保留现有撤销和更多入口。"
   },
-  "lib/features/home/presentation/home_page.dart :: TextButton": {
-    "count": 1,
-    "reason": "文字次操作继承统一 TextButtonTheme，保留现有撤销和更多入口。"
-  },
   "lib/features/home/presentation/home_page.dart :: showMenu": {
     "count": 1,
     "reason": "首页右键与长按坐标锚定菜单，继承统一 popupMenuTheme 并保留原定位和操作语义。"

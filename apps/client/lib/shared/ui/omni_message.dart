@@ -322,7 +322,7 @@ class _OmniMessagePopupState extends State<_OmniMessagePopup>
                     border: Border.all(color: accent.withValues(alpha: 0.3)),
                     borderRadius: BorderRadius.circular(OmniRadius.control),
                   ),
-                  child: _buildContent(context, icon, accent),
+                  child: _buildContent(icon, accent),
                 ),
               ),
             ),
@@ -332,55 +332,35 @@ class _OmniMessagePopupState extends State<_OmniMessagePopup>
     );
   }
 
-  /// 让消息操作在紧凑宽度或大字号下换到下一行。
-  Widget _buildContent(BuildContext context, IconData icon, Color accent) {
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        // 文本放大或窄屏时为操作独立保留一行。
-        final bool stacked =
-            constraints.maxWidth < 400 ||
-            MediaQuery.textScalerOf(context).scale(14) > 20;
-        // 当前消息的可选操作。
-        final Widget? action =
-            widget.actionLabel != null && widget.onAction != null
-            ? OmniButton(
-                label: widget.actionLabel!,
-                variant: OmniButtonVariant.text,
-                onPressed: widget.onAction,
-              )
-            : null;
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Icon(icon, color: accent, size: 18),
-                const SizedBox(width: OmniSpacing.xs),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: OmniSpacing.xs,
-                    ),
-                    child: Text(
-                      widget.message,
-                      maxLines: 6,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-                if (!stacked && action != null) action,
-                OmniIconButton(
-                  tooltip: '关闭提示',
-                  onPressed: widget.onDismiss,
-                  icon: const Icon(Icons.close_rounded, size: 18),
-                ),
-              ],
+  /// 内容相对弹窗垂直居中，正文使用按钮之外的剩余宽度自然换行。
+  Widget _buildContent(IconData icon, Color accent) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: <Widget>[
+        Icon(icon, color: accent, size: 18),
+        const SizedBox(width: OmniSpacing.xs),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: OmniSpacing.xs),
+            child: Text(
+              widget.message,
+              maxLines: 6,
+              overflow: TextOverflow.ellipsis,
             ),
-            if (stacked && action != null)
-              Align(alignment: Alignment.centerRight, child: action),
-          ],
-        );
-      },
+          ),
+        ),
+        if (widget.actionLabel != null && widget.onAction != null)
+          OmniButton(
+            label: widget.actionLabel!,
+            variant: OmniButtonVariant.text,
+            onPressed: widget.onAction,
+          ),
+        OmniIconButton(
+          tooltip: '关闭提示',
+          onPressed: widget.onDismiss,
+          icon: const Icon(Icons.close_rounded, size: 18),
+        ),
+      ],
     );
   }
 }

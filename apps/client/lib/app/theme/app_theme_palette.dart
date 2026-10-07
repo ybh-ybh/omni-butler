@@ -53,16 +53,16 @@ enum AppThemePalette {
   /// 设置页显示名称。
   final String label;
 
-  /// 浅色截图中的色块，不直接用于按钮或文字。
+  /// 浅色预览色；非经典主题也用于 Windows 标题栏与导航背景。
   final Color lightPreviewColor;
 
-  /// 深色截图中与同一主题对应的色块。
+  /// 深色预览色；非经典主题也用于 Windows 标题栏与导航背景。
   final Color darkPreviewColor;
 
   /// 生成完整明暗配色的基准色。
   final Color seedColor;
 
-  /// 跟随当前实际明暗模式显示同一主题的对应色块。
+  /// 解析当前明暗模式的预览色，同时供 Windows 窗口与导航使用。
   Color previewColorFor(Brightness brightness) =>
       brightness == Brightness.dark ? darkPreviewColor : lightPreviewColor;
 

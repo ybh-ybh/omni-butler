@@ -18,6 +18,83 @@ double _countdownProgress(WidgetTester tester) {
 
 /// 验证全应用统一顶部浮动消息的层级和交互。
 void main() {
+  // 覆盖桌面宽窄窗口、字号放大与移动端触控布局。
+  for (final ({TargetPlatform platform, double width, double textScale}) layout
+      in <({TargetPlatform platform, double width, double textScale})>[
+        (platform: TargetPlatform.windows, width: 800, textScale: 1),
+        (platform: TargetPlatform.windows, width: 367, textScale: 1),
+        (platform: TargetPlatform.windows, width: 520, textScale: 2),
+        (platform: TargetPlatform.android, width: 360, textScale: 1),
+        (platform: TargetPlatform.android, width: 360, textScale: 2),
+      ]) {
+    testWidgets(
+      '消息内容垂直居中且撤销保持同行：${layout.platform.name}/${layout.width}/${layout.textScale}',
+      (WidgetTester tester) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = Size(layout.width, 600);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(tester.view.resetPhysicalSize);
+        // 当前消息句柄，在断言失败时也移除浮层。
+        OmniMessageHandle? handle;
+        addTearDown(() => handle?.dismiss());
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: AppTheme.build(brightness: Brightness.light),
+            builder: (BuildContext context, Widget? child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: TextScaler.linear(layout.textScale)),
+              child: child!,
+            ),
+            home: Builder(
+              builder: (BuildContext context) => Scaffold(
+                body: FilledButton(
+                  onPressed: () => handle = showOmniMessage(
+                    context,
+                    message: '已完成“摘简历”',
+                    tone: OmniMessageTone.success,
+                    actionLabel: '撤销',
+                    onAction: () {},
+                  ),
+                  child: const Text('显示消息'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('显示消息'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+        // 当前消息的边界，用于核对内容相对弹窗的垂直中心。
+        final Rect popupRect = tester.getRect(
+          find.byKey(const ValueKey<String>('omni-message-popup')),
+        );
+        // 所有内容均应相对整个弹窗居中，而不是只在顶部内容行居中。
+        final List<Finder> content = <Finder>[
+          find.byIcon(Icons.check_circle_rounded),
+          find.text('已完成“摘简历”'),
+          find.text('撤销'),
+          find.byIcon(Icons.close_rounded),
+        ];
+        // 逐项确认内容的中心与边界。
+        for (final Finder element in content) {
+          expect(
+            tester.getCenter(element).dy,
+            closeTo(popupRect.center.dy, 0.5),
+          );
+          expect(popupRect.contains(tester.getTopLeft(element)), isTrue);
+          expect(popupRect.contains(tester.getBottomRight(element)), isTrue);
+        }
+        if (layout.textScale == 1) {
+          expect(popupRect.height, inInclusiveRange(48, 50));
+        }
+        expect(tester.takeException(), isNull);
+        handle!.dismiss();
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+      variant: TargetPlatformVariant(<TargetPlatform>{layout.platform}),
+    );
+  }
+
   testWidgets('操作消息浮动在窗口顶部并支持替换、操作和自动关闭', (WidgetTester tester) async {
     // 操作按钮是否被触发。
     bool actionCalled = false;

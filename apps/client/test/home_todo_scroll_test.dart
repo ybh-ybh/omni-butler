@@ -15,6 +15,83 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证真实首页中待办的默认折叠、固定标题与独立滚动行为。
 void main() {
+  // 分别覆盖桌面正常高度、矮窗口与手机整页滚动。
+  for (final (TargetPlatform, Size) scenario in <(TargetPlatform, Size)>[
+    (TargetPlatform.windows, const Size(1440, 900)),
+    (TargetPlatform.windows, const Size(1440, 440)),
+    (TargetPlatform.android, const Size(412, 915)),
+  ]) {
+    testWidgets('首页全部象限任务可滚动到末项并完成 ${scenario.$1} ${scenario.$2}', (
+      WidgetTester tester,
+    ) async {
+      // 使用真实数据库和仓储检验数量限制、滚动与完成行为。
+      final AppDatabase database = AppDatabase.forTesting(
+        NativeDatabase.memory(),
+      );
+      // 页面订阅的生产待办仓储。
+      final TodoRepository repository = TodoRepository(database);
+      // 首页已有的三个重点象限。
+      const List<TodoPriorityQuadrant> quadrants = <TodoPriorityQuadrant>[
+        TodoPriorityQuadrant.urgentImportant,
+        TodoPriorityQuadrant.importantNotUrgent,
+        TodoPriorityQuadrant.urgentNotImportant,
+      ];
+      // 每个象限都超过原来的三条限制。
+      for (final TodoPriorityQuadrant quadrant in quadrants) {
+        // 根任务在本象限内的顺序。
+        for (int index = 1; index <= 12; index++) {
+          await repository.save(
+            TodoDraft(
+              title: '${quadrant.label}完整任务 $index',
+              scheduledDate: DateTime(2026, 10, 6),
+              priorityQuadrant: quadrant,
+            ),
+          );
+        }
+      }
+      await _pumpHome(
+        tester,
+        database: database,
+        size: scenario.$2,
+        platform: scenario.$1,
+        useDefaultCards: true,
+      );
+      // 三个象限均保留全部十二条任务，并沿用仓储排序。
+      for (final TodoPriorityQuadrant quadrant in quadrants) {
+        // 当前逐项检查的任务顺序。
+        for (int index = 1; index <= 12; index++) {
+          expect(find.text('${quadrant.label}完整任务 $index'), findsOneWidget);
+        }
+        expect(
+          tester.getTopLeft(find.text('${quadrant.label}完整任务 4')).dy,
+          lessThan(tester.getTopLeft(find.text('${quadrant.label}完整任务 12')).dy),
+        );
+      }
+      expect(find.textContaining('还有'), findsNothing);
+      // 完成最后一个象限末项，确认超出旧限制的任务仍可操作。
+      final TodoRecord last = (await database.select(database.todoItems).get())
+          .singleWhere((TodoRecord row) => row.title == '紧急·不重要完整任务 12');
+      // 最末项的生产完成入口。
+      final Finder checkbox = find.byKey(
+        ValueKey<String>('home-todo-checkbox-action-${last.id}'),
+      );
+      await tester.ensureVisible(checkbox);
+      await tester.pumpAndSettle();
+      expect(checkbox.hitTestable(), findsOneWidget);
+      await tester.tap(checkbox);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(
+        (await database.select(database.todoItems).get())
+            .singleWhere((TodoRecord row) => row.id == last.id)
+            .isCompleted,
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    });
+  }
+
   testWidgets('真实桌面首页时间卡复用独立滚动作用域并保留全部记录', (WidgetTester tester) async {
     // 在完整首页网格中验证真实仓储数据，不只挂载独立卡片。
     final AppDatabase database = AppDatabase.forTesting(

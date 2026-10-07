@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:omni_butler/app/theme/app_chrome_colors.dart';
 import 'package:omni_butler/app/theme/app_theme_palette.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
@@ -214,6 +215,19 @@ abstract final class AppTheme {
   }) {
     // 当前明暗模式的扩展语义色。
     final OmniColors colors = _colorsFor(brightness, palette);
+    // Windows 使用选定主题的导航底色，其余平台与经典蓝保留既有外观。
+    final OmniChromeColors chromeColors =
+        defaultTargetPlatform == TargetPlatform.windows &&
+            palette != AppThemePalette.classicBlue
+        ? OmniChromeColors.fromBackground(palette.previewColorFor(brightness))
+        : OmniChromeColors(
+            background: colors.paper,
+            foreground: colors.ink,
+            muted: colors.muted,
+            selectedBackground: colors.brandSoft,
+            selectedForeground: colors.brand,
+            border: colors.line,
+          );
     // Material 语义色方案。
     final ColorScheme scheme =
         (palette == AppThemePalette.classicBlue
@@ -276,7 +290,7 @@ abstract final class AppTheme {
       canvasColor: colors.canvas,
       fontFamily: _fontFamily,
       fontFamilyFallback: _fontFamilyFallback,
-      extensions: <ThemeExtension<dynamic>>[colors],
+      extensions: <ThemeExtension<dynamic>>[colors, chromeColors],
       textTheme: _textTheme(colors),
       dividerColor: colors.line,
       disabledColor: colors.muted.withValues(alpha: 0.45),

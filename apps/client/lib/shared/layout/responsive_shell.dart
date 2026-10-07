@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/app/theme/app_chrome_colors.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
@@ -440,6 +441,8 @@ class _ExpandedSidebar extends ConsumerWidget {
     final OmniColors colors = OmniColors.of(context);
     // 用户是否明确开启多端同步。
     final bool syncEnabled = ref.watch(syncPreferenceProvider);
+    // 侧栏与原生标题栏共用背景和边界色。
+    final OmniChromeColors chrome = OmniChromeColors.of(context);
     // 当前侧栏需要展示的同步阶段。
     _SidebarSyncPhase? syncPhase;
     if (syncEnabled) {
@@ -469,8 +472,8 @@ class _ExpandedSidebar extends ConsumerWidget {
       key: const ValueKey<String>('expanded-sidebar'),
       width: OmniSize.sidebar,
       decoration: BoxDecoration(
-        color: colors.paper,
-        border: Border(right: BorderSide(color: colors.line)),
+        color: chrome.background,
+        border: Border(right: BorderSide(color: chrome.border)),
       ),
       child: SafeArea(
         child: Padding(
@@ -528,15 +531,15 @@ class _MediumNavigation extends StatelessWidget {
   /// 构建飞书式紧凑导航轨。
   @override
   Widget build(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
+    // 与 Windows 标题栏共用的导航配色。
+    final OmniChromeColors chrome = OmniChromeColors.of(context);
 
     return Container(
       key: const ValueKey<String>('medium-navigation'),
       width: OmniSize.navigationRail,
       decoration: BoxDecoration(
-        color: colors.paper,
-        border: Border(right: BorderSide(color: colors.line)),
+        color: chrome.background,
+        border: Border(right: BorderSide(color: chrome.border)),
       ),
       child: SafeArea(
         child: Column(
@@ -590,8 +593,8 @@ class _RailDestination extends StatelessWidget {
   /// 构建仅含图标和选中反馈的导航项。
   @override
   Widget build(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
+    // 导航色独立于业务面板，确保深色主题底上的图标可读。
+    final OmniChromeColors chrome = OmniChromeColors.of(context);
     return Tooltip(
       message: destination.label,
       child: Material(
@@ -609,13 +612,15 @@ class _RailDestination extends StatelessWidget {
                 height: 32,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: selected ? colors.brandSoft : Colors.transparent,
+                  color: selected
+                      ? chrome.selectedBackground
+                      : Colors.transparent,
                   borderRadius: BorderRadius.circular(OmniRadius.control),
                 ),
                 child: Icon(
                   selected ? destination.selectedIcon : destination.icon,
                   size: OmniSize.navigationIcon,
-                  color: selected ? colors.brand : colors.muted,
+                  color: selected ? chrome.selectedForeground : chrome.muted,
                 ),
               ),
             ),
@@ -881,6 +886,8 @@ class _BrandMark extends StatelessWidget {
   /// 构建品牌标识。
   @override
   Widget build(BuildContext context) {
+    // 品牌文字使用导航前景色，兼容浅色页面中的深色侧栏。
+    final OmniChromeColors chrome = OmniChromeColors.of(context);
     return Row(
       children: <Widget>[
         const _CompactBrandMark(),
@@ -891,9 +898,14 @@ class _BrandMark extends StatelessWidget {
             children: <Widget>[
               Text(
                 'Omni Butler',
-                style: Theme.of(context).textTheme.titleMedium,
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(color: chrome.foreground),
               ),
-              Text('知序', style: Theme.of(context).textTheme.bodySmall),
+              Text(
+                '知序',
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: chrome.muted),
+              ),
             ],
           ),
         ),
@@ -941,12 +953,12 @@ class _SidebarDestination extends StatelessWidget {
   /// 构建侧栏导航项。
   @override
   Widget build(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
+    // 根据导航实际背景选择前景及选中态，避免只按页面明暗取色。
+    final OmniChromeColors chrome = OmniChromeColors.of(context);
 
     return Material(
       key: ValueKey<String>('navigation-${destination.path}'),
-      color: selected ? colors.brandSoft : Colors.transparent,
+      color: selected ? chrome.selectedBackground : Colors.transparent,
       borderRadius: BorderRadius.circular(OmniRadius.control),
       child: InkWell(
         onTap: onTap,
@@ -959,13 +971,15 @@ class _SidebarDestination extends StatelessWidget {
               Icon(
                 selected ? destination.selectedIcon : destination.icon,
                 size: OmniSize.navigationIcon,
-                color: selected ? colors.brand : colors.muted,
+                color: selected ? chrome.selectedForeground : chrome.muted,
               ),
               const SizedBox(width: 12),
               Text(
                 destination.label,
                 style: TextStyle(
-                  color: selected ? colors.brand : colors.ink,
+                  color: selected
+                      ? chrome.selectedForeground
+                      : chrome.foreground,
                   fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                 ),
               ),

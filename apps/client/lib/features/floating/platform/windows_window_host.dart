@@ -13,20 +13,31 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/router/app_router.dart';
+import 'package:omni_butler/app/theme/app_chrome_colors.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/app/theme/app_theme_palette.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
+import 'package:omni_butler/app/theme/windows_theme_transition.dart';
 import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
 import 'package:omni_butler/features/floating/platform/floating_window_placement.dart';
 import 'package:omni_butler/features/floating/platform/floating_resize_scheduler.dart';
 import 'package:omni_butler/features/floating/platform/windows_desktop_card_controller.dart';
 import 'package:omni_butler/features/floating/platform/windows_floating_resize_service.dart';
 import 'package:omni_butler/features/floating/platform/windows_tray_service.dart';
+import 'package:omni_butler/features/floating/platform/windows_title_bar_service.dart';
 import 'package:omni_butler/features/floating/presentation/floating_window_page.dart';
+import 'package:omni_butler/features/floating/presentation/windows_title_bar.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_cleanup_coordinator.dart';
 import 'package:omni_butler/core/sync/sync_maintenance_boundary.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 import 'package:win32/win32.dart' as win32;
+
+/// 主窗口最小客户区尺寸，交给系统按当前 DPI 换算拖拽下限。
+const BoxConstraints _mainWindowConstraints = BoxConstraints(
+  minWidth: 512,
+  minHeight: 512,
+);
 
 /// 悬浮窗默认逻辑宽度。
 const double _floatingWindowWidth = 294;
@@ -69,10 +80,12 @@ class _WindowsWindowHostState extends State<WindowsWindowHost> {
     _mainWindowDelegate = _MainWindowDelegate();
     _mainWindowController = RegularWindowController(
       size: const Size(1280, 720),
-      constraints: const BoxConstraints(minWidth: 512, minHeight: 512),
+      constraints: _mainWindowConstraints,
       title: 'Omni Butler',
       delegate: _mainWindowDelegate,
     );
+    // 当前实验性 Windows 引擎未保存创建约束，创建后显式同步原生缩放限制。
+    _mainWindowController.setConstraints(_mainWindowConstraints);
   }
 
   @override
@@ -172,7 +185,7 @@ class _WindowsWindowCoordinator extends ConsumerStatefulWidget {
 /// Windows 窗口协调器状态。
 class _WindowsWindowCoordinatorState
     extends ConsumerState<_WindowsWindowCoordinator>
-    with ScreenListener {
+    with ScreenListener, WidgetsBindingObserver {
   /// 当前窗口注册表。
   WindowRegistry? _windowRegistry;
 
@@ -191,6 +204,9 @@ class _WindowsWindowCoordinatorState
   /// Windows Runner 内置托盘服务。
   final WindowsTrayService _trayService = WindowsTrayService();
 
+  /// 同步主题并处理原生系统消息的标题栏服务。
+  final WindowsTitleBarService _titleBarService = WindowsTitleBarService();
+
   /// 支持 Flutter 多窗口的显示器查询服务。
   final _WindowsDisplayService _displayService = const _WindowsDisplayService();
 
@@ -206,9 +222,16 @@ class _WindowsWindowCoordinatorState
   /// 上一次提交协调的目标状态。
   (bool, bool, bool)? _lastRequestedState;
 
+  /// 上一次同步的实际明暗模式与主题配色。
+  (Brightness, AppThemePalette)? _lastTitleBarTheme;
+
+  /// 旧版 Windows 不支持原生精确配色时使用同色自绘标题栏。
+  bool _usesCustomTitleBar = false;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.mainWindowDelegate.onCloseRequested = _handleMainCloseRequested;
     widget.mainWindowDelegate.onDestroyed = _handleMainWindowDestroyed;
     _trayService.onOpen = _showMainWindow;
@@ -225,6 +248,7 @@ class _WindowsWindowCoordinatorState
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     screenRetriever.removeListener(this);
     widget.mainWindowDelegate.onCloseRequested = null;
     widget.mainWindowDelegate.onDestroyed = null;
@@ -249,6 +273,9 @@ class _WindowsWindowCoordinatorState
 
   @override
   Widget build(BuildContext context) {
+    // 当前设备主题偏好，手动切换时同步原生标题栏。
+    final ThemePreference themePreference = ref.watch(themeControllerProvider);
+    _syncMainWindowTheme(themePreference);
     // 停用时立即移除窗口，不排在显示器查询或托盘初始化之后。
     ref.listen(floatingWindowPreferenceProvider, (previous, next) {
       if (previous?.enabled != next.enabled) {
@@ -293,7 +320,128 @@ class _WindowsWindowCoordinatorState
         );
       });
     }
-    return widget.child;
+    return WindowsThemeTransition(
+      themeKey: (
+        _resolveMainWindowBrightness(themePreference),
+        themePreference.palette,
+      ),
+      child: Column(
+        children: <Widget>[
+          if (_usesCustomTitleBar)
+            Directionality(
+              textDirection: TextDirection.ltr,
+              child: Theme(
+                data: AppTheme.build(
+                  brightness: _resolveMainWindowBrightness(themePreference),
+                  palette: themePreference.palette,
+                ),
+                child: ListenableBuilder(
+                  listenable: widget.mainWindowController,
+                  builder: (BuildContext context, Widget? child) =>
+                      WindowsTitleBar(
+                        colors: OmniChromeColors.of(context),
+                        maximized: widget.mainWindowController.isMaximized,
+                        onMinimize: () => _requestWindowAction(minimize: true),
+                        onToggleMaximize: () =>
+                            _requestWindowAction(minimize: false),
+                        onClose: () => _handleMainCloseRequested(
+                          widget.mainWindowController,
+                        ),
+                      ),
+                ),
+              ),
+            ),
+          Expanded(child: widget.child),
+        ],
+      ),
+    );
+  }
+
+  /// 按钮只提交异步原生命令，不在 Dart 调用栈内同步改变窗口尺寸。
+  void _requestWindowAction({required bool minimize}) {
+    if (_isExiting) return;
+    // 使用主窗口自身句柄，避免误操作当前焦点窗口或悬浮窗。
+    final int handle =
+        (widget.mainWindowController as RegularWindowControllerWin32)
+            .windowHandle
+            .address;
+    unawaited(
+      (minimize
+              ? _titleBarService.minimize(handle)
+              : _titleBarService.toggleMaximize(handle))
+          .catchError((Object error, StackTrace stackTrace) {
+            debugPrint('Windows 标题栏按钮操作失败：$error\n$stackTrace');
+          }),
+    );
+  }
+
+  /// 系统明暗变化时按应用当前模式更新标题栏。
+  @override
+  void didChangePlatformBrightness() {
+    // 引擎可能先将标题栏重置为系统主题，固定模式也必须重新应用。
+    _syncMainWindowTheme(ref.read(themeControllerProvider), force: true);
+    if (mounted) setState(() {});
+  }
+
+  /// 将手动或跟随系统的偏好解析为实际窗口亮度。
+  Brightness _resolveMainWindowBrightness(ThemePreference preference) =>
+      switch (preference.mode) {
+        ThemeMode.dark => Brightness.dark,
+        ThemeMode.light => Brightness.light,
+        ThemeMode.system =>
+          WidgetsBinding.instance.platformDispatcher.platformBrightness,
+      };
+
+  /// 将主题的导航底色与可读文字同步到实际主窗口的原生标题栏。
+  void _syncMainWindowTheme(ThemePreference preference, {bool force = false}) {
+    if (_isExiting) return;
+    // 跟随系统时采用 Flutter 收到的系统明暗状态。
+    final Brightness brightness = _resolveMainWindowBrightness(preference);
+    // 配色变化也需要更新标题栏，不能只对明暗模式去重。
+    final (Brightness, AppThemePalette) requestedTheme = (
+      brightness,
+      preference.palette,
+    );
+    if (!force && _lastTitleBarTheme == requestedTheme) return;
+    // 与左侧导航共用同一主题解析结果，避免标题栏出现独立色差。
+    final OmniChromeColors chrome = AppTheme.build(
+      brightness: brightness,
+      palette: preference.palette,
+    ).extension<OmniChromeColors>()!;
+    // 多窗口控制器对应的主窗口句柄，不依赖当前焦点或隐式 Flutter View。
+    final RegularWindowControllerWin32 controller =
+        widget.mainWindowController as RegularWindowControllerWin32;
+    // 标题栏按钮按实际底色选择明暗，浅色页面也可能使用深色导航。
+    final bool isDark =
+        ThemeData.estimateBrightnessForColor(chrome.background) ==
+        Brightness.dark;
+    // 同一通道按发送顺序应用主题，先记录目标避免普通重建重复发送。
+    _lastTitleBarTheme = requestedTheme;
+    unawaited(
+      _titleBarService
+          .applyTheme(
+            windowHandle: controller.windowHandle.address,
+            dark: isDark,
+            background: chrome.background,
+            foreground: chrome.foreground,
+            captionHeight: WindowsTitleBar.height.round(),
+            captionButtonsWidth: (WindowsTitleBar.buttonWidth * 3).round(),
+          )
+          .then<void>((bool exactColorsApplied) {
+            if (mounted &&
+                !_isExiting &&
+                _usesCustomTitleBar == exactColorsApplied) {
+              setState(() => _usesCustomTitleBar = !exactColorsApplied);
+            }
+          })
+          .catchError((Object error, StackTrace stackTrace) {
+            // 失败仅撤销仍对应当前请求的去重记录，不覆盖之后的新主题。
+            if (_lastTitleBarTheme == requestedTheme) {
+              _lastTitleBarTheme = null;
+            }
+            debugPrint('Windows 标题栏主题同步失败：$error\n$stackTrace');
+          }),
+    );
   }
 
   /// 将窗口相关异步操作加入串行队列。

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/router/app_router.dart';
+import 'package:omni_butler/app/theme/app_chrome_colors.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_theme_palette.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
@@ -20,6 +21,7 @@ void main() {
   // 桌面、常见手机和窄屏手机的实际设置入口。
   for (final (TargetPlatform platform, Size size) in <(TargetPlatform, Size)>[
     (TargetPlatform.windows, const Size(1200, 820)),
+    (TargetPlatform.windows, const Size(960, 820)),
     (TargetPlatform.android, const Size(390, 844)),
     (TargetPlatform.android, const Size(320, 720)),
   ]) {
@@ -132,6 +134,9 @@ void main() {
           ).colorScheme.primary,
         );
         expect(tester.takeException(), isNull);
+        if (platform == TargetPlatform.windows) {
+          _expectNavigationColors(tester);
+        }
       }
       await container
           .read(themeControllerProvider.notifier)
@@ -142,6 +147,9 @@ void main() {
         AppThemePalette.slate,
       );
       expect(find.text('黛蓝'), findsOneWidget);
+      if (platform == TargetPlatform.windows) {
+        _expectNavigationColors(tester);
+      }
       // 深色预览与用户给定截图中的五个实际色值对应。
       const List<Color> darkColors = <Color>[
         Color(0xFF050505),
@@ -264,4 +272,41 @@ Color? _swatch(WidgetTester tester, AppThemePalette palette) {
       .whereType<BoxDecoration>()
       .singleWhere((BoxDecoration decoration) => decoration.color != null)
       .color;
+}
+
+/// 验证真实展开侧栏或导航轨已采用独立窗口配色，且选中项仍可读。
+void _expectNavigationColors(WidgetTester tester) {
+  // 页面实际继承的窗口/导航语义色。
+  final OmniChromeColors chrome = OmniChromeColors.of(
+    tester.element(find.byType(ThemePaletteSelector)),
+  );
+  // 当前宽度下实际呈现的侧栏或导航轨。
+  final Finder navigation = find.byWidgetPredicate(
+    (Widget widget) =>
+        widget.key == const ValueKey<String>('expanded-sidebar') ||
+        widget.key == const ValueKey<String>('medium-navigation'),
+  );
+  expect(
+    (tester.widget<Container>(navigation).decoration! as BoxDecoration).color,
+    chrome.background,
+  );
+  // 设置入口在两种导航布局下均保持选中。
+  final Finder selected = find.byKey(
+    const ValueKey<String>('navigation-/settings'),
+  );
+  // 设置入口实际绘制的图标颜色。
+  final Icon icon = tester.widget<Icon>(
+    find.descendant(of: selected, matching: find.byType(Icon)),
+  );
+  expect(icon.color, chrome.selectedForeground);
+  if (find
+      .byKey(const ValueKey<String>('expanded-sidebar'))
+      .evaluate()
+      .isNotEmpty) {
+    expect(tester.widget<Material>(selected).color, chrome.selectedBackground);
+    expect(
+      tester.widget<Text>(find.text('Omni Butler')).style?.color,
+      chrome.foreground,
+    );
+  }
 }

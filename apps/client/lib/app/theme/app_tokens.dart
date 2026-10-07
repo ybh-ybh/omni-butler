@@ -114,6 +114,9 @@ abstract final class OmniMotion {
   /// 开关滑块移动时长。
   static const Duration switchThumb = Duration(milliseconds: 180);
 
+  /// Windows 整窗主题从右上向左下渐变的时长。
+  static const Duration themeChange = Duration(milliseconds: 480);
+
   /// 常规缓动曲线。
   static const Curve standardCurve = Curves.easeOutCubic;
 }

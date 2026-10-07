@@ -23,7 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证待办四象限在首页、完整页面与编辑器中保持一致。
 void main() {
-  testWidgets('首页三个重点区间各最多展示三条任务', (WidgetTester tester) async {
+  testWidgets('首页三个重点区间展示全部任务，不保留隐藏数量入口', (WidgetTester tester) async {
     // 桌面测试视口。
     const Size viewport = Size(1440, 900);
     tester.view.physicalSize = viewport;
@@ -81,12 +81,16 @@ void main() {
       expect(find.text('${quadrant.label}任务1'), findsOneWidget);
       expect(find.text('${quadrant.label}任务2'), findsOneWidget);
       expect(find.text('${quadrant.label}任务3'), findsOneWidget);
-      expect(find.text('${quadrant.label}任务4'), findsNothing);
+      expect(find.text('${quadrant.label}任务4'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('${quadrant.label}任务3')).dy,
+        lessThan(tester.getTopLeft(find.text('${quadrant.label}任务4')).dy),
+      );
     }
     for (int index = 1; index <= 4; index += 1) {
       expect(find.text('不紧急·不重要任务$index'), findsNothing);
     }
-    expect(find.text('还有 1 项'), findsNWidgets(3));
+    expect(find.textContaining('还有'), findsNothing);
     // 浅色主题下承载重点区间的首页面板。
     final Finder lightPanel = find.ancestor(
       of: find.byKey(const ValueKey<String>('home-todo-quadrant-3')),

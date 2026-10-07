@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:omni_butler/app/omni_scroll_behavior.dart';
@@ -144,6 +145,10 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
         palette: preference.palette,
       ),
       themeMode: preference.mode,
+      // Windows 宿主统一绘制整窗方向渐变，避免默认全局混色叠加。
+      themeAnimationStyle: defaultTargetPlatform == TargetPlatform.windows
+          ? AnimationStyle.noAnimation
+          : null,
       scrollBehavior: const OmniScrollBehavior(),
       routerConfig: router,
       builder: (BuildContext context, Widget? child) =>

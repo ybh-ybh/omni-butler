@@ -272,6 +272,17 @@ class _CatalogExamplesState extends State<_CatalogExamples> {
                       tone: OmniMessageTone.error,
                     ),
                   ),
+                  OmniButton(
+                    label: '完成提示',
+                    variant: OmniButtonVariant.text,
+                    onPressed: () => showOmniMessage(
+                      context,
+                      message: '已完成“示例任务”',
+                      tone: OmniMessageTone.success,
+                      actionLabel: '撤销',
+                      onAction: () {},
+                    ),
+                  ),
                 ],
               ),
             ]),

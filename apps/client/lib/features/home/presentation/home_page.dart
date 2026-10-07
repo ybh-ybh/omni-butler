@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
@@ -169,8 +168,6 @@ class HomePage extends ConsumerWidget {
       todoTreesAsync: todoTreesAsync,
       pendingTodoTrees: pendingTodoTrees,
       onCreate: openTodoEditor,
-      onOpenQuadrant: (TodoPriorityQuadrant quadrant) =>
-          context.go('/todos?quadrant=${quadrant.value}'),
       onAction: handleTodoAction,
       onToggle: (TodoRecord todo, bool value) =>
           todoRepository.setCompleted(todo.id, value),
@@ -1177,9 +1174,6 @@ class _TodayTodoCard extends StatefulWidget {
   /// 新增回调。
   final VoidCallback onCreate;
 
-  /// 查看指定象限回调。
-  final ValueChanged<TodoPriorityQuadrant> onOpenQuadrant;
-
   /// 执行指定待办的菜单操作。
   final Future<bool> Function(TodoRecord todo, _HomeTodoAction action) onAction;
 
@@ -1191,7 +1185,6 @@ class _TodayTodoCard extends StatefulWidget {
     required this.todoTreesAsync,
     required this.pendingTodoTrees,
     required this.onCreate,
-    required this.onOpenQuadrant,
     required this.onAction,
     required this.onToggle,
   });
@@ -1442,7 +1435,6 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
             todoTrees: groupedTodoTrees[_focusQuadrants[index]]!,
             expandedTreeIds: _expandedTreeIds,
             onToggleTree: _toggleTree,
-            onOpen: () => widget.onOpenQuadrant(_focusQuadrants[index]),
             onAction: _handleAction,
             onToggle: (TodoRecord todo, bool value) =>
                 value ? _completeTodo(todo) : widget.onToggle(todo, false),
@@ -1467,9 +1459,6 @@ class _HomeTodoQuadrant extends StatelessWidget {
   /// 切换指定父任务子任务展开状态的回调。
   final ValueChanged<String> onToggleTree;
 
-  /// 查看当前象限回调。
-  final VoidCallback onOpen;
-
   /// 执行指定待办的菜单操作。
   final Future<bool> Function(TodoRecord todo, _HomeTodoAction action) onAction;
 
@@ -1482,28 +1471,21 @@ class _HomeTodoQuadrant extends StatelessWidget {
     required this.todoTrees,
     required this.expandedTreeIds,
     required this.onToggleTree,
-    required this.onOpen,
     required this.onAction,
     required this.onToggle,
   });
 
-  /// 构建最多展示三条任务的象限摘要。
+  /// 按共享任务流的用户排序展示当前象限的全部任务。
   @override
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     // 当前象限用于轻量分区的语义色。
     final Color accentColor = quadrant.color(colors);
-    // 保留共享任务流的用户排序，展示与每日待办相同顺序的前三棵树。
-    final List<TodoTreeNode> visibleTodoTrees = todoTrees
-        .take(3)
-        .toList(growable: false);
-    // 未直接展示的根待办数量。
-    final int hiddenCount = todoTrees.length - visibleTodoTrees.length;
     // 当前象限任务内容。
-    final Widget todoContent = visibleTodoTrees.isEmpty
+    final Widget todoContent = todoTrees.isEmpty
         ? _buildEmptyState(context)
-        : _buildTodoTreeList(context, visibleTodoTrees, hiddenCount);
+        : _buildTodoTreeList(context);
 
     return Column(
       key: ValueKey<String>('home-todo-quadrant-${quadrant.value}'),
@@ -1532,19 +1514,16 @@ class _HomeTodoQuadrant extends StatelessWidget {
   }
 
   /// 构建当前象限的任务列表。
-  Widget _buildTodoTreeList(
-    BuildContext context,
-    List<TodoTreeNode> visibleTodoTrees,
-    int hiddenCount,
-  ) {
+  Widget _buildTodoTreeList(BuildContext context) {
     // 带分隔线的任务树列表内容。
     final List<Widget> children = <Widget>[];
-    for (int index = 0; index < visibleTodoTrees.length; index += 1) {
+    // 当前根任务在用户排序中的位置。
+    for (int index = 0; index < todoTrees.length; index += 1) {
       if (index > 0) {
         children.add(const Divider(indent: 28));
       }
       // 当前任务树。
-      final TodoTreeNode tree = visibleTodoTrees[index];
+      final TodoTreeNode tree = todoTrees[index];
       children.add(
         _HomeTodoTree(
           key: ValueKey<String>('home-todo-tree-${tree.root.id}'),
@@ -1555,11 +1534,6 @@ class _HomeTodoQuadrant extends StatelessWidget {
           onAction: onAction,
           onComplete: (TodoRecord todo) => onToggle(todo, true),
         ),
-      );
-    }
-    if (hiddenCount > 0) {
-      children.add(
-        TextButton(onPressed: onOpen, child: Text('还有 $hiddenCount 项')),
       );
     }
     return Column(mainAxisSize: MainAxisSize.min, children: children);

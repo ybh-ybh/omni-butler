@@ -5,6 +5,7 @@
 #include "utils.h"
 #include "windows_tray_controller.h"
 #include "windows_floating_controller.h"
+#include "windows_title_bar_controller.h"
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
@@ -34,6 +35,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // 在原生消息线程更新悬浮窗尺寸，不从 Dart 手势栈同步等待新帧。
   auto const floating_controller{
       std::make_unique<WindowsFloatingController>(engine->messenger())};
+  // 保存标题栏主题，并在系统重置原生窗口装饰后恢复应用配色。
+  auto const title_bar_controller{
+      std::make_unique<WindowsTitleBarController>(engine->messenger())};
   engine->Run();
 
   // Windows 消息循环。

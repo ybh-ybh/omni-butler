@@ -71,7 +71,7 @@
 | 分类颜色选择 | Omni 菜单入口；一个底层 `PopupMenuItem` 承载自定义颜色网格，颜色格增加语义与触控区域 | 颜色名称、已选标记、键盘/触控选择、取消 | `taxonomy_manager_dialog_test.dart` | 自动化通过；人工矩阵待验 |
 | 首页待办右键/长按菜单 | 指针定位 `showMenu` + `OmniPopupMenuItem`，保留调用位置定位能力；主题统一 | 右键/长按、不重复开启、编辑/子任务/删除、菜单关闭 | `home_todo_context_menu_test.dart` | 自动化通过；人工矩阵待验 |
 | 移动新增拆分菜单 | 时间/事件等使用 `OmniSplitActionButton`；物品仍有专用新增拆分菜单，均保留按钮上方锚定/展开语义 | 点主按钮与菜单互不混淆、取消、菜单方向键、减少动效、屏边 | `timeline_android_ui_test.dart`、`events_layout_test.dart`、`inventory_layout_test.dart` | 自动化通过；人工矩阵待验 |
-| 页面顶部操作反馈/完成撤销 | `showOmniMessage`；成功/警告/错误/信息共用结构；鼠标或键盘停留暂停，辅助导航保留可执行操作 | 替换/关闭、倒计时、操作只执行一次、撤销时限、长文案换行、减少动效 | `omni_message_test.dart`、`omni_overlay_accessibility_test.dart`、业务撤销测试 | 自动化通过；人工矩阵待验 |
+| 页面顶部操作反馈/完成撤销 | `showOmniMessage`；成功/警告/错误/信息共用结构；内容相对弹窗垂直居中，撤销保持同行；鼠标或键盘停留暂停，辅助导航保留可执行操作 | 替换/关闭、倒计时、操作只执行一次、撤销时限、宽窄窗口与两倍字号对齐、长文案换行、减少动效 | `omni_message_test.dart`、`omni_overlay_accessibility_test.dart`、业务撤销测试 | 自动化通过；真实中文宽窄窗、长文案和删除提示预览通过；人工矩阵待验 |
 | 文本输入/表单校验 | `OmniTextField` / `OmniTextFormField` 保留 Flutter 文本编辑、输入法、焦点及验证能力；业务拥有校验规则 | 中文输入法组合态、复制粘贴、多行 Enter、错误/只读/禁用/提交中、焦点顺序 | `omni_form_controls_test.dart`、`omni_windows_enter_submit_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | 分段切换、统计轮播与手势 | `OmniSlidingSegmentedControl`、共享分段主题、`OmniStatisticsCarousel`；Android 页面/象限横滑继续既有手势协调 | 连续快速切换、中途反向、跟手索引、减少动效、返回 | `omni_sliding_segmented_control_test.dart`、`omni_statistics_carousel_test.dart`、`android_primary_navigation_swipe_test.dart` | 自动化通过；人工矩阵待验 |
 | 附件选图、名言 JSON 导入/导出 | `FilePicker.pickFile` / `FilePicker.saveFile` 系统窗口保留；应用内调用入口与返回反馈统一 | 原生取消、不支持文件、路径/文件错误、焦点回到应用 | `quote_library_dialog_test.dart`、`quote_json_transfer_test.dart`、Windows/Android 实机 | 自动化通过；人工矩阵待验 |
