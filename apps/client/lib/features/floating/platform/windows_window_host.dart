@@ -1285,7 +1285,7 @@ class _WindowsFloatingWindowNative {
     }
   }
 
-  /// 查找承载桌面图标的 WorkerW，找不到时回退到 Progman。
+  /// 在桌面的实际合成层中挂载卡片，兼容分层图标视图。
   win32.HWND? _findDesktopHost() {
     // Windows 桌面工作窗口类名。
     final Pointer<Utf16> workerClassName = 'WorkerW'.toNativeUtf16();
@@ -1311,7 +1311,7 @@ class _WindowsFloatingWindowNative {
           null,
         ).value;
         if (desktopViewHandle != nullptr) {
-          return workerHandle;
+          return _desktopCompositionHost(workerHandle, desktopViewHandle);
         }
         workerHandle = win32.FindWindowEx(
           null,
@@ -1325,12 +1325,37 @@ class _WindowsFloatingWindowNative {
         win32.PCWSTR(programManagerClassName),
         null,
       ).value;
-      return programManagerHandle == nullptr ? null : programManagerHandle;
+      if (programManagerHandle == nullptr) {
+        return null;
+      }
+      // 新版 Windows 11 的图标视图直接位于 Progman 内。
+      final win32.HWND desktopViewHandle = win32.FindWindowEx(
+        programManagerHandle,
+        null,
+        win32.PCWSTR(desktopViewClassName),
+        null,
+      ).value;
+      return _desktopCompositionHost(programManagerHandle, desktopViewHandle);
     } finally {
       calloc.free(workerClassName);
       calloc.free(desktopViewClassName);
       calloc.free(programManagerClassName);
     }
+  }
+
+  /// 分层图标视图会独立合成；非 layered 卡片必须进入它的子窗口树。
+  win32.HWND _desktopCompositionHost(
+    win32.HWND shellHost,
+    win32.HWND desktopView,
+  ) {
+    if (desktopView != nullptr &&
+        (win32.GetWindowLongPtr(desktopView, win32.GWL_EXSTYLE).value &
+                win32.WS_EX_LAYERED) !=
+            0) {
+      // 保留卡片自身的非 layered 渲染，避免重新引入缩放旧帧回拷。
+      return desktopView;
+    }
+    return shellHost;
   }
 
   /// 将窗口移动到显示器工作区内的逻辑坐标。

@@ -296,6 +296,8 @@ win32.HWND _findOwnWindow({
   final Pointer<Utf16> workerClass = 'WorkerW'.toNativeUtf16();
   // 桌面回退宿主类名。
   final Pointer<Utf16> progmanClass = 'Progman'.toNativeUtf16();
+  // 分层桌面图标视图也可能直接承载本进程卡片。
+  final Pointer<Utf16> desktopViewClass = 'SHELLDLL_DefView'.toNativeUtf16();
   // 进程归属检查缓冲区。
   final Pointer<Uint32> processId = calloc<Uint32>();
   try {
@@ -321,6 +323,16 @@ win32.HWND _findOwnWindow({
         ).value;
       }
       parents.add(win32.FindWindow(win32.PCWSTR(progmanClass), null).value);
+      for (final win32.HWND? host in List<win32.HWND?>.of(parents)) {
+        if (host == null || host == nullptr) continue;
+        final win32.HWND view = win32.FindWindowEx(
+          host,
+          null,
+          win32.PCWSTR(desktopViewClass),
+          null,
+        ).value;
+        if (view != nullptr) parents.add(view);
+      }
     }
     // 按各候选父级遍历，但最终仍以进程归属为准。
     for (final win32.HWND? parent in parents) {
@@ -348,6 +360,7 @@ win32.HWND _findOwnWindow({
     if (nativeTitle != null) calloc.free(nativeTitle);
     calloc.free(workerClass);
     calloc.free(progmanClass);
+    calloc.free(desktopViewClass);
     calloc.free(processId);
   }
 }

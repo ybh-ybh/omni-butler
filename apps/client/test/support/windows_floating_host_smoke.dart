@@ -49,7 +49,10 @@ Future<void> main() async {
           .setEnabledFromSettings(true);
       // 本周期创建的真实桌面卡片。
       final win32.HWND card = await _waitForCard();
-      if (cycle == 0) await _checkResizeBounds(card);
+      if (cycle == 0) {
+        _checkDesktopCompositionHost(card);
+        await _checkResizeBounds(card);
+      }
       await container
           .read(floatingWindowPreferenceProvider.notifier)
           .setEnabledFromSettings(false);
@@ -103,6 +106,42 @@ Future<void> main() async {
   } catch (error, stackTrace) {
     stderr.writeln('FAIL: $error\n$stackTrace');
     exit(1);
+  }
+}
+
+/// 分层桌面图标视图内的卡片必须与图标进入同一合成窗口树。
+void _checkDesktopCompositionHost(win32.HWND card) {
+  // 桌面视图类名，用于检查真实父级对应的合成路径。
+  final Pointer<Utf16> viewClass = 'SHELLDLL_DefView'.toNativeUtf16();
+  try {
+    // 直接父级可能是传统桌面宿主，也可能是分层图标视图。
+    final win32.HWND parent = win32.GetParent(card).value;
+    // 以图标视图为父级时，外层才是 WorkerW/Progman。
+    final win32.HWND outerHost = win32.GetParent(parent).value;
+    // 传统挂载和新版挂载都需要查询相应宿主的直接图标视图。
+    win32.HWND desktopView = win32.FindWindowEx(
+      parent,
+      null,
+      win32.PCWSTR(viewClass),
+      null,
+    ).value;
+    if (desktopView == nullptr && outerHost != nullptr) {
+      desktopView = win32.FindWindowEx(
+        outerHost,
+        null,
+        win32.PCWSTR(viewClass),
+        null,
+      ).value;
+    }
+    if (desktopView != nullptr &&
+        (win32.GetWindowLongPtr(desktopView, win32.GWL_EXSTYLE).value &
+                win32.WS_EX_LAYERED) !=
+            0 &&
+        parent != desktopView) {
+      throw StateError('非 layered 卡片仍挂在分层桌面图标视图外，可能不可见');
+    }
+  } finally {
+    calloc.free(viewClass);
   }
 }
 
@@ -276,6 +315,8 @@ win32.HWND _findOwnWindow(
   final Pointer<Utf16> workerClass = 'WorkerW'.toNativeUtf16();
   // 桌面回退窗口类名。
   final Pointer<Utf16> progmanClass = 'Progman'.toNativeUtf16();
+  // 新版 Windows 的卡片可能位于图标视图内部。
+  final Pointer<Utf16> desktopViewClass = 'SHELLDLL_DefView'.toNativeUtf16();
   try {
     // 需要搜索的原生父窗口，null 表示顶层/消息窗口。
     final List<win32.HWND?> parents = searchDesktop
@@ -299,6 +340,16 @@ win32.HWND _findOwnWindow(
         ).value;
       }
       parents.add(win32.FindWindow(win32.PCWSTR(progmanClass), null).value);
+      for (final win32.HWND? host in List<win32.HWND?>.of(parents)) {
+        if (host == null || host == nullptr) continue;
+        final win32.HWND view = win32.FindWindowEx(
+          host,
+          null,
+          win32.PCWSTR(desktopViewClass),
+          null,
+        ).value;
+        if (view != nullptr) parents.add(view);
+      }
     }
     for (final win32.HWND? parent in parents) {
       // 同父级下当前遍历到的匹配窗口。
@@ -328,5 +379,6 @@ win32.HWND _findOwnWindow(
     calloc.free(processId);
     calloc.free(workerClass);
     calloc.free(progmanClass);
+    calloc.free(desktopViewClass);
   }
 }
