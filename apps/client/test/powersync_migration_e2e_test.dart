@@ -285,7 +285,7 @@ Future<void> _expectEmptyAfterBusinessReads(OmniSyncRuntime runtime) async {
   }
   // 覆盖全部同步表，不能只断言页面当前展示的名言和分类。
   final Map<String, int> counts = (await runtime.exportSnapshot()).counts;
-  expect(counts.length, 11);
+  expect(counts.length, 12);
   expect(counts.values, everyElement(0));
   expect((await runtime.powerSync.getUploadQueueStats()).count, 0);
 }
@@ -327,6 +327,7 @@ Future<String> _image(
 Dio _api() => Dio(
   BaseOptions(
     baseUrl: '$_address/omni-butler/api/v1',
+    headers: <String, String>{'X-Omni-Sync-Schema': '2'},
     receiveTimeout: const Duration(seconds: 90),
   ),
 );
@@ -345,7 +346,7 @@ Future<String> _reset(Dio api) async {
       'syncKey': _secret,
       'migrationId': const Uuid().v4(),
       'expectedOwnerId': preview.data!['ownerId'],
-      'snapshotVersion': 1,
+      'snapshotVersion': 2,
       'operations': <Object>[],
     },
   );
@@ -818,7 +819,7 @@ void main() {
         expect(transportC.uploads, uploadsBeforeEmpty);
         final Map<String, dynamic> emptyRemote = await emptyRestarted.auth
             .previewConnection(apiBaseUrl: _address, syncKey: _secret);
-        expect((emptyRemote['counts'] as Map).length, 11);
+        expect((emptyRemote['counts'] as Map).length, 12);
         expect((emptyRemote['counts'] as Map).values, everyElement(0));
         expect(
           (await emptyRestarted.runtime.exportSnapshot()).counts.values,

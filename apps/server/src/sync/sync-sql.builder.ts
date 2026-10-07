@@ -14,6 +14,8 @@ export const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
   todo_items: new Set([
     'parent_id',
     'title',
+    'task_type',
+    'progress_unit',
     'description',
     'scheduled_date',
     'due_at',
@@ -24,6 +26,16 @@ export const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
     'repeat_rule',
     'repeat_series_id',
     'sort_order',
+    'created_at',
+    'updated_at',
+    'deleted_at',
+  ]),
+  todo_progress_steps: new Set([
+    'todo_id',
+    'name',
+    'sort_order',
+    'is_completed',
+    'completed_at',
     'created_at',
     'updated_at',
     'deleted_at',
@@ -174,7 +186,21 @@ export class SyncSqlBuilder {
       };
     }
     // 客户端提交的数据。
-    const data = operation.data ?? {};
+    const data = { ...operation.data };
+    // 对新类型字段给出明确的客户端错误，原始负载保持幂等摘要不变。
+    if (operation.table === 'todo_items') {
+      if (
+        data.task_type !== undefined &&
+        data.task_type !== 'normal' &&
+        data.task_type !== 'progress'
+      ) {
+        throw new BadRequestException('不支持的待办任务类型');
+      }
+      this.normalizeOptionalText(data, 'progress_unit', 10);
+    }
+    if (operation.table === 'todo_progress_steps') {
+      this.normalizeOptionalText(data, 'name', 200);
+    }
     // 按名称排序的有效列，保证相同输入生成稳定 SQL。
     const columns = Object.keys(data).sort();
     if (columns.length === 0) {
@@ -212,5 +238,22 @@ export class SyncSqlBuilder {
       sql: `INSERT INTO "${operation.table}" (${insertColumns.map((column) => `"${column}"`).join(', ')}) VALUES (${placeholders}) ON CONFLICT ("id") DO NOTHING`,
       values: [operation.id, userId, ...columns.map((column) => data[column])],
     };
+  }
+
+  /// 清理可选名称前后空白，并以 null 表示空名称。
+  private normalizeOptionalText(
+    data: Record<string, unknown>,
+    column: string,
+    maximum: number,
+  ): void {
+    // PATCH 不携带字段时必须保留服务端当前值。
+    const value = data[column];
+    if (value === undefined || value === null) return;
+    if (typeof value !== 'string' || [...value.trim()].length > maximum) {
+      throw new BadRequestException(
+        `${column} 必须为空或不超过 ${maximum} 个字符的文字`,
+      );
+    }
+    data[column] = value.trim() || null;
   }
 }

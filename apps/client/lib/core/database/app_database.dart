@@ -28,6 +28,13 @@ class TodoItems extends Table {
   /// 待办描述。
   TextColumn get description => text().nullable()();
 
+  /// 完成方式；旧任务继续使用普通勾选。
+  TextColumn get taskType =>
+      text().withDefault(const Constant<String>('normal'))();
+
+  /// 进度单位；空值在界面显示默认步骤。
+  TextColumn get progressUnit => text().nullable()();
+
   /// 可选父任务标识；为空表示主任务。
   TextColumn get parentId => text().nullable()();
 
@@ -71,6 +78,42 @@ class TodoItems extends Table {
   DateTimeColumn get updatedAt => dateTime()();
 
   /// 软删除时间。
+  DateTimeColumn get deletedAt => dateTime().nullable()();
+
+  /// 使用稳定标识作为主键。
+  @override
+  Set<Column<Object>> get primaryKey => <Column<Object>>{id};
+}
+
+/// 进度任务中的独立进度项，不具有子任务语义。
+@DataClassName('TodoProgressStepRecord')
+class TodoProgressSteps extends Table {
+  /// 客户端生成的稳定标识。
+  TextColumn get id => text()();
+
+  /// 所属进度任务；本地兼容下行乱序，不施加即时外键。
+  TextColumn get todoId => text()();
+
+  /// 可选名称，留空时按展示顺序生成占位名称。
+  TextColumn get name => text().nullable()();
+
+  /// 进度项的用户顺序。
+  IntColumn get sortOrder => integer().withDefault(const Constant<int>(0))();
+
+  /// 当前进度项是否完成。
+  BoolColumn get isCompleted =>
+      boolean().withDefault(const Constant<bool>(false))();
+
+  /// 当前进度项完成时间。
+  DateTimeColumn get completedAt => dateTime().nullable()();
+
+  /// 创建时间。
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// 最近更新时间，供撤销比较操作后的状态。
+  DateTimeColumn get updatedAt => dateTime()();
+
+  /// 软删除时间，随所属任务保留。
   DateTimeColumn get deletedAt => dateTime().nullable()();
 
   /// 使用稳定标识作为主键。
@@ -643,6 +686,7 @@ class MembershipPayments extends Table {
 @DriftDatabase(
   tables: <Type>[
     TodoItems,
+    TodoProgressSteps,
     Quotes,
     DailyQuoteSelections,
     BannerSettings,
@@ -691,7 +735,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 14;
+  int get schemaVersion => 15;
 
   /// 创建数据库并从旧版本安全升级。
   @override
@@ -842,6 +886,28 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         // 每日选择身份永久保留，删除名言只清空可选引用。
         await migrator.alterTable(TableMigration(dailyQuoteSelections));
       }
+      if (from < 15) {
+        // 更早的表重建可能已带入新增列，升级须兼容这类路径。
+        final List<QueryRow> columns = await customSelect(
+          "PRAGMA table_info('todo_items')",
+        ).get();
+        if (!columns.any(
+          (QueryRow row) => row.read<String>('name') == 'task_type',
+        )) {
+          await migrator.addColumn(todoItems, todoItems.taskType);
+        }
+        if (!columns.any(
+          (QueryRow row) => row.read<String>('name') == 'progress_unit',
+        )) {
+          await migrator.addColumn(todoItems, todoItems.progressUnit);
+        }
+        // 测试降版和旧版重建路径允许进度表已经存在。
+        final QueryRow? steps = await customSelect(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'todo_progress_steps'",
+        ).getSingleOrNull();
+        if (steps == null) await migrator.createTable(todoProgressSteps);
+        await _createTodoIndexes();
+      }
     },
   );
 
@@ -861,6 +927,15 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
       'CREATE INDEX IF NOT EXISTS todo_items_completed_at_idx '
       'ON todo_items(is_completed, completed_at)',
     );
+    // 早期升级会在进度表创建前调用此方法。
+    final QueryRow? steps = await customSelect(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'todo_progress_steps'",
+    ).getSingleOrNull();
+    if (steps != null) {
+      await customStatement(
+        'CREATE INDEX IF NOT EXISTS todo_progress_steps_todo_sort_idx ON todo_progress_steps(todo_id, sort_order, id)',
+      );
+    }
   }
 
   /// 将待办中的真实时间点转换为当前设备本地时间，日期字段保持原值。
@@ -1017,6 +1092,9 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
 
   /// 永久删除一条待办。
   Future<void> permanentlyDeleteTodo(String id) async {
+    await (delete(
+      todoProgressSteps,
+    )..where((TodoProgressSteps table) => table.todoId.equals(id))).go();
     await (delete(
       todoItems,
     )..where((TodoItems table) => table.id.equals(id))).go();

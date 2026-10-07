@@ -36,8 +36,8 @@ RSA 的保留理由是独立服务验签，不是需要一套账号密码体系�
 
 客户端的本机快照是用户明确选择的迁移来源；普通连接仍执行既有首次 PUT 合并规则，显式覆盖服务器使用独立协议：
 
-- `POST /sync/connection-preview` 使用 `syncKey` 返回 `protocolVersion=1`、`snapshotVersion=1`、`ownerId`、11 张表的 `counts`、回收站 `deletedCount` 及大小限制，不创建设备会话。
-- `POST /sync/migrations` 接收 `syncKey`、持久 `migrationId`、预检 `expectedOwnerId`、`snapshotVersion=1` 与完整 `operations`。所有行必须为 PUT，包含白名单全部同步列（可空列显式传 null）；零行快照合法。未知列、重复同表身份和快照外的外键引用均拒绝。
+- `POST /sync/connection-preview` 使用 `syncKey` 返回 `protocolVersion=1`、`snapshotVersion=2`、`syncSchemaVersion=2`、`ownerId`、12 张表的 `counts`、回收站 `deletedCount` 及大小限制，不创建设备会话。步骤独立删除不计入回收站数量。
+- `POST /sync/migrations` 接收 `syncKey`、持久 `migrationId`、预检 `expectedOwnerId`、`snapshotVersion=2` 与完整 `operations`。所有行必须为 PUT，包含白名单全部同步列（可空列显式传 null）；零行快照合法。未知列、重复同表身份和快照外的外键引用均拒绝。客户端先将旧 v1 快照补齐普通任务类型、空单位和空步骤表，再转换为 v2；已经提交的旧迁移仍通过 status 查询原回执，不改写旧摘要。
 - 服务端在与初始化和创建连接共用的全局事务锁内先查询迁移回执，再锁定 expected owner，与普通上传串行。删除 owner 级联清理业务数据、设备会话、普通同步回执、墓碑及日签别名；新 owner 下导入快照并执行既有派生协调，关系最终验证通过后提交独立迁移回执。
 - `sync_migration_receipts` 不关联 owner、不进入 PowerSync publication。原请求摘要包含 expected owner、快照版本及按现有 canonicalize 规范化的操作；同迁移 ID 同摘要重试返回原结果，不再覆盖成功后的新编辑。不同内容拒绝。已被后续重建替代的回执返回 `superseded`。
 - `POST /sync/migrations/status` 使用同步密钥和迁移 ID 查询 `committed`、`superseded` 或 `notFound`；notFound 只说明当前不存在回执，不能证明网络中的原请求永远不会提交。

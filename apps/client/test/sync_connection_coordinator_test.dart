@@ -184,7 +184,8 @@ class _Fixture {
       case '/sync/connection-preview':
         return <String, dynamic>{
           'protocolVersion': 1,
-          'snapshotVersion': 1,
+          'snapshotVersion': 2,
+          'syncSchemaVersion': 2,
           'ownerId': remoteOwner,
           'counts': <String, int>{'todo_items': 7},
           'deletedCount': 2,
@@ -200,7 +201,7 @@ class _Fixture {
           'expiresIn': 900,
         };
       case '/auth/session':
-        return <String, dynamic>{'sub': remoteOwner};
+        return <String, dynamic>{'sub': remoteOwner, 'syncSchemaVersion': 2};
       case '/auth/disconnect':
         return <String, dynamic>{};
       default:

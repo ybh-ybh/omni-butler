@@ -68,6 +68,25 @@ class OmniSyncRuntime {
   /// 断开或冻结立即递增，阻止已在等待中的旧连接重新启动。
   int _connectionGeneration = 0;
 
+  /// 当前连接被结构版本错误阻止的原因，断开后仍保留。
+  SyncSchemaMismatch? _schemaError;
+
+  /// 结构错误通知复用现有同步控制器的错误展示。
+  final StreamController<SyncSchemaMismatch> _schemaErrors =
+      StreamController<SyncSchemaMismatch>.broadcast();
+
+  /// 脱离 SDK 回调调用栈后停止连接，避免等待自身上传回调。
+  Future<void>? _schemaStop;
+
+  /// 已开始关闭时忽略迟到的连接结果。
+  bool _closed = false;
+
+  /// 当前需要用户升级后重连的错误。
+  SyncSchemaMismatch? get schemaError => _schemaError;
+
+  /// 运行期间的结构版本错误流。
+  Stream<SyncSchemaMismatch> get schemaErrors => _schemaErrors.stream;
+
   /// 创建已初始化的同步运行时。
   OmniSyncRuntime._({
     required this.powerSync,
@@ -133,6 +152,7 @@ class OmniSyncRuntime {
 
   /// 为指定服务端身份启动后台同步；同一身份重复调用保持幂等。
   Future<void> connect(String userId, {SyncSession? session}) async {
+    if (_schemaError != null) throw _schemaError!;
     // 将连接准入固定到当前运行时代次，退休引用不能重新连接。
     final int generation = _connectionGeneration;
     _assertConnectionCurrent(generation);
@@ -156,16 +176,39 @@ class OmniSyncRuntime {
     }
     _assertConnectionCurrent(generation);
     await powerSync.connect(
-      connector: OmniPowerSyncConnector(_auth, session: session),
+      connector: OmniPowerSyncConnector(
+        _auth,
+        session: session,
+        onSchemaMismatch: (SyncSchemaMismatch error) =>
+            _stopForSchemaMismatch(error, generation),
+      ),
       // 已固定 PowerSync 2.4 与支持请求检查点的服务端部署版本。
       // ignore: experimental_member_use
       options: SyncOptions(checkpointMode: CheckpointMode.requests()),
     );
+    if (_schemaError != null) throw _schemaError!;
     if (generation != _connectionGeneration || writesFrozen) {
       await powerSync.disconnect();
       throw const SyncWritesFrozen();
     }
     _connectedUserId = userId;
+    if (_schemaError != null) throw _schemaError!;
+  }
+
+  /// 永久停止本次运行时的错误连接，不清数据、凭证或队列。
+  void _stopForSchemaMismatch(SyncSchemaMismatch error, int generation) {
+    if (_closed ||
+        generation != _connectionGeneration ||
+        _schemaError != null) {
+      return;
+    }
+    _schemaError = error;
+    _schemaErrors.add(error);
+    _schemaStop = Future<void>(() async {
+      if (!_closed && generation == _connectionGeneration) await disconnect();
+    });
+    // 原因已经记录；停止过程失败仍保持升级门禁，不产生未处理异步错误。
+    unawaited(_schemaStop!.catchError((Object _) {}));
   }
 
   /// 每个异步边界后重新核对连接是否仍属于活动运行时。
@@ -192,6 +235,9 @@ class OmniSyncRuntime {
 
   /// 关闭 Drift 与 PowerSync 持有的数据库资源。
   Future<void> close() async {
+    _closed = true;
+    await _schemaStop?.catchError((Object _) {});
+    await _schemaErrors.close();
     await database.close();
     await _driftConnection.close();
     await powerSync.close();
@@ -450,9 +496,11 @@ class OmniSyncRuntime {
 
   /// 等待上传全部获确认，再请求服务器检查点并等待其完整落入候选库。
   Future<void> catchUp({Duration timeout = const Duration(minutes: 3)}) async {
+    if (_schemaError != null) throw _schemaError!;
     // 一个截止时间覆盖上传与下行，避免每阶段各自重置等待上限。
     final DateTime deadline = DateTime.now().add(timeout);
     while (await powerSync.getNextCrudTransaction() != null) {
+      if (_schemaError != null) throw _schemaError!;
       if (DateTime.now().isAfter(deadline)) {
         throw const ApiFailure('等待本机快照上传超时，请重试迁移');
       }

@@ -60,6 +60,8 @@ final Schema omniSyncSchema = Schema(
   ],
   rawTables: <RawTable>[
     _rawTable('todo_items', <String>[
+      'task_type',
+      'progress_unit',
       'parent_id',
       'title',
       'description',
@@ -72,6 +74,16 @@ final Schema omniSyncSchema = Schema(
       'repeat_rule',
       'repeat_series_id',
       'sort_order',
+      'created_at',
+      'updated_at',
+      'deleted_at',
+    ]),
+    _rawTable('todo_progress_steps', <String>[
+      'todo_id',
+      'name',
+      'sort_order',
+      'is_completed',
+      'completed_at',
       'created_at',
       'updated_at',
       'deleted_at',

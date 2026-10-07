@@ -12,6 +12,8 @@ import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/features/todos/presentation/todo_completion_checkbox.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/features/todos/presentation/todo_priority_quadrant_style.dart';
+import 'package:omni_butler/features/todos/presentation/todo_progress_panel.dart';
+import 'package:omni_butler/features/todos/presentation/todo_progress_widgets.dart';
 import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
@@ -888,17 +890,29 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       changedIds = <String>[todo.id];
     }
     setState(() => _completingTodoIds.addAll(changedIds));
-    await Future<void>.delayed(
-      disableAnimations
-          ? Duration.zero
-          : TodoCompletionCheckbox.animationDuration + OmniMotion.panel,
-    );
-    await repository.setCompleted(todo.id, true);
-    if (!mounted) {
-      return;
+    try {
+      await Future<void>.delayed(
+        disableAnimations
+            ? Duration.zero
+            : TodoCompletionCheckbox.animationDuration + OmniMotion.panel,
+      );
+      await repository.setCompleted(todo.id, true);
+      if (mounted) {
+        _showUndoPopup(todo, changedIds);
+      }
+    } catch (error) {
+      if (mounted) {
+        showOmniMessage(
+          context,
+          message: error is FormatException ? error.message : '完成失败，请重试',
+          tone: OmniMessageTone.error,
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _completingTodoIds.removeAll(changedIds));
+      }
     }
-    setState(() => _completingTodoIds.removeAll(changedIds));
-    _showUndoPopup(todo, changedIds);
   }
 
   /// 在根浮层中显示完成操作的撤销消息。
@@ -1023,7 +1037,9 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       builder: (BuildContext context) => AlertDialog(
         title: const Text('移入回收站？'),
         content: Text(
-          todo.parentId == null
+          todo.taskType == 'progress'
+              ? '“${todo.title}”及其进度步骤会一起进入回收站。'
+              : todo.parentId == null
               ? '“${todo.title}”及其子任务会一起进入回收站。'
               : '“${todo.title}”会进入回收站。',
         ),
@@ -1823,6 +1839,31 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
     final Widget? treeControl = showsTreeControl
         ? _buildTreeControl(tree)
         : null;
+    if (tree.root.taskType == 'progress') {
+      return IgnorePointer(
+        key: ValueKey<String>('todo-row-${tree.root.id}'),
+        ignoring: widget.completingTodoIds.contains(tree.root.id),
+        child: AnimatedOpacity(
+          duration: OmniMotion.duration(context, OmniMotion.panel),
+          opacity: widget.completingTodoIds.contains(tree.root.id) ? 0.35 : 1,
+          child: Row(
+            children: <Widget>[
+              ?treeControl,
+              Expanded(
+                child: TodoProgressTaskTile(
+                  todo: tree.root,
+                  onEdit: () => widget.onEdit(tree.root),
+                  onMove: () => widget.onMove(tree.root),
+                  onDelete: () => widget.onDelete(tree.root),
+                  onConfirm: () =>
+                      unawaited(widget.onCompletedChanged(tree.root, true)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     // 当前平台下复选框的完整点击区域尺寸。
     final Size checkboxTapSize = TodoCompletionCheckbox.tapSizeOf(context);
     // 父任务复选框中心轴，同时计入展开或拖拽控制宽度。
@@ -2542,6 +2583,27 @@ class _CompletedTodoHistoryRow extends StatelessWidget {
     final Color accent = quadrant.color(OmniColors.of(context));
     // 当前是否存在截止或非时间状态信息。
     final bool hasDetails = _TodoDetails.hasContent(entry.todo);
+    if (entry.todo.taskType == 'progress') {
+      return OmniListRow(
+        key: ValueKey<String>('todo-progress-history-${entry.todo.id}'),
+        leading: OmniIconButton(
+          tooltip: '查看进度',
+          icon: Icon(Icons.segment_rounded, color: accent),
+          onPressed: () => TodoProgressPanel.show(context, record: entry.todo),
+        ),
+        title: _TodoInlineTitle(todo: entry.todo, completed: true),
+        subtitle: TodoProgressSummaryView(
+          todo: entry.todo,
+          onTap: () => TodoProgressPanel.show(context, record: entry.todo),
+        ),
+        trailing: OmniIconButton(
+          tooltip: '重新打开任务',
+          icon: const Icon(Icons.undo_rounded),
+          onPressed: () => onReopen(entry.todo),
+        ),
+        onTap: () => TodoProgressPanel.show(context, record: entry.todo),
+      );
+    }
     return OmniListRow(
       padding: const EdgeInsets.symmetric(
         horizontal: OmniSpacing.sm,

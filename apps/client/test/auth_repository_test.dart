@@ -36,7 +36,10 @@ Dio _client(
                 Response<Map<String, dynamic>>(
                   requestOptions: options,
                   statusCode: 200,
-                  data: await respond(options),
+                  data: <String, dynamic>{
+                    'syncSchemaVersion': 2,
+                    ...await respond(options),
+                  },
                 ),
               );
             } on DioException catch (error) {
@@ -65,6 +68,102 @@ void main() {
     FlutterSecureStorage.setMockInitialValues(_savedSession());
   });
 
+  test('旧服务器缺少结构版本时拒绝预检、会话恢复和凭证且保留本地会话', () async {
+    // 缓存会话在版本不兼容时不可清除。
+    final String original = (await storage.read(key: 'sync.device_session'))!;
+    // 确认所有现有接口都附带新的版本头。
+    final List<RequestOptions> requests = <RequestOptions>[];
+    final AuthRepository repository = AuthRepository(
+      storage,
+      clientFactory: (String url) =>
+          _client(url, (RequestOptions request) async {
+            requests.add(request);
+            if (request.path == '/auth/refresh') {
+              return <String, dynamic>{
+                'accessToken': 'refreshed',
+                'refreshToken': 'stable-device-secret',
+                'expiresIn': 900,
+              };
+            }
+            return <String, dynamic>{
+              'syncSchemaVersion': null,
+              'protocolVersion': 1,
+              'snapshotVersion': 1,
+              'sub': 'owner-id',
+            };
+          }),
+    );
+    await expectLater(
+      repository.previewConnection(
+        apiBaseUrl: 'https://sync.example.com',
+        syncKey: 'test-sync-secret-123',
+      ),
+      throwsA(isA<SyncSchemaMismatch>()),
+    );
+    await expectLater(
+      repository.restoreSession(),
+      throwsA(isA<SyncSchemaMismatch>()),
+    );
+    await expectLater(
+      repository.fetchPowerSyncCredential(),
+      throwsA(isA<SyncSchemaMismatch>()),
+    );
+    expect(await storage.read(key: 'sync.device_session'), isNotNull);
+    expect(
+      jsonDecode(original)['refreshToken'],
+      jsonDecode(
+        (await storage.read(key: 'sync.device_session'))!,
+      )['refreshToken'],
+    );
+    expect(
+      requests.every(
+        (RequestOptions request) =>
+            request.headers['X-Omni-Sync-Schema'] == '2',
+      ),
+      isTrue,
+    );
+    expect(
+      requests.where(
+        (RequestOptions request) => request.path == '/sync/operations',
+      ),
+      isEmpty,
+    );
+  });
+
+  test('上传握手代次内复用，换会话后重新检查结构', () async {
+    // 成功握手只读现有会话接口。
+    int sessions = 0;
+    final AuthRepository repository = AuthRepository(
+      storage,
+      clientFactory: (String url) =>
+          _client(url, (RequestOptions request) async {
+            if (request.path == '/auth/refresh') {
+              return <String, dynamic>{
+                'accessToken': 'refreshed',
+                'refreshToken': 'stable-device-secret',
+                'expiresIn': 900,
+              };
+            }
+            sessions++;
+            return <String, dynamic>{'sub': 'owner-id'};
+          }),
+    );
+    await repository.ensureSyncSchemaForGeneration(
+      repository.sessionGeneration,
+    );
+    await repository.ensureSyncSchemaForGeneration(
+      repository.sessionGeneration,
+    );
+    expect(sessions, 1);
+    // 清除会话会使旧上传作用域失效，不能沿用已验证版本。
+    final int oldGeneration = repository.sessionGeneration;
+    await repository.clearSession();
+    await expectLater(
+      repository.ensureSyncSchemaForGeneration(oldGeneration),
+      throwsA(isA<ApiFailure>()),
+    );
+  });
+
   test('候选连接与预检不改变活动会话，候选断开只删除独立键', () async {
     // 原活动会话必须完整保留。
     final String original = (await storage.read(key: 'sync.device_session'))!;
@@ -79,7 +178,7 @@ void main() {
             if (request.path == '/sync/connection-preview') {
               return <String, dynamic>{
                 'protocolVersion': 1,
-                'snapshotVersion': 1,
+                'snapshotVersion': 2,
                 'ownerId': 'owner-b',
               };
             }

@@ -26,6 +26,10 @@ NestJS 11 + Prisma 7 + PowerSync 的个人自托管同步 API。服务不提供�
 
 `POST /omni-butler/api/v1/sync/operations` 接收 `{clientId, transactionId, operations}`。事务重试必须保留身份和内容；每个本地事务整体提交，最大 100000 条、32 MB。PUT 只创建，PATCH 修改已有记录，DELETE 保留永久删除墓碑。缺失记录 PATCH 返回 409，不能假确认成功。
 
+当前同步结构为 `syncSchemaVersion=2`。增量上传、全量替换和 PowerSync 凭证接口均要求 `X-Omni-Sync-Schema: 2`，版本不兼容返回 `409 SYNC_SCHEMA_MISMATCH`；客户端必须保留本地数据及待上传事务并停止同步。预检、连接、刷新、会话与凭证响应包含当前版本。发布时先升级数据库、API 与 PowerSync 规则，再升级各客户端；这次增量迁移保留已有数据，无需重置数据库。
+
+进度任务使用 `todo_items.task_type=progress` 和独立 `todo_progress_steps` 表，步骤只能属于同 owner 的进度根任务。满进度不自动完成；事务最后仅撤销不再满足满进度条件的已确认任务。父任务软删除保留步骤自身删除标记，恢复不会复活独立删除的步骤；永久删除级联步骤并记录墓碑。快照协议为 v2，完整导入步骤之后再协调，保留合法的手动完成确认。
+
 - `npm test`：单元测试，未配置隔离数据库时集成套件跳过。
 - `npm run test:integration`：先将 `OMNI_TEST_DATABASE_URL` 指向独立空库（库名以 `_test` 或 `_integration` 结尾），执行真实 PostgreSQL 回归；测试会创建并清理该库的测试表。
 - Flutter 真实双设备测试见 `apps/client/test/powersync_server_e2e_test.dart`。

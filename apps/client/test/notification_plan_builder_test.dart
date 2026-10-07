@@ -170,6 +170,7 @@ TodoRecord _todo(String id, DateTime reminderAt, {bool completed = false}) {
   return TodoRecord(
     id: id,
     title: '测试待办 $id',
+    taskType: 'normal',
     scheduledDate: DateTime(2026, 9, 4),
     priorityQuadrant: 1,
     isCompleted: completed,

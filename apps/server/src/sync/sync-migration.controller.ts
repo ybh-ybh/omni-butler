@@ -1,10 +1,11 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, Headers, HttpCode, Post } from '@nestjs/common';
 import {
   ConnectionPreviewDto,
   MigrationStatusDto,
   SyncMigrationDto,
 } from './dto/sync-migration.dto';
 import { SyncMigrationService } from './sync-migration.service';
+import { requireSyncSchemaVersion } from './sync-schema';
 
 /// 部署密钥授权的连接预检和快照替换入口。
 @Controller('sync')
@@ -26,7 +27,9 @@ export class SyncMigrationController {
   @HttpCode(200)
   replace(
     @Body() input: SyncMigrationDto,
+    @Headers('x-omni-sync-schema') version?: string,
   ): ReturnType<SyncMigrationService['replace']> {
+    requireSyncSchemaVersion(version);
     return this.migrations.replace(input);
   }
 

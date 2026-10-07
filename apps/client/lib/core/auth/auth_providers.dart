@@ -71,4 +71,8 @@ class AuthController extends AsyncNotifier<SyncSession?> {
 final AsyncNotifierProvider<AuthController, SyncSession?>
 authControllerProvider = AsyncNotifierProvider<AuthController, SyncSession?>(
   AuthController.new,
+  // 旧服务器需要升级后显式重连，不能在启动阶段持续重试。
+  retry: (int count, Object error) => error is SyncSchemaMismatch
+      ? null
+      : ProviderContainer.defaultRetry(count, error),
 );

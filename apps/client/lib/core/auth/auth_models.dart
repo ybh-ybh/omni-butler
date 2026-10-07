@@ -83,3 +83,9 @@ class ApiFailure implements Exception {
   @override
   String toString() => message;
 }
+
+/// 不兼容同步结构时保留本地会话和队列，等待用户升级后重连。
+class SyncSchemaMismatch extends ApiFailure {
+  /// 创建明确的结构版本错误。
+  const SyncSchemaMismatch() : super('同步数据结构版本不兼容，请升级客户端和服务器后重新连接');
+}

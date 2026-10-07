@@ -3,6 +3,53 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:uuid/uuid.dart';
 
+/// 待办完成方式。
+enum TodoTaskType {
+  /// 普通勾选任务。
+  normal,
+
+  /// 逐项记录进度并手动确认完成。
+  progress,
+}
+
+/// 结构编辑中的进度项；列表位置决定顺序。
+class TodoProgressStepDraft {
+  /// 原有进度项标识；空值表示新增。
+  final String? id;
+
+  /// 可选进度项名称。
+  final String? name;
+
+  /// 创建进度项草稿。
+  const TodoProgressStepDraft({this.id, this.name});
+}
+
+/// 一次进度操作的撤销凭据，仅恢复未被后续操作改变的整批项目。
+class TodoProgressChange {
+  /// 所属任务标识。
+  final String todoId;
+
+  /// 本次实际改变前的项目快照。
+  final List<TodoProgressStepRecord> steps;
+
+  /// 本次写入时间。
+  final DateTime changedAt;
+
+  /// 本次目标完成状态。
+  final bool completed;
+
+  /// 创建只读撤销凭据。
+  TodoProgressChange({
+    required this.todoId,
+    required List<TodoProgressStepRecord> steps,
+    required this.changedAt,
+    required this.completed,
+  }) : steps = List<TodoProgressStepRecord>.unmodifiable(steps);
+
+  /// 本次实际改变的进度项数。
+  int get changedCount => steps.length;
+}
+
 /// 待办重复规则。
 enum TodoRepeatRule {
   /// 不重复。
@@ -38,6 +85,18 @@ class TodoDraft {
   /// 待办描述。
   final String? description;
 
+  /// 待办完成方式；创建后不支持转换类型。
+  final TodoTaskType taskType;
+
+  /// 可选进度单位。
+  final String? progressUnit;
+
+  /// 完整进度结构；编辑时空值表示保留原结构。
+  final List<TodoProgressStepDraft>? progressSteps;
+
+  /// 打开结构编辑时的原有名称和顺序，防止覆盖期间新增或改名的项目。
+  final List<TodoProgressStepDraft>? progressStepsBaseline;
+
   /// 可选父任务标识；为空表示主任务。
   final String? parentId;
 
@@ -61,6 +120,10 @@ class TodoDraft {
     this.id,
     required this.title,
     this.description,
+    this.taskType = TodoTaskType.normal,
+    this.progressUnit,
+    this.progressSteps,
+    this.progressStepsBaseline,
     this.parentId,
     required this.scheduledDate,
     this.dueAt,
@@ -109,6 +172,9 @@ class TodoHistoryEntry {
 
 /// 待办本地优先仓储。
 class TodoRepository {
+  /// 创建及本地结构编辑时允许的进度项上限。
+  static const int maxProgressSteps = 1000;
+
   /// 同级任务排序使用的默认间隔。
   static const int _sortOrderStep = 1024;
 
@@ -120,6 +186,42 @@ class TodoRepository {
 
   /// 创建待办仓储。
   TodoRepository(this._database, {this._uuid = const Uuid()});
+
+  /// 监听指定未删除任务，供编辑侧栏追踪同步更新。
+  Stream<TodoRecord?> watchById(String todoId) =>
+      (_database.select(_database.todoItems)..where(
+            (TodoItems table) =>
+                table.id.equals(todoId) & table.deletedAt.isNull(),
+          ))
+          .watchSingleOrNull();
+
+  /// 监听有效进度项；所属任务删除后返回空列表。
+  Stream<List<TodoProgressStepRecord>> watchProgressSteps(String todoId) {
+    // 同时订阅父表与步骤表，避免父项删除后的残留展示。
+    final query =
+        _database.select(_database.todoProgressSteps).join(<Join>[
+            innerJoin(
+              _database.todoItems,
+              _database.todoItems.id.equalsExp(
+                _database.todoProgressSteps.todoId,
+              ),
+            ),
+          ])
+          ..where(
+            _database.todoProgressSteps.todoId.equals(todoId) &
+                _database.todoProgressSteps.deletedAt.isNull() &
+                _database.todoItems.deletedAt.isNull(),
+          )
+          ..orderBy(<OrderingTerm>[
+            OrderingTerm.asc(_database.todoProgressSteps.sortOrder),
+            OrderingTerm.asc(_database.todoProgressSteps.id),
+          ]);
+    return query.watch().map(
+      (List<TypedResult> rows) => rows
+          .map((TypedResult row) => row.readTable(_database.todoProgressSteps))
+          .toList(growable: false),
+    );
+  }
 
   /// 监听指定自然日的有效待办。
   Stream<List<TodoRecord>> watchForDay(DateTime day) {
@@ -184,7 +286,10 @@ class TodoRepository {
   Future<void> save(
     TodoDraft draft, {
     TodoSeriesScope scope = TodoSeriesScope.single,
-  }) async {
+  }) => _database.transaction(() => _save(draft, scope: scope));
+
+  /// 在单一事务内保存任务与进度结构。
+  Future<void> _save(TodoDraft draft, {required TodoSeriesScope scope}) async {
     // 清理后的标题。
     final String normalizedTitle = draft.title.trim();
     if (normalizedTitle.isEmpty) {
@@ -202,6 +307,29 @@ class TodoRepository {
     final TodoRecord? existingRecord = existingId == null
         ? null
         : await _todoById(existingId, includeDeleted: true);
+    if (existingId != null &&
+        (existingRecord == null || existingRecord.deletedAt != null)) {
+      throw const FormatException('任务不存在或已被删除');
+    }
+    if (existingRecord != null &&
+        existingRecord.taskType != draft.taskType.name) {
+      throw const FormatException('创建后不能转换任务类型');
+    }
+    // 已规范化的可选单位。
+    final String? progressUnit = _cleanOptional(draft.progressUnit);
+    if ((progressUnit?.length ?? 0) > 10) {
+      throw const FormatException('进度单位不能超过 10 个字符');
+    }
+    if (draft.taskType == TodoTaskType.progress &&
+        (draft.parentId != null ||
+            existingRecord?.parentId != null ||
+            draft.repeatRule != TodoRepeatRule.none)) {
+      throw const FormatException('进度任务只能独立创建，不能使用子任务或重复规则');
+    }
+    if (draft.taskType == TodoTaskType.normal &&
+        (draft.progressSteps != null || progressUnit != null)) {
+      throw const FormatException('普通任务不能包含进度项');
+    }
     // 实际父任务标识；普通编辑不会意外提升子任务。
     final String? effectiveParentId =
         draft.parentId ?? existingRecord?.parentId;
@@ -220,6 +348,9 @@ class TodoRepository {
     if (parent?.parentId != null) {
       throw const FormatException('当前版本只支持主任务和一级子任务');
     }
+    if (parent?.taskType == TodoTaskType.progress.name) {
+      throw const FormatException('进度任务不能添加子任务');
+    }
     // 规范化后的重复规则。
     final String? repeatRule = parent != null
         ? null
@@ -234,6 +365,8 @@ class TodoRepository {
       parent?.scheduledDate ?? draft.scheduledDate,
     );
     if (existingId == null) {
+      // 同一事务内创建任务和初始进度项。
+      final String newId = _uuid.v7();
       // 重复系列标识。
       final String? seriesId = parent?.repeatSeriesId != null
           ? _uuid.v7()
@@ -247,9 +380,11 @@ class TodoRepository {
       );
       // 新增待办数据。
       final TodoItemsCompanion companion = TodoItemsCompanion.insert(
-        id: _uuid.v7(),
+        id: newId,
         title: normalizedTitle,
         description: Value<String?>(_cleanOptional(draft.description)),
+        taskType: Value<String>(draft.taskType.name),
+        progressUnit: Value<String?>(progressUnit),
         parentId: Value<String?>(parent?.id),
         scheduledDate: effectiveScheduledDate,
         dueAt: Value<DateTime?>(draft.dueAt),
@@ -262,6 +397,14 @@ class TodoRepository {
         updatedAt: now,
       );
       await _database.createTodo(companion);
+      if (draft.taskType == TodoTaskType.progress) {
+        await _saveProgressStructure(
+          newId,
+          draft.progressSteps ?? const <TodoProgressStepDraft>[],
+          now,
+          isNew: true,
+        );
+      }
       return;
     }
 
@@ -318,6 +461,7 @@ class TodoRepository {
     final TodoItemsCompanion companion = TodoItemsCompanion(
       title: Value<String>(normalizedTitle),
       description: Value<String?>(_cleanOptional(draft.description)),
+      progressUnit: Value<String?>(progressUnit),
       parentId: Value<String?>(parent?.id),
       scheduledDate: Value<DateTime>(effectiveScheduledDate),
       dueAt: Value<DateTime?>(draft.dueAt),
@@ -329,6 +473,15 @@ class TodoRepository {
     );
     await _database.transaction(() async {
       await _database.updateTodo(existingId, companion);
+      if (draft.taskType == TodoTaskType.progress &&
+          draft.progressSteps != null) {
+        await _saveProgressStructure(
+          existingId,
+          draft.progressSteps!,
+          now,
+          baseline: draft.progressStepsBaseline,
+        );
+      }
       if (existingRecord?.parentId == null) {
         await _cascadeChildrenContext(
           existingId,
@@ -342,8 +495,27 @@ class TodoRepository {
 
   /// 切换待办完成状态。
   Future<void> setCompleted(String id, bool completed) async {
-    // 当前目标任务。
+    // 读取一次当前目标；进度任务全满才可确认，普通任务沿用原树规则。
     final TodoRecord? target = await _todoById(id);
+    if (target?.taskType == TodoTaskType.progress.name) {
+      await _database.transaction(() async {
+        // 在事务内重新校验，防止同步或其他窗口修改。
+        final TodoRecord? current = await _todoById(id);
+        if (current == null) return;
+        if (completed) {
+          // 当前有效进度项。
+          final List<TodoProgressStepRecord> steps = await _progressSteps(id);
+          if (steps.isEmpty ||
+              steps.any((TodoProgressStepRecord step) => !step.isCompleted)) {
+            throw const FormatException('请先完成全部进度项，再确认任务完成');
+          }
+        }
+        if (current.isCompleted != completed) {
+          await _writeCompletion(id, completed: completed, now: DateTime.now());
+        }
+      });
+      return;
+    }
     if (target == null) {
       return;
     }
@@ -382,6 +554,254 @@ class TodoRepository {
         await _writeCompletion(target.parentId!, completed: false, now: now);
       }
     });
+  }
+
+  /// 显式确认已经满进度的任务。
+  Future<void> confirmProgressTask(String todoId) async {
+    // 确认入口只适用于进度任务。
+    final TodoRecord? target = await _todoById(todoId);
+    if (target == null || target.taskType != TodoTaskType.progress.name) {
+      throw const FormatException('进度任务不存在或已被删除');
+    }
+    await setCompleted(todoId, true);
+  }
+
+  /// 原子修改指定稳定进度项，满进度也不会自动完成任务。
+  Future<TodoProgressChange> setProgressStepsCompleted(
+    String todoId,
+    List<String> stepIds,
+    bool completed,
+  ) => _database.transaction(() async {
+    // 当前仍有效的任务。
+    final TodoRecord? target = await _todoById(todoId);
+    if (target == null || target.taskType != TodoTaskType.progress.name) {
+      throw const FormatException('进度任务不存在或已被删除');
+    }
+    if (target.isCompleted) throw const FormatException('请先重新打开任务，再修改进度');
+    // 调用方选择的稳定标识，重复选择只处理一次。
+    final Set<String> selected = stepIds.toSet();
+    // 当前完整有效步骤。
+    final List<TodoProgressStepRecord> current = await _progressSteps(todoId);
+    if (!selected.every(
+      (String id) =>
+          current.any((TodoProgressStepRecord step) => step.id == id),
+    )) {
+      throw const FormatException('选中的进度项已被修改或删除，请重新选择');
+    }
+    // 真正发生状态变化的项目，供撤销精确恢复。
+    final List<TodoProgressStepRecord> changed = current
+        .where(
+          (TodoProgressStepRecord step) =>
+              selected.contains(step.id) && step.isCompleted != completed,
+        )
+        .toList(growable: false);
+    // 当前操作时间。
+    final DateTime now = _progressWriteTime(changed);
+    for (final TodoProgressStepRecord step in changed) {
+      await (_database.update(
+        _database.todoProgressSteps,
+      )..where((TodoProgressSteps table) => table.id.equals(step.id))).write(
+        TodoProgressStepsCompanion(
+          isCompleted: Value<bool>(completed),
+          completedAt: Value<DateTime?>(completed ? now : null),
+          updatedAt: Value<DateTime>(now),
+        ),
+      );
+    }
+    await _reopenInvalidProgressTask(todoId, now);
+    return TodoProgressChange(
+      todoId: todoId,
+      steps: changed,
+      changedAt: now,
+      completed: completed,
+    );
+  });
+
+  /// 仅当整批项目仍处于本次操作后的状态时撤销，避免覆盖其他窗口或设备。
+  Future<bool> undoProgressChange(TodoProgressChange change) =>
+      _database.transaction(() async {
+        // 当前目标任务；删除后的任务不能被撤销复活。
+        final TodoRecord? target = await _todoById(change.todoId);
+        if (target == null ||
+            target.taskType != TodoTaskType.progress.name ||
+            change.steps.isEmpty) {
+          return false;
+        }
+        // 当前有效步骤的索引。
+        final Map<String, TodoProgressStepRecord> current =
+            <String, TodoProgressStepRecord>{
+              for (final TodoProgressStepRecord step in await _progressSteps(
+                change.todoId,
+              ))
+                step.id: step,
+            };
+        for (final TodoProgressStepRecord previous in change.steps) {
+          // 目标项目必须仍精确匹配原操作结果。
+          final TodoProgressStepRecord? step = current[previous.id];
+          if (step == null ||
+              step.isCompleted != change.completed ||
+              !step.updatedAt.isAtSameMomentAs(change.changedAt)) {
+            return false;
+          }
+        }
+        // 撤销作为新的写入同步，而非删除原始同步操作。
+        final DateTime now = _progressWriteTime(current.values);
+        for (final TodoProgressStepRecord previous in change.steps) {
+          await (_database.update(_database.todoProgressSteps)..where(
+                (TodoProgressSteps table) => table.id.equals(previous.id),
+              ))
+              .write(
+                TodoProgressStepsCompanion(
+                  isCompleted: Value<bool>(previous.isCompleted),
+                  completedAt: Value<DateTime?>(previous.completedAt),
+                  updatedAt: Value<DateTime>(now),
+                ),
+              );
+        }
+        await _reopenInvalidProgressTask(change.todoId, now);
+        return true;
+      });
+
+  /// 生成可经服务端毫秒精度往返的递增操作时间。
+  DateTime _progressWriteTime(Iterable<TodoProgressStepRecord> steps) {
+    // PostgreSQL 时间戳精确到毫秒；同项目的写入版本至少递增一毫秒。
+    int milliseconds = DateTime.now().millisecondsSinceEpoch;
+    for (final TodoProgressStepRecord step in steps) {
+      if (step.updatedAt.millisecondsSinceEpoch >= milliseconds) {
+        milliseconds = step.updatedAt.millisecondsSinceEpoch + 1;
+      }
+    }
+    return DateTime.fromMillisecondsSinceEpoch(milliseconds);
+  }
+
+  /// 按展示顺序读取有效进度项。
+  Future<List<TodoProgressStepRecord>> _progressSteps(String todoId) =>
+      (_database.select(_database.todoProgressSteps)
+            ..where(
+              (TodoProgressSteps table) =>
+                  table.todoId.equals(todoId) & table.deletedAt.isNull(),
+            )
+            ..orderBy(<OrderingTerm Function(TodoProgressSteps)>[
+              (TodoProgressSteps table) => OrderingTerm.asc(table.sortOrder),
+              (TodoProgressSteps table) => OrderingTerm.asc(table.id),
+            ]))
+          .get();
+
+  /// 差量保存结构，保留同一项目的完成状态与创建时间。
+  Future<void> _saveProgressStructure(
+    String todoId,
+    List<TodoProgressStepDraft> drafts,
+    DateTime now, {
+    List<TodoProgressStepDraft>? baseline,
+    bool isNew = false,
+  }) async {
+    // 当前有效结构。
+    final List<TodoProgressStepRecord> existing = await _progressSteps(todoId);
+    if (!isNew) {
+      if (baseline == null || baseline.length != existing.length) {
+        throw const FormatException('进度项已发生变化，请重新打开编辑后再保存');
+      }
+      for (int index = 0; index < existing.length; index += 1) {
+        if (baseline[index].id != existing[index].id ||
+            _cleanOptional(baseline[index].name) != existing[index].name) {
+          throw const FormatException('进度项已发生变化，请重新打开编辑后再保存');
+        }
+      }
+    }
+    // 所属任务用于保护已确认的进度结构。
+    final TodoRecord? target = await _todoById(todoId);
+    if (target == null) throw const FormatException('进度任务不存在');
+    if (target.isCompleted) throw const FormatException('请先重新打开任务，再管理进度项');
+    if (drafts.isEmpty) throw const FormatException('请至少保留一个进度项');
+    // 已经合并得到的超限数据可以保留或减少，不能继续增加。
+    if (drafts.length > maxProgressSteps && drafts.length > existing.length) {
+      throw const FormatException('最多添加 1000 个进度项');
+    }
+    // 有效原项目按稳定标识索引。
+    final Map<String, TodoProgressStepRecord> byId =
+        <String, TodoProgressStepRecord>{
+          for (final TodoProgressStepRecord step in existing) step.id: step,
+        };
+    // 本次保留的原项目标识。
+    final Set<String> retained = <String>{};
+    // 超限时不允许以删除抵消新增，避免绕过添加上限。
+    final bool addsNew = drafts.any(
+      (TodoProgressStepDraft draft) => draft.id == null,
+    );
+    if (existing.length >= maxProgressSteps &&
+        addsNew &&
+        drafts.length > maxProgressSteps) {
+      throw const FormatException('进度项已达上限，请先减少数量');
+    }
+    for (int index = 0; index < drafts.length; index += 1) {
+      // 当前编辑项目。
+      final TodoProgressStepDraft draft = drafts[index];
+      // 规范化名称，不把展示占位文字保存到数据库。
+      final String? name = _cleanOptional(draft.name);
+      if ((name?.length ?? 0) > 200) {
+        throw const FormatException('进度项名称不能超过 200 个字符');
+      }
+      // 当前用户顺序值。
+      final int sortOrder = (index + 1) * _sortOrderStep;
+      if (draft.id == null) {
+        await _database
+            .into(_database.todoProgressSteps)
+            .insert(
+              TodoProgressStepsCompanion.insert(
+                id: _uuid.v7(),
+                todoId: todoId,
+                name: Value<String?>(name),
+                sortOrder: Value<int>(sortOrder),
+                createdAt: now,
+                updatedAt: now,
+              ),
+            );
+      } else {
+        // 原进度项不存在时拒绝保存，不复活已删除项目。
+        final TodoProgressStepRecord? previous = byId[draft.id];
+        if (previous == null || !retained.add(draft.id!)) {
+          throw const FormatException('进度项已被修改或删除，请重新打开编辑');
+        }
+        if (previous.name != name || previous.sortOrder != sortOrder) {
+          await (_database.update(_database.todoProgressSteps)..where(
+                (TodoProgressSteps table) => table.id.equals(previous.id),
+              ))
+              .write(
+                TodoProgressStepsCompanion(
+                  name: Value<String?>(name),
+                  sortOrder: Value<int>(sortOrder),
+                  updatedAt: Value<DateTime>(now),
+                ),
+              );
+        }
+      }
+    }
+    for (final TodoProgressStepRecord step in existing) {
+      if (!retained.contains(step.id)) {
+        await (_database.update(
+          _database.todoProgressSteps,
+        )..where((TodoProgressSteps table) => table.id.equals(step.id))).write(
+          TodoProgressStepsCompanion(
+            deletedAt: Value<DateTime>(now),
+            updatedAt: Value<DateTime>(now),
+          ),
+        );
+      }
+    }
+    await _reopenInvalidProgressTask(todoId, now);
+  }
+
+  /// 只撤销失效的确认，永不根据满进度自动确认。
+  Future<void> _reopenInvalidProgressTask(String todoId, DateTime now) async {
+    // 当前父任务状态。
+    final TodoRecord? target = await _todoById(todoId);
+    if (target == null || !target.isCompleted) return;
+    // 当前完整进度用于验证确认是否仍有效。
+    final List<TodoProgressStepRecord> steps = await _progressSteps(todoId);
+    if (steps.isEmpty ||
+        steps.any((TodoProgressStepRecord step) => !step.isCompleted)) {
+      await _writeCompletion(todoId, completed: false, now: now);
+    }
   }
 
   /// 将待办移动到指定优先象限。

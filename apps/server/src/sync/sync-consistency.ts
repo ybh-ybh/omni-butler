@@ -118,7 +118,13 @@ export async function reconcileSync(
   ) {
     await reconcileEvents(transaction, userId, operations);
   }
-  if (operations.some((operation) => operation.table === 'todo_items')) {
+  if (
+    operations.some(
+      (operation) =>
+        operation.table === 'todo_items' ||
+        operation.table === 'todo_progress_steps',
+    )
+  ) {
     await reconcileTodos(transaction, userId);
   }
 }
@@ -184,13 +190,25 @@ async function reconcileTodos(
     JOIN "todo_items" AS parent
       ON parent."user_id" = child."user_id" AND parent."id" = child."parent_id"
     WHERE child."user_id" = ${userId}::uuid
-      AND (child."id" = child."parent_id" OR parent."parent_id" IS NOT NULL)
+      AND (child."id" = child."parent_id" OR parent."parent_id" IS NOT NULL
+        OR child."task_type" = 'progress' OR parent."task_type" = 'progress')
     LIMIT 1
   `;
   if (invalid.length > 0) {
     throw new BadRequestException(
-      '待办只允许主任务和直属子任务两层，不能自引用或形成循环',
+      '普通待办只允许两层，不能自引用或形成循环；进度任务不能包含或充当子任务',
     );
+  }
+  // 步骤仅能归属进度任务，同用户外键另由数据库在提交时检查。
+  const invalidSteps = await transaction.$queryRaw<Array<{ id: string }>>`
+    SELECT step."id" FROM "todo_progress_steps" AS step
+    JOIN "todo_items" AS todo
+      ON todo."user_id" = step."user_id" AND todo."id" = step."todo_id"
+    WHERE step."user_id" = ${userId}::uuid AND todo."task_type" <> 'progress'
+    LIMIT 1
+  `;
+  if (invalidSteps.length > 0) {
+    throw new BadRequestException('步骤只能属于进度任务');
   }
   await transaction.$executeRaw`
     UPDATE "todo_items" AS child
@@ -216,9 +234,28 @@ async function reconcileTodos(
     ) AS children
     WHERE parent."user_id" = ${userId}::uuid AND parent."id" = children."parent_id"
       AND parent."parent_id" IS NULL AND parent."deleted_at" IS NULL
+      AND parent."task_type" = 'normal'
       AND (parent."is_completed" IS DISTINCT FROM children."all_completed"
         OR (NOT children."all_completed" AND parent."completed_at" IS NOT NULL)
         OR (children."all_completed" AND parent."completed_at" IS DISTINCT FROM
           COALESCE(children."completed_at", parent."completed_at", CURRENT_TIMESTAMP)))
+  `;
+  // 满进度永不自动完成；只在最终步骤集合失效时撤销手动完成。
+  // 包括并发删成零步、添加未完成步骤、撤销任一步和无效离线确认。
+  await transaction.$executeRaw`
+    UPDATE "todo_items" AS todo
+    SET "is_completed" = false, "completed_at" = NULL,
+        "updated_at" = CURRENT_TIMESTAMP
+    WHERE todo."user_id" = ${userId}::uuid AND todo."task_type" = 'progress'
+      AND todo."is_completed"
+      AND (NOT EXISTS (
+        SELECT 1 FROM "todo_progress_steps" AS step
+        WHERE step."user_id" = todo."user_id" AND step."todo_id" = todo."id"
+          AND step."deleted_at" IS NULL
+      ) OR EXISTS (
+        SELECT 1 FROM "todo_progress_steps" AS step
+        WHERE step."user_id" = todo."user_id" AND step."todo_id" = todo."id"
+          AND step."deleted_at" IS NULL AND NOT step."is_completed"
+      ))
   `;
 }

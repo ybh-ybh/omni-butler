@@ -128,4 +128,32 @@ describe('SyncSqlBuilder', () => {
     );
     expect(statement.values).toEqual([recordId, userId]);
   });
+
+  it('进度可选名称规范为空且不改变客户端原始幂等负载', () => {
+    // 仅空格的可选名称不成为实际名称。
+    const operation: SyncOperationDto = {
+      op: 'PATCH',
+      table: 'todo_progress_steps',
+      id: recordId,
+      data: { name: '   ' },
+    };
+    expect(builder.build(operation, userId).values).toEqual([
+      recordId,
+      userId,
+      null,
+    ]);
+    expect(operation.data).toEqual({ name: '   ' });
+  });
+
+  it.each([
+    ['todo_items', { task_type: 'unknown' }],
+    ['todo_items', { progress_unit: '章'.repeat(11) }],
+    ['todo_progress_steps', { name: '章'.repeat(201) }],
+    ['todo_progress_steps', { name: 123 }],
+    ['todo_progress_steps', { user_id: userId }],
+  ])('拒绝进度任务的非法类型、超长字段或归属覆盖：%s %j', (table, data) => {
+    expect(() =>
+      builder.build({ op: 'PATCH', table, id: recordId, data }, userId),
+    ).toThrow(BadRequestException);
+  });
 });

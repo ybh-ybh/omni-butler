@@ -165,6 +165,40 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
   /// 描述输入控制器。
   late final TextEditingController _descriptionController;
 
+  /// 进度单位输入。
+  late final TextEditingController _progressUnitController;
+
+  /// 当前步骤总数输入，点击应用后更新结构。
+  final TextEditingController _stepCountController = TextEditingController(
+    text: '1',
+  );
+
+  /// 保存时固定的任务类型，编辑既有任务不允许转换。
+  late TodoTaskType _taskType;
+
+  /// 待保存的有序步骤草稿。
+  final List<_EditableProgressStep> _progressSteps = <_EditableProgressStep>[];
+
+  /// 打开编辑器时的结构基线，不包含可能持续变化的完成状态。
+  final List<TodoProgressStepDraft> _progressStepsBaseline =
+      <TodoProgressStepDraft>[];
+
+  /// 已移除但可能仍被当前帧使用的输入控制器。
+  final List<TextEditingController> _retiredStepControllers =
+      <TextEditingController>[];
+
+  /// 结构是否仍在读取。
+  bool _loadingSteps = false;
+
+  /// 读取失败时禁止用不完整结构覆盖原有步骤。
+  bool _stepsLoadFailed = false;
+
+  /// 靠近进度设置展示的输入或读取错误。
+  String? _progressError;
+
+  /// 靠近保存操作展示的错误。
+  String? _saveError;
+
   /// 当前所属日期。
   late DateTime _scheduledDate;
 
@@ -193,6 +227,18 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
     _descriptionController = TextEditingController(
       text: record?.description ?? '',
     );
+    _progressUnitController = TextEditingController(
+      text: record?.progressUnit ?? '',
+    );
+    _taskType = record?.taskType == 'progress'
+        ? TodoTaskType.progress
+        : TodoTaskType.normal;
+    if (_taskType == TodoTaskType.progress && record != null) {
+      _loadingSteps = true;
+      _loadProgressSteps();
+    } else {
+      _progressSteps.add(_EditableProgressStep());
+    }
     _scheduledDate = DateUtils.dateOnly(
       record?.scheduledDate ??
           widget.parent?.scheduledDate ??
@@ -216,6 +262,14 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
+    _progressUnitController.dispose();
+    _stepCountController.dispose();
+    for (final _EditableProgressStep step in _progressSteps) {
+      step.controller.dispose();
+    }
+    for (final TextEditingController controller in _retiredStepControllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -229,7 +283,9 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
         widget.parent != null || widget.record?.parentId != null;
 
     return OmniSideSheetScaffold(
-      onWindowsEnter: _saving ? null : _save,
+      onWindowsEnter: _saving || _loadingSteps || _stepsLoadFailed
+          ? null
+          : _save,
       title: isEditing
           ? isChild
                 ? '编辑子任务'
@@ -248,7 +304,9 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
           label: _saving ? '正在保存' : '保存',
           icon: Icons.save_outlined,
           loading: _saving,
-          onPressed: _saving ? null : _save,
+          onPressed: _saving || _loadingSteps || _stepsLoadFailed
+              ? null
+              : _save,
         ),
       ],
       child: SingleChildScrollView(
@@ -265,6 +323,30 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: OmniSpacing.lg),
+              if (!isChild && !isEditing) ...<Widget>[
+                LayoutBuilder(
+                  builder: (BuildContext context, BoxConstraints constraints) {
+                    return OmniSlidingSegmentedControl<TodoTaskType>(
+                      key: const ValueKey<String>('todo-task-type'),
+                      options: TodoTaskType.values,
+                      selected: _taskType,
+                      width: constraints.maxWidth,
+                      labelBuilder: (TodoTaskType type) =>
+                          type == TodoTaskType.progress ? '进度任务' : '普通任务',
+                      onChanged: (TodoTaskType type) {
+                        if (_saving) return;
+                        setState(() {
+                          _taskType = type;
+                          if (type == TodoTaskType.progress) {
+                            _repeatRule = TodoRepeatRule.none;
+                          }
+                        });
+                      },
+                    );
+                  },
+                ),
+                const SizedBox(height: OmniSpacing.md),
+              ],
               OmniTextFormField(
                 controller: _titleController,
                 autofocus: true,
@@ -287,6 +369,10 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
                 decoration: const InputDecoration(labelText: '描述（可选）'),
               ),
               const SizedBox(height: OmniSpacing.md),
+              if (_taskType == TodoTaskType.progress) ...<Widget>[
+                _buildProgressSettings(),
+                const SizedBox(height: OmniSpacing.md),
+              ],
               if (!isChild) ...<Widget>[
                 Text('优先象限', style: Theme.of(context).textTheme.labelLarge),
                 const SizedBox(height: OmniSpacing.xs),
@@ -383,7 +469,8 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
                       onChanged: (DateTime? value) =>
                           setState(() => _reminderAt = value),
                     ),
-                    if (!isChild) ...<Widget>[
+                    if (!isChild &&
+                        _taskType == TodoTaskType.normal) ...<Widget>[
                       const SizedBox(height: OmniSpacing.md),
                       OmniDropdownButtonFormField<TodoRepeatRule>(
                         initialValue: _repeatRule,
@@ -407,11 +494,321 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
                 ),
               ),
               const SizedBox(height: OmniSpacing.xl),
+              if (_saveError != null)
+                Text(
+                  _saveError!,
+                  style: TextStyle(color: OmniColors.of(context).danger),
+                ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// 读取结构一次，后续输入不被数据流刷新覆盖。
+  Future<void> _loadProgressSteps() async {
+    try {
+      // 仓储中的最新有效步骤。
+      final List<TodoProgressStepRecord> steps = await ref
+          .read(todoRepositoryProvider)
+          .watchProgressSteps(widget.record!.id)
+          .first;
+      if (!mounted) return;
+      setState(() {
+        _progressSteps.addAll(
+          steps.map(
+            (step) => _EditableProgressStep(
+              id: step.id,
+              name: step.name,
+              completed: step.isCompleted,
+            ),
+          ),
+        );
+        _stepCountController.text = _progressSteps.length.toString();
+        _progressStepsBaseline.addAll(
+          steps.map(
+            (step) => TodoProgressStepDraft(id: step.id, name: step.name),
+          ),
+        );
+        _loadingSteps = false;
+        _stepsLoadFailed = false;
+        _progressError = null;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loadingSteps = false;
+          _stepsLoadFailed = true;
+          _progressError = '步骤读取失败，请重试后再保存。';
+        });
+      }
+    }
+  }
+
+  /// 构建与任务元数据分组的步骤结构编辑器。
+  Widget _buildProgressSettings() {
+    // 完成历史的步骤必须重新打开任务后再修改。
+    final bool readOnly = widget.record?.isCompleted == true;
+    // 结构编辑的统一可用状态。
+    final bool enabled =
+        !_saving && !_loadingSteps && !_stepsLoadFailed && !readOnly;
+    return OmniPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Text('进度设置', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: OmniSpacing.xs),
+          Text(
+            readOnly ? '任务已完成，重新打开后才能修改步骤。' : '步骤可跳序完成，名称可留空。进度任务不支持子任务和重复。',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: OmniSpacing.sm),
+          OmniTextFormField(
+            key: const ValueKey<String>('todo-progress-unit'),
+            controller: _progressUnitController,
+            enabled: enabled,
+            maxLength: 10,
+            decoration: const InputDecoration(
+              labelText: '单位（可选）',
+              hintText: '例如：章、节、次',
+            ),
+          ),
+          const SizedBox(height: OmniSpacing.xs),
+          if (widget.record != null)
+            Text('步骤总数：${_progressSteps.length}；通过下方增删调整')
+          else
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: OmniTextFormField(
+                    key: const ValueKey<String>('todo-progress-total'),
+                    controller: _stepCountController,
+                    enabled: enabled,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: '步骤总数',
+                      helperText: '1 至 1000',
+                    ),
+                    validator: (String? value) {
+                      // 用户输入的有效步骤数量。
+                      final int? count = int.tryParse(value?.trim() ?? '');
+                      return count == null || count < 1 || count > 1000
+                          ? '请输入 1 至 1000 的整数'
+                          : null;
+                    },
+                  ),
+                ),
+                const SizedBox(width: OmniSpacing.xs),
+                OmniButton(
+                  key: const ValueKey<String>('todo-progress-apply-total'),
+                  label: '应用数量',
+                  variant: OmniButtonVariant.text,
+                  onPressed: enabled ? _applyStepCount : null,
+                ),
+              ],
+            ),
+          if (_progressError != null) ...<Widget>[
+            Text(
+              _progressError!,
+              style: TextStyle(color: OmniColors.of(context).danger),
+            ),
+            if (_progressSteps.isEmpty && widget.record != null)
+              OmniButton(
+                label: '重新读取步骤',
+                variant: OmniButtonVariant.text,
+                onPressed: _loadingSteps
+                    ? null
+                    : () {
+                        setState(() => _loadingSteps = true);
+                        _loadProgressSteps();
+                      },
+              ),
+          ],
+          if (_loadingSteps) const Text('正在读取步骤…'),
+          const SizedBox(height: OmniSpacing.sm),
+          ExpansionTile(
+            key: const ValueKey<String>('todo-progress-step-names'),
+            initiallyExpanded: widget.record != null,
+            title: const Text('步骤名称（可选）'),
+            subtitle: const Text('留空时按序号和单位显示'),
+            children: <Widget>[
+              SizedBox(
+                height: _progressSteps.isEmpty ? 0 : 280,
+                child: ListView.builder(
+                  itemCount: _progressSteps.length,
+                  itemBuilder: (BuildContext context, int index) {
+                    // 当前结构草稿，控制器与稳定对象绑定而非序号。
+                    final _EditableProgressStep step = _progressSteps[index];
+                    return Padding(
+                      key: ObjectKey(step),
+                      padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
+                      child: Column(
+                        children: <Widget>[
+                          OmniTextFormField(
+                            controller: step.controller,
+                            enabled: enabled,
+                            maxLength: 200,
+                            decoration: InputDecoration(
+                              labelText: '步骤 ${index + 1}（名称可选）',
+                              helperText: step.completed
+                                  ? '已完成，改名或移动不会丢失进度'
+                                  : null,
+                            ),
+                          ),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: <Widget>[
+                              OmniIconButton(
+                                tooltip: '上移步骤 ${index + 1}',
+                                onPressed: enabled && index > 0
+                                    ? () => _moveStep(index, index - 1)
+                                    : null,
+                                icon: const Icon(Icons.arrow_upward_rounded),
+                              ),
+                              OmniIconButton(
+                                tooltip: '下移步骤 ${index + 1}',
+                                onPressed:
+                                    enabled && index < _progressSteps.length - 1
+                                    ? () => _moveStep(index, index + 1)
+                                    : null,
+                                icon: const Icon(Icons.arrow_downward_rounded),
+                              ),
+                              OmniIconButton(
+                                tooltip: '删除步骤 ${index + 1}',
+                                onPressed: enabled && _progressSteps.length > 1
+                                    ? () => _removeSteps(
+                                        <_EditableProgressStep>[step],
+                                      )
+                                    : null,
+                                icon: const Icon(Icons.delete_outline_rounded),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OmniButton(
+              label: '添加步骤',
+              icon: Icons.add_rounded,
+              variant: OmniButtonVariant.text,
+              onPressed: enabled && _progressSteps.length < 1000
+                  ? () => setState(() {
+                      _progressSteps.add(_EditableProgressStep());
+                      _stepCountController.text = _progressSteps.length
+                          .toString();
+                    })
+                  : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 应用步骤总数，减少有内容的步骤前明确确认。
+  Future<bool> _applyStepCount() async {
+    // 待应用的正整数总数。
+    final int? count = int.tryParse(_stepCountController.text.trim());
+    if (count == null || count < 1 || count > 1000) {
+      setState(() => _progressError = '步骤总数必须是 1 至 1000 的整数。');
+      return false;
+    }
+    if (count < _progressSteps.length) {
+      return _removeSteps(_progressSteps.skip(count).toList(growable: false));
+    } else {
+      setState(() {
+        while (_progressSteps.length < count) {
+          _progressSteps.add(_EditableProgressStep());
+        }
+        _progressError = null;
+      });
+    }
+    return true;
+  }
+
+  /// 删除有名称或已完成步骤前展示具体影响。
+  Future<bool> _removeSteps(List<_EditableProgressStep> removed) async {
+    if (removed.any(
+      (step) => step.completed || step.controller.text.trim().isNotEmpty,
+    )) {
+      // 当前操作会丢失的已命名或已完成步骤数量。
+      final int meaningfulCount = removed
+          .where(
+            (step) => step.completed || step.controller.text.trim().isNotEmpty,
+          )
+          .length;
+      // 删除后仍保留的完整结构。
+      final List<_EditableProgressStep> remaining = _progressSteps
+          .where((step) => !removed.contains(step))
+          .toList(growable: false);
+      // 用原始序号与名称列出此次删除的影响。
+      final String affectedNames = removed
+          .take(8)
+          .map((step) {
+            // 删除前的可见序号。
+            final int number = _progressSteps.indexOf(step) + 1;
+            return '$number. ${step.controller.text.trim().isEmpty ? '未命名' : step.controller.text.trim()}${step.completed ? '（已完成）' : ''}';
+          })
+          .join('\n');
+      // 用户对这次结构删除的明确选择。
+      final bool confirmed = await showOmniConfirmDialog(
+        context,
+        title: '删除这些步骤？',
+        message:
+            '将删除 ${removed.length} 个步骤，其中 $meaningfulCount 个已有名称或完成记录。\n$affectedNames${removed.length > 8 ? '\n另有 ${removed.length - 8} 个步骤' : ''}\n删除后进度为 ${remaining.where((step) => step.completed).length}/${remaining.length}。保存任务后生效。',
+        confirmLabel: '删除步骤',
+        danger: true,
+      );
+      if (!confirmed || !mounted) {
+        if (mounted) {
+          _stepCountController.text = _progressSteps.length.toString();
+        }
+        return false;
+      }
+    }
+    if (!mounted) return false;
+    setState(() {
+      for (final _EditableProgressStep step in removed) {
+        _progressSteps.remove(step);
+        _retiredStepControllers.add(step.controller);
+      }
+      _stepCountController.text = _progressSteps.length.toString();
+      _progressError = null;
+    });
+    return true;
+  }
+
+  /// 改变列表顺序但保持步骤标识和完成状态。
+  void _moveStep(int from, int to) {
+    setState(() {
+      // 正在移动的稳定步骤草稿。
+      final _EditableProgressStep step = _progressSteps.removeAt(from);
+      _progressSteps.insert(to, step);
+    });
+  }
+
+  /// 只比较结构，元数据修改不覆盖其他窗口新增或调整的步骤。
+  bool get _progressStructureChanged {
+    if (widget.record == null ||
+        _progressSteps.length != _progressStepsBaseline.length) {
+      return true;
+    }
+    for (int index = 0; index < _progressSteps.length; index += 1) {
+      if (_progressSteps[index].id != _progressStepsBaseline[index].id ||
+          _progressSteps[index].controller.text.trim() !=
+              (_progressStepsBaseline[index].name?.trim() ?? '')) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// 构建可分别展开日期与时间浮层的可选日期时间控件。
@@ -489,15 +886,42 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
 
   /// 校验并保存待办。
   Future<void> _save() async {
+    if (_saving || _loadingSteps || _stepsLoadFailed) return;
     if (!(_formKey.currentState?.validate() ?? false)) {
       return;
+    }
+    if (_taskType == TodoTaskType.progress && widget.record == null) {
+      // 新建时直接采用输入数量，预览按钮不是保存的前置操作。
+      final bool applied;
+      setState(() => _saving = true);
+      try {
+        applied = await _applyStepCount();
+      } finally {
+        if (mounted) setState(() => _saving = false);
+      }
+      if (!applied || !mounted) return;
+    }
+    if (_taskType == TodoTaskType.progress &&
+        widget.record?.isCompleted != true) {
+      if (_progressSteps.isEmpty) {
+        setState(() => _progressError = '请先补充至少一个步骤。');
+        return;
+      }
+      if (int.tryParse(_stepCountController.text.trim()) !=
+          _progressSteps.length) {
+        setState(() => _progressError = '步骤数量尚未应用，请先点击“应用数量”。');
+        return;
+      }
     }
     // 重复系列编辑范围。
     final TodoSeriesScope? scope = await _chooseSeriesScope();
     if (scope == null) {
       return;
     }
-    setState(() => _saving = true);
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
     try {
       // 待办仓储。
       final TodoRepository repository = ref.read(todoRepositoryProvider);
@@ -512,6 +936,29 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
           priorityQuadrant: _priorityQuadrant,
           reminderAt: _reminderAt,
           repeatRule: _repeatRule,
+          taskType: _taskType,
+          progressUnit: _taskType == TodoTaskType.progress
+              ? _progressUnitController.text
+              : null,
+          progressSteps:
+              _taskType == TodoTaskType.progress &&
+                  widget.record?.isCompleted != true &&
+                  _progressStructureChanged
+              ? _progressSteps
+                    .map(
+                      (step) => TodoProgressStepDraft(
+                        id: step.id,
+                        name: step.controller.text,
+                      ),
+                    )
+                    .toList(growable: false)
+              : null,
+          progressStepsBaseline:
+              widget.record != null &&
+                  _taskType == TodoTaskType.progress &&
+                  _progressStructureChanged
+              ? List<TodoProgressStepDraft>.unmodifiable(_progressStepsBaseline)
+              : null,
         ),
         scope: scope,
       );
@@ -520,12 +967,15 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
       }
     } on FormatException catch (error) {
       if (mounted) {
+        setState(() => _saveError = error.message.toString());
         showOmniMessage(
           context,
           message: error.message,
           tone: OmniMessageTone.error,
         );
       }
+    } catch (_) {
+      if (mounted) setState(() => _saveError = '保存失败，请重试。输入内容已保留。');
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -574,4 +1024,20 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
       TodoRepeatRule.monthly => '每月',
     };
   }
+}
+
+/// 与完成状态分离的结构编辑草稿。
+class _EditableProgressStep {
+  /// 已存在步骤的稳定标识，新增步骤为空。
+  final String? id;
+
+  /// 名称输入控制器。
+  final TextEditingController controller;
+
+  /// 加载时的完成状态，只用于删除确认和说明。
+  final bool completed;
+
+  /// 创建结构编辑草稿。
+  _EditableProgressStep({this.id, String? name, this.completed = false})
+    : controller = TextEditingController(text: name ?? '');
 }

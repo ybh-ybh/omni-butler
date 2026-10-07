@@ -29,6 +29,9 @@ class OmniPowerSyncConnector extends PowerSyncBackendConnector {
   /// 明确提供的服务器及 owner 作用域。
   final SyncSession? session;
 
+  /// 不兼容时通知运行时停止重试，并保留用户可见原因。
+  final void Function(SyncSchemaMismatch error)? onSchemaMismatch;
+
   /// 首次凭证确认的 owner，兼容仅传仓储的旧调用。
   String? _credentialOwnerId;
 
@@ -36,7 +39,7 @@ class OmniPowerSyncConnector extends PowerSyncBackendConnector {
   PowerSyncDatabase? _database;
 
   /// 创建后端同步连接器。
-  OmniPowerSyncConnector(this._auth, {this.session})
+  OmniPowerSyncConnector(this._auth, {this.session, this.onSchemaMismatch})
     : _generation = _auth.sessionGeneration;
 
   /// 在网络及数据库异步边界核对固定会话，旧结果不能确认新状态。
@@ -59,6 +62,16 @@ class OmniPowerSyncConnector extends PowerSyncBackendConnector {
   /// 获取当前设备的短期 PowerSync 凭证。
   @override
   Future<PowerSyncCredentials?> fetchCredentials() async {
+    try {
+      return await _fetchCredentials();
+    } on SyncSchemaMismatch catch (error) {
+      onSchemaMismatch?.call(error);
+      rethrow;
+    }
+  }
+
+  /// 在当前固定会话内获取凭证，错误由公开入口归类。
+  Future<PowerSyncCredentials?> _fetchCredentials() async {
     await _assertScope();
     // 服务端签发的短期凭证。
     final credential = await _auth.fetchPowerSyncCredentialForGeneration(
@@ -82,6 +95,18 @@ class OmniPowerSyncConnector extends PowerSyncBackendConnector {
   /// 完整上传每个本地事务，并用持久身份保证响应丢失后安全重试。
   @override
   Future<void> uploadData(PowerSyncDatabase database) async {
+    try {
+      await _uploadData(database);
+    } on SyncSchemaMismatch catch (error) {
+      onSchemaMismatch?.call(error);
+      rethrow;
+    }
+  }
+
+  /// 保持原始事务边界上传，失败不确认本地队列。
+  Future<void> _uploadData(PowerSyncDatabase database) async {
+    await _assertScope();
+    await _auth.ensureSyncSchemaForGeneration(_generation);
     await _assertScope();
     if (_database != null && !identical(_database, database)) {
       throw const ApiFailure('同步连接器不能跨数据库复用');

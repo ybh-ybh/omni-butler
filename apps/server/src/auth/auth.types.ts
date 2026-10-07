@@ -10,6 +10,8 @@ export interface AuthUser {
 
 /// 设备连接与刷新接口返回的令牌组。
 export interface TokenPair {
+  /// 当前服务端同步业务结构版本。
+  syncSchemaVersion: number;
   /// 短期访问令牌。
   accessToken: string;
   /// 固定有效期内可重复使用的高熵设备凭证。

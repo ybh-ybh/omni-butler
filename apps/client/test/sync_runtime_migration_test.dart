@@ -13,6 +13,7 @@ import 'package:omni_butler/core/sync/sync_snapshot.dart';
 import 'package:omni_butler/core/sync/sync_image_report.dart';
 import 'package:omni_butler/core/sync/sync_write_gate.dart';
 import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
+import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:powersync/powersync.dart';
 
 /// 通过真实 PowerSync SQLite 验证跨服务器迁移的本地数据边界。
@@ -71,6 +72,76 @@ void main() {
           updatedAt: now,
         ),
       );
+
+  test('真实进度快照保留步骤身份、名称和手动完成，候选库不重放旧队列', () async {
+    // 通过正式仓储写入真实 PowerSync 数据表。
+    final TodoRepository repository = TodoRepository(source.database);
+    await repository.save(
+      TodoDraft(
+        title: '迁移阅读进度',
+        scheduledDate: now,
+        taskType: TodoTaskType.progress,
+        progressUnit: '章',
+        progressSteps: const <TodoProgressStepDraft>[
+          TodoProgressStepDraft(name: '序言'),
+          TodoProgressStepDraft(),
+        ],
+      ),
+    );
+    final TodoRecord task = await source.database
+        .select(source.database.todoItems)
+        .getSingle();
+    final List<TodoProgressStepRecord> steps = await repository
+        .watchProgressSteps(task.id)
+        .first;
+    // 创建应是一个包含父项和全部步骤的完整上传事务。
+    final CrudTransaction? creation = await source.powerSync
+        .getNextCrudTransaction();
+    expect(
+      creation!.crud.where(
+        (CrudEntry entry) => entry.table == 'todo_progress_steps',
+      ),
+      hasLength(2),
+    );
+    await repository.setProgressStepsCompleted(
+      task.id,
+      steps.map((TodoProgressStepRecord step) => step.id).toList(),
+      true,
+    );
+    await repository.confirmProgressTask(task.id);
+    await source.freezeWrites();
+    final SyncSnapshot snapshot = await source.exportSnapshot();
+    final OmniSyncRuntime candidate = await OmniSyncRuntime.createCandidate(
+      auth,
+      '${directory.path}/progress.sqlite',
+      snapshot,
+      'B',
+      mergeInitial: false,
+      useLocalData: true,
+    );
+    candidates.add(candidate);
+    final TodoRecord restored = await candidate.database
+        .select(candidate.database.todoItems)
+        .getSingle();
+    final List<TodoProgressStepRecord> restoredSteps = await TodoRepository(
+      candidate.database,
+    ).watchProgressSteps(task.id).first;
+    expect(restored.taskType, 'progress');
+    expect(restored.progressUnit, '章');
+    expect(restored.isCompleted, isTrue);
+    expect(restored.completedAt, isNotNull);
+    expect(
+      restoredSteps.map((TodoProgressStepRecord step) => step.id),
+      steps.map((TodoProgressStepRecord step) => step.id),
+    );
+    expect(restoredSteps.first.name, '序言');
+    expect(restoredSteps.last.name, isNull);
+    expect(
+      restoredSteps.every((TodoProgressStepRecord step) => step.isCompleted),
+      isTrue,
+    );
+    expect(await candidate.powerSync.getNextCrudTransaction(), isNull);
+  });
 
   test('冻结等待已开始事务完成，并拒绝旧仓储的新写入、批量和 RETURNING', () async {
     // 明确暂停在事务中间，证明冻结不会抢先导出半段数据。
@@ -132,7 +203,7 @@ void main() {
     expect(snapshot.deletedCount, 1);
     expect(snapshot.pendingOperations, 1);
     expect(snapshot.tables.keys, unorderedEquals(SyncSnapshot.tableNames));
-    expect(snapshot.tables, hasLength(13));
+    expect(snapshot.tables, hasLength(14));
     expect(snapshot.operations.single['data'], isNot(contains('sync_state')));
     for (final bool merge in <bool>[true, false]) {
       // 两种保留本机的策略均从全新候选库开始。

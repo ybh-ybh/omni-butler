@@ -7,7 +7,7 @@
 ## 盘点口径与统一基础
 
 - 主导航有 **7 个路由**，另有 Windows 独立悬浮窗；Android 管理聚合器和设置详情属于既有路由内的二级界面。
-- 有 **23 个具名业务弹窗/侧栏组件**。同一组件的新增、编辑、开始、结束等状态合并计数；`State` 类、基础 `OmniDialogScaffold` 和内联确认框不重复计数。
+- 有 **24 个具名业务弹窗/侧栏组件**。同一组件的新增、编辑、开始、结束等状态合并计数；`State` 类、基础 `OmniDialogScaffold` 和内联确认框不重复计数。
 - 所有界面均需检查：正常、加载、空态、失败、禁用/只读、提交中、保存失败；只有相关界面才需构造对应状态，不能用空页面代替表单或列表验收。
 - 主题矩阵为六套配色 × 浅色/深色，另验跟随系统切换；平台矩阵为 Windows 宽窗/窄窗、Android 紧凑布局、Windows 悬浮窗专用尺寸。
 - 统一设计参数来自 `lib/app/theme/app_tokens.dart`，语义颜色和原生控件兜底来自 `lib/app/theme/app_theme.dart`；组件出口为 `lib/shared/ui/omni_ui.dart`，规范为仓库根目录 `style.md`。
@@ -27,7 +27,7 @@
 | `FloatingWindowPage`；`lib/features/floating/presentation/floating_window_page.dart` | 待办象限/子任务、快速新增、开始记录/补记、进行中、撤销；拖动、缩放、唤起主窗口 | Windows 独立悬浮窗 | 共享语义色、输入、下拉、按钮和消息；紧凑行高、宿主窗口拖拽/缩放及浮层材质为受控差异 | `floating_window_page_test.dart`、`floating_resize_scheduler_test.dart`、`windows_floating_resize_service_test.dart`、`support/windows_floating_host_smoke.dart` | 自动化通过；人工矩阵待验 |
 | `ResponsiveShell`、管理聚合器；`lib/shared/layout/responsive_shell.dart`、`lib/features/management/presentation/` | 侧栏/导航轨、桌面管理切换、底部导航、Android 主页面/管理分区横滑、同步状态入口 | Windows、Android | 共享主题、图标操作与菜单；导航关系、预加载和手势协调保持既有契约 | `desktop_management_navigation_test.dart`、`android_management_navigation_test.dart`、`android_primary_navigation_swipe_test.dart`、`responsive_shell_sync_status_test.dart` | 自动化通过；人工矩阵待验 |
 
-## 23 个具名业务弹窗与侧栏
+## 24 个具名业务弹窗与侧栏
 
 “居中”均通过应用内 `showOmniDialog`，不会因 Flutter Windows 实验多窗口能力变成独立原生窗口。“侧栏”通过 `showOmniSideSheet`，紧凑宽度保持既有全宽形态。以下“已接入”仅描述源码路径。
 
@@ -56,6 +56,7 @@
 | D21 | `_PaymentEditorDialog`；同上 | 缴费金额/日期、周期、有效期、保存失败 | 已接统一居中弹窗、输入、下拉、日期和按钮 | `windows_dialog_enter_save_test.dart`、`memberships_layout_test.dart` | 自动化通过；人工矩阵待验 |
 | D22 | `_SyncConnectionDialog`；`lib/features/settings/presentation/sync_connection_dialog.dart` | 连接表单→数据处理预览、保留/替换策略、返回、提交中不可关闭、失败 | 已接统一侧栏、表单、单选、图标和按钮；保留两阶段确认与 `PopScope` | `sync_connection_dialog_test.dart`、`sync_connection_coordinator_test.dart` | 自动化通过；人工矩阵待验 |
 | D23 | `_SyncBackupDialog`；`lib/features/settings/presentation/sync_backup_dialog.dart` | 备份列表、加载/失败、删除确认/执行中 | 已接统一居中弹窗和按钮；旧库/快照删除范围不变 | `sync_maintenance_boundary_test.dart`；备份界面专项需手工验收 | 共享/仓储回归通过；界面专项待验 |
+| D24 | `TodoProgressPanel`；`lib/features/todos/presentation/todo_progress_panel.dart` | 跳序记录、批量预览、即时保存/失败重试、六秒撤销、满进度待确认、历史只读与重开；首页/待办/悬浮窗共用 | 统一侧栏、按钮、输入、消息与语义主题；只读分段条为业务图形，无拖动手势 | `todo_progress_ui_test.dart`、`todo_progress_entrypoints_test.dart`、`test/support/todo_progress_runtime_smoke.dart` | 六配色×明暗像素、键盘、读屏语义与宽窄屏通过；Windows/Android模拟器真实引擎点击闭环通过；实体设备读屏/输入法体验待人工验收 |
 
 ## 内联浮层、选择器、消息与受控例外
 

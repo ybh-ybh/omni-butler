@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
 import 'package:omni_butler/core/auth/auth_providers.dart';
@@ -28,6 +30,15 @@ class SyncController extends AsyncNotifier<void> {
       await runtime.disconnect();
       return;
     }
+    // 连接停止后仍由原有同步异常界面显示升级原因。
+    if (runtime.schemaError != null) throw runtime.schemaError!;
+    // SDK 在 build 返回后才可能发现错误，订阅补充运行期反馈。
+    final StreamSubscription<SyncSchemaMismatch> schemaErrors = runtime
+        .schemaErrors
+        .listen((SyncSchemaMismatch error) {
+          if (ref.mounted) state = AsyncError<void>(error, StackTrace.current);
+        });
+    ref.onDispose(schemaErrors.cancel);
     // 当前已恢复完成的设备同步会话。
     final SyncSession? session = await ref.watch(authControllerProvider.future);
     if (!ref.mounted ||
@@ -42,6 +53,7 @@ class SyncController extends AsyncNotifier<void> {
     }
     // 离线缓存身份仍可连接引擎，由 PowerSync 在网络恢复后重试凭证和上传。
     await runtime.connect(session.identity.id);
+    if (runtime.schemaError != null) throw runtime.schemaError!;
   }
 
   /// 清空同步数据库，用于用户明确选择“断开并删除本机数据”。
@@ -56,7 +68,13 @@ class SyncController extends AsyncNotifier<void> {
 
 /// 设备会话驱动的 PowerSync 连接控制器。
 final AsyncNotifierProvider<SyncController, void> syncControllerProvider =
-    AsyncNotifierProvider<SyncController, void>(SyncController.new);
+    AsyncNotifierProvider<SyncController, void>(
+      SyncController.new,
+      // 版本不兼容需要用户升级，不沿用 Riverpod 的默认自动重试。
+      retry: (int count, Object error) => error is SyncSchemaMismatch
+          ? null
+          : ProviderContainer.defaultRetry(count, error),
+    );
 
 /// 当前 PowerSync 连接、上传和下载状态。
 final StreamProvider<SyncStatus?> syncStatusProvider =

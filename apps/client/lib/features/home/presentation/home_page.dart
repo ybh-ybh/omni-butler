@@ -23,6 +23,7 @@ import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/features/todos/presentation/todo_priority_quadrant_style.dart';
+import 'package:omni_butler/features/todos/presentation/todo_progress_widgets.dart';
 import 'package:omni_butler/shared/attachments/attachment_picker_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
@@ -102,7 +103,7 @@ class HomePage extends ConsumerWidget {
         case _HomeTodoAction.edit:
           return await TodoEditorDialog.show(context, record: todo) ?? false;
         case _HomeTodoAction.addChild:
-          if (todo.parentId != null) {
+          if (todo.parentId != null || todo.taskType == 'progress') {
             return false;
           }
           return await TodoEditorDialog.show(context, parent: todo) ?? false;
@@ -112,7 +113,11 @@ class HomePage extends ConsumerWidget {
             context,
             title: '删除任务？',
             message:
-                '${todo.parentId == null ? '“${todo.title}”及其子任务' : '“${todo.title}”'}会移入回收站，可在回收站恢复。'
+                '${todo.taskType == 'progress'
+                    ? '“${todo.title}”及其进度步骤'
+                    : todo.parentId == null
+                    ? '“${todo.title}”及其子任务'
+                    : '“${todo.title}”'}会移入回收站，可在回收站恢复。'
                 '${todo.repeatSeriesId == null ? '' : '\n仅将本次任务移入回收站。'}',
             confirmLabel: '删除任务',
             danger: true,
@@ -1893,7 +1898,7 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
       await _animateCompletion();
       // 动画可因切页提前结束，但用户确认的业务操作必须继续提交。
       await onComplete(todo);
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
         setState(() {
           _checked = false;
@@ -1901,8 +1906,12 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
           _collapsed = false;
           _submitting = false;
         });
+        showOmniMessage(
+          context,
+          message: error is FormatException ? error.message : '完成失败，请重试',
+          tone: OmniMessageTone.error,
+        );
       }
-      rethrow;
     }
   }
 
@@ -1962,6 +1971,32 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
     final VoidCallback? onTitleTap = _submitting
         ? null
         : widget.onToggleChildren;
+
+    if (widget.todo.taskType == 'progress') {
+      return AnimatedSize(
+        duration: collapseDuration,
+        curve: OmniMotion.standardCurve,
+        child: _collapsed
+            ? const SizedBox.shrink()
+            : AnimatedOpacity(
+                opacity: _fading ? 0 : 1,
+                duration: fadeDuration,
+                child: IgnorePointer(
+                  ignoring: _submitting,
+                  child: TodoProgressTaskTile(
+                    todo: widget.todo,
+                    onEdit: () => unawaited(
+                      widget.onAction(widget.todo, _HomeTodoAction.edit),
+                    ),
+                    onDelete: () => unawaited(
+                      widget.onAction(widget.todo, _HomeTodoAction.delete),
+                    ),
+                    onConfirm: () => unawaited(_complete()),
+                  ),
+                ),
+              ),
+      );
+    }
 
     return AnimatedSize(
       duration: collapseDuration,

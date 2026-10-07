@@ -17,6 +17,7 @@ import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/features/todos/presentation/todo_priority_quadrant_style.dart';
+import 'package:omni_butler/features/todos/presentation/todo_progress_panel.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 悬浮框请求显示主窗口指定路由的回调。
@@ -1831,7 +1832,7 @@ class _FloatingTodoTree extends StatelessWidget {
 }
 
 /// 悬浮框中的单条紧凑待办。
-class _FloatingTodoRow extends StatelessWidget {
+class _FloatingTodoRow extends ConsumerWidget {
   /// 当前待办。
   final TodoRecord todo;
 
@@ -1866,13 +1867,19 @@ class _FloatingTodoRow extends StatelessWidget {
 
   /// 构建完成入口、标题、截止时间和展开按钮。
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     // 当前待办紧凑截止时间。
     final String? dueLabel = todo.dueAt == null
         ? null
         : DateFormat('HH:mm').format(todo.dueAt!);
+    // 进度任务在悬浮窗中只显示比例，明细在当前窗口共享侧栏内编辑。
+    final bool isProgress = todo.taskType == 'progress';
+    // 仅进度类型监听步骤，普通行不增加查询。
+    final AsyncValue<List<TodoProgressStepRecord>>? progress = isProgress
+        ? ref.watch(todoProgressStepsProvider(todo.id))
+        : null;
     return SizedBox(
       height: floatingTodoRowHeight,
       child: Row(
@@ -1882,13 +1889,21 @@ class _FloatingTodoRow extends StatelessWidget {
             height: 30,
             child: OmniIconButton(
               key: ValueKey<String>('floating-todo-complete-${todo.id}'),
-              tooltip: todo.isCompleted ? '已完成' : '完成任务',
+              tooltip: isProgress
+                  ? '更新进度'
+                  : todo.isCompleted
+                  ? '已完成'
+                  : '完成任务',
               padding: EdgeInsets.zero,
-              onPressed: todo.isCompleted
+              onPressed: isProgress
+                  ? () => TodoProgressPanel.show(context, record: todo)
+                  : todo.isCompleted
                   ? null
                   : () => unawaited(onComplete(todo)),
               icon: Icon(
-                todo.isCompleted
+                isProgress
+                    ? Icons.segment_rounded
+                    : todo.isCompleted
                     ? Icons.check_box_rounded
                     : Icons.check_box_outline_blank_rounded,
                 size: 17,
@@ -1908,7 +1923,9 @@ class _FloatingTodoRow extends StatelessWidget {
               child: InkWell(
                 key: ValueKey<String>('floating-todo-edit-${todo.id}'),
                 borderRadius: BorderRadius.circular(OmniRadius.control),
-                onTap: () => TodoEditorDialog.show(context, record: todo),
+                onTap: () => isProgress
+                    ? TodoProgressPanel.show(context, record: todo)
+                    : TodoEditorDialog.show(context, record: todo),
                 child: Row(
                   children: <Widget>[
                     Flexible(
@@ -1961,6 +1978,29 @@ class _FloatingTodoRow extends StatelessWidget {
               ),
             ),
           ),
+          if (progress != null) ...<Widget>[
+            const SizedBox(width: OmniSpacing.xxs),
+            progress.when(
+              data: (List<TodoProgressStepRecord> steps) {
+                // 当前已完成的有效步骤数量。
+                final int completed = steps
+                    .where((TodoProgressStepRecord step) => step.isCompleted)
+                    .length;
+                return Semantics(
+                  label: '已完成 $completed 步，共 ${steps.length} 步',
+                  child: Text(
+                    '$completed/${steps.length}',
+                    key: ValueKey<String>('floating-todo-progress-${todo.id}'),
+                    style: Theme.of(context).textTheme.labelSmall
+                        ?.copyWith(color: accent),
+                  ),
+                );
+              },
+              loading: () => const Text('…'),
+              error: (Object error, StackTrace stackTrace) =>
+                  const Text('读取失败'),
+            ),
+          ],
           if (dueLabel != null) ...<Widget>[
             const SizedBox(width: OmniSpacing.xxs),
             Text(

@@ -28,6 +28,9 @@ class _RecordingAuth extends AuthRepository {
   /// 是否模拟服务端处理后响应丢失。
   bool loseResponse = false;
 
+  /// 是否模拟服务器已不支持当前业务结构。
+  bool schemaCompatible = true;
+
   /// 可选上传开始信号，供会话竞态测试使用。
   Completer<void>? uploadStarted;
 
@@ -39,6 +42,12 @@ class _RecordingAuth extends AuthRepository {
 
   /// 创建不访问安全存储的认证替身。
   _RecordingAuth() : super(const FlutterSecureStorage());
+
+  /// 上传协议用例专注事务重试；真实握手由认证仓储测试覆盖。
+  @override
+  Future<void> ensureSyncSchemaForGeneration(int generation) async {
+    if (!schemaCompatible) throw const SyncSchemaMismatch();
+  }
 
   /// 捕获生产连接器提交的真实事务请求体。
   @override
@@ -62,6 +71,7 @@ class _RecordingAuth extends AuthRepository {
   /// 模拟暂时离线，让 PowerSync 接管后续重试。
   @override
   Future<PowerSyncCredential> fetchPowerSyncCredential() async {
+    if (!schemaCompatible) throw const SyncSchemaMismatch();
     if (!credentialRequested.isCompleted) {
       credentialRequested.complete();
     }
@@ -100,6 +110,83 @@ Future<void> _insertTodo(AppDatabase database, String id) async {
 /// 验证完整事务、幂等重试、初始导入和离线启动行为。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('结构版本不兼容时停止同步并保留可见错误及未确认队列', () async {
+    // 使用真实 PowerSync 引擎证明停止重试和队列保留。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_schema_gate_',
+    );
+    final _RecordingAuth auth = _RecordingAuth()..schemaCompatible = false;
+    final OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      '${directory.path}/db.sqlite',
+    );
+    try {
+      await _insertTodo(
+        runtime.database,
+        '01990000-7000-8002-8000-000000000001',
+      );
+      // 连接前先注册错误监听，避免错过立即返回的错误。
+      final Future<SyncSchemaMismatch> failed = runtime.schemaErrors.first;
+      try {
+        await runtime
+            .connect('01990000-7000-8002-8000-000000000099')
+            .timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => throw StateError('版本拒绝后 connect 未返回'),
+            );
+      } on SyncSchemaMismatch {
+        // SDK 可能在 connect 返回前报告不兼容，也可能稍后通过流通知。
+      }
+      await failed.timeout(const Duration(seconds: 5));
+      // 等异步停止离开 SDK 回调栈并完成连接释放。
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(runtime.schemaError, isA<SyncSchemaMismatch>());
+      expect(runtime.powerSync.connected, isFalse);
+      expect(await runtime.powerSync.getNextCrudTransaction(), isNotNull);
+      expect(auth.requests, isEmpty);
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'sync.enabled': true,
+      });
+      // 现有同步状态界面通过控制器错误继续看到升级原因。
+      final SharedPreferences preferences =
+          await SharedPreferences.getInstance();
+      final ProviderContainer container = ProviderContainer(
+        overrides: [
+          syncRuntimeProvider.overrideWithValue(runtime),
+          authControllerProvider.overrideWith(_OfflineAuthController.new),
+          sharedPreferencesProvider.overrideWithValue(preferences),
+        ],
+      );
+      try {
+        await expectLater(
+          container
+              .read(syncControllerProvider.future)
+              .timeout(
+                const Duration(seconds: 5),
+                onTimeout: () => throw StateError('版本拒绝后状态控制器未返回'),
+              ),
+          throwsA(isA<SyncSchemaMismatch>()),
+        );
+        expect(
+          container.read(syncControllerProvider).error,
+          isA<SyncSchemaMismatch>(),
+        );
+      } finally {
+        container.dispose();
+      }
+      await expectLater(
+        runtime.connect('01990000-7000-8002-8000-000000000099'),
+        throwsA(isA<SyncSchemaMismatch>()),
+      );
+    } finally {
+      await runtime.close().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw StateError('版本拒绝后 close 未返回'),
+      );
+      await directory.delete(recursive: true);
+    }
+  });
 
   test('上传期间会话代次变化时保留队列且旧连接器不可复用', () async {
     FlutterSecureStorage.setMockInitialValues(<String, String>{});

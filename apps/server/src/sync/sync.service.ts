@@ -17,6 +17,7 @@ import { SyncSqlBuilder } from './sync-sql.builder';
 /// 同步操作引用的业务父表，用于处理永久删除后的迟到写入。
 const parentReferences: Readonly<Record<string, Record<string, string>>> = {
   todo_items: { parent_id: 'todo_items' },
+  todo_progress_steps: { todo_id: 'todo_items' },
   record_taxonomy_links: { taxonomy_id: 'taxonomy_entries' },
   event_completions: { event_id: 'events' },
   inventory_items: { parent_item_id: 'inventory_items' },
@@ -163,6 +164,7 @@ export class SyncService {
               continue;
             }
           }
+          await this.validateProgressIdentity(transaction, userId, operation);
           // 自动续费只允许推进账期，人工编辑保持原意。
           const normalized = await normalizeAutomaticRenewalPatch(
             transaction,
@@ -200,6 +202,41 @@ export class SyncService {
       },
       { maxWait: 30000, timeout: 60000 },
     );
+  }
+
+  /// 已保存任务不转换类型，步骤稳定身份也不能转移到另一个任务。
+  private async validateProgressIdentity(
+    transaction: Prisma.TransactionClient,
+    userId: string,
+    operation: SyncOperationDto,
+  ): Promise<void> {
+    if (operation.op !== 'PATCH') return;
+    if (
+      operation.table === 'todo_items' &&
+      operation.data?.task_type !== undefined
+    ) {
+      // owner 锁内读取最新类型，允许完整 PATCH 重复携带原类型。
+      const current = await transaction.todoItem.findFirst({
+        where: { userId, id: operation.id },
+        select: { taskType: true },
+      });
+      if (current && current.taskType !== operation.data.task_type) {
+        throw new BadRequestException('已保存任务不能转换类型');
+      }
+    }
+    if (
+      operation.table === 'todo_progress_steps' &&
+      operation.data?.todo_id !== undefined
+    ) {
+      // 步骤的归属固定，避免旧面板操作意外修改另一个任务。
+      const current = await transaction.todoProgressStep.findFirst({
+        where: { userId, id: operation.id },
+        select: { todoId: true },
+      });
+      if (current && current.todoId !== operation.data.todo_id) {
+        throw new BadRequestException('已保存步骤不能转移到其他任务');
+      }
+    }
   }
 
   /// 合并同一天的旧随机身份，让后续增量操作持续命中同一日历槽位。

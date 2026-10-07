@@ -15,12 +15,14 @@ import type {
 import { reconcileSync } from './sync-consistency';
 import { SyncSqlBuilder, writableColumns } from './sync-sql.builder';
 import { canonicalize } from './sync.service';
+import { syncSchemaVersion } from './sync-schema';
 
 /// 客户端预检与服务端统一使用的快照上限。
 const limits = { maxOperations: 100000, maxBytes: 33554432 } as const;
 /// 必须包含在同一快照内的业务引用。
 const references: Record<string, Record<string, string>> = {
   todo_items: { parent_id: 'todo_items' },
+  todo_progress_steps: { todo_id: 'todo_items' },
   daily_quote_selections: { quote_id: 'quotes' },
   record_taxonomy_links: { taxonomy_id: 'taxonomy_entries' },
   event_completions: { event_id: 'events' },
@@ -62,6 +64,7 @@ export class SyncMigrationService {
   async preview(syncKey: string): Promise<{
     protocolVersion: number;
     snapshotVersion: number;
+    syncSchemaVersion: number;
     ownerId: string;
     counts: Record<string, number>;
     deletedCount: number;
@@ -90,11 +93,15 @@ export class SyncMigrationService {
             owner.id,
           );
           counts[table] = Number(rows[0]!.count);
-          deletedCount += Number(rows[0]!.deleted);
+          // 步骤只随任务展示，不能作为独立回收站记录计数。
+          if (table !== 'todo_progress_steps') {
+            deletedCount += Number(rows[0]!.deleted);
+          }
         }
         return {
           protocolVersion: 1,
-          snapshotVersion: 1,
+          snapshotVersion: 2,
+          syncSchemaVersion,
           ownerId: owner.id,
           counts,
           deletedCount,
@@ -201,7 +208,7 @@ export class SyncMigrationService {
   /// 验证完整列、重复身份、引用闭包与请求大小，空快照合法。
   private validateSnapshot(input: SyncMigrationDto): void {
     if (
-      input.snapshotVersion !== 1 ||
+      input.snapshotVersion !== 2 ||
       input.operations.length > limits.maxOperations ||
       Buffer.byteLength(JSON.stringify(input), 'utf8') > limits.maxBytes
     )

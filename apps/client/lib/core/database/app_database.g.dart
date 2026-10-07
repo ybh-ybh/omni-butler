@@ -42,6 +42,29 @@ class $TodoItemsTable extends TodoItems
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _taskTypeMeta = const VerificationMeta(
+    'taskType',
+  );
+  @override
+  late final GeneratedColumn<String> taskType = GeneratedColumn<String>(
+    'task_type',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant<String>('normal'),
+  );
+  static const VerificationMeta _progressUnitMeta = const VerificationMeta(
+    'progressUnit',
+  );
+  @override
+  late final GeneratedColumn<String> progressUnit = GeneratedColumn<String>(
+    'progress_unit',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _parentIdMeta = const VerificationMeta(
     'parentId',
   );
@@ -207,6 +230,8 @@ class $TodoItemsTable extends TodoItems
     id,
     title,
     description,
+    taskType,
+    progressUnit,
     parentId,
     scheduledDate,
     dueAt,
@@ -253,6 +278,21 @@ class $TodoItemsTable extends TodoItems
         description.isAcceptableOrUnknown(
           data['description']!,
           _descriptionMeta,
+        ),
+      );
+    }
+    if (data.containsKey('task_type')) {
+      context.handle(
+        _taskTypeMeta,
+        taskType.isAcceptableOrUnknown(data['task_type']!, _taskTypeMeta),
+      );
+    }
+    if (data.containsKey('progress_unit')) {
+      context.handle(
+        _progressUnitMeta,
+        progressUnit.isAcceptableOrUnknown(
+          data['progress_unit']!,
+          _progressUnitMeta,
         ),
       );
     }
@@ -382,6 +422,14 @@ class $TodoItemsTable extends TodoItems
         DriftSqlType.string,
         data['${effectivePrefix}description'],
       ),
+      taskType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}task_type'],
+      )!,
+      progressUnit: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}progress_unit'],
+      ),
       parentId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}parent_id'],
@@ -457,6 +505,12 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
   /// 待办描述。
   final String? description;
 
+  /// 完成方式；旧任务继续使用普通勾选。
+  final String taskType;
+
+  /// 进度单位；空值在界面显示默认步骤。
+  final String? progressUnit;
+
   /// 可选父任务标识；为空表示主任务。
   final String? parentId;
 
@@ -502,6 +556,8 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     required this.id,
     required this.title,
     this.description,
+    required this.taskType,
+    this.progressUnit,
     this.parentId,
     required this.scheduledDate,
     this.dueAt,
@@ -524,6 +580,10 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     map['title'] = Variable<String>(title);
     if (!nullToAbsent || description != null) {
       map['description'] = Variable<String>(description);
+    }
+    map['task_type'] = Variable<String>(taskType);
+    if (!nullToAbsent || progressUnit != null) {
+      map['progress_unit'] = Variable<String>(progressUnit);
     }
     if (!nullToAbsent || parentId != null) {
       map['parent_id'] = Variable<String>(parentId);
@@ -563,6 +623,10 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
       description: description == null && nullToAbsent
           ? const Value.absent()
           : Value(description),
+      taskType: Value(taskType),
+      progressUnit: progressUnit == null && nullToAbsent
+          ? const Value.absent()
+          : Value(progressUnit),
       parentId: parentId == null && nullToAbsent
           ? const Value.absent()
           : Value(parentId),
@@ -603,6 +667,8 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
       id: serializer.fromJson<String>(json['id']),
       title: serializer.fromJson<String>(json['title']),
       description: serializer.fromJson<String?>(json['description']),
+      taskType: serializer.fromJson<String>(json['taskType']),
+      progressUnit: serializer.fromJson<String?>(json['progressUnit']),
       parentId: serializer.fromJson<String?>(json['parentId']),
       scheduledDate: serializer.fromJson<DateTime>(json['scheduledDate']),
       dueAt: serializer.fromJson<DateTime?>(json['dueAt']),
@@ -626,6 +692,8 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
       'id': serializer.toJson<String>(id),
       'title': serializer.toJson<String>(title),
       'description': serializer.toJson<String?>(description),
+      'taskType': serializer.toJson<String>(taskType),
+      'progressUnit': serializer.toJson<String?>(progressUnit),
       'parentId': serializer.toJson<String?>(parentId),
       'scheduledDate': serializer.toJson<DateTime>(scheduledDate),
       'dueAt': serializer.toJson<DateTime?>(dueAt),
@@ -647,6 +715,8 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     String? id,
     String? title,
     Value<String?> description = const Value.absent(),
+    String? taskType,
+    Value<String?> progressUnit = const Value.absent(),
     Value<String?> parentId = const Value.absent(),
     DateTime? scheduledDate,
     Value<DateTime?> dueAt = const Value.absent(),
@@ -665,6 +735,8 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     id: id ?? this.id,
     title: title ?? this.title,
     description: description.present ? description.value : this.description,
+    taskType: taskType ?? this.taskType,
+    progressUnit: progressUnit.present ? progressUnit.value : this.progressUnit,
     parentId: parentId.present ? parentId.value : this.parentId,
     scheduledDate: scheduledDate ?? this.scheduledDate,
     dueAt: dueAt.present ? dueAt.value : this.dueAt,
@@ -689,6 +761,10 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
       description: data.description.present
           ? data.description.value
           : this.description,
+      taskType: data.taskType.present ? data.taskType.value : this.taskType,
+      progressUnit: data.progressUnit.present
+          ? data.progressUnit.value
+          : this.progressUnit,
       parentId: data.parentId.present ? data.parentId.value : this.parentId,
       scheduledDate: data.scheduledDate.present
           ? data.scheduledDate.value
@@ -726,6 +802,8 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
           ..write('id: $id, ')
           ..write('title: $title, ')
           ..write('description: $description, ')
+          ..write('taskType: $taskType, ')
+          ..write('progressUnit: $progressUnit, ')
           ..write('parentId: $parentId, ')
           ..write('scheduledDate: $scheduledDate, ')
           ..write('dueAt: $dueAt, ')
@@ -749,6 +827,8 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
     id,
     title,
     description,
+    taskType,
+    progressUnit,
     parentId,
     scheduledDate,
     dueAt,
@@ -771,6 +851,8 @@ class TodoRecord extends DataClass implements Insertable<TodoRecord> {
           other.id == this.id &&
           other.title == this.title &&
           other.description == this.description &&
+          other.taskType == this.taskType &&
+          other.progressUnit == this.progressUnit &&
           other.parentId == this.parentId &&
           other.scheduledDate == this.scheduledDate &&
           other.dueAt == this.dueAt &&
@@ -791,6 +873,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
   final Value<String> id;
   final Value<String> title;
   final Value<String?> description;
+  final Value<String> taskType;
+  final Value<String?> progressUnit;
   final Value<String?> parentId;
   final Value<DateTime> scheduledDate;
   final Value<DateTime?> dueAt;
@@ -810,6 +894,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     this.id = const Value.absent(),
     this.title = const Value.absent(),
     this.description = const Value.absent(),
+    this.taskType = const Value.absent(),
+    this.progressUnit = const Value.absent(),
     this.parentId = const Value.absent(),
     this.scheduledDate = const Value.absent(),
     this.dueAt = const Value.absent(),
@@ -830,6 +916,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     required String id,
     required String title,
     this.description = const Value.absent(),
+    this.taskType = const Value.absent(),
+    this.progressUnit = const Value.absent(),
     this.parentId = const Value.absent(),
     required DateTime scheduledDate,
     this.dueAt = const Value.absent(),
@@ -854,6 +942,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     Expression<String>? id,
     Expression<String>? title,
     Expression<String>? description,
+    Expression<String>? taskType,
+    Expression<String>? progressUnit,
     Expression<String>? parentId,
     Expression<DateTime>? scheduledDate,
     Expression<DateTime>? dueAt,
@@ -874,6 +964,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
       if (id != null) 'id': id,
       if (title != null) 'title': title,
       if (description != null) 'description': description,
+      if (taskType != null) 'task_type': taskType,
+      if (progressUnit != null) 'progress_unit': progressUnit,
       if (parentId != null) 'parent_id': parentId,
       if (scheduledDate != null) 'scheduled_date': scheduledDate,
       if (dueAt != null) 'due_at': dueAt,
@@ -896,6 +988,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     Value<String>? id,
     Value<String>? title,
     Value<String?>? description,
+    Value<String>? taskType,
+    Value<String?>? progressUnit,
     Value<String?>? parentId,
     Value<DateTime>? scheduledDate,
     Value<DateTime?>? dueAt,
@@ -916,6 +1010,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
       id: id ?? this.id,
       title: title ?? this.title,
       description: description ?? this.description,
+      taskType: taskType ?? this.taskType,
+      progressUnit: progressUnit ?? this.progressUnit,
       parentId: parentId ?? this.parentId,
       scheduledDate: scheduledDate ?? this.scheduledDate,
       dueAt: dueAt ?? this.dueAt,
@@ -945,6 +1041,12 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
     }
     if (description.present) {
       map['description'] = Variable<String>(description.value);
+    }
+    if (taskType.present) {
+      map['task_type'] = Variable<String>(taskType.value);
+    }
+    if (progressUnit.present) {
+      map['progress_unit'] = Variable<String>(progressUnit.value);
     }
     if (parentId.present) {
       map['parent_id'] = Variable<String>(parentId.value);
@@ -1000,6 +1102,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
           ..write('id: $id, ')
           ..write('title: $title, ')
           ..write('description: $description, ')
+          ..write('taskType: $taskType, ')
+          ..write('progressUnit: $progressUnit, ')
           ..write('parentId: $parentId, ')
           ..write('scheduledDate: $scheduledDate, ')
           ..write('dueAt: $dueAt, ')
@@ -1011,6 +1115,591 @@ class TodoItemsCompanion extends UpdateCompanion<TodoRecord> {
           ..write('repeatSeriesId: $repeatSeriesId, ')
           ..write('sortOrder: $sortOrder, ')
           ..write('syncState: $syncState, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $TodoProgressStepsTable extends TodoProgressSteps
+    with TableInfo<$TodoProgressStepsTable, TodoProgressStepRecord> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TodoProgressStepsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _todoIdMeta = const VerificationMeta('todoId');
+  @override
+  late final GeneratedColumn<String> todoId = GeneratedColumn<String>(
+    'todo_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _sortOrderMeta = const VerificationMeta(
+    'sortOrder',
+  );
+  @override
+  late final GeneratedColumn<int> sortOrder = GeneratedColumn<int>(
+    'sort_order',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant<int>(0),
+  );
+  static const VerificationMeta _isCompletedMeta = const VerificationMeta(
+    'isCompleted',
+  );
+  @override
+  late final GeneratedColumn<bool> isCompleted = GeneratedColumn<bool>(
+    'is_completed',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_completed" IN (0, 1))',
+    ),
+    defaultValue: const Constant<bool>(false),
+  );
+  static const VerificationMeta _completedAtMeta = const VerificationMeta(
+    'completedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> completedAt = GeneratedColumn<DateTime>(
+    'completed_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    todoId,
+    name,
+    sortOrder,
+    isCompleted,
+    completedAt,
+    createdAt,
+    updatedAt,
+    deletedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'todo_progress_steps';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<TodoProgressStepRecord> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('todo_id')) {
+      context.handle(
+        _todoIdMeta,
+        todoId.isAcceptableOrUnknown(data['todo_id']!, _todoIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_todoIdMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+        _nameMeta,
+        name.isAcceptableOrUnknown(data['name']!, _nameMeta),
+      );
+    }
+    if (data.containsKey('sort_order')) {
+      context.handle(
+        _sortOrderMeta,
+        sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
+      );
+    }
+    if (data.containsKey('is_completed')) {
+      context.handle(
+        _isCompletedMeta,
+        isCompleted.isAcceptableOrUnknown(
+          data['is_completed']!,
+          _isCompletedMeta,
+        ),
+      );
+    }
+    if (data.containsKey('completed_at')) {
+      context.handle(
+        _completedAtMeta,
+        completedAt.isAcceptableOrUnknown(
+          data['completed_at']!,
+          _completedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  TodoProgressStepRecord map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TodoProgressStepRecord(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      todoId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}todo_id'],
+      )!,
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      ),
+      sortOrder: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}sort_order'],
+      )!,
+      isCompleted: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_completed'],
+      )!,
+      completedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}completed_at'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}deleted_at'],
+      ),
+    );
+  }
+
+  @override
+  $TodoProgressStepsTable createAlias(String alias) {
+    return $TodoProgressStepsTable(attachedDatabase, alias);
+  }
+}
+
+class TodoProgressStepRecord extends DataClass
+    implements Insertable<TodoProgressStepRecord> {
+  /// 客户端生成的稳定标识。
+  final String id;
+
+  /// 所属进度任务；本地兼容下行乱序，不施加即时外键。
+  final String todoId;
+
+  /// 可选名称，留空时按展示顺序生成占位名称。
+  final String? name;
+
+  /// 进度项的用户顺序。
+  final int sortOrder;
+
+  /// 当前进度项是否完成。
+  final bool isCompleted;
+
+  /// 当前进度项完成时间。
+  final DateTime? completedAt;
+
+  /// 创建时间。
+  final DateTime createdAt;
+
+  /// 最近更新时间，供撤销比较操作后的状态。
+  final DateTime updatedAt;
+
+  /// 软删除时间，随所属任务保留。
+  final DateTime? deletedAt;
+  const TodoProgressStepRecord({
+    required this.id,
+    required this.todoId,
+    this.name,
+    required this.sortOrder,
+    required this.isCompleted,
+    this.completedAt,
+    required this.createdAt,
+    required this.updatedAt,
+    this.deletedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['todo_id'] = Variable<String>(todoId);
+    if (!nullToAbsent || name != null) {
+      map['name'] = Variable<String>(name);
+    }
+    map['sort_order'] = Variable<int>(sortOrder);
+    map['is_completed'] = Variable<bool>(isCompleted);
+    if (!nullToAbsent || completedAt != null) {
+      map['completed_at'] = Variable<DateTime>(completedAt);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
+    return map;
+  }
+
+  TodoProgressStepsCompanion toCompanion(bool nullToAbsent) {
+    return TodoProgressStepsCompanion(
+      id: Value(id),
+      todoId: Value(todoId),
+      name: name == null && nullToAbsent ? const Value.absent() : Value(name),
+      sortOrder: Value(sortOrder),
+      isCompleted: Value(isCompleted),
+      completedAt: completedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(completedAt),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+    );
+  }
+
+  factory TodoProgressStepRecord.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return TodoProgressStepRecord(
+      id: serializer.fromJson<String>(json['id']),
+      todoId: serializer.fromJson<String>(json['todoId']),
+      name: serializer.fromJson<String?>(json['name']),
+      sortOrder: serializer.fromJson<int>(json['sortOrder']),
+      isCompleted: serializer.fromJson<bool>(json['isCompleted']),
+      completedAt: serializer.fromJson<DateTime?>(json['completedAt']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'todoId': serializer.toJson<String>(todoId),
+      'name': serializer.toJson<String?>(name),
+      'sortOrder': serializer.toJson<int>(sortOrder),
+      'isCompleted': serializer.toJson<bool>(isCompleted),
+      'completedAt': serializer.toJson<DateTime?>(completedAt),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
+    };
+  }
+
+  TodoProgressStepRecord copyWith({
+    String? id,
+    String? todoId,
+    Value<String?> name = const Value.absent(),
+    int? sortOrder,
+    bool? isCompleted,
+    Value<DateTime?> completedAt = const Value.absent(),
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    Value<DateTime?> deletedAt = const Value.absent(),
+  }) => TodoProgressStepRecord(
+    id: id ?? this.id,
+    todoId: todoId ?? this.todoId,
+    name: name.present ? name.value : this.name,
+    sortOrder: sortOrder ?? this.sortOrder,
+    isCompleted: isCompleted ?? this.isCompleted,
+    completedAt: completedAt.present ? completedAt.value : this.completedAt,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+  );
+  TodoProgressStepRecord copyWithCompanion(TodoProgressStepsCompanion data) {
+    return TodoProgressStepRecord(
+      id: data.id.present ? data.id.value : this.id,
+      todoId: data.todoId.present ? data.todoId.value : this.todoId,
+      name: data.name.present ? data.name.value : this.name,
+      sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+      isCompleted: data.isCompleted.present
+          ? data.isCompleted.value
+          : this.isCompleted,
+      completedAt: data.completedAt.present
+          ? data.completedAt.value
+          : this.completedAt,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TodoProgressStepRecord(')
+          ..write('id: $id, ')
+          ..write('todoId: $todoId, ')
+          ..write('name: $name, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('isCompleted: $isCompleted, ')
+          ..write('completedAt: $completedAt, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    todoId,
+    name,
+    sortOrder,
+    isCompleted,
+    completedAt,
+    createdAt,
+    updatedAt,
+    deletedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is TodoProgressStepRecord &&
+          other.id == this.id &&
+          other.todoId == this.todoId &&
+          other.name == this.name &&
+          other.sortOrder == this.sortOrder &&
+          other.isCompleted == this.isCompleted &&
+          other.completedAt == this.completedAt &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt);
+}
+
+class TodoProgressStepsCompanion
+    extends UpdateCompanion<TodoProgressStepRecord> {
+  final Value<String> id;
+  final Value<String> todoId;
+  final Value<String?> name;
+  final Value<int> sortOrder;
+  final Value<bool> isCompleted;
+  final Value<DateTime?> completedAt;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<DateTime?> deletedAt;
+  final Value<int> rowid;
+  const TodoProgressStepsCompanion({
+    this.id = const Value.absent(),
+    this.todoId = const Value.absent(),
+    this.name = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.isCompleted = const Value.absent(),
+    this.completedAt = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  TodoProgressStepsCompanion.insert({
+    required String id,
+    required String todoId,
+    this.name = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.isCompleted = const Value.absent(),
+    this.completedAt = const Value.absent(),
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    this.deletedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       todoId = Value(todoId),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<TodoProgressStepRecord> custom({
+    Expression<String>? id,
+    Expression<String>? todoId,
+    Expression<String>? name,
+    Expression<int>? sortOrder,
+    Expression<bool>? isCompleted,
+    Expression<DateTime>? completedAt,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<DateTime>? deletedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (todoId != null) 'todo_id': todoId,
+      if (name != null) 'name': name,
+      if (sortOrder != null) 'sort_order': sortOrder,
+      if (isCompleted != null) 'is_completed': isCompleted,
+      if (completedAt != null) 'completed_at': completedAt,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  TodoProgressStepsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? todoId,
+    Value<String?>? name,
+    Value<int>? sortOrder,
+    Value<bool>? isCompleted,
+    Value<DateTime?>? completedAt,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<DateTime?>? deletedAt,
+    Value<int>? rowid,
+  }) {
+    return TodoProgressStepsCompanion(
+      id: id ?? this.id,
+      todoId: todoId ?? this.todoId,
+      name: name ?? this.name,
+      sortOrder: sortOrder ?? this.sortOrder,
+      isCompleted: isCompleted ?? this.isCompleted,
+      completedAt: completedAt ?? this.completedAt,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (todoId.present) {
+      map['todo_id'] = Variable<String>(todoId.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (sortOrder.present) {
+      map['sort_order'] = Variable<int>(sortOrder.value);
+    }
+    if (isCompleted.present) {
+      map['is_completed'] = Variable<bool>(isCompleted.value);
+    }
+    if (completedAt.present) {
+      map['completed_at'] = Variable<DateTime>(completedAt.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TodoProgressStepsCompanion(')
+          ..write('id: $id, ')
+          ..write('todoId: $todoId, ')
+          ..write('name: $name, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('isCompleted: $isCompleted, ')
+          ..write('completedAt: $completedAt, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('deletedAt: $deletedAt, ')
@@ -2679,7 +3368,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
   /// 当前设备私有文件路径。
   final String? localPath;
 
-  /// 下一期云端对象键。
+  /// 兼容历史附件的对象键；图片访问统一使用业务图片接口。
   final String? objectKey;
 
   /// 文件 MIME 类型。
@@ -2691,7 +3380,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
   /// 文件 SHA-256 摘要。
   final String? sha256;
 
-  /// 本地保存或下一期云端上传状态。
+  /// 本地保存或已同步缓存状态。
   final String uploadState;
 
   /// 最近一次失败原因。
@@ -9998,6 +10687,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $TodoItemsTable todoItems = $TodoItemsTable(this);
+  late final $TodoProgressStepsTable todoProgressSteps =
+      $TodoProgressStepsTable(this);
   late final $QuotesTable quotes = $QuotesTable(this);
   late final $DailyQuoteSelectionsTable dailyQuoteSelections =
       $DailyQuoteSelectionsTable(this);
@@ -10023,6 +10714,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   @override
   List<DatabaseSchemaEntity> get allSchemaEntities => [
     todoItems,
+    todoProgressSteps,
     quotes,
     dailyQuoteSelections,
     bannerSettings,
@@ -10055,6 +10747,8 @@ typedef $$TodoItemsTableCreateCompanionBuilder = TodoItemsCompanion Function({
   required String id,
   required String title,
   Value<String?> description,
+  Value<String> taskType,
+  Value<String?> progressUnit,
   Value<String?> parentId,
   required DateTime scheduledDate,
   Value<DateTime?> dueAt,
@@ -10075,6 +10769,8 @@ typedef $$TodoItemsTableUpdateCompanionBuilder = TodoItemsCompanion Function({
   Value<String> id,
   Value<String> title,
   Value<String?> description,
+  Value<String> taskType,
+  Value<String?> progressUnit,
   Value<String?> parentId,
   Value<DateTime> scheduledDate,
   Value<DateTime?> dueAt,
@@ -10113,6 +10809,16 @@ class $$TodoItemsTableFilterComposer
 
   ColumnFilters<String> get description => $composableBuilder(
     column: $table.description,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get taskType => $composableBuilder(
+    column: $table.taskType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get progressUnit => $composableBuilder(
+    column: $table.progressUnit,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -10211,6 +10917,16 @@ class $$TodoItemsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get taskType => $composableBuilder(
+    column: $table.taskType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get progressUnit => $composableBuilder(
+    column: $table.progressUnit,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get parentId => $composableBuilder(
     column: $table.parentId,
     builder: (column) => ColumnOrderings(column),
@@ -10299,6 +11015,14 @@ class $$TodoItemsTableAnnotationComposer
 
   GeneratedColumn<String> get description => $composableBuilder(
     column: $table.description,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get taskType =>
+      $composableBuilder(column: $table.taskType, builder: (column) => column);
+
+  GeneratedColumn<String> get progressUnit => $composableBuilder(
+    column: $table.progressUnit,
     builder: (column) => column,
   );
 
@@ -10393,6 +11117,8 @@ class $$TodoItemsTableTableManager
                 Value<String> id = const Value.absent(),
                 Value<String> title = const Value.absent(),
                 Value<String?> description = const Value.absent(),
+                Value<String> taskType = const Value.absent(),
+                Value<String?> progressUnit = const Value.absent(),
                 Value<String?> parentId = const Value.absent(),
                 Value<DateTime> scheduledDate = const Value.absent(),
                 Value<DateTime?> dueAt = const Value.absent(),
@@ -10412,6 +11138,8 @@ class $$TodoItemsTableTableManager
                 id: id,
                 title: title,
                 description: description,
+                taskType: taskType,
+                progressUnit: progressUnit,
                 parentId: parentId,
                 scheduledDate: scheduledDate,
                 dueAt: dueAt,
@@ -10433,6 +11161,8 @@ class $$TodoItemsTableTableManager
                 required String id,
                 required String title,
                 Value<String?> description = const Value.absent(),
+                Value<String> taskType = const Value.absent(),
+                Value<String?> progressUnit = const Value.absent(),
                 Value<String?> parentId = const Value.absent(),
                 required DateTime scheduledDate,
                 Value<DateTime?> dueAt = const Value.absent(),
@@ -10452,6 +11182,8 @@ class $$TodoItemsTableTableManager
                 id: id,
                 title: title,
                 description: description,
+                taskType: taskType,
+                progressUnit: progressUnit,
                 parentId: parentId,
                 scheduledDate: scheduledDate,
                 dueAt: dueAt,
@@ -10497,6 +11229,310 @@ typedef $$TodoItemsTableProcessedTableManager =
       $$TodoItemsTableUpdateCompanionBuilder,
       (TodoRecord, BaseReferences<_$AppDatabase, $TodoItemsTable, TodoRecord>),
       TodoRecord,
+      PrefetchHooks Function()
+    >;
+typedef $$TodoProgressStepsTableCreateCompanionBuilder =
+    TodoProgressStepsCompanion Function({
+      required String id,
+      required String todoId,
+      Value<String?> name,
+      Value<int> sortOrder,
+      Value<bool> isCompleted,
+      Value<DateTime?> completedAt,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+      Value<DateTime?> deletedAt,
+      Value<int> rowid,
+    });
+typedef $$TodoProgressStepsTableUpdateCompanionBuilder =
+    TodoProgressStepsCompanion Function({
+      Value<String> id,
+      Value<String> todoId,
+      Value<String?> name,
+      Value<int> sortOrder,
+      Value<bool> isCompleted,
+      Value<DateTime?> completedAt,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<DateTime?> deletedAt,
+      Value<int> rowid,
+    });
+
+class $$TodoProgressStepsTableFilterComposer
+    extends Composer<_$AppDatabase, $TodoProgressStepsTable> {
+  $$TodoProgressStepsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get todoId => $composableBuilder(
+    column: $table.todoId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isCompleted => $composableBuilder(
+    column: $table.isCompleted,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$TodoProgressStepsTableOrderingComposer
+    extends Composer<_$AppDatabase, $TodoProgressStepsTable> {
+  $$TodoProgressStepsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get todoId => $composableBuilder(
+    column: $table.todoId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isCompleted => $composableBuilder(
+    column: $table.isCompleted,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$TodoProgressStepsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $TodoProgressStepsTable> {
+  $$TodoProgressStepsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get todoId =>
+      $composableBuilder(column: $table.todoId, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<int> get sortOrder =>
+      $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  GeneratedColumn<bool> get isCompleted => $composableBuilder(
+    column: $table.isCompleted,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+}
+
+class $$TodoProgressStepsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $TodoProgressStepsTable,
+          TodoProgressStepRecord,
+          $$TodoProgressStepsTableFilterComposer,
+          $$TodoProgressStepsTableOrderingComposer,
+          $$TodoProgressStepsTableAnnotationComposer,
+          $$TodoProgressStepsTableCreateCompanionBuilder,
+          $$TodoProgressStepsTableUpdateCompanionBuilder,
+          (
+            TodoProgressStepRecord,
+            BaseReferences<
+              _$AppDatabase,
+              $TodoProgressStepsTable,
+              TodoProgressStepRecord
+            >,
+          ),
+          TodoProgressStepRecord,
+          PrefetchHooks Function()
+        > {
+  $$TodoProgressStepsTableTableManager(
+    _$AppDatabase db,
+    $TodoProgressStepsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TodoProgressStepsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TodoProgressStepsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$TodoProgressStepsTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> todoId = const Value.absent(),
+                Value<String?> name = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<bool> isCompleted = const Value.absent(),
+                Value<DateTime?> completedAt = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => TodoProgressStepsCompanion(
+                id: id,
+                todoId: todoId,
+                name: name,
+                sortOrder: sortOrder,
+                isCompleted: isCompleted,
+                completedAt: completedAt,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String todoId,
+                Value<String?> name = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<bool> isCompleted = const Value.absent(),
+                Value<DateTime?> completedAt = const Value.absent(),
+                required DateTime createdAt,
+                required DateTime updatedAt,
+                Value<DateTime?> deletedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => TodoProgressStepsCompanion.insert(
+                id: id,
+                todoId: todoId,
+                name: name,
+                sortOrder: sortOrder,
+                isCompleted: isCompleted,
+                completedAt: completedAt,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$TodoProgressStepsTable, TodoProgressStepRecord>(
+                    table,
+                  ),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $TodoProgressStepsTable,
+                    TodoProgressStepRecord
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$TodoProgressStepsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $TodoProgressStepsTable,
+      TodoProgressStepRecord,
+      $$TodoProgressStepsTableFilterComposer,
+      $$TodoProgressStepsTableOrderingComposer,
+      $$TodoProgressStepsTableAnnotationComposer,
+      $$TodoProgressStepsTableCreateCompanionBuilder,
+      $$TodoProgressStepsTableUpdateCompanionBuilder,
+      (
+        TodoProgressStepRecord,
+        BaseReferences<
+          _$AppDatabase,
+          $TodoProgressStepsTable,
+          TodoProgressStepRecord
+        >,
+      ),
+      TodoProgressStepRecord,
       PrefetchHooks Function()
     >;
 typedef $$QuotesTableCreateCompanionBuilder = QuotesCompanion Function({
@@ -15593,6 +16629,8 @@ class $AppDatabaseManager {
   $AppDatabaseManager(this._db);
   $$TodoItemsTableTableManager get todoItems =>
       $$TodoItemsTableTableManager(_db, _db.todoItems);
+  $$TodoProgressStepsTableTableManager get todoProgressSteps =>
+      $$TodoProgressStepsTableTableManager(_db, _db.todoProgressSteps);
   $$QuotesTableTableManager get quotes =>
       $$QuotesTableTableManager(_db, _db.quotes);
   $$DailyQuoteSelectionsTableTableManager get dailyQuoteSelections =>

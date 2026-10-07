@@ -7,6 +7,9 @@ import 'package:omni_butler/core/auth/auth_models.dart';
 /// Omni Butler API 的固定公开路径，用于区分同域名下的其他服务。
 const String fixedApiPath = '/omni-butler/api/v1';
 
+/// 当前客户端支持的业务同步结构版本。
+const int syncSchemaVersion = 2;
+
 /// 完整设备会话使用同一个安全存储键，避免写入中断造成凭证混搭。
 const String _sessionKey = 'sync.device_session';
 
@@ -76,6 +79,9 @@ class AuthRepository {
   /// 本机会话代次，防止断开后旧请求重新写回凭证。
   int _generation = 0;
 
+  /// 当前会话已确认的同步结构代次，切换会话后自然失效。
+  int? _verifiedSchemaGeneration;
+
   /// 安全存储修改顺序，确保断开最终覆盖已经开始的写入。
   Future<void> _storageWrites = Future<void>.value();
 
@@ -88,6 +94,29 @@ class AuthRepository {
 
   /// 暴露当前代次，供同步连接器拒绝旧请求确认队列。
   int get sessionGeneration => _generation;
+
+  /// 上传开始前也进行握手，避免 SDK 独立调用上传时绕过凭证校验。
+  Future<void> ensureSyncSchemaForGeneration(int generation) async {
+    if (generation != _generation) throw const ApiFailure('同步会话已变更，请重试');
+    if (_verifiedSchemaGeneration == generation) return;
+    // 使用现有只读会话接口，无需新增公开路径。
+    final Response<Map<String, dynamic>> response =
+        await authorizedRequestForGeneration<Map<String, dynamic>>(
+          generation,
+          'GET',
+          '/auth/session',
+        );
+    _verifySyncSchema(response.data ?? <String, dynamic>{});
+    if (generation != _generation) throw const ApiFailure('同步会话已变更，请重试');
+    _verifiedSchemaGeneration = generation;
+  }
+
+  /// 缺失版本也属于不兼容，不能向旧服务器提交新业务数据。
+  void _verifySyncSchema(Map<String, dynamic> response) {
+    if (response['syncSchemaVersion'] != syncSchemaVersion) {
+      throw const SyncSchemaMismatch();
+    }
+  }
 
   /// 同步检查代次后立即开始请求，关闭异步作用域校验与请求发起之间的切换窗口。
   Future<Response<T>> authorizedRequestForGeneration<T>(
@@ -157,7 +186,8 @@ class AuthRepository {
       '/sync/connection-preview',
       <String, Object?>{'syncKey': syncKey},
     );
-    if (result['protocolVersion'] != 1 || result['snapshotVersion'] != 1) {
+    _verifySyncSchema(result);
+    if (result['protocolVersion'] != 1 || result['snapshotVersion'] != 2) {
       throw const ApiFailure('服务器尚不支持当前迁移协议，请先升级后端');
     }
     return result;
@@ -176,7 +206,7 @@ class AuthRepository {
       'syncKey': syncKey,
       'migrationId': migrationId,
       'expectedOwnerId': expectedOwnerId,
-      'snapshotVersion': 1,
+      'snapshotVersion': 2,
       'operations': operations,
     };
     if (operations.length > 100000 ||
@@ -256,6 +286,12 @@ class AuthRepository {
       );
     } on DioException catch (error) {
       if (generation != _generation) return null;
+      // 版本错误不可伪装为离线恢复，否则会再次自动启动同步。
+      final Object? responseData = error.response?.data;
+      if (responseData is Map &&
+          responseData['code'] == 'SYNC_SCHEMA_MISMATCH') {
+        throw const SyncSchemaMismatch();
+      }
       if (error.response?.statusCode == 401) {
         await clearSession();
         return null;
@@ -265,6 +301,8 @@ class AuthRepository {
         apiBaseUrl: saved.baseUrl,
         isOffline: true,
       );
+    } on SyncSchemaMismatch {
+      rethrow;
     } on ApiFailure {
       return null;
     }
@@ -351,6 +389,8 @@ class AuthRepository {
         );
     // PowerSync 返回数据。
     final Map<String, dynamic> data = response.data ?? <String, dynamic>{};
+    _verifySyncSchema(data);
+    _verifiedSchemaGeneration = _generation;
     return PowerSyncCredential(
       endpoint: data['endpoint'] as String,
       token: data['token'] as String,
@@ -555,7 +595,10 @@ class AuthRepository {
         headers: <String, String>{'Authorization': 'Bearer $token'},
       ),
     );
-    return SyncIdentity.fromJson(response.data ?? <String, dynamic>{});
+    // 旧服务器不能在已有会话恢复路径绕过结构检查。
+    final Map<String, dynamic> data = response.data ?? <String, dynamic>{};
+    _verifySyncSchema(data);
+    return SyncIdentity.fromJson(data);
   }
 
   /// 读取完整会话；旧格式不迁移，重新连接即可。
@@ -653,7 +696,9 @@ class AuthRepository {
 
   /// 创建带公共超时设置的 HTTP 客户端。
   Dio _dio(String baseUrl) {
-    return clientFactory?.call(baseUrl) ??
+    // 测试传输与真实传输统一附带版本头，不改动原有请求体契约。
+    final Dio client =
+        clientFactory?.call(baseUrl) ??
         Dio(
           BaseOptions(
             baseUrl: baseUrl,
@@ -663,6 +708,8 @@ class AuthRepository {
             responseType: ResponseType.json,
           ),
         );
+    client.options.headers['X-Omni-Sync-Schema'] = syncSchemaVersion.toString();
+    return client;
   }
 
   /// 将服务端错误转换为用户提示。
@@ -670,6 +717,9 @@ class AuthRepository {
     // 服务端错误响应体。
     final Object? responseData = error.response?.data;
     if (responseData is Map<String, dynamic>) {
+      if (responseData['code'] == 'SYNC_SCHEMA_MISMATCH') {
+        throw const SyncSchemaMismatch();
+      }
       // NestJS 标准错误消息。
       final Object? message = responseData['message'];
       if (message is String && message.isNotEmpty) return message;

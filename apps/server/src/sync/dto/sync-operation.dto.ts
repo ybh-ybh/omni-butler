@@ -18,6 +18,7 @@ export class SyncOperationDto {
   @ApiProperty()
   @IsIn([
     'todo_items',
+    'todo_progress_steps',
     'quotes',
     'daily_quote_selections',
     'taxonomy_entries',

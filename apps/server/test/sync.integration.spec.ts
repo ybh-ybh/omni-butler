@@ -29,6 +29,7 @@ const timestamp = '2026-09-25T08:00:00.000Z';
 /// 含 updated_at 非空列的业务表。
 const updatedTables = new Set([
   'todo_items',
+  'todo_progress_steps',
   'quotes',
   'daily_quote_selections',
   'taxonomy_entries',
@@ -101,6 +102,8 @@ integration('SyncService PostgreSQL 集成', () => {
   let ownsSchema = false;
   // 第四份迁移是否原样保留前三份迁移已存入的旧随机日签。
   let preservedLegacySelection = false;
+  // 进度任务增量迁移是否原样保留普通任务和子任务。
+  let preservedLegacyTodos = false;
 
   beforeAll(async () => {
     // 解析显式提供的测试连接字符串。
@@ -140,6 +143,8 @@ integration('SyncService PostgreSQL 集成', () => {
         migration === '20260925000300_daily_quote_selection_aliases';
       // 升级前的完整业务行，用于逐字段验证迁移没有改写数据。
       let legacySelection: Record<string, unknown> | undefined;
+      // 新类型上线前的完整普通任务快照。
+      let legacyTodos: Record<string, unknown>[] | undefined;
       if (upgradingAliases) {
         // 此数据仅属于当前显式空测试库，首个用例前会正常清理。
         const seeded = await database.query<{ row: Record<string, unknown> }>(
@@ -156,6 +161,23 @@ integration('SyncService PostgreSQL 集成', () => {
         );
         legacySelection = seeded.rows[0]!.row;
       }
+      if (migration === '20261007000000_todo_progress') {
+        // 在新增列前创建已完成父任务和子任务，验证真实增量升级。
+        const seeded = await database.query<{ row: Record<string, unknown> }>(
+          `WITH owner AS (
+             INSERT INTO sync_owners (id) VALUES ($1) RETURNING id
+           ), parent AS (
+             INSERT INTO todo_items (id, user_id, title, scheduled_date, is_completed, completed_at, updated_at)
+             SELECT $2, id, 'legacy root', '2026-09-25', true, $4, $4 FROM owner RETURNING *
+           ), child AS (
+             INSERT INTO todo_items (id, user_id, parent_id, title, scheduled_date, is_completed, completed_at, updated_at)
+             SELECT $3, user_id, id, 'legacy child', '2026-09-25', true, $4, $4 FROM parent RETURNING *
+           ) SELECT to_jsonb(parent) AS row FROM parent
+             UNION ALL SELECT to_jsonb(child) AS row FROM child`,
+          [randomUUID(), randomUUID(), randomUUID(), timestamp],
+        );
+        legacyTodos = seeded.rows.map((row) => row.row);
+      }
       await database.query(
         readFileSync(
           join(__dirname, '../prisma/migrations', migration, 'migration.sql'),
@@ -171,6 +193,22 @@ integration('SyncService PostgreSQL 集成', () => {
         expect(after.rows[0]?.row).toEqual(legacySelection);
         preservedLegacySelection = true;
       }
+      if (legacyTodos) {
+        // 每条旧记录只增加默认类型和空单位，其余业务字段保持不变。
+        for (const legacyTodo of legacyTodos) {
+          // 迁移后的真实数据库行。
+          const after = await database.query<{ row: Record<string, unknown> }>(
+            'SELECT to_jsonb(todo) AS row FROM todo_items todo WHERE id = $1',
+            [legacyTodo.id],
+          );
+          expect(after.rows[0]?.row).toEqual({
+            ...legacyTodo,
+            task_type: 'normal',
+            progress_unit: null,
+          });
+        }
+        preservedLegacyTodos = true;
+      }
     }
     prisma = new PrismaService(
       new ConfigService({ DATABASE_URL: databaseUrl }),
@@ -184,6 +222,10 @@ integration('SyncService PostgreSQL 集成', () => {
 
   it('第四份迁移原样保留已部署版本的旧随机日签记录', () => {
     expect(preservedLegacySelection).toBe(true);
+  });
+
+  it('进度任务增量迁移原样保留旧任务完成状态及父子关系', () => {
+    expect(preservedLegacyTodos).toBe(true);
   });
 
   beforeEach(async () => {
@@ -213,7 +255,7 @@ integration('SyncService PostgreSQL 集成', () => {
       syncKey: 'migration-test-key',
       migrationId: randomUUID(),
       expectedOwnerId: ownerId,
-      snapshotVersion: 1,
+      snapshotVersion: 2,
       operations,
     };
   }
@@ -562,12 +604,12 @@ integration('SyncService PostgreSQL 集成', () => {
     expect(preview).toMatchObject({
       ownerId,
       protocolVersion: 1,
-      snapshotVersion: 1,
+      snapshotVersion: 2,
       deletedCount: 1,
       counts: { quotes: 2 },
       limits: { maxOperations: 100000, maxBytes: 33554432 },
     });
-    expect(Object.keys(preview.counts)).toHaveLength(11);
+    expect(Object.keys(preview.counts)).toHaveLength(12);
   });
 
   afterAll(async () => {
@@ -600,6 +642,7 @@ integration('SyncService PostgreSQL 集成', () => {
       'taxonomy_entries',
       'time_entries',
       'todo_items',
+      'todo_progress_steps',
     ]);
   });
 
@@ -1445,6 +1488,431 @@ integration('SyncService PostgreSQL 集成', () => {
     );
     expect(await prisma!.todoItem.count()).toBe(0);
     expect(await prisma!.syncReceipt.count()).toBe(0);
+  });
+
+  /// 构造可直接用于严格快照的进度任务和步骤。
+  function progressFixture(count = 3, completed = false): SyncOperationDto[] {
+    // 包含全部同步字段的根任务。
+    const todo = put('todo_items', {
+      parent_id: null,
+      title: '阅读书籍',
+      task_type: 'progress',
+      progress_unit: '章',
+      description: null,
+      scheduled_date: '2026-10-07',
+      due_at: null,
+      priority_quadrant: 2,
+      is_completed: completed,
+      completed_at: completed ? timestamp : null,
+      reminder_at: null,
+      repeat_rule: null,
+      repeat_series_id: null,
+      sort_order: 0,
+      deleted_at: null,
+    });
+    return [
+      todo,
+      ...Array.from({ length: count }, (_, index) =>
+        put('todo_progress_steps', {
+          todo_id: todo.id,
+          name: null,
+          sort_order: index,
+          is_completed: completed,
+          completed_at: completed ? timestamp : null,
+          deleted_at: null,
+        }),
+      ),
+    ];
+  }
+
+  /// 构造步骤目标状态，重试不得变成再次反转。
+  function stepState(
+    step: SyncOperationDto,
+    completed: boolean,
+  ): SyncOperationDto {
+    return {
+      op: 'PATCH',
+      table: step.table,
+      id: step.id,
+      data: {
+        is_completed: completed,
+        completed_at: completed ? timestamp : null,
+      },
+    };
+  }
+
+  it('进度支持跳序记录，满进度手动确认，重新打开保留所有步骤', async () => {
+    // 十二章与根任务一次上传。
+    const [todo, ...steps] = progressFixture(12);
+    await service.applyBatch(ownerId, batch([todo!, ...steps]));
+    await service.applyBatch(
+      ownerId,
+      batch([0, 2, 7].map((index) => stepState(steps[index]!, true))),
+    );
+    expect(
+      (
+        await prisma!.todoProgressStep.findMany({
+          where: { isCompleted: true },
+          orderBy: { sortOrder: 'asc' },
+        })
+      ).map((step) => step.sortOrder),
+    ).toEqual([0, 2, 7]);
+    // 未满时离线确认被纠正，但事务正常确认，不阻塞后续队列。
+    const confirm = batch([
+      {
+        op: 'PATCH',
+        table: 'todo_items',
+        id: todo!.id,
+        data: { is_completed: true, completed_at: timestamp },
+      },
+    ]);
+    await expect(service.applyBatch(ownerId, confirm)).resolves.toMatchObject({
+      applied: 1,
+      replayed: false,
+    });
+    expect(
+      await prisma!.todoItem.findUnique({ where: { id: todo!.id } }),
+    ).toMatchObject({ isCompleted: false, completedAt: null });
+    await service.applyBatch(
+      ownerId,
+      batch(steps.map((step) => stepState(step, true))),
+    );
+    expect(
+      (await prisma!.todoItem.findUniqueOrThrow({ where: { id: todo!.id } }))
+        .isCompleted,
+    ).toBe(false);
+    await service.applyBatch(ownerId, batch(confirm.operations));
+    expect(
+      (await prisma!.todoItem.findUniqueOrThrow({ where: { id: todo!.id } }))
+        .isCompleted,
+    ).toBe(true);
+    await service.applyBatch(
+      ownerId,
+      batch([
+        {
+          op: 'PATCH',
+          table: 'todo_items',
+          id: todo!.id,
+          data: { is_completed: false, completed_at: null },
+        },
+      ]),
+    );
+    expect(
+      await prisma!.todoProgressStep.count({ where: { isCompleted: true } }),
+    ).toBe(12);
+  });
+
+  it('两端记录不同步骤可合并，幂等重试不覆盖之后的进度，改名排序不覆盖完成', async () => {
+    // 两端共享初始未完成快照。
+    const [todo, ...steps] = progressFixture();
+    await service.applyBatch(ownerId, batch([todo!, ...steps]));
+    // 设备 A 的一次已完成操作，之后将原事务完整重试。
+    const first = batch([stepState(steps[0]!, true)]);
+    await Promise.all([
+      service.applyBatch(ownerId, first),
+      service.applyBatch(ownerId, batch([stepState(steps[1]!, true)])),
+    ]);
+    await service.applyBatch(ownerId, batch([stepState(steps[0]!, false)]));
+    await expect(service.applyBatch(ownerId, first)).resolves.toMatchObject({
+      replayed: true,
+    });
+    await service.applyBatch(
+      ownerId,
+      batch([
+        {
+          op: 'PATCH',
+          table: 'todo_progress_steps',
+          id: steps[1]!.id,
+          data: { name: '  重复名称  ', sort_order: 8 },
+        },
+      ]),
+    );
+    expect(
+      await prisma!.todoProgressStep.findUnique({
+        where: { id: steps[0]!.id },
+      }),
+    ).toMatchObject({ isCompleted: false });
+    expect(
+      await prisma!.todoProgressStep.findUnique({
+        where: { id: steps[1]!.id },
+      }),
+    ).toMatchObject({ name: '重复名称', sortOrder: 8, isCompleted: true });
+  });
+
+  it('已确认任务改名排序及删掉已完成步骤保持确认，新增未完成步骤自动重开', async () => {
+    // 已完成快照可在同一事务导入，不能被逐操作协调提前重开。
+    const [todo, ...steps] = progressFixture(3, true);
+    await service.applyBatch(ownerId, batch([todo!, ...steps]));
+    await service.applyBatch(
+      ownerId,
+      batch([
+        {
+          op: 'PATCH',
+          table: 'todo_progress_steps',
+          id: steps[0]!.id,
+          data: { name: '引言', sort_order: 5 },
+        },
+        {
+          op: 'PATCH',
+          table: 'todo_progress_steps',
+          id: steps[1]!.id,
+          data: { deleted_at: timestamp },
+        },
+      ]),
+    );
+    expect(
+      await prisma!.todoItem.findUnique({ where: { id: todo!.id } }),
+    ).toMatchObject({ isCompleted: true, completedAt: new Date(timestamp) });
+    await service.applyBatch(
+      ownerId,
+      batch([put('todo_progress_steps', { todo_id: todo!.id, sort_order: 6 })]),
+    );
+    expect(
+      await prisma!.todoItem.findUnique({ where: { id: todo!.id } }),
+    ).toMatchObject({ isCompleted: false, completedAt: null });
+  });
+
+  it.each([true, false])(
+    '确认与取消步骤并发无论应用顺序均以最终步骤为准（确认先=%s）',
+    async (confirmFirst) => {
+      // 初始步骤全满，任务保持待确认。
+      const [todo, ...steps] = progressFixture(1, true);
+      todo!.data!.is_completed = false;
+      todo!.data!.completed_at = null;
+      await service.applyBatch(ownerId, batch([todo!, ...steps]));
+      // 一端确认任务，另一端撤销同一步。
+      const confirm = batch([
+        {
+          op: 'PATCH',
+          table: 'todo_items',
+          id: todo!.id,
+          data: { is_completed: true, completed_at: timestamp },
+        },
+      ]);
+      // 撤销必须保留明确目标状态。
+      const cancel = batch([stepState(steps[0]!, false)]);
+      await service.applyBatch(ownerId, confirmFirst ? confirm : cancel);
+      await service.applyBatch(ownerId, confirmFirst ? cancel : confirm);
+      expect(
+        await prisma!.todoItem.findUnique({ where: { id: todo!.id } }),
+      ).toMatchObject({ isCompleted: false, completedAt: null });
+      expect(await prisma!.syncReceipt.count()).toBe(3);
+    },
+  );
+
+  it('并发删至零步不删除任务且不能确认，合并超过1000步保留全部数据', async () => {
+    // 两台设备分别删除最后两个步骤。
+    const [todo, ...steps] = progressFixture(2, true);
+    await service.applyBatch(ownerId, batch([todo!, ...steps]));
+    await Promise.all(
+      steps.map((step) =>
+        service.applyBatch(
+          ownerId,
+          batch([
+            {
+              op: 'PATCH',
+              table: step.table,
+              id: step.id,
+              data: { deleted_at: timestamp },
+            },
+          ]),
+        ),
+      ),
+    );
+    expect(
+      await prisma!.todoItem.findUnique({ where: { id: todo!.id } }),
+    ).toMatchObject({ isCompleted: false });
+    // 服务端不强加本地添加上限，以免跨设备合并导致数据丢失或堵队列。
+    const added = Array.from({ length: 1001 }, (_, index) =>
+      put('todo_progress_steps', { todo_id: todo!.id, sort_order: index }),
+    );
+    await service.applyBatch(ownerId, batch(added));
+    expect(
+      await prisma!.todoProgressStep.count({ where: { deletedAt: null } }),
+    ).toBe(1001);
+  });
+
+  it('父任务软删除和恢复保留步骤自身删除标记，永久删除级联墓碑阻止迟到重建', async () => {
+    // 一个步骤提前独立删除，另一个仍有效。
+    const [todo, ...steps] = progressFixture(2);
+    steps[0]!.data!.deleted_at = timestamp;
+    await service.applyBatch(ownerId, batch([todo!, ...steps]));
+    await service.applyBatch(
+      ownerId,
+      batch([
+        {
+          op: 'PATCH',
+          table: 'todo_items',
+          id: todo!.id,
+          data: { deleted_at: timestamp },
+        },
+      ]),
+    );
+    expect((await migrations.preview('migration-test-key')).deletedCount).toBe(
+      1,
+    );
+    expect(
+      await prisma!.todoProgressStep.findUnique({
+        where: { id: steps[1]!.id },
+      }),
+    ).toMatchObject({ deletedAt: null });
+    await service.applyBatch(
+      ownerId,
+      batch([
+        {
+          op: 'PATCH',
+          table: 'todo_items',
+          id: todo!.id,
+          data: { deleted_at: null },
+        },
+      ]),
+    );
+    expect(
+      await prisma!.todoProgressStep.count({ where: { deletedAt: null } }),
+    ).toBe(1);
+    await service.applyBatch(
+      ownerId,
+      batch([{ op: 'DELETE', table: 'todo_items', id: todo!.id }]),
+    );
+    expect(await prisma!.todoProgressStep.count()).toBe(0);
+    expect(
+      await prisma!.syncTombstone.count({
+        where: { tableName: 'todo_progress_steps' },
+      }),
+    ).toBe(2);
+    await expect(
+      service.applyBatch(
+        ownerId,
+        batch([steps[1]!, put('todo_progress_steps', { todo_id: todo!.id })]),
+      ),
+    ).resolves.toMatchObject({ ignored: 2 });
+    expect(await prisma!.todoProgressStep.count()).toBe(0);
+  });
+
+  it('拒绝普通任务挂步骤、进度任务挂子任务及保存后转换类型', async () => {
+    // 普通任务不能通过新增步骤伪装成进度任务。
+    const normal = put('todo_items', {
+      title: '普通任务',
+      scheduled_date: '2026-10-07',
+    });
+    await service.applyBatch(ownerId, batch([normal]));
+    await expect(
+      service.applyBatch(
+        ownerId,
+        batch([put('todo_progress_steps', { todo_id: normal.id })]),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.applyBatch(
+        ownerId,
+        batch([
+          {
+            op: 'PATCH',
+            table: 'todo_items',
+            id: normal.id,
+            data: { task_type: 'progress' },
+          },
+        ]),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    // 进度任务同样不能出现在普通父子树中。
+    const [todo, ...steps] = progressFixture(1);
+    await service.applyBatch(ownerId, batch([todo!, ...steps]));
+    await expect(
+      service.applyBatch(
+        ownerId,
+        batch([
+          put('todo_items', {
+            title: '非法子任务',
+            scheduled_date: '2026-10-07',
+            parent_id: todo!.id,
+          }),
+        ]),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(await prisma!.todoItem.count()).toBe(2);
+  });
+
+  it('步骤不能跨owner引用任务或在保存后转移任务，重复任务结构由数据库拒绝', async () => {
+    // 另一归属的任务仍不允许本 owner 访问。
+    const other = await prisma!.syncOwner.create({ data: {} });
+    // 另一用户的真实任务及步骤。
+    const [todo, ...steps] = progressFixture(1);
+    await service.applyBatch(other.id, batch([todo!, ...steps]));
+    await expect(
+      service.applyBatch(
+        ownerId,
+        batch([put('todo_progress_steps', { todo_id: todo!.id })]),
+      ),
+    ).rejects.toBeDefined();
+    // 当前用户的另一组任务。
+    const local = progressFixture(1);
+    await service.applyBatch(ownerId, batch(local));
+    await expect(
+      service.applyBatch(
+        ownerId,
+        batch([
+          {
+            op: 'PATCH',
+            table: 'todo_progress_steps',
+            id: local[1]!.id,
+            data: { todo_id: todo!.id },
+          },
+        ]),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.applyBatch(
+        ownerId,
+        batch([
+          {
+            op: 'PATCH',
+            table: 'todo_items',
+            id: local[0]!.id,
+            data: { repeat_rule: 'daily' },
+          },
+        ]),
+      ),
+    ).rejects.toBeDefined();
+    expect(await prisma!.todoProgressStep.count()).toBe(2);
+  });
+
+  it('v2严格快照导入完整进度后保留合法确认，缺父步骤快照拒绝且旧回执仍可查询', async () => {
+    // 已完成任务和步骤以完整快照替换服务器。
+    const operations = progressFixture(3, true);
+    // 需要保留的既有手动完成结果。
+    const result = await migrations.replace(migration(operations));
+    expect(
+      await prisma!.todoItem.findUnique({ where: { id: operations[0]!.id } }),
+    ).toMatchObject({ isCompleted: true, completedAt: new Date(timestamp) });
+    expect(await prisma!.todoProgressStep.count()).toBe(3);
+    expect(
+      await migrations.status({
+        syncKey: 'migration-test-key',
+        migrationId: result.migrationId,
+      }),
+    ).toEqual(result);
+    await expect(
+      migrations.replace({
+        ...migration(operations.slice(1)),
+        expectedOwnerId: result.ownerId,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    // 升级前已提交的迁移回执不含版本字段，status继续返回原hash以供安全恢复。
+    const legacy = await prisma!.syncMigrationReceipt.create({
+      data: {
+        migrationId: randomUUID(),
+        expectedOwnerId: ownerId,
+        ownerId: result.ownerId,
+        payloadHash: '1'.repeat(64),
+      },
+    });
+    expect(
+      await migrations.status({
+        syncKey: 'migration-test-key',
+        migrationId: legacy.migrationId,
+      }),
+    ).toMatchObject({ status: 'committed', payloadHash: legacy.payloadHash });
   });
 
   it('同一自动续费账期只收费一次，迟到设备不会回退会员账期', async () => {

@@ -15,6 +15,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import type { DeviceSession } from '../generated/prisma/client';
 import type { AuthUser, TokenPair } from './auth.types';
+import { syncSchemaVersion } from '../sync/sync-schema';
 
 /// 同步密钥校验、固定设备会话与 PowerSync 凭证服务。
 @Injectable()
@@ -106,6 +107,7 @@ export class AuthService {
     endpoint: string;
     expiresIn: number;
     userId: string;
+    syncSchemaVersion: number;
   }> {
     // 连接凭证有效秒数。
     const expiresIn = this.accessTokenSeconds;
@@ -123,6 +125,7 @@ export class AuthService {
       endpoint: this.config.getOrThrow<string>('POWERSYNC_URL'),
       expiresIn,
       userId: user.sub,
+      syncSchemaVersion,
     };
   }
 
@@ -148,7 +151,7 @@ export class AuthService {
         expiresIn,
       },
     );
-    return { accessToken, refreshToken, expiresIn };
+    return { accessToken, refreshToken, expiresIn, syncSchemaVersion };
   }
 
   /// 读取会话并恒定时间校验高熵刷新凭证。

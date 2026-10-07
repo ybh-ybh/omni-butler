@@ -11,6 +11,7 @@ import 'package:omni_butler/core/auth/auth_repository.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/sync/omni_sync_runtime.dart';
 import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
+import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:path/path.dart' as path;
 import 'package:powersync/powersync.dart';
 import 'package:uuid/uuid.dart';
@@ -119,6 +120,7 @@ Future<_EndToEndAuth> _connectTestDevice() async {
     BaseOptions(
       baseUrl: AuthRepository(const FlutterSecureStorage())
           .normalizeBaseUrl(_serverAddress),
+      headers: <String, String>{'X-Omni-Sync-Schema': '2'},
     ),
   );
   // 服务端签发的设备令牌组。
@@ -182,6 +184,157 @@ Future<List<Map<String, Object?>>> _waitForRows(
 /// 使用生产运行时验证完整事务、响应重试及关键字段的双设备收敛。
 void main() {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
+  test(
+    '进度步骤双端离线合并、手动确认及过期确认纠正',
+    () async {
+      // 本次用例专属设备目录，不使用正式数据库。
+      final Directory directory = await Directory.systemTemp.createTemp(
+        'omni-progress-e2e-',
+      );
+      // 两个独立真实设备身份。
+      final _EndToEndAuth authA = await _connectTestDevice();
+      final _EndToEndAuth authB = await _connectTestDevice();
+      // 必须在失败路径释放的生产同步引擎。
+      OmniSyncRuntime? deviceA;
+      OmniSyncRuntime? deviceB;
+      try {
+        deviceA = await OmniSyncRuntime.openAtPath(
+          authA,
+          path.join(directory.path, 'a.sqlite'),
+        );
+        deviceB = await OmniSyncRuntime.openAtPath(
+          authB,
+          path.join(directory.path, 'b.sqlite'),
+        );
+        // 两端都走生产仓储，不能用测试SQL代替业务写入。
+        final TodoRepository repoA = TodoRepository(deviceA.database);
+        final TodoRepository repoB = TodoRepository(deviceB.database);
+        await repoA.save(
+          TodoDraft(
+            title: '双设备阅读进度',
+            scheduledDate: DateTime.now(),
+            taskType: TodoTaskType.progress,
+            progressUnit: '章',
+            progressSteps: List<TodoProgressStepDraft>.generate(
+              12,
+              (int index) =>
+                  TodoProgressStepDraft(name: index == 0 ? '引言' : null),
+            ),
+          ),
+        );
+        // 新建任务和有序步骤的稳定身份。
+        final TodoRecord todo = await deviceA.database
+            .select(deviceA.database.todoItems)
+            .getSingle();
+        final List<TodoProgressStepRecord> steps = await repoA
+            .watchProgressSteps(todo.id)
+            .first;
+        await deviceA.connect(authA.ownerId);
+        await deviceB.connect(authB.ownerId);
+        await _waitForUpload(deviceA.powerSync);
+        await _waitForRows(
+          deviceB.powerSync,
+          'SELECT id FROM todo_progress_steps WHERE todo_id = ?',
+          <Object?>[todo.id],
+          (rows) => rows.length == 12,
+        );
+        await deviceA.disconnect();
+        await deviceB.disconnect();
+        await repoA.setProgressStepsCompleted(todo.id, <String>[
+          steps[0].id,
+          steps[2].id,
+        ], true);
+        await repoB.setProgressStepsCompleted(todo.id, <String>[
+          steps[7].id,
+        ], true);
+        await deviceA.connect(authA.ownerId);
+        await deviceB.connect(authB.ownerId);
+        await Future.wait(<Future<void>>[
+          _waitForUpload(deviceA.powerSync),
+          _waitForUpload(deviceB.powerSync),
+        ]);
+        for (final OmniSyncRuntime device in <OmniSyncRuntime>[
+          deviceA,
+          deviceB,
+        ]) {
+          await _waitForRows(
+            device.powerSync,
+            'SELECT id FROM todo_progress_steps WHERE todo_id = ? AND is_completed = 1',
+            <Object?>[todo.id],
+            (rows) => rows.length == 3,
+          );
+        }
+        await repoA.setProgressStepsCompleted(
+          todo.id,
+          steps.map((step) => step.id).toList(),
+          true,
+        );
+        await _waitForUpload(deviceA.powerSync);
+        await _waitForRows(
+          deviceB.powerSync,
+          'SELECT id FROM todo_progress_steps WHERE todo_id = ? AND is_completed = 1',
+          <Object?>[todo.id],
+          (rows) => rows.length == 12,
+        );
+        expect((await repoA.watchById(todo.id).first)!.isCompleted, isFalse);
+        expect((await repoB.watchById(todo.id).first)!.isCompleted, isFalse);
+        await repoA.confirmProgressTask(todo.id);
+        await _waitForUpload(deviceA.powerSync);
+        await _waitForRows(
+          deviceB.powerSync,
+          'SELECT is_completed FROM todo_items WHERE id = ?',
+          <Object?>[todo.id],
+          (rows) => rows.single['is_completed'] == 1,
+        );
+        await repoB.setCompleted(todo.id, false);
+        await _waitForUpload(deviceB.powerSync);
+        await _waitForRows(
+          deviceA.powerSync,
+          'SELECT is_completed FROM todo_items WHERE id = ?',
+          <Object?>[todo.id],
+          (rows) => rows.single['is_completed'] == 0,
+        );
+        // A基于旧的全满状态离线确认，B先撤销一步并上传。
+        await deviceA.disconnect();
+        await repoA.confirmProgressTask(todo.id);
+        await repoB.setProgressStepsCompleted(todo.id, <String>[
+          steps[7].id,
+        ], false);
+        await _waitForUpload(deviceB.powerSync);
+        await deviceA.connect(authA.ownerId);
+        await _waitForUpload(deviceA.powerSync);
+        for (final OmniSyncRuntime device in <OmniSyncRuntime>[
+          deviceA,
+          deviceB,
+        ]) {
+          await _waitForRows(
+            device.powerSync,
+            'SELECT is_completed FROM todo_items WHERE id = ?',
+            <Object?>[todo.id],
+            (rows) => rows.single['is_completed'] == 0,
+          );
+          await _waitForRows(
+            device.powerSync,
+            'SELECT id FROM todo_progress_steps WHERE todo_id = ? AND is_completed = 1',
+            <Object?>[todo.id],
+            (rows) => rows.length == 11,
+          );
+          expect((await device.powerSync.getUploadQueueStats()).count, 0);
+          expect(device.powerSync.currentStatus.downloadError, isNull);
+        }
+      } finally {
+        await deviceA?.disconnect();
+        await deviceB?.disconnect();
+        await deviceA?.close();
+        await deviceB?.close();
+        authA.api.close(force: true);
+        authB.api.close(force: true);
+        await directory.delete(recursive: true);
+      }
+    },
+    skip: _runEndToEnd ? false : '需要显式启动隔离 Docker 同步服务',
+    timeout: const Timeout(Duration(minutes: 4)),
+  );
   test(
     '真实双设备同步完整事务、购买平台、ARGB 颜色和稳定业务身份',
     () async {

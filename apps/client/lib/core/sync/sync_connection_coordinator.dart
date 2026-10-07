@@ -201,7 +201,7 @@ class SyncConnectionCoordinator {
               'syncKey': syncKey,
               'migrationId': id,
               'expectedOwnerId': preview.ownerId,
-              'snapshotVersion': 1,
+              'snapshotVersion': 2,
               'operations': snapshot.operations,
             }),
           )

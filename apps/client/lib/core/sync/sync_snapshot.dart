@@ -3,7 +3,7 @@ import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 /// 不携带同步检查点、客户端身份或设备密钥的完整业务快照。
 class SyncSnapshot {
   /// 当前快照持久化格式版本。
-  static const int version = 1;
+  static const int version = 2;
 
   /// 包含所有业务表及本机附件、横幅设置的原始 SQLite 行。
   final Map<String, List<Map<String, Object?>>> tables;
@@ -16,13 +16,30 @@ class SyncSnapshot {
 
   /// 从迁移控制文件恢复快照，拒绝不支持的格式和未知表。
   factory SyncSnapshot.fromJson(Map<String, dynamic> json) {
-    if (json['version'] != version) {
+    if (json['version'] != version && json['version'] != 1) {
       throw const FormatException('不支持的迁移快照版本');
     }
     // 只接受当前版本固定定义的业务表名。
     final Map<String, dynamic> encoded = Map<String, dynamic>.from(
       json['tables'] as Map,
     );
+    if (json['version'] == 1) {
+      // 原始持久文件与校验摘要不变，只升级内存中的业务副本。
+      encoded.putIfAbsent('todo_progress_steps', () => <dynamic>[]);
+      if (encoded['todo_items'] is List) {
+        encoded['todo_items'] = (encoded['todo_items'] as List)
+            .map((dynamic source) {
+              // 旧任务继续按普通任务恢复，不推断新的进度结构。
+              final Map<String, dynamic> row = Map<String, dynamic>.from(
+                source as Map,
+              );
+              row.putIfAbsent('task_type', () => 'normal');
+              row.putIfAbsent('progress_unit', () => null);
+              return row;
+            })
+            .toList(growable: false);
+      }
+    }
     if (encoded.keys.any((String table) => !tableNames.contains(table)) ||
         tableNames.any((String table) => !encoded.containsKey(table))) {
       throw const FormatException('迁移快照业务表不完整');
@@ -76,9 +93,13 @@ class SyncSnapshot {
     0,
     (int sum, table) =>
         sum +
-        (tables[table.name] ?? <Map<String, Object?>>[])
-            .where((Map<String, Object?> row) => row['deleted_at'] != null)
-            .length,
+        (table.name == 'todo_progress_steps'
+            ? 0
+            : (tables[table.name] ?? <Map<String, Object?>>[])
+                  .where(
+                    (Map<String, Object?> row) => row['deleted_at'] != null,
+                  )
+                  .length),
   );
 
   /// 持久化可恢复业务快照，不写入认证凭证。

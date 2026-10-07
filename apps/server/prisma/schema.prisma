@@ -26,6 +26,8 @@ model SyncOwner {
   receipts             SyncReceipt[]
   tombstones           SyncTombstone[]
   todoItems            TodoItem[]
+  /// 进度任务的独立步骤。
+  todoProgressSteps    TodoProgressStep[]
   quotes               Quote[]
   dailyQuoteSelections DailyQuoteSelection[]
   /// 旧设备日签身份到当前日历槽位的映射。
@@ -123,6 +125,10 @@ model TodoItem {
   /// 可空的同用户父任务标识。
   parentId         String?    @map("parent_id") @db.Uuid
   title            String     @db.VarChar(200)
+  /// 普通任务与独立进度任务的类型。
+  taskType         String     @default("normal") @map("task_type") @db.VarChar(16)
+  /// 可选进度单位，空值由客户端显示为“步”。
+  progressUnit     String?    @map("progress_unit") @db.VarChar(10)
   description      String?
   scheduledDate    DateTime   @map("scheduled_date") @db.Date
   dueAt            DateTime?  @map("due_at") @db.Timestamptz(3)
@@ -141,6 +147,8 @@ model TodoItem {
   parent           TodoItem?  @relation("TodoSubtasks", fields: [userId, parentId], references: [userId, id], onDelete: Cascade)
   /// 当前任务直接包含的子任务。
   subtasks         TodoItem[] @relation("TodoSubtasks")
+  /// 不参与普通子任务树和任务计数的步骤。
+  progressSteps    TodoProgressStep[]
 
   @@unique([userId, id])
   @@index([userId, parentId, sortOrder])
@@ -148,6 +156,38 @@ model TodoItem {
   @@index([userId, scheduledDate])
   @@index([userId, updatedAt])
   @@map("todo_items")
+}
+
+/// 等权重步骤以稳定身份保存，状态与名称、排序独立合并。
+model TodoProgressStep {
+  /// 跨设备稳定步骤身份。
+  id String @id @db.Uuid
+  /// 与所属任务一致的数据归属。
+  userId String @map("user_id") @db.Uuid
+  /// 所属进度任务。
+  todoId String @map("todo_id") @db.Uuid
+  /// 可空名称，不存储客户端序号占位文字。
+  name String? @db.VarChar(200)
+  /// 当前步骤展示顺序。
+  sortOrder Int @default(0) @map("sort_order")
+  /// 当前步骤是否完成。
+  isCompleted Boolean @default(false) @map("is_completed")
+  /// 步骤最近一次完成时间。
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  /// 创建时间。
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// 最后修改时间。
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  /// 单独删除步骤的时间，不由所属任务软删除覆盖。
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+  /// 删除数据归属时清理步骤。
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 同归属复合外键，永久删除任务时级联清理步骤。
+  todo TodoItem @relation(fields: [userId, todoId], references: [userId, id], onDelete: Cascade)
+
+  @@index([userId, todoId, sortOrder])
+  @@index([userId, updatedAt])
+  @@map("todo_progress_steps")
 }
 
 model Quote {

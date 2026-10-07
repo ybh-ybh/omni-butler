@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   Post,
   UseGuards,
@@ -14,6 +15,10 @@ import { ConnectSyncDto } from './dto/connect-sync.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { JwksService } from './jwks.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import {
+  requireSyncSchemaVersion,
+  syncSchemaVersion,
+} from '../sync/sync-schema';
 
 /// 设备同步会话与 PowerSync 凭证接口。
 @ApiTags('auth')
@@ -54,8 +59,10 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '检查当前设备同步会话' })
-  session(@CurrentUser() user: AuthUser): AuthUser {
-    return user;
+  session(
+    @CurrentUser() user: AuthUser,
+  ): AuthUser & { syncSchemaVersion: number } {
+    return { ...user, syncSchemaVersion };
   }
 
   /// 签发 PowerSync 短期连接令牌。
@@ -66,7 +73,9 @@ export class AuthController {
   @ApiOperation({ summary: '获取 PowerSync 短期 JWT 和服务地址' })
   powersyncToken(
     @CurrentUser() user: AuthUser,
+    @Headers('x-omni-sync-schema') version?: string,
   ): ReturnType<AuthService['issuePowerSyncToken']> {
+    requireSyncSchemaVersion(version);
     return this.auth.issuePowerSyncToken(user);
   }
 

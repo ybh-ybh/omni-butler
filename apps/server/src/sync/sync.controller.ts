@@ -1,10 +1,18 @@
-import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Headers,
+  HttpCode,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SyncBatchDto } from './dto/sync-batch.dto';
 import { SyncService } from './sync.service';
+import { requireSyncSchemaVersion } from './sync-schema';
 
 /// PowerSync 客户端离线操作上传接口。
 @ApiTags('sync')
@@ -22,7 +30,9 @@ export class SyncController {
   applyBatch(
     @CurrentUser() user: AuthUser,
     @Body() input: SyncBatchDto,
+    @Headers('x-omni-sync-schema') version?: string,
   ): ReturnType<SyncService['applyBatch']> {
+    requireSyncSchemaVersion(version);
     return this.sync.applyBatch(user.sub, input);
   }
 }

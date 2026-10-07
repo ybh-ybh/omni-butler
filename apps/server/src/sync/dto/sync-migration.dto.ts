@@ -32,7 +32,7 @@ export class SyncMigrationDto extends MigrationStatusDto {
   expectedOwnerId!: string;
 
   /// 当前严格快照协议版本。
-  @Equals(1)
+  @Equals(2)
   snapshotVersion!: number;
 
   /// 所有同步表的完整 PUT；空数组表示明确用空库覆盖。

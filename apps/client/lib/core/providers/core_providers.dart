@@ -114,6 +114,23 @@ final Provider<TodoRepository> todoRepositoryProvider =
       return TodoRepository(database);
     });
 
+/// 指定任务的实时记录，删除后返回空值。
+final todoByIdProvider = StreamProvider.autoDispose.family<TodoRecord?, String>(
+  (Ref ref, String todoId) {
+    // 当前待办仓储。
+    final TodoRepository repository = ref.watch(todoRepositoryProvider);
+    return repository.watchById(todoId);
+  },
+);
+
+/// 指定任务的有效进度项，顺序与仓储一致。
+final todoProgressStepsProvider = StreamProvider.autoDispose
+    .family<List<TodoProgressStepRecord>, String>((Ref ref, String todoId) {
+      // 当前待办仓储。
+      final TodoRepository repository = ref.watch(todoRepositoryProvider);
+      return repository.watchProgressSteps(todoId);
+    });
+
 /// 指定自然日待办流提供者。
 final todosForDayProvider = StreamProvider.family<List<TodoRecord>, DateTime>((
   Ref ref,
