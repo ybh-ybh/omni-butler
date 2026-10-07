@@ -99,6 +99,10 @@
     "count": 1,
     "reason": "周时间指纹类别标签叠加在业务分类色块上，保留固定浅灰低对比图表标注；不用于普通文字或品牌控件。"
   },
+  "lib/features/todos/presentation/todo_task_actions.dart :: showMenu": {
+    "count": 1,
+    "reason": "每日待办移除更多按钮后按右键、长按或键盘菜单键定位浮层；复用 OmniPopupMenuItem、主题尺寸和减少动效，不增加独立菜单外观。"
+  },
   "lib/features/todos/presentation/todos_page.dart :: AlertDialog": {
     "count": 1,
     "reason": "待办重复系列范围选择确认，继承统一 DialogTheme 且通过 showOmniDialog 打开。"

@@ -471,8 +471,8 @@ void main() {
     );
     expect(timeSettings, findsOneWidget);
     expect(find.text('计划日期'), findsNothing);
-    expect(find.text('设置截止日期'), findsNothing);
-    expect(find.text('设置提醒日期'), findsNothing);
+    expect(find.text('添加截止'), findsNothing);
+    expect(find.text('添加提醒'), findsNothing);
     expect(find.text('重复'), findsNothing);
     for (final TodoPriorityQuadrant quadrant
         in todoPriorityQuadrantMatrixOrder) {
@@ -490,8 +490,8 @@ void main() {
     await tester.tap(timeSettings);
     await tester.pumpAndSettle();
     expect(find.text('计划日期'), findsOneWidget);
-    expect(find.text('设置截止日期'), findsOneWidget);
-    expect(find.text('设置提醒日期'), findsOneWidget);
+    expect(find.text('添加截止'), findsOneWidget);
+    expect(find.text('添加提醒'), findsOneWidget);
     expect(find.text('重复'), findsOneWidget);
 
     await tester.tap(find.text('取消'));
@@ -1086,19 +1086,16 @@ void main() {
     final Finder mobileAddChild = find.byKey(
       ValueKey<String>('todo-add-child-${mobileRoot.id}'),
     );
-    // 移动端父任务行中的更多操作菜单。
-    final Finder mobileMoreAction = find.descendant(
-      of: find.byKey(ValueKey<String>('todo-tree-root-${mobileRoot.id}')),
-      matching: find.byTooltip('更多操作'),
-    );
     expect(tester.getSize(mobileAddChild), const Size.square(OmniSize.touch));
-    expect(tester.getSize(mobileMoreAction), const Size.square(OmniSize.touch));
+    expect(find.byTooltip('更多操作'), findsNothing);
     await tester.tap(mobileAddChild);
     await tester.pumpAndSettle();
     expect(find.text('新增子任务'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
-    await tester.tap(mobileMoreAction);
+    await tester.longPress(
+      find.byKey(ValueKey<String>('todo-title-${mobileRoot.id}')),
+    );
     await tester.pumpAndSettle();
     expect(find.text('编辑'), findsOneWidget);
     await tester.tap(find.text('编辑'));
@@ -1784,15 +1781,19 @@ void main() {
     expect(find.text('新增子任务'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
-    // 父任务行的更多菜单不再包含添加子任务入口。
+    // 父任务行的右键菜单保留原菜单内容，无可见更多按钮。
     final Finder rootRow = find.byKey(
       ValueKey<String>('todo-tree-root-${root.id}'),
     );
-    final Finder rootMoreButton = find.descendant(
-      of: rootRow,
-      matching: find.byTooltip('更多操作'),
+    expect(
+      find.descendant(of: rootRow, matching: find.byTooltip('更多操作')),
+      findsNothing,
     );
-    await tester.tap(rootMoreButton);
+    await tester.tap(
+      rootTitle,
+      buttons: kSecondaryMouseButton,
+      kind: PointerDeviceKind.mouse,
+    );
     await tester.pumpAndSettle();
     expect(find.text('编辑'), findsOneWidget);
     expect(find.text('添加子任务'), findsNothing);
@@ -1908,7 +1909,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
 
-    await tester.tap(find.byTooltip('更多操作'));
+    await tester.tap(
+      find.text('待回收任务'),
+      buttons: kSecondaryMouseButton,
+      kind: PointerDeviceKind.mouse,
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('移入回收站'));
     await tester.pumpAndSettle();
@@ -1949,7 +1954,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('移入回收站？'), findsNothing);
     expect(find.text('待回收任务'), findsOneWidget);
-    await tester.tap(find.byTooltip('更多操作'));
+    await tester.tap(
+      find.text('待回收任务'),
+      buttons: kSecondaryMouseButton,
+      kind: PointerDeviceKind.mouse,
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('移入回收站'));
     await tester.pumpAndSettle();

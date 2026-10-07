@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -183,9 +185,15 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
   final List<TodoProgressStepDraft> _progressStepsBaseline =
       <TodoProgressStepDraft>[];
 
-  /// 已移除但可能仍被当前帧使用的输入控制器。
-  final List<TextEditingController> _retiredStepControllers =
-      <TextEditingController>[];
+  /// 已移除但可能仍被当前帧使用的步骤输入资源。
+  final List<_EditableProgressStep> _retiredProgressSteps =
+      <_EditableProgressStep>[];
+
+  /// 添加步骤时可主动展开名称列表。
+  final ExpansibleController _progressListExpansion = ExpansibleController();
+
+  /// 长步骤列表的独立滚动位置。
+  final ScrollController _progressListScroll = ScrollController();
 
   /// 结构是否仍在读取。
   bool _loadingSteps = false;
@@ -213,6 +221,9 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
 
   /// 可选提醒时间。
   DateTime? _reminderAt;
+
+  /// 时间设置展开时隐藏折叠摘要。
+  bool _timeSettingsExpanded = false;
 
   /// 是否正在保存。
   bool _saving = false;
@@ -264,11 +275,13 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
     _descriptionController.dispose();
     _progressUnitController.dispose();
     _stepCountController.dispose();
+    _progressListExpansion.dispose();
+    _progressListScroll.dispose();
     for (final _EditableProgressStep step in _progressSteps) {
-      step.controller.dispose();
+      step.dispose();
     }
-    for (final TextEditingController controller in _retiredStepControllers) {
-      controller.dispose();
+    for (final _EditableProgressStep step in _retiredProgressSteps) {
+      step.dispose();
     }
     super.dispose();
   }
@@ -316,13 +329,13 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              Text(
-                widget.parent == null
-                    ? '先保存到本机，联网后再同步。'
-                    : '所属主任务：${widget.parent!.title}；计划日期和象限跟随主任务。',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: OmniSpacing.lg),
+              if (widget.parent != null) ...<Widget>[
+                Text(
+                  '所属主任务：${widget.parent!.title}；计划日期和象限跟随主任务。',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: OmniSpacing.lg),
+              ],
               if (!isChild && !isEditing) ...<Widget>[
                 LayoutBuilder(
                   builder: (BuildContext context, BoxConstraints constraints) {
@@ -403,96 +416,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
                 ),
               ],
               const SizedBox(height: OmniSpacing.md),
-              OmniPanel(
-                padding: EdgeInsets.zero,
-                child: ExpansionTile(
-                  key: const ValueKey<String>('todo-time-settings'),
-                  initiallyExpanded: false,
-                  leading: const Icon(Icons.schedule_outlined),
-                  title: const Text('时间设置'),
-                  subtitle: const Text('计划日期、截止与提醒'),
-                  tilePadding: const EdgeInsets.symmetric(
-                    horizontal: OmniSpacing.md,
-                  ),
-                  childrenPadding: const EdgeInsets.fromLTRB(
-                    OmniSpacing.md,
-                    0,
-                    OmniSpacing.md,
-                    OmniSpacing.md,
-                  ),
-                  children: <Widget>[
-                    if (!isChild) ...<Widget>[
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          '计划日期',
-                          style: Theme.of(context).textTheme.labelLarge,
-                        ),
-                      ),
-                      const SizedBox(height: OmniSpacing.xs),
-                      OmniDatePickerButton(
-                        value: _scheduledDate,
-                        initialDate: _scheduledDate,
-                        firstDate: DateTime(2000),
-                        lastDate: DateTime(2100),
-                        label: DateFormat('yyyy年M月d日').format(_scheduledDate),
-                        onChanged: (DateTime selected) {
-                          setState(() => _scheduledDate = selected);
-                        },
-                      ),
-                      const SizedBox(height: OmniSpacing.md),
-                    ],
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        '截止与提醒',
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                    ),
-                    const SizedBox(height: OmniSpacing.xs),
-                    _buildDateTimeControls(
-                      value: _dueAt,
-                      defaultHour: 18,
-                      emptyDateLabel: '设置截止日期',
-                      dateIcon: Icons.flag_outlined,
-                      clearTooltip: '清除截止时间',
-                      onChanged: (DateTime? value) =>
-                          setState(() => _dueAt = value),
-                    ),
-                    const SizedBox(height: OmniSpacing.xs),
-                    _buildDateTimeControls(
-                      value: _reminderAt,
-                      defaultHour: 9,
-                      emptyDateLabel: '设置提醒日期',
-                      dateIcon: Icons.notifications_outlined,
-                      clearTooltip: '清除提醒时间',
-                      onChanged: (DateTime? value) =>
-                          setState(() => _reminderAt = value),
-                    ),
-                    if (!isChild &&
-                        _taskType == TodoTaskType.normal) ...<Widget>[
-                      const SizedBox(height: OmniSpacing.md),
-                      OmniDropdownButtonFormField<TodoRepeatRule>(
-                        initialValue: _repeatRule,
-                        decoration: const InputDecoration(labelText: '重复'),
-                        items: <DropdownMenuItem<TodoRepeatRule>>[
-                          for (final TodoRepeatRule rule
-                              in TodoRepeatRule.values)
-                            DropdownMenuItem<TodoRepeatRule>(
-                              value: rule,
-                              child: Text(_repeatLabel(rule)),
-                            ),
-                        ],
-                        onChanged: (TodoRepeatRule? value) {
-                          if (value != null) {
-                            setState(() => _repeatRule = value);
-                          }
-                        },
-                      ),
-                    ],
-                  ],
-                ),
-              ),
+              _buildTimeSettings(isChild: isChild),
               const SizedBox(height: OmniSpacing.xl),
               if (_saveError != null)
                 Text(
@@ -548,9 +472,9 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
 
   /// 构建与任务元数据分组的步骤结构编辑器。
   Widget _buildProgressSettings() {
-    // 完成历史的步骤必须重新打开任务后再修改。
+    // 完成历史的步骤必须重新打开任务后展示可编辑结构。
     final bool readOnly = widget.record?.isCompleted == true;
-    // 结构编辑的统一可用状态。
+    // 加载、错误和提交期间禁止修改结构。
     final bool enabled =
         !_saving && !_loadingSteps && !_stepsLoadFailed && !readOnly;
     return OmniPanel(
@@ -558,57 +482,17 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           Text('进度设置', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: OmniSpacing.xs),
-          Text(
-            readOnly ? '任务已完成，重新打开后才能修改步骤。' : '步骤可跳序完成，名称可留空。进度任务不支持子任务和重复。',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
+          if (readOnly) ...<Widget>[
+            const SizedBox(height: OmniSpacing.xs),
+            Text(
+              '任务已完成，重新打开后才能修改步骤。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
           const SizedBox(height: OmniSpacing.sm),
-          OmniTextFormField(
-            key: const ValueKey<String>('todo-progress-unit'),
-            controller: _progressUnitController,
-            enabled: enabled,
-            maxLength: 10,
-            decoration: const InputDecoration(
-              labelText: '单位（可选）',
-              hintText: '例如：章、节、次',
-            ),
-          ),
-          const SizedBox(height: OmniSpacing.xs),
-          if (widget.record != null)
-            Text('步骤总数：${_progressSteps.length}；通过下方增删调整')
-          else
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: OmniTextFormField(
-                    key: const ValueKey<String>('todo-progress-total'),
-                    controller: _stepCountController,
-                    enabled: enabled,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: '步骤总数',
-                      helperText: '1 至 1000',
-                    ),
-                    validator: (String? value) {
-                      // 用户输入的有效步骤数量。
-                      final int? count = int.tryParse(value?.trim() ?? '');
-                      return count == null || count < 1 || count > 1000
-                          ? '请输入 1 至 1000 的整数'
-                          : null;
-                    },
-                  ),
-                ),
-                const SizedBox(width: OmniSpacing.xs),
-                OmniButton(
-                  key: const ValueKey<String>('todo-progress-apply-total'),
-                  label: '应用数量',
-                  variant: OmniButtonVariant.text,
-                  onPressed: enabled ? _applyStepCount : null,
-                ),
-              ],
-            ),
+          _buildProgressBasics(enabled: enabled),
           if (_progressError != null) ...<Widget>[
+            const SizedBox(height: OmniSpacing.xs),
             Text(
               _progressError!,
               style: TextStyle(color: OmniColors.of(context).danger),
@@ -629,70 +513,15 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
           const SizedBox(height: OmniSpacing.sm),
           ExpansionTile(
             key: const ValueKey<String>('todo-progress-step-names'),
+            controller: _progressListExpansion,
             initiallyExpanded: widget.record != null,
-            title: const Text('步骤名称（可选）'),
-            subtitle: const Text('留空时按序号和单位显示'),
-            children: <Widget>[
-              SizedBox(
-                height: _progressSteps.isEmpty ? 0 : 280,
-                child: ListView.builder(
-                  itemCount: _progressSteps.length,
-                  itemBuilder: (BuildContext context, int index) {
-                    // 当前结构草稿，控制器与稳定对象绑定而非序号。
-                    final _EditableProgressStep step = _progressSteps[index];
-                    return Padding(
-                      key: ObjectKey(step),
-                      padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
-                      child: Column(
-                        children: <Widget>[
-                          OmniTextFormField(
-                            controller: step.controller,
-                            enabled: enabled,
-                            maxLength: 200,
-                            decoration: InputDecoration(
-                              labelText: '步骤 ${index + 1}（名称可选）',
-                              helperText: step.completed
-                                  ? '已完成，改名或移动不会丢失进度'
-                                  : null,
-                            ),
-                          ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: <Widget>[
-                              OmniIconButton(
-                                tooltip: '上移步骤 ${index + 1}',
-                                onPressed: enabled && index > 0
-                                    ? () => _moveStep(index, index - 1)
-                                    : null,
-                                icon: const Icon(Icons.arrow_upward_rounded),
-                              ),
-                              OmniIconButton(
-                                tooltip: '下移步骤 ${index + 1}',
-                                onPressed:
-                                    enabled && index < _progressSteps.length - 1
-                                    ? () => _moveStep(index, index + 1)
-                                    : null,
-                                icon: const Icon(Icons.arrow_downward_rounded),
-                              ),
-                              OmniIconButton(
-                                tooltip: '删除步骤 ${index + 1}',
-                                onPressed: enabled && _progressSteps.length > 1
-                                    ? () => _removeSteps(
-                                        <_EditableProgressStep>[step],
-                                      )
-                                    : null,
-                                icon: const Icon(Icons.delete_outline_rounded),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
+            tilePadding: EdgeInsets.zero,
+            shape: const Border(),
+            collapsedShape: const Border(),
+            title: Text('步骤列表 · ${_progressSteps.length} 项'),
+            children: <Widget>[_buildProgressStepList(enabled: enabled)],
           ),
+          const SizedBox(height: OmniSpacing.xs),
           Align(
             alignment: Alignment.centerLeft,
             child: OmniButton(
@@ -700,17 +529,455 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
               icon: Icons.add_rounded,
               variant: OmniButtonVariant.text,
               onPressed: enabled && _progressSteps.length < 1000
-                  ? () => setState(() {
-                      _progressSteps.add(_EditableProgressStep());
-                      _stepCountController.text = _progressSteps.length
-                          .toString();
-                    })
+                  ? _addProgressStep
                   : null,
             ),
           ),
         ],
       ),
     );
+  }
+
+  /// 统一步骤输入行高度，保留触控热区与放大字号空间。
+  double get _progressRowHeight => math.max(
+    OmniDensity.controlHeight(context, large: true),
+    MediaQuery.textScalerOf(context).scale(14) * 1.55 + OmniSpacing.md,
+  );
+
+  /// 基础字段使用外置标签，避免标签压在边框上。
+  Widget _buildProgressField({required String label, required Widget child}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Text(label, style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: OmniSpacing.xs),
+        child,
+      ],
+    );
+  }
+
+  /// 数量与单位在桌面同排；窄屏或放大字号时按阅读顺序分行。
+  Widget _buildProgressBasics({required bool enabled}) {
+    // 单位沿用原长度限制，计数只在接近上限时显示在框内。
+    final Widget unitField = _buildProgressField(
+      label: '单位（可选）',
+      child: _buildProgressTextInput(
+        fieldKey: const ValueKey<String>('todo-progress-unit'),
+        controller: _progressUnitController,
+        enabled: enabled,
+        maxLength: 10,
+        counterThreshold: 8,
+        hint: '例如：章',
+        semanticLabel: '单位（可选）',
+      ),
+    );
+    // 已有步骤总数来自列表，不能绕过指定步骤的删除确认。
+    final Widget countField = widget.record != null
+        ? _buildProgressField(
+            label: '步骤总数',
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: _progressRowHeight),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '共 ${_progressSteps.length} 步',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
+            ),
+          )
+        : _buildProgressField(
+            label: '步骤总数',
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _stepCountController,
+              builder:
+                  (
+                    BuildContext context,
+                    TextEditingValue value,
+                    Widget? child,
+                  ) {
+                    // 数量无变化时不提供重复应用操作；无效输入仍可得到具体错误。
+                    final bool changed =
+                        int.tryParse(value.text.trim()) !=
+                        _progressSteps.length;
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        SizedBox(
+                          width:
+                              OmniSize.control * 2 +
+                              MediaQuery.textScalerOf(context)
+                                  .scale(OmniSpacing.md),
+                          child: OmniTextFormField(
+                            key: const ValueKey<String>('todo-progress-total'),
+                            controller: _stepCountController,
+                            enabled: enabled,
+                            keyboardType: TextInputType.number,
+                            textAlign: TextAlign.center,
+                            decoration: InputDecoration(
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: OmniSpacing.sm,
+                                vertical: OmniSpacing.sm,
+                              ),
+                              constraints: BoxConstraints(
+                                minHeight: _progressRowHeight,
+                              ),
+                            ),
+                            validator: (String? value) {
+                              // 保留原有步骤数量校验范围。
+                              final int? count = int.tryParse(
+                                value?.trim() ?? '',
+                              );
+                              return count == null || count < 1 || count > 1000
+                                  ? '请输入 1 至 1000 的整数'
+                                  : null;
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: OmniSpacing.xs),
+                        Flexible(
+                          child: OmniButton(
+                            key: const ValueKey<String>(
+                              'todo-progress-apply-total',
+                            ),
+                            label: '更新步骤',
+                            large: true,
+                            variant: OmniButtonVariant.text,
+                            onPressed: enabled && changed
+                                ? _applyStepCount
+                                : null,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+            ),
+          );
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 两组字段在字体放大后需要更多横向空间。
+        final double textScale =
+            MediaQuery.textScalerOf(context).scale(14) / 14;
+        if (constraints.maxWidth < OmniSize.control * 12 * textScale) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              countField,
+              const SizedBox(height: OmniSpacing.sm),
+              unitField,
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Expanded(flex: 3, child: countField),
+            const SizedBox(width: OmniSpacing.sm),
+            Expanded(flex: 2, child: unitField),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 在输入框内部按需显示字数，不增加单独的计数行。
+  Widget _buildProgressTextInput({
+    required Key fieldKey,
+    required TextEditingController controller,
+    required bool enabled,
+    required int maxLength,
+    required int counterThreshold,
+    required String hint,
+    required String semanticLabel,
+    FocusNode? focusNode,
+  }) {
+    return Semantics(
+      label: semanticLabel,
+      child: ValueListenableBuilder<TextEditingValue>(
+        valueListenable: controller,
+        builder: (BuildContext context, TextEditingValue value, Widget? child) {
+          // 按用户可见字符计数，与原生 maxLength 对组合字符的口径一致。
+          final int length = value.text.characters.length;
+          return OmniTextFormField(
+            key: fieldKey,
+            controller: controller,
+            focusNode: focusNode,
+            enabled: enabled,
+            maxLength: maxLength,
+            decoration: InputDecoration(
+              hintText: hint,
+              counterText: '',
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: OmniSpacing.sm,
+                vertical: OmniSpacing.sm,
+              ),
+              suffixText: length >= counterThreshold
+                  ? '$length/$maxLength'
+                  : null,
+              suffixStyle: Theme.of(context).textTheme.bodySmall,
+              constraints: BoxConstraints(minHeight: _progressRowHeight),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 少量步骤完整展示，较长列表按窗口可用高度限制并保持惰性构建。
+  Widget _buildProgressStepList({required bool enabled}) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 操作区以实际宽度和字号决定是否收进更多菜单。
+        final double textScale =
+            MediaQuery.textScalerOf(context).scale(14) / 14;
+        // 桌面窄窗同样使用菜单，但不改变平台本身的点击密度。
+        final bool compact =
+            constraints.maxWidth < OmniSize.control * 12 * textScale;
+        // 统一行高包括下方间距，使长列表定位到末项时无需猜测尺寸。
+        final double itemExtent = _progressRowHeight + OmniSpacing.xs;
+        // 按当前字体实测序号宽度，避免数字与完成图标在不同字体下挤压。
+        final TextPainter numberMeasure = TextPainter(
+          text: TextSpan(
+            text: _progressSteps.length.toString(),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          textScaler: MediaQuery.textScalerOf(context),
+          textDirection: Directionality.of(context),
+        )..layout();
+        // 所有行共用序号列，额外空间容纳完成图标和两侧间距。
+        final double numberWidth = math.max(
+          OmniSize.control,
+          numberMeasure.width.ceilToDouble() + OmniSpacing.lg,
+        );
+        numberMeasure.dispose();
+        if (_progressSteps.length <= 5) {
+          return Column(
+            children: <Widget>[
+              // 当前步骤在列表中的位置。
+              for (int index = 0; index < _progressSteps.length; index += 1)
+                _buildProgressStepRow(
+                  index,
+                  enabled: enabled,
+                  compact: compact,
+                  numberWidth: numberWidth,
+                ),
+            ],
+          );
+        }
+        // 软键盘出现时降低列表上限，列表之外仍由整个编辑器滚动。
+        final double visibleHeight = math.max(
+          0,
+          MediaQuery.sizeOf(context).height -
+              MediaQuery.viewInsetsOf(context).bottom,
+        );
+        // 常规窗口最多约六行，较矮窗口至少保留两行可操作内容。
+        final double listHeight = (visibleHeight * 0.35)
+            .clamp(itemExtent * 2, itemExtent * 6)
+            .toDouble();
+        return SizedBox(
+          key: const ValueKey<String>('todo-progress-scroll-list'),
+          height: listHeight,
+          child: Scrollbar(
+            controller: _progressListScroll,
+            child: ListView.builder(
+              controller: _progressListScroll,
+              primary: false,
+              padding: EdgeInsets.zero,
+              itemExtent: itemExtent,
+              itemCount: _progressSteps.length,
+              findChildIndexCallback: (Key key) {
+                // 排序时复用对应步骤的输入节点及选择状态。
+                final int index = key is ObjectKey
+                    ? _progressSteps.indexOf(key.value as _EditableProgressStep)
+                    : -1;
+                return index < 0 ? null : index;
+              },
+              itemBuilder: (BuildContext context, int index) =>
+                  _buildProgressStepRow(
+                    index,
+                    enabled: enabled,
+                    compact: compact,
+                    numberWidth: numberWidth,
+                  ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 单个步骤将序号、名称及其操作放在同一行。
+  Widget _buildProgressStepRow(
+    int index, {
+    required bool enabled,
+    required bool compact,
+    required double numberWidth,
+  }) {
+    // 稳定草稿对象保留输入、完成状态和焦点身份。
+    final _EditableProgressStep step = _progressSteps[index];
+    return Padding(
+      key: ObjectKey(step),
+      padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
+      child: SizedBox(
+        height: _progressRowHeight,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            SizedBox(
+              width: numberWidth,
+              child: Center(
+                child: Tooltip(
+                  message: step.completed
+                      ? '步骤 ${index + 1}，已完成'
+                      : '步骤 ${index + 1}',
+                  child: Semantics(
+                    label: '步骤 ${index + 1}${step.completed ? '，已完成' : ''}',
+                    excludeSemantics: true,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Text(
+                          '${index + 1}',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        if (step.completed) ...<Widget>[
+                          const SizedBox(width: OmniSpacing.xxs),
+                          const Icon(Icons.check_rounded, size: OmniSpacing.sm),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: OmniSpacing.xxs),
+            Expanded(
+              child: _buildProgressTextInput(
+                fieldKey: step.fieldKey,
+                controller: step.controller,
+                focusNode: step.focusNode,
+                enabled: enabled,
+                maxLength: 200,
+                counterThreshold: 180,
+                hint: '名称（可选）',
+                semanticLabel: '步骤 ${index + 1} 名称',
+              ),
+            ),
+            const SizedBox(width: OmniSpacing.xxs),
+            _buildProgressStepActions(
+              index,
+              enabled: enabled,
+              compact: compact,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 两种布局共用同一组可用条件和步骤结构操作。
+  Widget _buildProgressStepActions(
+    int index, {
+    required bool enabled,
+    required bool compact,
+  }) {
+    if (compact) {
+      return SizedBox(
+        width: OmniDensity.controlHeight(context),
+        child: OmniPopupMenuButton<String>(
+          tooltip: '步骤 ${index + 1} 操作',
+          enabled: enabled,
+          itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+            OmniPopupMenuItem<String>(
+              value: 'up',
+              label: '上移',
+              icon: Icons.arrow_upward_rounded,
+              enabled: index > 0,
+            ),
+            OmniPopupMenuItem<String>(
+              value: 'down',
+              label: '下移',
+              icon: Icons.arrow_downward_rounded,
+              enabled: index < _progressSteps.length - 1,
+            ),
+            OmniPopupMenuItem<String>(
+              value: 'delete',
+              label: '删除',
+              icon: Icons.delete_outline_rounded,
+              danger: true,
+              enabled: _progressSteps.length > 1,
+            ),
+          ],
+          onSelected: (String action) {
+            switch (action) {
+              case 'up':
+                _moveStep(index, index - 1);
+              case 'down':
+                _moveStep(index, index + 1);
+              case 'delete':
+                _removeSteps(<_EditableProgressStep>[_progressSteps[index]]);
+            }
+          },
+        ),
+      );
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        OmniIconButton(
+          tooltip: '上移步骤 ${index + 1}',
+          onPressed: enabled && index > 0
+              ? () => _moveStep(index, index - 1)
+              : null,
+          icon: const Icon(Icons.arrow_upward_rounded),
+        ),
+        OmniIconButton(
+          tooltip: '下移步骤 ${index + 1}',
+          onPressed: enabled && index < _progressSteps.length - 1
+              ? () => _moveStep(index, index + 1)
+              : null,
+          icon: const Icon(Icons.arrow_downward_rounded),
+        ),
+        OmniIconButton(
+          tooltip: '删除步骤 ${index + 1}',
+          onPressed: enabled && _progressSteps.length > 1
+              ? () =>
+                    _removeSteps(<_EditableProgressStep>[_progressSteps[index]])
+              : null,
+          icon: const Icon(Icons.delete_outline_rounded),
+        ),
+      ],
+    );
+  }
+
+  /// 添加后展开列表，滚入新行并将焦点交给名称输入框。
+  Future<void> _addProgressStep() async {
+    // 新步骤的身份和输入资源在本次编辑期间保持稳定。
+    final _EditableProgressStep step = _EditableProgressStep();
+    setState(() {
+      _progressSteps.add(step);
+      _stepCountController.text = _progressSteps.length.toString();
+    });
+    _progressListExpansion.expand();
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _progressSteps.last != step) return;
+    if (_progressListScroll.hasClients) {
+      _progressListScroll.jumpTo(_progressListScroll.position.maxScrollExtent);
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    if (!mounted || _progressSteps.last != step) return;
+    // 惰性列表完成末项挂载后再定位外层编辑器。
+    final BuildContext? fieldContext = step.fieldKey.currentContext;
+    if (fieldContext == null || !fieldContext.mounted) return;
+    await Scrollable.ensureVisible(
+      fieldContext,
+      alignment: 1,
+      duration: OmniMotion.duration(context, OmniMotion.panel),
+      curve: OmniMotion.standardCurve,
+    );
+    if (mounted && _progressSteps.contains(step)) {
+      step.focusNode.requestFocus();
+    }
   }
 
   /// 应用步骤总数，减少有内容的步骤前明确确认。
@@ -778,7 +1045,8 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
     setState(() {
       for (final _EditableProgressStep step in removed) {
         _progressSteps.remove(step);
-        _retiredStepControllers.add(step.controller);
+        step.focusNode.unfocus();
+        _retiredProgressSteps.add(step);
       }
       _stepCountController.text = _progressSteps.length.toString();
       _progressError = null;
@@ -811,12 +1079,183 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
     return false;
   }
 
-  /// 构建可分别展开日期与时间浮层的可选日期时间控件。
+  /// 当年日期使用中文短格式，跨年日期保留年份以免混淆。
+  String _timeDateLabel(DateTime date) {
+    return DateFormat(date.year == DateTime.now().year ? 'M月d日' : 'yyyy/M/d')
+        .format(date);
+  }
+
+  /// 汇总当前已生效的时间设置供收起时核对。
+  String _timeSettingsSummary({required bool isChild}) {
+    // 只汇总当前任务可设置且已有值的字段。
+    final List<String> parts = <String>[
+      if (!isChild) '计划 ${_timeDateLabel(_scheduledDate)}',
+      if (_dueAt != null)
+        '截止 ${_timeDateLabel(_dueAt!)} ${DateFormat('HH:mm').format(_dueAt!)}',
+      if (_reminderAt != null)
+        '提醒 ${_timeDateLabel(_reminderAt!)} ${DateFormat('HH:mm').format(_reminderAt!)}',
+      if (!isChild &&
+          _taskType == TodoTaskType.normal &&
+          _repeatRule != TodoRepeatRule.none)
+        _repeatLabel(_repeatRule),
+    ];
+    return parts.isEmpty ? '未设置截止或提醒' : parts.join(' · ');
+  }
+
+  /// 以统一外置标签组织计划日期、截止、提醒和重复。
+  Widget _buildTimeSettings({required bool isChild}) {
+    return OutlinedButtonTheme(
+      data: OutlinedButtonThemeData(
+        style: _timeControlStyle.merge(OutlinedButtonTheme.of(context).style),
+      ),
+      child: OmniPanel(
+        padding: EdgeInsets.zero,
+        child: ExpansionTile(
+          key: const ValueKey<String>('todo-time-settings'),
+          initiallyExpanded: _timeSettingsExpanded,
+          onExpansionChanged: (bool expanded) {
+            setState(() => _timeSettingsExpanded = expanded);
+          },
+          leading: const Icon(Icons.schedule_outlined),
+          title: const Text('时间设置'),
+          subtitle: _timeSettingsExpanded
+              ? null
+              : Text(
+                  _timeSettingsSummary(isChild: isChild),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+          tilePadding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
+          childrenPadding: const EdgeInsets.fromLTRB(
+            OmniSpacing.md,
+            OmniSpacing.xxs,
+            OmniSpacing.md,
+            OmniSpacing.md,
+          ),
+          children: <Widget>[
+            if (!isChild) ...<Widget>[
+              _buildTimeField(
+                label: '计划日期',
+                child: OmniDatePickerButton(
+                  value: _scheduledDate,
+                  initialDate: _scheduledDate,
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2100),
+                  label: _timeDateLabel(_scheduledDate),
+                  icon: null,
+                  onChanged: (DateTime selected) {
+                    setState(() => _scheduledDate = selected);
+                  },
+                ),
+              ),
+              const SizedBox(height: OmniSpacing.sm),
+            ],
+            _buildTimeField(
+              label: '截止时间',
+              child: _buildDateTimeControls(
+                value: _dueAt,
+                defaultHour: 18,
+                emptyDateLabel: '添加截止',
+                clearTooltip: '清除截止时间',
+                onChanged: (DateTime? value) => setState(() => _dueAt = value),
+              ),
+            ),
+            const SizedBox(height: OmniSpacing.sm),
+            _buildTimeField(
+              label: '提醒时间',
+              child: _buildDateTimeControls(
+                value: _reminderAt,
+                defaultHour: 9,
+                emptyDateLabel: '添加提醒',
+                clearTooltip: '清除提醒时间',
+                onChanged: (DateTime? value) =>
+                    setState(() => _reminderAt = value),
+              ),
+            ),
+            if (!isChild && _taskType == TodoTaskType.normal) ...<Widget>[
+              const SizedBox(height: OmniSpacing.sm),
+              _buildTimeField(
+                label: '重复',
+                child: OmniDropdownButton<TodoRepeatRule>(
+                  value: _repeatRule,
+                  width: double.infinity,
+                  height: OmniDensity.controlHeight(context, large: true),
+                  items: <DropdownMenuItem<TodoRepeatRule>>[
+                    // 当前可选重复规则。
+                    for (final TodoRepeatRule rule in TodoRepeatRule.values)
+                      DropdownMenuItem<TodoRepeatRule>(
+                        value: rule,
+                        child: Text(_repeatLabel(rule)),
+                      ),
+                  ],
+                  onChanged: (TodoRepeatRule? value) {
+                    if (value != null) {
+                      setState(() => _repeatRule = value);
+                    }
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 日期和时间控件使用同一高度与内边距，触控端保留完整热区。
+  ButtonStyle get _timeControlStyle => ButtonStyle(
+    minimumSize: WidgetStatePropertyAll<Size>(
+      Size(0, OmniDensity.controlHeight(context, large: true)),
+    ),
+    padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+      EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+    ),
+  );
+
+  /// 宽屏使用固定标签列，窄屏或大字号将标签放到控件上方。
+  Widget _buildTimeField({required String label, required Widget child}) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 字号放大后同步增加标签列与横排所需空间。
+        final double textScale =
+            MediaQuery.textScalerOf(context).scale(14) / 14;
+        // 所有字段共享同一宽度判断，避免上下行切换成不同布局。
+        final bool stacked =
+            constraints.maxWidth < OmniSize.control * 12 * textScale;
+        // 外置标签始终可见，不随日期是否设置而变化。
+        final Widget fieldLabel = Text(
+          label,
+          style: Theme.of(context).textTheme.labelLarge,
+        );
+        if (stacked) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              fieldLabel,
+              const SizedBox(height: OmniSpacing.xs),
+              child,
+            ],
+          );
+        }
+        return Row(
+          children: <Widget>[
+            SizedBox(
+              width: (OmniSize.control * 2 + OmniSpacing.xs) * textScale,
+              child: fieldLabel,
+            ),
+            const SizedBox(width: OmniSpacing.sm),
+            Expanded(child: child),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 未设置时添加入口占满字段宽度，选定后按日期、时间和清除列对齐。
   Widget _buildDateTimeControls({
     required DateTime? value,
     required int defaultHour,
     required String emptyDateLabel,
-    required IconData dateIcon,
     required String clearTooltip,
     required ValueChanged<DateTime?> onChanged,
   }) {
@@ -829,58 +1268,105 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
           _scheduledDate.day,
           defaultHour,
         );
-    return Row(
-      children: <Widget>[
-        Expanded(
-          child: OmniDatePickerButton(
-            value: value,
-            initialDate: effectiveValue,
-            firstDate: DateTime(2000),
-            lastDate: DateTime(2100),
-            label: value == null
-                ? emptyDateLabel
-                : DateFormat('M月d日').format(value),
-            icon: dateIcon,
-            onChanged: (DateTime selectedDate) {
-              // 合并新日期与当前时刻后的值。
-              final DateTime nextValue = DateTime(
-                selectedDate.year,
-                selectedDate.month,
-                selectedDate.day,
-                effectiveValue.hour,
-                effectiveValue.minute,
-              );
-              onChanged(nextValue);
-            },
+    // 日期入口的状态切换不改变当前已选时刻。
+    final Widget dateControl = OmniDatePickerButton(
+      value: value,
+      initialDate: effectiveValue,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+      label: value == null ? emptyDateLabel : _timeDateLabel(value),
+      icon: value == null ? Icons.add_rounded : null,
+      onChanged: (DateTime selectedDate) {
+        // 合并新日期与当前时刻后的值。
+        final DateTime nextValue = DateTime(
+          selectedDate.year,
+          selectedDate.month,
+          selectedDate.day,
+          effectiveValue.hour,
+          effectiveValue.minute,
+        );
+        onChanged(nextValue);
+      },
+    );
+    if (value == null) {
+      return dateControl;
+    }
+    // 已设置的截止与提醒使用同宽清除操作列。
+    final Widget clearControl = SizedBox(
+      width: OmniDensity.controlHeight(context),
+      child: OmniIconButton(
+        tooltip: clearTooltip,
+        onPressed: () => onChanged(null),
+        icon: const Icon(Icons.close_rounded),
+      ),
+    );
+    // 只有日期已设置时才允许选择时间，避免默认值被误认为已启用。
+    final Widget timeControl = OmniTimePickerButton(
+      value: TimeOfDay.fromDateTime(effectiveValue),
+      label: DateFormat('HH:mm').format(effectiveValue),
+      icon: null,
+      onChanged: (TimeOfDay selectedTime) {
+        // 合并当前日期与新时刻后的值。
+        final DateTime nextValue = DateTime(
+          effectiveValue.year,
+          effectiveValue.month,
+          effectiveValue.day,
+          selectedTime.hour,
+          selectedTime.minute,
+        );
+        onChanged(nextValue);
+      },
+    );
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 时间列随字号增长，正常尺寸下仍保持紧凑宽度。
+        final double timeWidth =
+            MediaQuery.textScalerOf(context).scale(14) /
+                14 *
+                (OmniSize.control * 2) +
+            OmniSpacing.sm;
+        // 用较长跨年格式为两行预留一致的日期空间，不因选值而错位。
+        final TextPainter dateMeasure = TextPainter(
+          text: TextSpan(
+            text: '2000/12/30',
+            style: Theme.of(context).textTheme.labelLarge,
           ),
-        ),
-        const SizedBox(width: OmniSpacing.xs),
-        SizedBox(
-          width: 108,
-          child: OmniTimePickerButton(
-            value: TimeOfDay.fromDateTime(effectiveValue),
-            label: DateFormat('HH:mm').format(effectiveValue),
-            icon: null,
-            onChanged: (TimeOfDay selectedTime) {
-              // 合并当前日期与新时刻后的值。
-              final DateTime nextValue = DateTime(
-                effectiveValue.year,
-                effectiveValue.month,
-                effectiveValue.day,
-                selectedTime.hour,
-                selectedTime.minute,
-              );
-              onChanged(nextValue);
-            },
-          ),
-        ),
-        if (value != null)
-          OmniIconButton(
-            tooltip: clearTooltip,
-            onPressed: () => onChanged(null),
-            icon: const Icon(Icons.close_rounded),
-          ),
-      ],
+          textScaler: MediaQuery.textScalerOf(context),
+          textDirection: Directionality.of(context),
+        )..layout();
+        // 日期文字、控件间距及清除热区共同决定换行边界。
+        final double requiredWidth =
+            dateMeasure.width +
+            OmniSpacing.xs * 4 +
+            timeWidth +
+            OmniDensity.controlHeight(context);
+        dateMeasure.dispose();
+        if (constraints.maxWidth < requiredWidth) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              dateControl,
+              const SizedBox(height: OmniSpacing.xs),
+              Row(
+                children: <Widget>[
+                  Expanded(child: timeControl),
+                  const SizedBox(width: OmniSpacing.xs),
+                  clearControl,
+                ],
+              ),
+            ],
+          );
+        }
+        return Row(
+          children: <Widget>[
+            Expanded(child: dateControl),
+            const SizedBox(width: OmniSpacing.xs),
+            SizedBox(width: timeWidth, child: timeControl),
+            const SizedBox(width: OmniSpacing.xs),
+            clearControl,
+          ],
+        );
+      },
     );
   }
 
@@ -909,7 +1395,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
       }
       if (int.tryParse(_stepCountController.text.trim()) !=
           _progressSteps.length) {
-        setState(() => _progressError = '步骤数量尚未应用，请先点击“应用数量”。');
+        setState(() => _progressError = '步骤数量尚未更新，请先点击“更新步骤”。');
         return;
       }
     }
@@ -1034,10 +1520,22 @@ class _EditableProgressStep {
   /// 名称输入控制器。
   final TextEditingController controller;
 
+  /// 输入节点随步骤移动，新增后用于定位焦点。
+  final FocusNode focusNode = FocusNode();
+
+  /// 输入框的稳定挂载位置，供滚动定位与排序复用。
+  final GlobalKey fieldKey = GlobalKey();
+
   /// 加载时的完成状态，只用于删除确认和说明。
   final bool completed;
 
   /// 创建结构编辑草稿。
   _EditableProgressStep({this.id, String? name, this.completed = false})
     : controller = TextEditingController(text: name ?? '');
+
+  /// 在编辑器销毁时统一释放输入资源。
+  void dispose() {
+    controller.dispose();
+    focusNode.dispose();
+  }
 }

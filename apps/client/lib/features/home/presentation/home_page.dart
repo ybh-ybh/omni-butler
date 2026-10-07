@@ -1985,6 +1985,7 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                   ignoring: _submitting,
                   child: TodoProgressTaskTile(
                     todo: widget.todo,
+                    compact: true,
                     onEdit: () => unawaited(
                       widget.onAction(widget.todo, _HomeTodoAction.edit),
                     ),

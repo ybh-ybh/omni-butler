@@ -216,11 +216,11 @@ class _TodoProgressPanelState extends ConsumerState<TodoProgressPanel> {
               const Text('任务已不存在或已移入回收站。')
             else ...<Widget>[
               TodoProgressSummaryView(todo: todo),
-              const SizedBox(height: OmniSpacing.sm),
+              const SizedBox(height: OmniSpacing.xxs),
               Text(
                 todo.isCompleted
                     ? '任务已完成。重新打开后可以修改步骤，原有进度会保留。'
-                    : '点击步骤即可标为完成或未完成，修改自动保存。全部步骤完成后仍需手动确认。',
+                    : '点击步骤切换完成状态，自动保存；全部完成后需确认。',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               if (_error != null) ...<Widget>[
@@ -239,7 +239,7 @@ class _TodoProgressPanelState extends ConsumerState<TodoProgressPanel> {
                     ),
                   ),
               ],
-              const SizedBox(height: OmniSpacing.md),
+              const SizedBox(height: OmniSpacing.xs),
               if (steps.isEmpty)
                 OmniButton(
                   label: '补充步骤',
@@ -248,8 +248,10 @@ class _TodoProgressPanelState extends ConsumerState<TodoProgressPanel> {
                       : () => TodoEditorDialog.show(context, record: todo),
                 )
               else ...<Widget>[
-                if (!todo.isCompleted) _buildQuickActions(todo, steps),
-                const SizedBox(height: OmniSpacing.md),
+                if (!todo.isCompleted) ...<Widget>[
+                  _buildQuickActions(todo, steps),
+                  const SizedBox(height: OmniSpacing.sm),
+                ],
                 for (int index = 0; index < steps.length; index += 1)
                   Padding(
                     padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
@@ -296,40 +298,117 @@ class _TodoProgressPanelState extends ConsumerState<TodoProgressPanel> {
     final int nextIndex = steps.indexWhere(
       (step) => step.id == pending.first.id,
     );
+    // 完整目标文案同时供可见文本和长名称提示使用。
+    final String nextLabel =
+        '下一个：${todoProgressStepLabel(pending.first, nextIndex, unit: todo.progressUnit)}';
+    // 非法数量的说明放在整行下方，避免短输入框挤压错误文字。
+    final bool showBatchError =
+        _batchController.text.isNotEmpty && !validAmount;
     return OmniPanel(
+      key: const ValueKey<String>('todo-progress-quick-actions'),
+      padding: const EdgeInsets.all(OmniSpacing.sm),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Text(
-            '下一个：${todoProgressStepLabel(pending.first, nextIndex, unit: todo.progressUnit)}',
+          LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              // 字号变大时为名称与按钮留出独立行，保持完整操作热区。
+              final double textScale =
+                  MediaQuery.textScalerOf(context).scale(14) / 14;
+              // 常规窄屏也可同排；空间不足时按阅读顺序分行。
+              final bool stacked =
+                  constraints.maxWidth <
+                  (OmniSize.control * 8 + OmniSpacing.xl) * textScale;
+              // 长名称最多展示两行，悬停或长按可查看完整目标。
+              final Widget nextName = Tooltip(
+                message: nextLabel,
+                child: Text(
+                  nextLabel,
+                  key: const ValueKey<String>('todo-progress-next-label'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              );
+              // 加一操作仍绑定当前第一个未完成步骤的稳定标识。
+              final Widget nextButton = OmniButton(
+                key: const ValueKey<String>('todo-progress-next'),
+                label: '完成下一个 +1',
+                variant: OmniButtonVariant.text,
+                onPressed: _busy
+                    ? null
+                    : () =>
+                          unawaited(_change(<String>[pending.first.id], true)),
+              );
+              // 外置数量标签不随输入内容浮动。
+              final Widget batchLabel = const Text(
+                '批量完成',
+                key: ValueKey<String>('todo-progress-batch-label'),
+              );
+              // 数量使用短输入框；非法状态保留错误边框，说明另占整行。
+              final Widget batchInput = Semantics(
+                label: '批量完成数量',
+                child: OmniTextField(
+                  key: const ValueKey<String>('todo-progress-batch-count'),
+                  controller: _batchController,
+                  enabled: !_busy,
+                  keyboardType: TextInputType.number,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: '1 至 ${pending.length}',
+                    error: showBatchError ? const SizedBox.shrink() : null,
+                  ),
+                ),
+              );
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  if (stacked) ...<Widget>[
+                    nextName,
+                    const SizedBox(height: OmniSpacing.xxs),
+                    Align(alignment: Alignment.centerLeft, child: nextButton),
+                  ] else
+                    Row(
+                      children: <Widget>[
+                        Expanded(child: nextName),
+                        const SizedBox(width: OmniSpacing.xs),
+                        nextButton,
+                      ],
+                    ),
+                  const SizedBox(height: OmniSpacing.xs),
+                  if (stacked) ...<Widget>[
+                    batchLabel,
+                    const SizedBox(height: OmniSpacing.xxs),
+                    batchInput,
+                  ] else
+                    Row(
+                      children: <Widget>[
+                        batchLabel,
+                        const SizedBox(width: OmniSpacing.xs),
+                        Flexible(
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: OmniSize.control * 5 * textScale,
+                            ),
+                            child: batchInput,
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              );
+            },
           ),
-          const SizedBox(height: OmniSpacing.xs),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OmniButton(
-              key: const ValueKey<String>('todo-progress-next'),
-              label: '完成下一个 +1',
-              variant: OmniButtonVariant.text,
-              onPressed: _busy
-                  ? null
-                  : () => unawaited(_change(<String>[pending.first.id], true)),
+          if (showBatchError) ...<Widget>[
+            const SizedBox(height: OmniSpacing.xxs),
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                '请输入 1 至 ${pending.length} 的整数',
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: OmniColors.of(context).danger),
+              ),
             ),
-          ),
-          const SizedBox(height: OmniSpacing.md),
-          OmniTextField(
-            key: const ValueKey<String>('todo-progress-batch-count'),
-            controller: _batchController,
-            enabled: !_busy,
-            keyboardType: TextInputType.number,
-            onChanged: (_) => setState(() {}),
-            decoration: InputDecoration(
-              labelText: '批量完成数量',
-              hintText: '1 至 ${pending.length}',
-              errorText: _batchController.text.isNotEmpty && !validAmount
-                  ? '请输入 1 至 ${pending.length} 的整数'
-                  : null,
-            ),
-          ),
+          ],
           if (preview.isNotEmpty) ...<Widget>[
             const SizedBox(height: OmniSpacing.xs),
             Text('将按顺序完成以下 ${preview.length} 个未完成步骤：'),

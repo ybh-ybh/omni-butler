@@ -14,6 +14,7 @@ import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart'
 import 'package:omni_butler/features/todos/presentation/todo_priority_quadrant_style.dart';
 import 'package:omni_butler/features/todos/presentation/todo_progress_panel.dart';
 import 'package:omni_butler/features/todos/presentation/todo_progress_widgets.dart';
+import 'package:omni_butler/features/todos/presentation/todo_task_actions.dart';
 import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
@@ -1846,20 +1847,14 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
         child: AnimatedOpacity(
           duration: OmniMotion.duration(context, OmniMotion.panel),
           opacity: widget.completingTodoIds.contains(tree.root.id) ? 0.35 : 1,
-          child: Row(
-            children: <Widget>[
-              ?treeControl,
-              Expanded(
-                child: TodoProgressTaskTile(
-                  todo: tree.root,
-                  onEdit: () => widget.onEdit(tree.root),
-                  onMove: () => widget.onMove(tree.root),
-                  onDelete: () => widget.onDelete(tree.root),
-                  onConfirm: () =>
-                      unawaited(widget.onCompletedChanged(tree.root, true)),
-                ),
-              ),
-            ],
+          child: TodoProgressTaskTile(
+            todo: tree.root,
+            leading: treeControl,
+            onEdit: () => widget.onEdit(tree.root),
+            onMove: () => widget.onMove(tree.root),
+            onDelete: () => widget.onDelete(tree.root),
+            onConfirm: () =>
+                unawaited(widget.onCompletedChanged(tree.root, true)),
           ),
         ),
       );
@@ -1896,11 +1891,7 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
           : '${tree.pendingChildrenCount}/${tree.children.length}',
       onCompletedChanged: (bool value) =>
           widget.onCompletedChanged(tree.root, value),
-      onTap: widget.mobile
-          ? tree.children.isEmpty
-                ? null
-                : _toggleChildren
-          : () => widget.onEdit(tree.root),
+      onTap: tree.children.isEmpty ? null : _toggleChildren,
       onEdit: () => widget.onEdit(tree.root),
       onAddChild: () => widget.onAddChild(tree.root),
       onMove: () => widget.onMove(tree.root),
@@ -1937,9 +1928,7 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
                 mobile: widget.mobile,
                 onCompletedChanged: (bool value) =>
                     widget.onCompletedChanged(pendingChildren[index], value),
-                onTap: widget.mobile
-                    ? null
-                    : () => widget.onEdit(pendingChildren[index]),
+                onTap: null,
                 onEdit: () => widget.onEdit(pendingChildren[index]),
                 onMove: null,
                 onDelete: () => widget.onDelete(pendingChildren[index]),
@@ -2087,26 +2076,11 @@ class _TodoTaskRow extends StatelessWidget {
             horizontal: OmniSpacing.sm,
             vertical: OmniSpacing.xs,
           );
-    // 移动端新增子任务按钮使用四十四像素点击区域，桌面端沿用原有主题尺寸。
-    final ButtonStyle addChildButtonStyle = mobile
-        ? IconButton.styleFrom(
-            foregroundColor: colors.todo,
-            fixedSize: const Size.square(OmniSize.touch),
-            padding: EdgeInsets.zero,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          )
-        : IconButton.styleFrom(foregroundColor: colors.todo);
-    // 移动端更多菜单使用固定点击区域，避免 PopupMenuButton 默认尺寸撑高任务行。
-    final Widget? moreActionChild = mobile
-        ? SizedBox.square(
-            dimension: OmniSize.touch,
-            child: Icon(
-              Icons.more_horiz_rounded,
-              size: OmniSize.icon,
-              color: colors.muted,
-            ),
-          )
-        : null;
+    // 完成下一个与添加子任务共用完整按钮尺寸。
+    final ButtonStyle addChildButtonStyle = todoTaskActionButtonStyle(
+      context,
+      colors.todo,
+    );
     // 当前是否关闭非必要动画。
     final bool disableAnimations =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
@@ -2137,89 +2111,60 @@ class _TodoTaskRow extends StatelessWidget {
       },
       child: AbsorbPointer(
         absorbing: completing,
-        child: OmniListRow(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(OmniRadius.control),
-          padding: rowPadding,
-          leadingGap: 0,
-          leading: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              if (treeControl != null) ...<Widget>[
-                treeControl!,
-                const SizedBox(width: OmniSpacing.xxs),
-              ],
-              TodoCompletionCheckbox(
-                key: ValueKey<String>('todo-completion-checkbox-${todo.id}'),
-                value: todo.isCompleted || completing,
-                onChanged: completing ? null : onCompletedChanged,
-              ),
-            ],
-          ),
-          title: Row(
-            children: <Widget>[
-              Expanded(
-                child: _TodoInlineTitle(
-                  todo: todo,
-                  completed: todo.isCompleted,
-                ),
-              ),
-              if (progressLabel != null)
-                Padding(
-                  padding: const EdgeInsets.only(left: OmniSpacing.xs),
-                  child: OmniTag(
-                    key: ValueKey<String>('todo-tree-progress-${todo.id}'),
-                    label: progressLabel!,
-                    color: colors.todo,
-                  ),
-                ),
-            ],
-          ),
-          subtitle: hasDetails ? _TodoDetails(todo: todo, now: now) : null,
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              if (onAddChild != null)
-                OmniIconButton(
-                  key: ValueKey<String>('todo-add-child-${todo.id}'),
-                  tooltip: '添加子任务',
-                  onPressed: onAddChild,
-                  style: addChildButtonStyle,
-                  icon: const Icon(Icons.playlist_add_rounded, size: 20),
-                ),
-              OmniPopupMenuButton<String>(
-                tooltip: '更多操作',
-                child: moreActionChild,
-                onSelected: (String value) {
-                  if (value == 'edit') {
-                    onEdit();
-                  } else if (value == 'move') {
-                    onMove?.call();
-                  } else if (value == 'delete') {
-                    onDelete();
-                  }
-                },
-                itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                  OmniPopupMenuItem<String>(
-                    value: 'edit',
-                    label: '编辑',
-                    icon: Icons.edit_outlined,
-                  ),
-                  if (onMove != null)
-                    OmniPopupMenuItem<String>(
-                      value: 'move',
-                      label: '移动象限',
-                      icon: Icons.drive_file_move_outline,
-                    ),
-                  OmniPopupMenuItem<String>(
-                    value: 'delete',
-                    label: '移入回收站',
-                    icon: Icons.delete_outline_rounded,
-                    danger: true,
-                  ),
+        child: TodoTaskContextMenu(
+          enabled: !completing,
+          onEdit: onEdit,
+          onMove: onMove,
+          onDelete: onDelete,
+          child: OmniListRow(
+            // 无子任务时保持整行悬停和焦点能力，单击不执行业务操作。
+            onTap: onTap ?? () {},
+            borderRadius: BorderRadius.circular(OmniRadius.control),
+            padding: rowPadding,
+            leadingGap: 0,
+            leading: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                if (treeControl != null) ...<Widget>[
+                  treeControl!,
+                  const SizedBox(width: OmniSpacing.xxs),
                 ],
-              ),
-            ],
+                TodoCompletionCheckbox(
+                  key: ValueKey<String>('todo-completion-checkbox-${todo.id}'),
+                  value: todo.isCompleted || completing,
+                  onChanged: completing ? null : onCompletedChanged,
+                ),
+              ],
+            ),
+            title: Row(
+              children: <Widget>[
+                Expanded(
+                  child: _TodoInlineTitle(
+                    todo: todo,
+                    completed: todo.isCompleted,
+                  ),
+                ),
+                if (progressLabel != null)
+                  Padding(
+                    padding: const EdgeInsets.only(left: OmniSpacing.xs),
+                    child: OmniTag(
+                      key: ValueKey<String>('todo-tree-progress-${todo.id}'),
+                      label: progressLabel!,
+                      color: colors.todo,
+                    ),
+                  ),
+              ],
+            ),
+            subtitle: hasDetails ? _TodoDetails(todo: todo, now: now) : null,
+            trailing: onAddChild == null
+                ? null
+                : OmniIconButton(
+                    key: ValueKey<String>('todo-add-child-${todo.id}'),
+                    tooltip: '添加子任务',
+                    onPressed: onAddChild,
+                    style: addChildButtonStyle,
+                    icon: const Icon(Icons.playlist_add_rounded, size: 20),
+                  ),
           ),
         ),
       ),

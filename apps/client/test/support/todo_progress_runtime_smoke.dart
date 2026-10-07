@@ -151,7 +151,8 @@ Future<void> _verifyFlow(
     return _buttonEnabled('progress-update-$todoId');
   });
   await _capture(captureKey, '01-list-empty');
-  await _pressButton('progress-update-$todoId');
+  // 加一按钮直接推进步骤；任务正文保留打开共享进度面板的入口。
+  await _tapElement('progress-title-$todoId');
   await _waitUntil('步骤面板加载', () async {
     return _buttonEnabled('todo-progress-next');
   });
@@ -286,14 +287,13 @@ Element? _findElement(String key) {
 bool _buttonEnabled(String key) {
   // 当前渲染出的生产按钮。
   final Widget? widget = _findElement(key)?.widget;
+  if (widget is OmniIconButton) return widget.onPressed != null;
   return widget is OmniButton && widget.onPressed != null && !widget.loading;
 }
 
 /// 点击生产按钮的实际渲染位置，缺失或禁用均立即报错。
 Future<void> _pressButton(String key) async {
-  // 当前生产按钮实例。
-  final Widget? widget = _findElement(key)?.widget;
-  if (widget is! OmniButton || widget.onPressed == null || widget.loading) {
+  if (!_buttonEnabled(key)) {
     throw StateError('生产按钮不存在或不可用：$key');
   }
   await _tapElement(key);

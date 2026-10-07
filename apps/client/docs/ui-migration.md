@@ -41,7 +41,7 @@
 | D06 | `QuoteLibraryDialog`；`lib/features/home/presentation/quote_library_dialog.dart` | 列表、搜索、空态、删除/撤销、导入/导出菜单 | 已接统一弹窗、输入、图标、菜单和消息 | `quote_library_dialog_test.dart` | 自动化通过；人工矩阵待验 |
 | D07 | `QuoteImportPreviewDialog`；同上 | 导入预览、追加/覆盖模式、确认/取消、格式错误 | 已接统一弹窗、单选选项和按钮；导入数据规则保留 | `quote_library_dialog_test.dart`、`quote_json_transfer_test.dart` | 自动化通过；人工矩阵待验 |
 | D08 | `_QuoteEditorDialog`；同上 | 新增/编辑、正文多行、作者、必填/保存状态 | 已接统一侧栏、表单字段和按钮 | `quote_library_dialog_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
-| D09 | `TodoEditorDialog`；`lib/features/todos/presentation/todo_editor_dialog.dart` | 新建/编辑/子任务、日期时间、提醒、重复规则、重复系列范围、保存失败 | 已接统一侧栏、表单、开关、日期时间和下拉 | `todo_quadrant_ui_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
+| D09 | `TodoEditorDialog`；`lib/features/todos/presentation/todo_editor_dialog.dart` | 新建/编辑/子任务、日期时间、提醒、重复规则、进度结构、重复系列范围、保存失败 | 统一侧栏和控件；时间设置外置标签、空值入口等宽与折叠摘要；进度设置基础字段并排、步骤行内操作/窄屏菜单、短列表完整展示、添加定位聚焦，均适配大字号 | `todo_editor_time_settings_test.dart`、`todo_progress_editor_layout_test.dart`、`todo_progress_ui_test.dart`、`todo_quadrant_ui_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化与中文宽窄屏预览通过；真机手感及完整人工矩阵待验 |
 | D10 | `_TimeEntryEditorDialog`；`lib/features/timeline/presentation/timeline_page.dart` | 区间编辑、日期/分类、备注、多段占用冲突、拖动范围、保存失败 | 共享侧栏/输入/选择；业务范围滑块与冲突图形保留 | `timeline_editor_test.dart`、`timeline_layout_test.dart` | 自动化通过；人工矩阵待验 |
 | D11 | `_AbsoluteTimeEntryDialog`；同上 | 开始记录、完整补记、结束进行中、跨日日期、时间冲突、备注多行 | 已接居中弹窗、表单、日期时间、下拉；结束流程保留原遮罩关闭限制 | `timeline_android_ui_test.dart`、`timeline_editor_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | D12 | `_EventEditorDialog`；`lib/features/events/presentation/events_page.dart` | 新增/编辑、周期单位/间隔、提醒开关/时间、必填和保存失败 | 已接共享侧栏、表单、下拉、开关和按钮 | `events_layout_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
@@ -56,7 +56,7 @@
 | D21 | `_PaymentEditorDialog`；同上 | 缴费金额/日期、周期、有效期、保存失败 | 已接统一居中弹窗、输入、下拉、日期和按钮 | `windows_dialog_enter_save_test.dart`、`memberships_layout_test.dart` | 自动化通过；人工矩阵待验 |
 | D22 | `_SyncConnectionDialog`；`lib/features/settings/presentation/sync_connection_dialog.dart` | 连接表单→数据处理预览、保留/替换策略、返回、提交中不可关闭、失败 | 已接统一侧栏、表单、单选、图标和按钮；保留两阶段确认与 `PopScope` | `sync_connection_dialog_test.dart`、`sync_connection_coordinator_test.dart` | 自动化通过；人工矩阵待验 |
 | D23 | `_SyncBackupDialog`；`lib/features/settings/presentation/sync_backup_dialog.dart` | 备份列表、加载/失败、删除确认/执行中 | 已接统一居中弹窗和按钮；旧库/快照删除范围不变 | `sync_maintenance_boundary_test.dart`；备份界面专项需手工验收 | 共享/仓储回归通过；界面专项待验 |
-| D24 | `TodoProgressPanel`；`lib/features/todos/presentation/todo_progress_panel.dart` | 跳序记录、批量预览、即时保存/失败重试、六秒撤销、满进度待确认、历史只读与重开；首页/待办/悬浮窗共用 | 统一侧栏、按钮、输入、消息与语义主题；只读分段条为业务图形，无拖动手势 | `todo_progress_ui_test.dart`、`todo_progress_entrypoints_test.dart`、`test/support/todo_progress_runtime_smoke.dart` | 六配色×明暗像素、键盘、读屏语义与宽窄屏通过；Windows/Android模拟器真实引擎点击闭环通过；实体设备读屏/输入法体验待人工验收 |
+| D24 | `TodoProgressPanel`；`lib/features/todos/presentation/todo_progress_panel.dart` | 跳序记录、批量预览、即时保存/失败重试、六秒撤销、满进度待确认、历史只读与重开；首页/待办/悬浮窗共用 | 统一侧栏、按钮、输入、消息与语义主题；顶部下一个步骤与完成操作同排，批量短输入框及外置标签，空间不足按字号分行，错误整行展示；只读分段条为业务图形，无拖动手势 | `todo_progress_ui_test.dart`、`todo_progress_entrypoints_test.dart`、`todo_progress_panel_layout_test.dart`、`test/support/todo_progress_runtime_smoke.dart` | 六配色×明暗像素、键盘、读屏语义与宽窄屏通过；Windows/Android模拟器真实引擎点击闭环通过；本轮顶部布局验收记录见进度面板专项测试；实体设备读屏/输入法体验待人工验收 |
 
 ## 内联浮层、选择器、消息与受控例外
 
@@ -71,6 +71,7 @@
 | 常规操作菜单：列表更多、分类、名言导入导出、导航主题/管理切换 | `OmniPopupMenuButton` / `OmniPopupMenuItem`；共用主题、动作图标、危险色和减少动效 | 选中/取消、禁用项、打开后返回、键盘与边缘定位 | `omni_dropdown_test.dart`、`taxonomy_manager_dialog_test.dart`、导航专项测试 | 自动化通过；人工矩阵待验 |
 | 分类颜色选择 | Omni 菜单入口；一个底层 `PopupMenuItem` 承载自定义颜色网格，颜色格增加语义与触控区域 | 颜色名称、已选标记、键盘/触控选择、取消 | `taxonomy_manager_dialog_test.dart` | 自动化通过；人工矩阵待验 |
 | 首页待办右键/长按菜单 | 指针定位 `showMenu` + `OmniPopupMenuItem`，保留调用位置定位能力；主题统一 | 右键/长按、不重复开启、编辑/子任务/删除、菜单关闭 | `home_todo_context_menu_test.dart` | 自动化通过；人工矩阵待验 |
+| 每日待办普通/进度任务菜单及首页进度快捷操作 | `TodoTaskContextMenu` 指针定位 `showMenu` + `OmniPopupMenuItem`，移除更多按钮；添加子任务与完成下一个共用按钮尺寸；进度快捷按钮使用“+1”直接完成首个未完成步骤，正文仍打开面板 | Windows 单击展开/收起、右键；Android 单击、长按、横滑；编辑/移动/回收站、键盘菜单键/Shift+F10；进度提交防重、失败恢复、精确撤销、满进度仍需确认 | `todo_progress_entrypoints_test.dart`、`todo_progress_quick_action_test.dart`、`todo_quadrant_ui_test.dart` | 自动化通过；人工矩阵待验 |
 | 移动新增拆分菜单 | 时间/事件等使用 `OmniSplitActionButton`；物品仍有专用新增拆分菜单，均保留按钮上方锚定/展开语义 | 点主按钮与菜单互不混淆、取消、菜单方向键、减少动效、屏边 | `timeline_android_ui_test.dart`、`events_layout_test.dart`、`inventory_layout_test.dart` | 自动化通过；人工矩阵待验 |
 | 页面顶部操作反馈/完成撤销 | `showOmniMessage`；成功/警告/错误/信息共用结构；内容相对弹窗垂直居中，撤销保持同行；鼠标、键盘或读屏焦点停留暂停，辅助服务开启本身不永久暂停 | 替换/关闭、倒计时、操作只执行一次、撤销时限、辅助服务开启时仍自动关闭、正文及按钮读屏焦点暂停/继续、宽窄窗口与两倍字号对齐、长文案换行、减少动效 | `omni_message_test.dart`、`omni_overlay_accessibility_test.dart`、业务撤销测试 | 自动化通过；真实中文宽窄窗、长文案和删除提示预览通过；人工矩阵待验 |
 | 文本输入/表单校验 | `OmniTextField` / `OmniTextFormField` 保留 Flutter 文本编辑、输入法、焦点及验证能力；业务拥有校验规则 | 中文输入法组合态、复制粘贴、多行 Enter、错误/只读/禁用/提交中、焦点顺序 | `omni_form_controls_test.dart`、`omni_windows_enter_submit_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |

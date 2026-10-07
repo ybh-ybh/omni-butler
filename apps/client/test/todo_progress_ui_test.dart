@@ -243,7 +243,7 @@ void main() {
     await tester.tap(find.widgetWithText(OmniButton, '取消').last);
     await tester.pumpAndSettle();
     // 取消后输入总数和仓储中的完成记录都应保留。
-    expect(find.text('步骤总数：3；通过下方增删调整'), findsOneWidget);
+    expect(find.text('共 3 步'), findsOneWidget);
     expect((await _readSteps(database)).first.isCompleted, isTrue);
     await _disposeFeature(tester, database);
   });
@@ -341,8 +341,8 @@ void main() {
     final Finder firstName = find.byWidgetPredicate(
       (Widget widget) =>
           widget is OmniTextFormField &&
-          widget.decoration.labelText == '步骤 1（名称可选）',
-    );
+          widget.decoration.hintText == '名称（可选）',
+    ).first;
     await tester.ensureVisible(firstName);
     await tester.enterText(firstName, '需要保留的输入');
     // 另一窗口新增步骤后，旧结构基线必须被拒绝。
@@ -382,7 +382,7 @@ void main() {
       ]);
     });
     await _pumpFeature(tester, database, TodoEditorDialog(record: todo));
-    expect(find.text('步骤总数：1001；通过下方增删调整'), findsOneWidget);
+    expect(find.text('共 1001 步'), findsOneWidget);
     expect(
       find.byKey(const ValueKey<String>('todo-progress-total')),
       findsNothing,
