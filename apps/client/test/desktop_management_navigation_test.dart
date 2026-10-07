@@ -59,6 +59,12 @@ void main() {
         await tester.pumpAndSettle();
         _expectSingleManagementEntry();
         _expectManagementSelected(tester);
+        // Windows 三个管理分区的进出路由都应立即完成。
+        final TransitionRoute<dynamic> route =
+            ModalRoute.of(tester.element(_key('desktop-management-switcher')))!
+                as TransitionRoute<dynamic>;
+        expect(route.transitionDuration, Duration.zero);
+        expect(route.reverseTransitionDuration, Duration.zero);
         expect(
           find.descendant(
             of: _key('desktop-management-switcher'),

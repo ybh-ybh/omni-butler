@@ -155,7 +155,7 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
   );
 });
 
-/// 紧凑 Android 管理路由复用页面身份，避免分区切换销毁在途横滑。
+/// Windows 管理分区直接切换，紧凑 Android 复用页面身份以保留在途横滑。
 Page<void> _buildManagementRoutePage(
   BuildContext context,
   GoRouterState state,
@@ -173,6 +173,24 @@ Page<void> _buildManagementRoutePage(
       embeddedInManagement: embedded,
     ),
   };
+  // 各平台共用完整页面表面，保留 Android 管理分页壳层。
+  final Widget surface = _PrimaryRouteSurface(
+    child: embedded
+        ? AndroidManagementShell(selectedSection: section, child: content)
+        : content,
+  );
+  if (Theme.of(context).platform == TargetPlatform.windows) {
+    return NoTransitionPage<void>(
+      key: state.pageKey,
+      name: state.name ?? state.path,
+      arguments: <String, String>{
+        ...state.pathParameters,
+        ...state.uri.queryParameters,
+      },
+      restorationId: state.pageKey.value,
+      child: surface,
+    );
+  }
   return MaterialPage<void>(
     key: embedded
         ? const ValueKey<String>('android-management-page')
@@ -183,11 +201,7 @@ Page<void> _buildManagementRoutePage(
       ...state.uri.queryParameters,
     },
     restorationId: embedded ? 'android-management-page' : state.pageKey.value,
-    child: _PrimaryRouteSurface(
-      child: embedded
-          ? AndroidManagementShell(selectedSection: section, child: content)
-          : content,
-    ),
+    child: surface,
   );
 }
 
