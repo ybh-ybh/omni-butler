@@ -15,6 +15,145 @@ import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
 
 /// 验证双圆环共用真实类别图例并保留完整辅助功能信息。
 void main() {
+  testWidgets('鼠标悬停环节切换中心时长并突出绘制，空白与离开恢复总时长', (WidgetTester tester) async {
+    await _pumpTimeCard(
+      tester,
+      now: DateTime(2026, 10, 6, 14),
+      todayRecords: _interactionRecords(),
+      weekRecords: _interactionRecords(),
+      categoryColors: const {'工作': Colors.blue, '学习': Colors.orange},
+    );
+    // 悬停前的真实圆环像素，用来确认高亮与恢复。
+    final ByteData before = await _donutPixels(tester, '今日');
+    // 今日圆环中心，右侧属于工作，左侧属于学习。
+    final Offset center = tester.getCenter(
+      find.byKey(const ValueKey<String>('home-time-donut-今日')),
+    );
+    // 模拟实际鼠标，避免用触摸事件替代悬停。
+    final TestGesture mouse = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(center + const Offset(45, 0));
+    await tester.pump();
+    expect(_donutDuration(tester, '今日'), '1h0m');
+    expect(_donutDuration(tester, '本周'), '1h30m');
+    expect(
+      (await _donutPixels(tester, '今日')).buffer.asUint8List(),
+      isNot(before.buffer.asUint8List()),
+    );
+    // 高亮描边延伸到原描边外侧，选中颜色保持不透明。
+    final ByteData highlighted = await _donutPixels(tester, '今日');
+    expect(highlighted.getUint8((52 * 104 + 102) * 4 + 3), 255);
+    expect(
+      await _paintedDonutColors(tester, '今日'),
+      isNot(contains(Colors.orange.toARGB32())),
+    );
+    await mouse.moveTo(center + const Offset(-45, 0));
+    await tester.pump();
+    expect(_donutDuration(tester, '今日'), '0h30m');
+    await mouse.moveTo(center);
+    await tester.pump();
+    expect(_donutDuration(tester, '今日'), '1h30m');
+    // 顶部分类间隙与圆环外角均不得误命中类别。
+    await mouse.moveTo(center + const Offset(0, -45));
+    await tester.pump();
+    expect(_donutDuration(tester, '今日'), '1h30m');
+    await mouse.moveTo(center + const Offset(50, 50));
+    await tester.pump();
+    expect(_donutDuration(tester, '今日'), '1h30m');
+    await mouse.moveTo(center + const Offset(45, 0));
+    await tester.pump();
+    await mouse.moveTo(Offset.zero);
+    await tester.pump();
+    expect(_donutDuration(tester, '今日'), '1h30m');
+    expect(
+      (await _donutPixels(tester, '今日')).buffer.asUint8List(),
+      before.buffer.asUint8List(),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('安卓点击环节保留选择，双图独立，重复点击与中心点击取消', (WidgetTester tester) async {
+    // 同时验证读屏摘要跟随选中类别。
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    try {
+      await _pumpTimeCard(
+        tester,
+        now: DateTime(2026, 10, 6, 14),
+        platform: TargetPlatform.android,
+        width: 320,
+        todayRecords: _interactionRecords(),
+        weekRecords: _interactionRecords(),
+      );
+      // 两个圆环各自的交互中心。
+      final Offset todayCenter = tester.getCenter(
+        find.byKey(const ValueKey<String>('home-time-donut-今日')),
+      );
+      // 本周圆环不应受今日选中状态影响。
+      final Offset weekCenter = tester.getCenter(
+        find.byKey(const ValueKey<String>('home-time-donut-本周')),
+      );
+      await tester.tapAt(todayCenter + const Offset(-45, 0));
+      await tester.pumpAndSettle();
+      expect(_donutDuration(tester, '今日'), '0h30m');
+      expect(_donutDuration(tester, '本周'), '1h30m');
+      expect(find.bySemanticsLabel(RegExp('今日.*当前类别学习 30分钟')), findsOneWidget);
+      await tester.tapAt(weekCenter + const Offset(45, 0));
+      await tester.pumpAndSettle();
+      expect(_donutDuration(tester, '本周'), '1h0m');
+      expect(_donutDuration(tester, '今日'), '0h30m');
+      await tester.tapAt(todayCenter + const Offset(45, 0));
+      await tester.pumpAndSettle();
+      expect(_donutDuration(tester, '今日'), '1h0m');
+      await tester.tapAt(todayCenter + const Offset(45, 0));
+      await tester.pumpAndSettle();
+      expect(_donutDuration(tester, '今日'), '1h30m');
+      await tester.tapAt(weekCenter);
+      await tester.pumpAndSettle();
+      expect(_donutDuration(tester, '本周'), '1h30m');
+      expect(tester.takeException(), isNull);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('隐藏已选中类别恢复总时长，过渡中的点击命中实际呈现扇区', (WidgetTester tester) async {
+    await _pumpTimeCard(
+      tester,
+      now: DateTime(2026, 10, 6, 14),
+      platform: TargetPlatform.android,
+      todayRecords: _interactionRecords(),
+      weekRecords: _interactionRecords(),
+    );
+    // 初始工作占三分之二，右侧仍为工作。
+    final Offset center = tester.getCenter(
+      find.byKey(const ValueKey<String>('home-time-donut-今日')),
+    );
+    // 共用筛选入口，选择操作不改变图例。
+    final Finder work = find.byKey(
+      const ValueKey<String>('home-time-legend-item-工作'),
+    );
+    await tester.tapAt(center + const Offset(45, 0));
+    await tester.pumpAndSettle();
+    expect(_donutDuration(tester, '今日'), '1h0m');
+    await tester.tap(work);
+    await tester.pump();
+    expect(_donutDuration(tester, '今日'), '0h30m');
+    expect(find.bySemanticsLabel(RegExp('当前类别工作')), findsNothing);
+    // 目标帧右侧将属于学习，但起始帧仍是已隐藏的工作；不得提前选中学习。
+    await tester.tapAt(center + const Offset(45, 0));
+    await tester.pump();
+    expect(find.text('学习'), findsOneWidget);
+    await tester.pumpAndSettle();
+    await tester.tap(work);
+    await tester.pumpAndSettle();
+    expect(_donutDuration(tester, '今日'), '1h30m');
+    expect(find.text('工作'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('共同与独有类别合并去重，图例色块与两个圆环实际颜色一致', (WidgetTester tester) async {
     // 挂载前启用语义树，验证去除可见摘要后读屏信息仍完整。
     final SemanticsHandle semantics = tester.ensureSemantics();
@@ -510,6 +649,29 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 }
+
+/// 用不等时长类别覆盖圆环两侧命中与中心总时长。
+List<TimeEntryRecord> _interactionRecords() => <TimeEntryRecord>[
+  _entry(
+    id: 'work',
+    startedAt: DateTime(2026, 10, 6, 9),
+    minutes: 60,
+    category: '工作',
+  ),
+  _entry(
+    id: 'study',
+    startedAt: DateTime(2026, 10, 6, 11),
+    minutes: 30,
+    category: '学习',
+  ),
+];
+
+/// 读取指定周期的中心时长，避免匹配图例和记录行文字。
+String _donutDuration(WidgetTester tester, String label) => tester
+    .widget<Text>(
+      find.byKey(ValueKey<String>('home-time-donut-duration-$label')),
+    )
+    .data!;
 
 /// 挂载独立时间卡片，用真实统计方法和受控异步数据验证图例。
 Future<void> _pumpTimeCard(

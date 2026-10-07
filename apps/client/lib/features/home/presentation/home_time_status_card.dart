@@ -385,7 +385,7 @@ class _TimeSlice {
 }
 
 /// 单个周期时间圆环。
-class _TimeDonut extends StatelessWidget {
+class _TimeDonut extends StatefulWidget {
   /// 当前是否应用了类别筛选。
   final bool filtered;
 
@@ -406,19 +406,68 @@ class _TimeDonut extends StatelessWidget {
     required this.filtered,
   });
 
+  /// 为每个周期维护独立的环节选中状态。
+  @override
+  State<_TimeDonut> createState() => _TimeDonutState();
+}
+
+/// 管理圆环悬停与触摸选择，不影响共用图例筛选。
+class _TimeDonutState extends State<_TimeDonut> {
+  /// 当前突出显示的类别名称，空值时显示总时长。
+  String? _activeCategory;
+
+  /// 更新选择，仅在命中类别变化时刷新界面。
+  void _selectCategory(String? category) {
+    // 退出动画尚在绘制的隐藏类别不能被再次选中。
+    final String? visibleCategory =
+        widget.summary.slices.any(
+          (_TimeSlice slice) => slice.label == category && slice.minutes > 0,
+        )
+        ? category
+        : null;
+    if (_activeCategory == visibleCategory) return;
+    setState(() => _activeCategory = visibleCategory);
+  }
+
+  /// 类别被隐藏或记录移除时清除过期选择。
+  @override
+  void didUpdateWidget(covariant _TimeDonut oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.summary.slices.any(
+      (_TimeSlice slice) => slice.label == _activeCategory && slice.minutes > 0,
+    )) {
+      _activeCategory = null;
+    }
+  }
+
   /// 构建带中心时长和完整辅助功能摘要的圆环。
   @override
   Widget build(BuildContext context) {
+    // 当前周期名称。
+    final String label = widget.label;
+    // 当前可见类别摘要。
+    final _TimeSummary summary = widget.summary;
+    // 当前选中类别的真实时长与颜色。
+    final _TimeSlice? activeSlice = summary.slices
+        .where(
+          (_TimeSlice slice) =>
+              slice.label == _activeCategory && slice.minutes > 0,
+        )
+        .firstOrNull;
+    // 中心显示选中类别时长，未选中时显示当前总时长。
+    final int minutes = activeSlice?.minutes ?? summary.totalMinutes;
     // 辅助功能可读的完整摘要。
     final String semanticsLabel = summary.totalMinutes == 0
-        ? filtered
+        ? widget.filtered
               ? '$label所选类别暂无时间记录'
               : '$label还没有时间记录'
         : '$label记录${_formatDuration(summary.totalMinutes)}，${summary.detail}；${summary.breakdown}';
     // 保留零角度类别的位置，隐藏与恢复都沿原扇区边界过渡。
     final _TimeDonutFrame frame = _TimeDonutFrame.fromSummary(summary);
     return Semantics(
-      label: semanticsLabel,
+      label: activeSlice == null
+          ? semanticsLabel
+          : '$semanticsLabel；当前类别${activeSlice.label} ${_formatDuration(minutes)}',
       child: ExcludeSemantics(
         child: Column(
           children: <Widget>[
@@ -426,46 +475,97 @@ class _TimeDonut extends StatelessWidget {
             const SizedBox(height: OmniSpacing.xs),
             SizedBox.square(
               dimension: 104,
-              child: Stack(
-                alignment: Alignment.center,
-                children: <Widget>[
-                  TweenAnimationBuilder<_TimeDonutFrame>(
-                    tween: _TimeDonutTween(begin: frame, end: frame),
-                    duration: OmniMotion.duration(
-                      context,
-                      const Duration(milliseconds: 400),
-                    ),
-                    curve: OmniMotion.standardCurve,
-                    builder:
-                        (
-                          BuildContext context,
-                          _TimeDonutFrame value,
-                          Widget? child,
-                        ) {
-                          return CustomPaint(
-                            key: ValueKey<String>('home-time-donut-$label'),
-                            size: const Size.square(104),
-                            painter: _TimeDonutPainter(
-                              frame: value,
-                              emptyColor: emptyColor,
-                            ),
-                          );
-                        },
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    child: Text(
-                      '${summary.totalMinutes ~/ 60}h${summary.totalMinutes % 60}m',
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontFeatures: const <FontFeature>[
-                          FontFeature.tabularFigures(),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+              child: TweenAnimationBuilder<_TimeDonutFrame>(
+                tween: _TimeDonutTween(begin: frame, end: frame),
+                duration: OmniMotion.duration(
+                  context,
+                  const Duration(milliseconds: 400),
+                ),
+                curve: OmniMotion.standardCurve,
+                builder:
+                    (
+                      BuildContext context,
+                      _TimeDonutFrame value,
+                      Widget? child,
+                    ) {
+                      // 交互与绘制共用当前动画帧，避免命中尚未移动到位的扇区。
+                      final _TimeDonutPainter painter = _TimeDonutPainter(
+                        frame: value,
+                        emptyColor: widget.emptyColor,
+                        activeCategory: activeSlice?.label,
+                      );
+                      return MouseRegion(
+                        onHover: (event) => _selectCategory(
+                          painter.categoryAt(
+                            event.localPosition,
+                            const Size.square(104),
+                          ),
+                        ),
+                        onExit: (_) => _selectCategory(null),
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTapUp: (details) {
+                            // 点击已选中环节或圆环空白区域时恢复总时长。
+                            final String? category = painter.categoryAt(
+                              details.localPosition,
+                              const Size.square(104),
+                            );
+                            _selectCategory(
+                              category == _activeCategory ? null : category,
+                            );
+                          },
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: <Widget>[
+                              CustomPaint(
+                                key: ValueKey<String>('home-time-donut-$label'),
+                                size: const Size.square(104),
+                                painter: painter,
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    Text(
+                                      '${minutes ~/ 60}h${minutes % 60}m',
+                                      key: ValueKey<String>(
+                                        'home-time-donut-duration-$label',
+                                      ),
+                                      textAlign: TextAlign.center,
+                                      maxLines: 2,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleSmall
+                                          ?.copyWith(
+                                            fontFeatures: const <FontFeature>[
+                                              FontFeature.tabularFigures(),
+                                            ],
+                                          ),
+                                    ),
+                                    if (activeSlice != null)
+                                      Text(
+                                        activeSlice.label,
+                                        textAlign: TextAlign.center,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelSmall
+                                            ?.copyWith(
+                                              color: activeSlice.color,
+                                            ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
               ),
             ),
           ],
@@ -670,8 +770,41 @@ class _TimeDonutPainter extends CustomPainter {
   /// 空圆环颜色。
   final Color emptyColor;
 
+  /// 当前需要突出显示的类别。
+  final String? activeCategory;
+
   /// 创建时间圆环绘制器。
-  const _TimeDonutPainter({required this.frame, required this.emptyColor});
+  const _TimeDonutPainter({
+    required this.frame,
+    required this.emptyColor,
+    this.activeCategory,
+  });
+
+  /// 计算与绘制一致的类别间隔，单一类别时保留完整圆环。
+  double _gap(_TimeArc arc) =>
+      math.min(0.035, arc.sweep * 0.18) *
+      ((math.pi * 2 - arc.sweep) / 0.035).clamp(0, 1);
+
+  /// 按实际圆弧范围命中类别，排除中心、外侧和分段间隙。
+  String? categoryAt(Offset position, Size size) {
+    // 鼠标或触点相对圆心的位置。
+    final Offset offset = position - size.center(Offset.zero);
+    // 与绘制边界一致的圆弧中心线半径。
+    final double radius = size.shortestSide / 2 - 7;
+    for (final _TimeArc arc in frame.arcs) {
+      // 高亮描边加粗后的实际半宽。
+      final double halfWidth = arc.label == activeCategory ? 7 : 5;
+      if ((offset.distance - radius).abs() > halfWidth) continue;
+      // 相对当前分段起点的顺时针角度。
+      final double angle = (offset.direction - arc.start) % (math.pi * 2);
+      // 保留分类之间的可见间隙作为非命中区域。
+      final double gap = _gap(arc);
+      if (arc.sweep > 0 && angle >= gap / 2 && angle < arc.sweep - gap / 2) {
+        return arc.label;
+      }
+    }
+    return null;
+  }
 
   /// 绘制空圆环或按分钟比例绘制分类圆弧。
   @override
@@ -697,10 +830,12 @@ class _TimeDonutPainter extends CustomPainter {
     }
     for (final _TimeArc arc in frame.arcs) {
       // 分类之间使用的细小间隔角度。
-      final double gap =
-          math.min(0.035, arc.sweep * 0.18) *
-          ((math.pi * 2 - arc.sweep) / 0.035).clamp(0, 1);
-      paint.color = arc.color;
+      final double gap = _gap(arc);
+      paint
+        ..strokeWidth = arc.label == activeCategory ? 14 : 10
+        ..color = activeCategory == null || arc.label == activeCategory
+            ? arc.color
+            : arc.color.withValues(alpha: arc.color.a * 0.35);
       canvas.drawArc(
         bounds.deflate(7),
         arc.start + gap / 2,
@@ -714,7 +849,9 @@ class _TimeDonutPainter extends CustomPainter {
   /// 仅在圆环数据或颜色变化时重绘。
   @override
   bool shouldRepaint(covariant _TimeDonutPainter oldDelegate) {
-    return oldDelegate.frame != frame || oldDelegate.emptyColor != emptyColor;
+    return oldDelegate.frame != frame ||
+        oldDelegate.emptyColor != emptyColor ||
+        oldDelegate.activeCategory != activeCategory;
   }
 }
 

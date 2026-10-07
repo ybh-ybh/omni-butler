@@ -1167,11 +1167,12 @@ class _TimeTrendPanel extends StatelessWidget {
       rangeEnd: rangeEnd,
       period: period,
     );
-    // 当前趋势中的最大分钟数。
-    final int maxMinutes = data.fold<int>(
-      1,
-      (int value, _TimeTrendDatum item) => math.max(value, item.minutes),
-    );
+    // 每条趋势按对应时间容量统一刻度：六小时时段、自然日、自然周。
+    final int maxMinutes = switch (period) {
+      TimelineStatsPeriod.day => 6 * 60,
+      TimelineStatsPeriod.week => 24 * 60,
+      TimelineStatsPeriod.month => 7 * 24 * 60,
+    };
     // 当前趋势标题。
     final String title = period == TimelineStatsPeriod.day ? '时段节律' : '记录趋势';
     // 当前趋势说明。
@@ -1202,7 +1203,7 @@ class _TimeTrendPanel extends StatelessWidget {
                     borderRadius: BorderRadius.circular(OmniRadius.pill),
                     child: LinearProgressIndicator(
                       minHeight: 8,
-                      value: item.minutes / maxMinutes,
+                      value: (item.minutes / maxMinutes).clamp(0.0, 1.0),
                       backgroundColor: colors.mist,
                       valueColor: AlwaysStoppedAnimation<Color>(colors.time),
                     ),
