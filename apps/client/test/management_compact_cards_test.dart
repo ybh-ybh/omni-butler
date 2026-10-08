@@ -14,14 +14,15 @@ import 'package:omni_butler/features/memberships/data/membership_repository.dart
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 验证 Android 管理页三类记录卡片的紧凑尺寸、触控区域与吸顶行为。
+/// 验证 Android 管理页三类平铺记录、固定摘要及展开与筛选视觉基线。
 void main() {
-  testWidgets('安卓管理记录卡保持紧凑并仅吸顶筛选栏', (WidgetTester tester) async {
+  testWidgets('安卓管理三分区平铺、固定搜索、独立滚动与九种视觉状态', (WidgetTester tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     SharedPreferences.setMockInitialValues(<String, Object>{
       'appearance.theme_mode': 'light',
@@ -152,169 +153,149 @@ void main() {
     container.read(appRouterProvider).go('/events');
     await tester.pumpAndSettle();
 
-    // 需要覆盖的常见 Android 逻辑宽度。
-    const List<double> viewportWidths = <double>[320, 360, 390];
-    for (final double viewportWidth in viewportWidths) {
-      tester.view.physicalSize = Size(viewportWidth, 844);
+    // 每个分区在常规与窄屏大字号下验证同一套移动契约。
+    final List<({String section, String id, String listKey})> sections = [
+      (section: 'events', id: eventId, listKey: 'event-card-grid'),
+      (
+        section: 'memberships',
+        id: membershipId,
+        listKey: 'membership-card-grid',
+      ),
+      (
+        section: 'inventory',
+        id: inventoryId,
+        listKey: 'inventory-management-list',
+      ),
+    ];
+    for (final section in sections) {
+      container.read(appRouterProvider).go('/${section.section}');
       await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey<String>('event-layout-toggle')),
-        findsNothing,
-      );
-      // 当前事件卡片。
-      final Finder eventCard = find.byKey(
-        ValueKey<String>('event-card-$eventId'),
-      );
-      // 当前事件历史操作。
-      final Finder historyButton = find.byKey(
-        ValueKey<String>('event-history-$eventId'),
-      );
-      // 当前事件记录操作。
-      final Finder recordButton = find.byKey(
-        ValueKey<String>('event-record-$eventId'),
-      );
-      // 当前事件记录操作的可见按钮表面。
-      final Finder recordButtonSurface = find.descendant(
-        of: recordButton,
-        matching: find.byKey(
-          const ValueKey<String>('event-compact-action-surface'),
+      // 当前分区的列表身份，物品列表使用滚动存储键。
+      final Finder list = section.section == 'inventory'
+          ? find.byKey(PageStorageKey<String>(section.listKey))
+          : _key(section.listKey);
+      // 当前业务的记录键前缀。
+      final String prefix = switch (section.section) {
+        'events' => 'event',
+        'memberships' => 'membership',
+        _ => 'inventory',
+      };
+      // 当前需要验证的含长名称记录。
+      final Finder row = _key('$prefix-card-${section.id}');
+      // 正常字号下记录自然高度，供大字号比较。
+      double normalHeight = 0;
+      for (final ({double width, double scale}) viewport in [
+        (width: 390.0, scale: 1.0),
+        (width: 360.0, scale: 1.0),
+        (width: 320.0, scale: 2.0),
+      ]) {
+        tester.view.physicalSize = Size(viewport.width, 844);
+        tester.platformDispatcher.textScaleFactorTestValue = viewport.scale;
+        await tester.pumpAndSettle();
+        await _revealRecord(tester, list: list, row: row);
+        _expectWithinViewport(tester, row, viewport.width);
+        if (viewport.width == 390) normalHeight = tester.getSize(row).height;
+        if (viewport.scale == 2) {
+          expect(tester.getSize(row).height, greaterThan(normalHeight));
+        }
+        if (section.section == 'events') {
+          // 事件业务动作保留完整四十八像素热区。
+          _expectTouchTarget(tester, _key('event-history-${section.id}'));
+          _expectTouchTarget(tester, _key('event-record-${section.id}'));
+          _expectTouchTarget(
+            tester,
+            find.descendant(
+              of: row,
+              matching: find.byType(OmniPopupMenuButton<String>),
+            ),
+          );
+          expect(
+            find.descendant(of: row, matching: find.byType(OmniPanel)),
+            findsNothing,
+          );
+        } else if (section.section == 'memberships') {
+          _expectTouchTarget(tester, _key('membership-renew-${section.id}'));
+          expect(
+            find.descendant(
+              of: row,
+              matching: find.byType(OmniPopupMenuButton<String>),
+            ),
+            findsNothing,
+          );
+          expect(
+            tester
+                .widget<OmniPanel>(
+                  find.descendant(of: row, matching: find.byType(OmniPanel)),
+                )
+                .flat,
+            isTrue,
+          );
+          expect(find.text('到期 2026-11-01'), findsOneWidget);
+        } else {
+          _expectTouchTarget(
+            tester,
+            _key('inventory-accessories-button-${section.id}'),
+          );
+          expect(_key('inventory-more-button-${section.id}'), findsNothing);
+          expect(
+            tester.getSize(_key('inventory-card-image-${section.id}')),
+            const Size(64, 64),
+          );
+          expect(
+            find.descendant(of: row, matching: find.byType(OmniPanel)),
+            findsNothing,
+          );
+        }
+        expect(tester.takeException(), isNull);
+        await _scrollToTop(tester, list);
+        await _expectFixedSummaryAndSearch(tester, list);
+        if (viewport.scale == 2) {
+          await _exerciseExpandedAndFilter(tester);
+          expect(tester.takeException(), isNull);
+        }
+      }
+      tester.view.physicalSize = const Size(390, 844);
+      tester.platformDispatcher.textScaleFactorTestValue = 1;
+      await tester.pumpAndSettle();
+      await _scrollToTop(tester, list);
+      await expectLater(
+        find.byType(OmniButlerApp),
+        matchesGoldenFile(
+          'goldens/management_${section.section}_light_390x844.png',
         ),
       );
-      // 当前事件更多操作。
-      final Finder eventMenu = find.descendant(
-        of: eventCard,
-        matching: find.byType(OmniPopupMenuButton<String>),
+      await tester.tap(_visibleKey('management-summary-toggle'));
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(OmniButlerApp),
+        matchesGoldenFile(
+          'goldens/management_${section.section}_expanded_light_390x844.png',
+        ),
       );
-      // 顶部菜单与底部操作改用 48 像素热区，卡片仍须保持紧凑高度。
-      expect(tester.getSize(eventCard).height, lessThanOrEqualTo(178));
-      _expectTouchTarget(tester, historyButton);
-      _expectTouchTarget(tester, recordButton);
-      expect(tester.getSize(recordButtonSurface).height, 28);
-      _expectTouchTarget(tester, eventMenu);
-      _expectWithinViewport(tester, eventCard, viewportWidth);
+      await tester.tap(_visibleKey('management-summary-toggle'));
+      await tester.pumpAndSettle();
+      await tester.tap(_visibleKey('management-filter-button'));
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(OmniButlerApp),
+        matchesGoldenFile(
+          'goldens/management_${section.section}_filters_light_390x844.png',
+        ),
+      );
+      await tester.tap(find.byTooltip('取消筛选'));
+      await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     }
-    tester.view.physicalSize = const Size(390, 844);
-    await tester.pumpAndSettle();
-    await expectLater(
-      find.byType(OmniButlerApp),
-      matchesGoldenFile('goldens/management_events_light_390x844.png'),
-    );
-    await _expectStatisticsScrollsAwayWhileFilterSticks(
-      tester,
-      statistics: find.byKey(
-        const ValueKey<String>('event-statistics-carousel'),
-      ),
-      filter: find.byKey(const ValueKey<String>('event-status-selector')),
-      scrollable: find.byKey(const ValueKey<String>('event-card-grid')),
-    );
-
+    // 永久会员的文案仍可通过列表滚动访问，截图完成后验证业务信息。
     container.read(appRouterProvider).go('/memberships');
     await tester.pumpAndSettle();
-    for (final double viewportWidth in viewportWidths) {
-      tester.view.physicalSize = Size(viewportWidth, 844);
-      await tester.pumpAndSettle();
-      // 当前会员卡片。
-      final Finder membershipCard = find.byKey(
-        ValueKey<String>('membership-card-$membershipId'),
-      );
-      // 当前会员续费操作。
-      final Finder renewButton = find.byKey(
-        ValueKey<String>('membership-renew-$membershipId'),
-      );
-      // 当前会员更多操作。
-      final Finder membershipMenu = find.descendant(
-        of: membershipCard,
-        matching: find.byType(OmniPopupMenuButton<String>),
-      );
-      // 无到期日会员卡片。
-      final Finder permanentMembershipCard = find.byKey(
-        ValueKey<String>('membership-card-$permanentMembershipId'),
-      );
-      expect(tester.getSize(membershipCard).height, lessThanOrEqualTo(100));
-      expect(
-        tester.getSize(permanentMembershipCard).height,
-        lessThanOrEqualTo(100),
-      );
-      expect(
-        tester
-            .getSize(
-              find.descendant(
-                of: permanentMembershipCard,
-                matching: find.byType(OmniTag),
-              ),
-            )
-            .height,
-        18,
-      );
-      _expectTouchTarget(tester, renewButton);
-      _expectTouchTarget(tester, membershipMenu);
-      _expectWithinViewport(tester, membershipCard, viewportWidth);
-      expect(tester.takeException(), isNull);
-    }
-    tester.view.physicalSize = const Size(390, 844);
-    await tester.pumpAndSettle();
-    await expectLater(
-      find.byType(OmniButlerApp),
-      matchesGoldenFile('goldens/management_memberships_light_390x844.png'),
-    );
-    await _expectStatisticsScrollsAwayWhileFilterSticks(
+    await _revealRecord(
       tester,
-      statistics: find.byKey(
-        const ValueKey<String>('membership-statistics-carousel'),
-      ),
-      filter: find.byKey(const ValueKey<String>('membership-search-field')),
-      scrollable: find.byKey(const ValueKey<String>('membership-card-grid')),
+      list: _key('membership-card-grid'),
+      row: _key('membership-card-$permanentMembershipId'),
     );
-
-    container.read(appRouterProvider).go('/inventory');
-    await tester.pumpAndSettle();
-    for (final double viewportWidth in viewportWidths) {
-      tester.view.physicalSize = Size(viewportWidth, 844);
-      await tester.pumpAndSettle();
-      // 当前物品卡片。
-      final Finder inventoryCard = find.byKey(
-        ValueKey<String>('inventory-card-$inventoryId'),
-      );
-      // 当前物品配套入口。
-      final Finder accessoriesButton = find.byKey(
-        ValueKey<String>('inventory-accessories-button-$inventoryId'),
-      );
-      // 当前物品更多操作。
-      final Finder inventoryMenu = find.byKey(
-        ValueKey<String>('inventory-more-button-$inventoryId'),
-      );
-      expect(tester.getSize(inventoryCard).height, 104);
-      expect(
-        tester
-            .getSize(
-              find.descendant(
-                of: inventoryCard,
-                matching: find.byType(OmniTag),
-              ),
-            )
-            .height,
-        18,
-      );
-      _expectTouchTarget(tester, accessoriesButton);
-      _expectTouchTarget(tester, inventoryMenu);
-      _expectWithinViewport(tester, inventoryCard, viewportWidth);
-      expect(tester.takeException(), isNull);
-    }
-    tester.view.physicalSize = const Size(390, 844);
-    await tester.pumpAndSettle();
-    await expectLater(
-      find.byType(OmniButlerApp),
-      matchesGoldenFile('goldens/management_inventory_light_390x844.png'),
-    );
-    await _expectStatisticsScrollsAwayWhileFilterSticks(
-      tester,
-      statistics: find.byKey(
-        const ValueKey<String>('inventory-statistics-carousel'),
-      ),
-      filter: find.byKey(const ValueKey<String>('inventory-search-field')),
-      scrollable: find.byKey(const ValueKey<String>('inventory-card-grid')),
-    );
+    expect(find.text('永久有效'), findsOneWidget);
+    tester.platformDispatcher.clearTextScaleFactorTestValue();
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
@@ -325,39 +306,96 @@ void main() {
   });
 }
 
-/// 断言统计卡随列表离开，筛选栏到顶后保持固定。
-Future<void> _expectStatisticsScrollsAwayWhileFilterSticks(
-  WidgetTester tester, {
-  required Finder statistics,
-  required Finder filter,
-  required Finder scrollable,
-}) async {
-  // 滚动前统计卡的边界。
-  final Rect initialStatisticsRect = tester.getRect(statistics);
-  // 滚动前筛选栏的顶部位置。
-  final double initialFilterTop = tester.getTopLeft(filter).dy;
-  await tester.drag(scrollable, const Offset(0, -360));
-  await tester.pumpAndSettle();
-  // 统计头收起后筛选栏的固定顶部位置。
-  final double pinnedFilterTop = tester.getTopLeft(filter).dy;
-  expect(initialStatisticsRect.top, lessThan(initialFilterTop));
-  expect(pinnedFilterTop, lessThan(initialFilterTop));
-  expect(statistics, findsNothing);
+/// 返回跨页面复用的测试键。
+Finder _key(String value) => find.byKey(ValueKey<String>(value));
 
-  await tester.drag(scrollable, const Offset(0, -120));
+/// 仅定位保活分区中当前可命中的共享控件。
+Finder _visibleKey(String value) => _key(value).hitTestable();
+
+/// 返回列表自身的纵向滚动位置，不改变祖先分页状态。
+ScrollPosition _listPosition(WidgetTester tester, Finder list) => tester
+    .state<ScrollableState>(
+      find.descendant(of: list, matching: find.byType(Scrollable)).first,
+    )
+    .position;
+
+/// 确保懒构建记录已经进入列表，并允许长行完整参与布局验证。
+Future<void> _revealRecord(
+  WidgetTester tester, {
+  required Finder list,
+  required Finder row,
+}) async {
+  if (row.evaluate().isEmpty) {
+    await tester.scrollUntilVisible(
+      row,
+      200,
+      scrollable: find
+          .descendant(of: list, matching: find.byType(Scrollable))
+          .first,
+    );
+  }
+  await tester.ensureVisible(row);
   await tester.pumpAndSettle();
-  // 列表继续滚动后的筛选栏位置。
-  final double continuedFilterTop = tester.getTopLeft(filter).dy;
-  expect(continuedFilterTop, closeTo(pinnedFilterTop, 0.1));
+}
+
+/// 截图前恢复列表首屏，避免确保可见动作改变视觉基线。
+Future<void> _scrollToTop(WidgetTester tester, Finder list) async {
+  _listPosition(tester, list).jumpTo(0);
+  await tester.pumpAndSettle();
+}
+
+/// 纵向滚动只移动列表，摘要与搜索均保持在原位置。
+Future<void> _expectFixedSummaryAndSearch(
+  WidgetTester tester,
+  Finder list,
+) async {
+  // 当前摘要的固定顶部位置。
+  final double summaryTop = tester
+      .getTopLeft(_visibleKey('management-summary-toggle'))
+      .dy;
+  // 当前搜索的固定顶部位置。
+  final double searchTop = tester
+      .getTopLeft(_visibleKey('management-search'))
+      .dy;
+  // 拖动前的实际列表滚动位置。
+  final double before = _listPosition(tester, list).pixels;
+  await tester.drag(list, const Offset(0, -250));
+  await tester.pumpAndSettle();
+  expect(_listPosition(tester, list).pixels, greaterThan(before));
+  expect(
+    tester.getTopLeft(_visibleKey('management-summary-toggle')).dy,
+    closeTo(summaryTop, 0.1),
+  );
+  expect(
+    tester.getTopLeft(_visibleKey('management-search')).dy,
+    closeTo(searchTop, 0.1),
+  );
   expect(tester.takeException(), isNull);
+  await _scrollToTop(tester, list);
+}
+
+/// 在窄屏大字号下实际打开完整统计和筛选面板。
+Future<void> _exerciseExpandedAndFilter(WidgetTester tester) async {
+  await tester.tap(_visibleKey('management-summary-toggle'));
+  await tester.pumpAndSettle();
+  expect(_key('management-summary-scrim'), findsOneWidget);
+  expect(tester.takeException(), isNull);
+  await tester.tap(_visibleKey('management-summary-toggle'));
+  await tester.pumpAndSettle();
+  await tester.tap(_visibleKey('management-filter-button'));
+  await tester.pumpAndSettle();
+  expect(_key('management-filter-sheet'), findsOneWidget);
+  expect(tester.takeException(), isNull);
+  await tester.tap(find.byTooltip('取消筛选'));
+  await tester.pumpAndSettle();
 }
 
 /// 断言操作控件在两个方向都满足最小触控尺寸。
 void _expectTouchTarget(WidgetTester tester, Finder finder) {
   // 操作控件的实际渲染尺寸。
   final Size size = tester.getSize(finder);
-  expect(size.width, greaterThanOrEqualTo(44));
-  expect(size.height, greaterThanOrEqualTo(44));
+  expect(size.width, greaterThanOrEqualTo(48));
+  expect(size.height, greaterThanOrEqualTo(48));
 }
 
 /// 断言卡片完整落在当前视口横向范围内。

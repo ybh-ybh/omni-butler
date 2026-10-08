@@ -17,6 +17,7 @@ import 'package:omni_butler/features/inventory/presentation/inventory_move_dialo
 import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
 import 'package:omni_butler/shared/attachments/attachment_picker_dialog.dart';
 import 'package:omni_butler/features/management/presentation/desktop_management_switcher.dart';
+import 'package:omni_butler/features/management/presentation/management_mobile_scaffold.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 物品网格列数的本机偏好键。
@@ -365,6 +366,10 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
       accessories: allAccessories,
       categories: categories.asData?.value ?? const <TaxonomyEntry>[],
       useCarousel: widget.embeddedInManagement,
+      onRetry: () {
+        ref.invalidate(inventoryItemsProvider(''));
+        ref.invalidate(inventoryAllAccessoriesProvider);
+      },
     );
     // 物品搜索与筛选栏。
     final Widget toolbar = _InventoryToolbar(
@@ -408,10 +413,50 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
             .toList(growable: false);
         if (filteredRecords.isEmpty) {
           return _InventoryEmpty(
+            mobile: widget.embeddedInManagement,
             searching:
                 _query.isNotEmpty ||
                 _tagFilter != null ||
                 _locationFilter != null,
+            onClear: widget.embeddedInManagement
+                ? () {
+                    _searchController.clear();
+                    setState(() {
+                      _query = '';
+                      _tagFilter = null;
+                      _locationFilter = null;
+                    });
+                  }
+                : null,
+          );
+        }
+        if (widget.embeddedInManagement) {
+          return ListView.separated(
+            key: const PageStorageKey<String>('inventory-management-list'),
+            padding: const EdgeInsets.fromLTRB(
+              16,
+              0,
+              16,
+              _mobileActionClearance,
+            ),
+            itemCount: filteredRecords.length,
+            separatorBuilder: (BuildContext context, int index) => Divider(
+              height: 1,
+              indent: 76,
+              color: OmniColors.of(context).line,
+            ),
+            itemBuilder: (BuildContext context, int index) {
+              // 当前行对应的主物品；配套搜索仍由原仓储回溯主物品。
+              final InventoryRecord item = filteredRecords[index];
+              return _InventoryCard(
+                item: item,
+                useHorizontalLayout: true,
+                onOpen: () => _openDetails(item),
+                onEdit: () => _openEditor(item),
+                onAccessories: () => _openAccessories(item),
+                onDelete: () => _delete(item),
+              );
+            },
           );
         }
         return LayoutBuilder(
@@ -428,14 +473,11 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
             final int columns = _inventoryColumns.clamp(1, maxColumns).toInt();
             return GridView.builder(
               key: const ValueKey<String>('inventory-card-grid'),
-              padding: widget.embeddedInManagement
-                  ? const EdgeInsets.only(bottom: _mobileActionClearance)
-                  : null,
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: columns,
                 crossAxisSpacing: OmniSpacing.xs,
                 mainAxisSpacing: OmniSpacing.xs,
-                mainAxisExtent: widget.embeddedInManagement ? 104 : 300,
+                mainAxisExtent: 300,
               ),
               itemCount: filteredRecords.length,
               itemBuilder: (BuildContext context, int index) {
@@ -443,7 +485,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                 final InventoryRecord item = filteredRecords[index];
                 return _InventoryCard(
                   item: item,
-                  useHorizontalLayout: widget.embeddedInManagement,
+                  useHorizontalLayout: false,
                   onOpen: () => _openDetails(item),
                   onEdit: () => _openEditor(item),
                   onAccessories: () => _openAccessories(item),
@@ -458,81 +500,78 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
       error: (Object error, StackTrace stackTrace) =>
           Center(child: Text('物品读取失败：$error')),
     );
-    // Android 管理页让统计卡随外层滚动离开，筛选栏留在列表顶部。
-    final Widget pageContent = widget.embeddedInManagement
-        ? NestedScrollView(
-            key: const ValueKey<String>('inventory-management-scroll'),
-            headerSliverBuilder:
-                (BuildContext context, bool innerBoxIsScrolled) => <Widget>[
-                  SliverToBoxAdapter(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        statistics,
-                        const SizedBox(height: OmniSpacing.xs),
-                      ],
-                    ),
-                  ),
-                ],
-            body: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                toolbar,
-                const SizedBox(height: OmniSpacing.xs),
-                Expanded(child: records),
-              ],
+    if (widget.embeddedInManagement) {
+      return ManagementMobileScaffold(
+        title: '物品统计',
+        summary: _InventoryStatistics(
+          items: allItems,
+          accessories: allAccessories,
+          categories: categories.asData?.value ?? const <TaxonomyEntry>[],
+          useCarousel: true,
+          summaryOnly: true,
+          onRetry: () {
+            ref.invalidate(inventoryItemsProvider(''));
+            ref.invalidate(inventoryAllAccessoriesProvider);
+          },
+        ),
+        statistics: statistics,
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            toolbar,
+            Expanded(child: records),
+          ],
+        ),
+        floatingActionButton: _InventoryCreateSplitButton(
+          onCreate: _openEditor,
+          onMove: _openMoveDialog,
+          onManageTags: () => TaxonomyManagerDialog.show(
+            context,
+            module: TaxonomyModule.inventory,
+            kind: TaxonomyKind.tag,
+          ),
+          onManageLocation: () => TaxonomyManagerDialog.show(
+            context,
+            module: TaxonomyModule.inventory,
+            kind: TaxonomyKind.location,
+          ),
+        ),
+      );
+    }
+    // 桌面与宽屏保留原有布局。
+    final Widget pageContent = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        OmniPageHeader(
+          title: '物品管理',
+          titleWidget: const DesktopManagementSwitcher(
+            selectedSection: ManagementSection.inventory,
+          ),
+          actions: <Widget>[
+            OmniButton(
+              label: '新增物品',
+              icon: Icons.add_rounded,
+              variant: OmniButtonVariant.pagePrimary,
+              onPressed: _openEditor,
             ),
-          )
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              OmniPageHeader(
-                title: '物品管理',
-                titleWidget: const DesktopManagementSwitcher(
-                  selectedSection: ManagementSection.inventory,
-                ),
-                actions: <Widget>[
-                  OmniButton(
-                    label: '新增物品',
-                    icon: Icons.add_rounded,
-                    variant: OmniButtonVariant.pagePrimary,
-                    onPressed: _openEditor,
-                  ),
-                ],
-              ),
-              const SizedBox(height: OmniSpacing.xs),
-              statistics,
-              const SizedBox(height: OmniSpacing.xs),
-              toolbar,
-              const SizedBox(height: OmniSpacing.xs),
-              Expanded(child: records),
-            ],
-          );
+          ],
+        ),
+        const SizedBox(height: OmniSpacing.xs),
+        statistics,
+        const SizedBox(height: OmniSpacing.xs),
+        toolbar,
+        const SizedBox(height: OmniSpacing.xs),
+        Expanded(child: records),
+      ],
+    );
     return Scaffold(
-      floatingActionButton: widget.embeddedInManagement
-          ? _InventoryCreateSplitButton(
-              onCreate: _openEditor,
-              onMove: _openMoveDialog,
-              onManageTags: () => TaxonomyManagerDialog.show(
-                context,
-                module: TaxonomyModule.inventory,
-                kind: TaxonomyKind.tag,
-              ),
-              onManageLocation: () => TaxonomyManagerDialog.show(
-                context,
-                module: TaxonomyModule.inventory,
-                kind: TaxonomyKind.location,
-              ),
-            )
-          : null,
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: Padding(
         padding: compact
             ? EdgeInsets.fromLTRB(
                 OmniSpacing.xs,
                 OmniSpacing.xs,
                 OmniSpacing.xs,
-                widget.embeddedInManagement ? 0 : OmniSpacing.md,
+                OmniSpacing.md,
               )
             : const EdgeInsets.symmetric(
                 horizontal: 14,
@@ -1018,6 +1057,29 @@ class _InventoryToolbar extends StatelessWidget {
   /// 构建搜索框与右侧操作。
   @override
   Widget build(BuildContext context) {
+    if (embeddedInManagement) {
+      return ManagementSearchToolbar(
+        controller: searchController,
+        hintText: '搜索名称、分类、位置或标签',
+        onChanged: onSearchChanged,
+        onClear: onClearSearch,
+        onFilter: () => _openMobileFilters(context),
+        filterCount:
+            (selectedTag == null ? 0 : 1) + (selectedLocation == null ? 0 : 1),
+        filters: <ManagementFilterSelection>[
+          if (selectedTag != null)
+            ManagementFilterSelection(
+              label: '标签：$selectedTag',
+              onDeleted: () => onTagChanged(null),
+            ),
+          if (selectedLocation != null)
+            ManagementFilterSelection(
+              label: '位置：$selectedLocation',
+              onDeleted: () => onLocationChanged(null),
+            ),
+        ],
+      );
+    }
     // 桌面搜索输入框。
     final Widget desktopSearchField = _InventorySearchField(
       controller: searchController,
@@ -1157,29 +1219,6 @@ class _InventoryToolbar extends StatelessWidget {
     );
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        if (embeddedInManagement) {
-          // Android 管理页的自适应搜索框。
-          final Widget mobileSearchField = _InventorySearchField(
-            controller: searchController,
-            query: searchQuery,
-            width: double.infinity,
-            height: OmniSize.touch,
-            onChanged: onSearchChanged,
-            onClear: onClearSearch,
-          );
-          // Android 管理页的筛选与搜索行。
-          final Widget mobileSearchRow = Row(
-            children: <Widget>[
-              filterButton,
-              const SizedBox(width: OmniSpacing.xs),
-              Expanded(child: mobileSearchField),
-            ],
-          );
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[mobileSearchRow, filterPanel],
-          );
-        }
         // 宽屏将操作固定在搜索框右侧，窄屏自动换行。
         final Widget primaryToolbar = constraints.maxWidth >= 760
             ? Row(
@@ -1201,6 +1240,79 @@ class _InventoryToolbar extends StatelessWidget {
         );
       },
     );
+  }
+
+  /// 在底部面板编辑筛选草稿，只有应用后才更新列表。
+  Future<void> _openMobileFilters(BuildContext context) async {
+    // 本次编辑得到的筛选结果；关闭面板时保留原条件。
+    final ({String? tag, String? location})? result =
+        await showManagementFilterSheet<({String? tag, String? location})>(
+          context: context,
+          initialValue: (tag: selectedTag, location: selectedLocation),
+          resetValue: (tag: null, location: null),
+          builder:
+              (
+                BuildContext context,
+                ({String? tag, String? location}) draft,
+                ValueChanged<({String? tag, String? location})> update,
+              ) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('标签', style: Theme.of(context).textTheme.titleSmall),
+                    const SizedBox(height: OmniSpacing.xs),
+                    Wrap(
+                      key: const ValueKey<String>('inventory-tag-filters'),
+                      spacing: OmniSpacing.xs,
+                      runSpacing: OmniSpacing.xs,
+                      children: <Widget>[
+                        ManagementFilterOption(
+                          label: '全部标签',
+                          selected: draft.tag == null,
+                          onSelected: () =>
+                              update((tag: null, location: draft.location)),
+                        ),
+                        for (final String name in _tagNames())
+                          ManagementFilterOption(
+                            label: name,
+                            selected: draft.tag == name,
+                            onSelected: () =>
+                                update((tag: name, location: draft.location)),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: OmniSpacing.lg),
+                    Text('位置', style: Theme.of(context).textTheme.titleSmall),
+                    const SizedBox(height: OmniSpacing.xs),
+                    Wrap(
+                      key: const ValueKey<String>('inventory-location-filters'),
+                      spacing: OmniSpacing.xs,
+                      runSpacing: OmniSpacing.xs,
+                      children: <Widget>[
+                        ManagementFilterOption(
+                          label: '全部位置',
+                          selected: draft.location == null,
+                          onSelected: () =>
+                              update((tag: draft.tag, location: null)),
+                        ),
+                        for (final String name in _locationNames())
+                          ManagementFilterOption(
+                            label: name,
+                            selected: draft.location == name,
+                            onSelected: () =>
+                                update((tag: draft.tag, location: name)),
+                          ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+        );
+    if (result == null || !context.mounted) {
+      return;
+    }
+    onTagChanged(result.tag);
+    onLocationChanged(result.location);
   }
 
   /// 生成去重后的标签名称。
@@ -1405,7 +1517,7 @@ class _InventorySearchField extends StatelessWidget {
   final double width;
 
   /// 搜索框高度。
-  final double height;
+  static const double height = OmniSize.pageAction;
 
   /// 搜索词变更回调。
   final ValueChanged<String> onChanged;
@@ -1420,7 +1532,6 @@ class _InventorySearchField extends StatelessWidget {
     required this.width,
     required this.onChanged,
     required this.onClear,
-    this.height = OmniSize.pageAction,
   });
 
   /// 构建带物品色搜索图标的输入框。
@@ -1597,8 +1708,14 @@ class _InventoryStatistics extends StatelessWidget {
   /// 当前物品分类。
   final List<TaxonomyEntry> categories;
 
-  /// 是否使用 Android 管理页统计轮播。
+  /// 是否使用 Android 管理页完整统计内容。
   final bool useCarousel;
+
+  /// 是否只构建收起时的一行摘要。
+  final bool summaryOnly;
+
+  /// 统计读取失败后的重试操作。
+  final VoidCallback? onRetry;
 
   /// 创建物品顶部统计面板。
   const _InventoryStatistics({
@@ -1606,6 +1723,8 @@ class _InventoryStatistics extends StatelessWidget {
     required this.accessories,
     required this.categories,
     required this.useCarousel,
+    this.summaryOnly = false,
+    this.onRetry,
   });
 
   /// 构建物品顶部统计面板。
@@ -1613,6 +1732,12 @@ class _InventoryStatistics extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
+    // 手机摘要与完整统计共同等待主物品和配套数据，失败时不能展示为零。
+    final bool loading =
+        (items.isLoading && !items.hasValue) ||
+        (accessories.isLoading && !accessories.hasValue);
+    // 任一统计来源失败时明确提示，避免误把缺失数据当成零值。
+    final bool failed = items.hasError || accessories.hasError;
     // 当前物品记录。
     final List<InventoryRecord> records =
         items.asData?.value ?? const <InventoryRecord>[];
@@ -1663,6 +1788,54 @@ class _InventoryStatistics extends StatelessWidget {
         color: colors.warning,
       ),
     ];
+    if (summaryOnly) {
+      return ManagementSummaryLine(
+        loading: loading,
+        error: failed ? '物品统计读取失败' : null,
+        onRetry: onRetry,
+        metrics: <ManagementSummaryMetric>[
+          for (final _InventoryStatusMetric metric in statusMetrics)
+            ManagementSummaryMetric(
+              label: metric.label == '已借出' ? '借出' : metric.label,
+              value: '${metric.count}',
+              color: metric.color,
+            ),
+        ],
+      );
+    }
+    if (useCarousel) {
+      if (failed) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Text('物品统计读取失败'),
+            if (onRetry != null)
+              OmniButton(
+                label: '重试',
+                variant: OmniButtonVariant.text,
+                onPressed: onRetry,
+              ),
+          ],
+        );
+      }
+      if (loading) {
+        return const Padding(
+          padding: EdgeInsets.all(OmniSpacing.lg),
+          child: Center(child: CircularProgressIndicator()),
+        );
+      }
+      return _InventoryMobileStatistics(
+        totalCents: valueRecords.fold<int>(
+          0,
+          (int total, InventoryRecord item) =>
+              total + (item.purchasePriceCents ?? 0),
+        ),
+        total: currentRecords.length,
+        accessoryCount: accessoryRecords.length,
+        metrics: statusMetrics,
+        stats: categoryStats,
+      );
+    }
     // 当前统计内容。
     final Widget statusPanel = _InventoryStatusPanel(
       total: currentRecords.length,
@@ -1681,13 +1854,6 @@ class _InventoryStatistics extends StatelessWidget {
       ),
       loading: items.isLoading && !items.hasValue,
     );
-    if (useCarousel) {
-      return OmniStatisticsCarousel(
-        key: const ValueKey<String>('inventory-statistics-carousel'),
-        cardHeight: 144,
-        children: <Widget>[statusPanel, valuePanel],
-      );
-    }
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // 宽屏并排展示两个统计面板。
@@ -1760,6 +1926,150 @@ class _InventoryStatistics extends StatelessWidget {
                 second.valueCents.compareTo(first.valueCents),
           );
     return result;
+  }
+}
+
+/// 手机端完整物品统计，内容随文字大小和分类数量自然增高。
+class _InventoryMobileStatistics extends StatelessWidget {
+  /// 沿用原统计口径的购入总值，配套金额也计入且不乘数量。
+  final int totalCents;
+
+  /// 处于在用、闲置、借出状态的主物品数量。
+  final int total;
+
+  /// 全部有效配套物品数量。
+  final int accessoryCount;
+
+  /// 三种主物品状态的统计数据。
+  final List<_InventoryStatusMetric> metrics;
+
+  /// 已按金额降序排列的分类价值数据。
+  final List<_InventoryCategoryStat> stats;
+
+  /// 创建不带独立卡片外壳的物品统计内容。
+  const _InventoryMobileStatistics({
+    required this.totalCents,
+    required this.total,
+    required this.accessoryCount,
+    required this.metrics,
+    required this.stats,
+  });
+
+  /// 构建主指标、状态比例与分类图表。
+  @override
+  Widget build(BuildContext context) {
+    // 与首页一致的主题色。
+    final OmniColors colors = OmniColors.of(context);
+    // 当前系统字号对应的文本样式。
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    return Column(
+      key: const ValueKey<String>('inventory-mobile-statistics'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text('购入总值', style: textTheme.bodyMedium),
+        const SizedBox(height: OmniSpacing.xs),
+        Text(
+          _formatInventoryCny(totalCents),
+          key: const ValueKey<String>('inventory-mobile-total-value'),
+          style: textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: OmniSpacing.sm),
+        Wrap(
+          spacing: OmniSpacing.lg,
+          runSpacing: OmniSpacing.xs,
+          children: <Widget>[
+            Text(
+              '主物品 $total 条',
+              key: const ValueKey<String>('inventory-total-count'),
+            ),
+            Text(
+              '配套物品 $accessoryCount 条',
+              key: const ValueKey<String>('inventory-accessory-count'),
+            ),
+          ],
+        ),
+        const SizedBox(height: OmniSpacing.md),
+        Divider(height: 1, color: colors.line),
+        const SizedBox(height: OmniSpacing.md),
+        for (final _InventoryStatusMetric metric in metrics)
+          Padding(
+            key: ValueKey<String>('inventory-status-metric-${metric.label}'),
+            padding: const EdgeInsets.only(bottom: OmniSpacing.sm),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Wrap(
+                  spacing: OmniSpacing.sm,
+                  runSpacing: OmniSpacing.xxs,
+                  children: <Widget>[
+                    Text(
+                      metric.label,
+                      style: textTheme.bodyMedium?.copyWith(
+                        color: metric.color,
+                      ),
+                    ),
+                    Text('${metric.count} 条', style: textTheme.titleSmall),
+                    Text(
+                      '${total == 0 ? 0 : (metric.count / total * 100).round()}%',
+                      style: textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: OmniSpacing.xs),
+                LinearProgressIndicator(
+                  value: total == 0 ? 0 : metric.count / total,
+                  minHeight: 4,
+                  borderRadius: BorderRadius.circular(OmniRadius.pill),
+                  color: metric.color,
+                  backgroundColor: metric.color.withValues(alpha: 0.12),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: OmniSpacing.xs),
+        Divider(height: 1, color: colors.line),
+        const SizedBox(height: OmniSpacing.md),
+        Text('按分类分布', style: textTheme.titleSmall),
+        const SizedBox(height: OmniSpacing.sm),
+        Center(
+          child: CustomPaint(
+            key: const ValueKey<String>('inventory-value-donut'),
+            size: const Size.square(120),
+            painter: _InventoryDonutPainter(stats: stats, colors: colors),
+          ),
+        ),
+        const SizedBox(height: OmniSpacing.md),
+        if (stats.isEmpty) Text('暂无已记录金额', style: textTheme.bodySmall),
+        for (final _InventoryCategoryStat stat in stats)
+          Padding(
+            key: ValueKey<String>('inventory-category-legend-${stat.label}'),
+            padding: const EdgeInsets.only(bottom: OmniSpacing.sm),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  stat.label,
+                  style: textTheme.bodyMedium?.copyWith(color: stat.color),
+                ),
+                Wrap(
+                  spacing: OmniSpacing.sm,
+                  runSpacing: OmniSpacing.xxs,
+                  children: <Widget>[
+                    Text(
+                      _formatInventoryCny(stat.valueCents),
+                      style: textTheme.titleSmall,
+                    ),
+                    Text(
+                      '${totalCents == 0 ? '0.0' : (stat.valueCents / totalCents * 100).toStringAsFixed(1)}% · ${stat.recordCount} 条',
+                      style: textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
   }
 }
 
@@ -2428,13 +2738,18 @@ class _InventoryCard extends ConsumerWidget {
     // 当前物品的已使用时长文案。
     final String usageDuration = _usageDuration(item.purchaseDate);
     if (useHorizontalLayout) {
-      return _buildHorizontalCard(
-        context,
-        colors: colors,
-        theme: theme,
-        accessoryCount: accessoryCount,
-        price: price,
-        usageDuration: usageDuration,
+      return OmniContextMenu<String>(
+        key: ValueKey<String>('inventory-context-menu-${item.id}'),
+        itemBuilder: _moreMenuItems,
+        onSelected: (String action) => _selectMoreAction(context, action),
+        child: _buildHorizontalCard(
+          context,
+          colors: colors,
+          theme: theme,
+          accessoryCount: accessoryCount,
+          price: price,
+          usageDuration: usageDuration,
+        ),
       );
     }
     return OmniPanel(
@@ -2583,7 +2898,7 @@ class _InventoryCard extends ConsumerWidget {
     );
   }
 
-  /// 构建 Android 管理页的横向物品记录卡。
+  /// 构建连续背景上的手机物品行，行高随名称和系统字号自然增加。
   Widget _buildHorizontalCard(
     BuildContext context, {
     required OmniColors colors,
@@ -2592,179 +2907,159 @@ class _InventoryCard extends ConsumerWidget {
     required String price,
     required String usageDuration,
   }) {
-    return OmniPanel(
-      key: ValueKey<String>('inventory-card-${item.id}'),
-      onTap: onOpen,
-      padding: const EdgeInsets.all(OmniSpacing.xs),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          ClipRRect(
-            key: ValueKey<String>('inventory-card-image-${item.id}'),
-            borderRadius: BorderRadius.circular(OmniRadius.panel),
-            child: SizedBox(
-              width: 88,
-              child: _InventoryImage(item: item, colors: colors, compact: true),
-            ),
-          ),
-          const SizedBox(width: OmniSpacing.xs),
-          Expanded(
-            child: Container(
-              key: ValueKey<String>('inventory-card-content-${item.id}'),
-              alignment: Alignment.centerLeft,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    item.name,
-                    key: ValueKey<String>('inventory-name-${item.id}'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      height: 1,
+    return Material(
+      color: colors.paper,
+      child: InkWell(
+        key: ValueKey<String>('inventory-card-${item.id}'),
+        onTap: onOpen,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: OmniSpacing.sm),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.only(top: OmniSpacing.xs),
+                child: ClipRRect(
+                  key: ValueKey<String>('inventory-card-image-${item.id}'),
+                  borderRadius: BorderRadius.circular(OmniRadius.control),
+                  child: SizedBox.square(
+                    dimension: 64,
+                    child: _InventoryImage(
+                      item: item,
+                      colors: colors,
+                      compact: true,
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Row(
-                    key: ValueKey<String>('inventory-status-row-${item.id}'),
-                    children: <Widget>[
-                      OmniTag(
-                        label: _statusLabel(item.status),
-                        color: _statusColor(colors, item.status),
-                        compact: true,
-                      ),
-                      const SizedBox(width: OmniSpacing.xxs),
-                      Expanded(
-                        child: Text(
-                          item.category ?? '未分类',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: colors.muted,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  key: ValueKey<String>('inventory-card-content-${item.id}'),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: OmniSpacing.xs),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Text(
+                                  item.name,
+                                  key: ValueKey<String>(
+                                    'inventory-name-${item.id}',
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: OmniSpacing.xxs),
+                                Wrap(
+                                  key: ValueKey<String>(
+                                    'inventory-status-row-${item.id}',
+                                  ),
+                                  spacing: OmniSpacing.xs,
+                                  runSpacing: OmniSpacing.xxs,
+                                  children: <Widget>[
+                                    Text(
+                                      _statusLabel(item.status),
+                                      style: theme.textTheme.bodySmall
+                                          ?.copyWith(
+                                            color: _statusColor(
+                                              colors,
+                                              item.status,
+                                            ),
+                                          ),
+                                    ),
+                                    Text(
+                                      item.category ?? '未分类',
+                                      style: theme.textTheme.bodySmall
+                                          ?.copyWith(color: colors.muted),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
-                  Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: Text(
+                        if (accessoryCount > 0)
+                          KeyedSubtree(
+                            key: ValueKey<String>(
+                              'inventory-accessory-count-${item.id}',
+                            ),
+                            child: OmniButton(
+                              key: ValueKey<String>(
+                                'inventory-accessories-button-${item.id}',
+                              ),
+                              label: '配套 $accessoryCount',
+                              variant: OmniButtonVariant.text,
+                              onPressed: onAccessories,
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: OmniSpacing.xs),
+                    Wrap(
+                      spacing: OmniSpacing.sm,
+                      runSpacing: OmniSpacing.xxs,
+                      children: <Widget>[
+                        Text(
                           item.location ?? '未记录位置',
                           key: ValueKey<String>(
                             'inventory-location-${item.id}',
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: colors.muted,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: OmniSpacing.xxs),
-                      Text(
-                        '数量 ${item.quantity}',
-                        key: ValueKey<String>('inventory-quantity-${item.id}'),
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: colors.muted,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: Text(
-                          usageDuration,
-                          key: ValueKey<String>('inventory-usage-${item.id}'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: colors.muted,
-                            fontSize: 10,
                           ),
                         ),
-                      ),
-                      if (accessoryCount > 0) ...<Widget>[
-                        const SizedBox(width: OmniSpacing.xxs),
                         Text(
-                          '配套 $accessoryCount',
+                          '数量 ${item.quantity}',
                           key: ValueKey<String>(
-                            'inventory-accessory-count-${item.id}',
+                            'inventory-quantity-${item.id}',
                           ),
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: colors.muted,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(width: OmniSpacing.xs),
-          SizedBox(
-            key: ValueKey<String>('inventory-card-trailing-${item.id}'),
-            width: OmniSize.touch * 2,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: <Widget>[
-                SizedBox(
-                  height: OmniSize.touch,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: <Widget>[
-                      if (accessoryCount > 0)
-                        SizedBox.square(
-                          dimension: OmniSize.touch,
-                          child: OmniIconButton(
-                            key: ValueKey<String>(
-                              'inventory-accessories-button-${item.id}',
-                            ),
-                            tooltip: '查看配套物品',
-                            onPressed: onAccessories,
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints.tightFor(
-                              width: OmniSize.touch,
-                              height: OmniSize.touch,
-                            ),
-                            visualDensity: VisualDensity.compact,
-                            color: colors.item,
-                            icon: const Icon(Icons.inventory_2_outlined),
-                          ),
-                        ),
-                      SizedBox.square(
-                        dimension: OmniSize.touch,
-                        child: _buildMoreButton(context),
-                      ),
-                    ],
-                  ),
-                ),
-                const Spacer(),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    price,
-                    key: ValueKey<String>('inventory-price-${item.id}'),
-                    maxLines: 1,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
                     ),
-                  ),
+                    const SizedBox(height: OmniSpacing.xxs),
+                    SizedBox(
+                      width: double.infinity,
+                      child: Wrap(
+                        spacing: OmniSpacing.sm,
+                        runSpacing: OmniSpacing.xxs,
+                        alignment: WrapAlignment.spaceBetween,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: <Widget>[
+                          Text(
+                            usageDuration,
+                            key: ValueKey<String>('inventory-usage-${item.id}'),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colors.muted,
+                            ),
+                          ),
+                          Text(
+                            price,
+                            key: ValueKey<String>('inventory-price-${item.id}'),
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -2774,23 +3069,32 @@ class _InventoryCard extends ConsumerWidget {
     return OmniPopupMenuButton<String>(
       key: ValueKey<String>('inventory-more-button-${item.id}'),
       tooltip: '更多操作',
-      onSelected: (String value) {
-        if (value == 'edit') {
-          onEdit();
-        } else if (value == 'accessories') {
-          onAccessories();
-        } else if (value == 'image') {
-          AttachmentPickerDialog.show(
-            context,
-            businessType: AttachmentBusinessType.inventoryImage,
-            businessId: item.id,
-            title: '${item.name} · 主图',
-          );
-        } else {
-          onDelete();
-        }
-      },
-      itemBuilder: (_) => <PopupMenuEntry<String>>[
+      onSelected: (String action) => _selectMoreAction(context, action),
+      itemBuilder: _moreMenuItems,
+    );
+  }
+
+  /// 长按和桌面更多按钮复用同一业务操作。
+  void _selectMoreAction(BuildContext context, String action) {
+    if (action == 'edit') {
+      onEdit();
+    } else if (action == 'accessories') {
+      onAccessories();
+    } else if (action == 'image') {
+      AttachmentPickerDialog.show(
+        context,
+        businessType: AttachmentBusinessType.inventoryImage,
+        businessId: item.id,
+        title: '${item.name} · 主图',
+      );
+    } else if (action == 'delete') {
+      onDelete();
+    }
+  }
+
+  /// 保留没有配套时仍可从菜单管理和新增配套的入口。
+  List<PopupMenuEntry<String>> _moreMenuItems(BuildContext context) =>
+      <PopupMenuEntry<String>>[
         OmniPopupMenuItem<String>(
           value: 'edit',
           label: '编辑',
@@ -2812,9 +3116,7 @@ class _InventoryCard extends ConsumerWidget {
           icon: Icons.delete_outline_rounded,
           danger: true,
         ),
-      ],
-    );
-  }
+      ];
 
   /// 根据购买日期返回适合展示的已使用时长。
   String _usageDuration(DateTime? purchaseDate) {
@@ -3379,21 +3681,49 @@ class _InventoryEmpty extends StatelessWidget {
   /// 当前是否正在搜索。
   final bool searching;
 
+  /// 手机短屏和键盘避让时允许空态正文滚动。
+  final bool mobile;
+
+  /// 手机空结果提供一次清空搜索和筛选的操作。
+  final VoidCallback? onClear;
+
   /// 创建物品空状态。
-  const _InventoryEmpty({required this.searching});
+  const _InventoryEmpty({
+    required this.searching,
+    this.mobile = false,
+    this.onClear,
+  });
 
   /// 构建物品空状态。
   @override
   Widget build(BuildContext context) {
+    // 桌面与移动共用原有提示内容，仅移动端增加滚动空间。
+    final Widget content = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        const Icon(Icons.inventory_2_outlined, size: 48),
+        const SizedBox(height: 14),
+        Text(searching ? '没有找到匹配的物品' : '从最常找不到的那件物品开始记录'),
+        if (searching && onClear != null)
+          OmniButton(
+            label: '清空搜索和筛选',
+            variant: OmniButtonVariant.text,
+            onPressed: onClear,
+          ),
+      ],
+    );
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          const Icon(Icons.inventory_2_outlined, size: 48),
-          const SizedBox(height: 14),
-          Text(searching ? '没有找到匹配的物品' : '从最常找不到的那件物品开始记录'),
-        ],
-      ),
+      child: mobile
+          ? SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(
+                OmniSpacing.md,
+                OmniSpacing.md,
+                OmniSpacing.md,
+                _InventoryPageState._mobileActionClearance,
+              ),
+              child: content,
+            )
+          : content,
     );
   }
 }

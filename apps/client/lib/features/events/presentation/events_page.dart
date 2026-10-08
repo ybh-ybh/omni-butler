@@ -10,6 +10,7 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/events/data/event_repository.dart';
 import 'package:omni_butler/features/management/presentation/desktop_management_switcher.dart';
+import 'package:omni_butler/features/management/presentation/management_mobile_scaffold.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 周期事件页面。
@@ -33,11 +34,59 @@ class _EventsPageState extends ConsumerState<EventsPage> {
   /// 是否显示归档事件。
   bool _showArchived = false;
 
+  /// 安卓管理页的事件搜索控制器。
+  final TextEditingController _searchController = TextEditingController();
+
+  /// 安卓管理页当前已输入的名称或描述关键词。
+  String _query = '';
+
   /// 是否优先使用双列事件卡片布局。
   bool _useTwoColumns = true;
 
   /// 当前事件完成撤销浮动消息。
   OmniMessageHandle? _undoMessage;
+
+  /// 打开仅在确认后应用的事件状态筛选。
+  Future<void> _openMobileFilters() async {
+    // 本次确认的归档状态；关闭面板时不修改列表条件。
+    final bool? selected = await showManagementFilterSheet<bool>(
+      context: context,
+      initialValue: _showArchived,
+      resetValue: false,
+      builder:
+          (BuildContext context, bool draft, ValueChanged<bool> onChanged) {
+            return Wrap(
+              spacing: OmniSpacing.xs,
+              runSpacing: OmniSpacing.xs,
+              children: <Widget>[
+                ManagementFilterOption(
+                  label: '进行中',
+                  selected: !draft,
+                  onSelected: () => onChanged(false),
+                ),
+                ManagementFilterOption(
+                  label: '已归档',
+                  selected: draft,
+                  onSelected: () => onChanged(true),
+                ),
+              ],
+            );
+          },
+    );
+    if (selected == null || !mounted) {
+      return;
+    }
+    setState(() => _showArchived = selected);
+  }
+
+  /// 清除事件搜索并回到默认进行中列表。
+  void _clearMobileFilters() {
+    _searchController.clear();
+    setState(() {
+      _query = '';
+      _showArchived = false;
+    });
+  }
 
   /// 打开事件编辑器。
   Future<void> _openEditor([EventRecord? event]) async {
@@ -106,6 +155,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
   @override
   void dispose() {
     _undoMessage?.dismiss();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -152,11 +202,55 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     // 当前事件列表内容。
     final Widget records = events.when(
       data: (List<EventRecord> records) {
+        // 搜索只影响安卓列表，统计始终来自全部有效数据。
+        final String keyword = widget.embeddedInManagement
+            ? _query.trim().toLowerCase()
+            : '';
+        // 保留仓储默认顺序的名称和描述搜索结果。
+        final List<EventRecord> visibleRecords = keyword.isEmpty
+            ? records
+            : records
+                  .where((EventRecord event) {
+                    return '${event.name} ${event.description ?? ''}'
+                        .toLowerCase()
+                        .contains(keyword);
+                  })
+                  .toList(growable: false);
+        if (widget.embeddedInManagement &&
+            visibleRecords.isEmpty &&
+            (keyword.isNotEmpty || _showArchived)) {
+          return Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(
+                OmniSpacing.md,
+                OmniSpacing.md,
+                OmniSpacing.md,
+                _mobileActionClearance,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  const Text('没有符合条件的事件'),
+                  const SizedBox(height: OmniSpacing.xs),
+                  OmniButton(
+                    key: const ValueKey<String>('event-clear-filters'),
+                    label: '清除条件',
+                    variant: OmniButtonVariant.text,
+                    onPressed: _clearMobileFilters,
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
         if (records.isEmpty) {
-          return _EmptyEvents(archived: _showArchived);
+          return _EmptyEvents(
+            archived: _showArchived,
+            mobile: widget.embeddedInManagement,
+          );
         }
         return _EventCardGrid(
-          events: records,
+          events: visibleRecords,
           archived: _showArchived,
           useTwoColumns: _useTwoColumns,
           compactCards: widget.embeddedInManagement,
@@ -174,74 +268,84 @@ class _EventsPageState extends ConsumerState<EventsPage> {
       error: (Object error, StackTrace stackTrace) =>
           Center(child: Text('事件读取失败：$error')),
     );
-    // Android 管理页让统计卡随外层滚动离开，筛选栏留在列表顶部。
-    final Widget pageContent = widget.embeddedInManagement
-        ? NestedScrollView(
-            key: const ValueKey<String>('event-management-scroll'),
-            headerSliverBuilder:
-                (BuildContext context, bool innerBoxIsScrolled) => <Widget>[
-                  SliverToBoxAdapter(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        statistics,
-                        const SizedBox(height: OmniSpacing.xs),
-                      ],
-                    ),
+    if (widget.embeddedInManagement) {
+      return ManagementMobileScaffold(
+        title: '事件统计',
+        summary: _EventStatistics(
+          events: activeEvents,
+          completions: completions,
+          now: now,
+          useCarousel: true,
+          summaryOnly: true,
+        ),
+        statistics: statistics,
+        floatingActionButton: OmniButton(
+          key: const ValueKey<String>('event-mobile-create'),
+          label: '新增事件',
+          icon: Icons.add_rounded,
+          variant: OmniButtonVariant.pagePrimary,
+          onPressed: _openEditor,
+        ),
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            ManagementSearchToolbar(
+              controller: _searchController,
+              hintText: '搜索事件名称或描述',
+              onChanged: (String value) => setState(() => _query = value),
+              onClear: () {
+                _searchController.clear();
+                setState(() => _query = '');
+              },
+              onFilter: _openMobileFilters,
+              filterCount: _showArchived ? 1 : 0,
+              filters: <ManagementFilterSelection>[
+                if (_showArchived)
+                  ManagementFilterSelection(
+                    label: '已归档',
+                    onDeleted: () => setState(() => _showArchived = false),
                   ),
-                ],
-            body: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                toolbar,
-                const SizedBox(height: OmniSpacing.xs),
-                Expanded(child: records),
               ],
             ),
-          )
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              OmniPageHeader(
-                title: '事件记录',
-                titleWidget: const DesktopManagementSwitcher(
-                  selectedSection: ManagementSection.events,
-                ),
-                actions: <Widget>[
-                  OmniButton(
-                    label: '新增事件',
-                    icon: Icons.add_rounded,
-                    variant: OmniButtonVariant.pagePrimary,
-                    onPressed: _openEditor,
-                  ),
-                ],
-              ),
-              const SizedBox(height: OmniSpacing.xs),
-              statistics,
-              const SizedBox(height: OmniSpacing.xs),
-              toolbar,
-              const SizedBox(height: OmniSpacing.xs),
-              Expanded(child: records),
-            ],
-          );
-    return Scaffold(
-      floatingActionButton: widget.embeddedInManagement
-          ? OmniButton(
-              key: const ValueKey<String>('event-mobile-create'),
+            Expanded(child: records),
+          ],
+        ),
+      );
+    }
+    // 桌面继续使用原有页头、统计卡和工具栏布局。
+    final Widget pageContent = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        OmniPageHeader(
+          title: '事件记录',
+          titleWidget: const DesktopManagementSwitcher(
+            selectedSection: ManagementSection.events,
+          ),
+          actions: <Widget>[
+            OmniButton(
               label: '新增事件',
               icon: Icons.add_rounded,
               variant: OmniButtonVariant.pagePrimary,
               onPressed: _openEditor,
-            )
-          : null,
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+            ),
+          ],
+        ),
+        const SizedBox(height: OmniSpacing.xs),
+        statistics,
+        const SizedBox(height: OmniSpacing.xs),
+        toolbar,
+        const SizedBox(height: OmniSpacing.xs),
+        Expanded(child: records),
+      ],
+    );
+    return Scaffold(
       body: Padding(
         padding: compact
             ? EdgeInsets.fromLTRB(
                 OmniSpacing.xs,
                 OmniSpacing.xs,
                 OmniSpacing.xs,
-                widget.embeddedInManagement ? 0 : OmniSpacing.md,
+                OmniSpacing.md,
               )
             : const EdgeInsets.symmetric(
                 horizontal: 14,
@@ -264,8 +368,11 @@ class _EventStatistics extends ConsumerWidget {
   /// 当前统计时间。
   final DateTime now;
 
-  /// 是否使用 Android 管理页统计轮播。
+  /// 是否使用 Android 管理页的完整平铺统计。
   final bool useCarousel;
+
+  /// 是否只显示胶囊中的三个概要指标。
+  final bool summaryOnly;
 
   /// 创建事件顶部统计模块。
   const _EventStatistics({
@@ -273,6 +380,7 @@ class _EventStatistics extends ConsumerWidget {
     required this.completions,
     required this.now,
     required this.useCarousel,
+    this.summaryOnly = false,
   });
 
   /// 按自然周汇总本月完成次数。
@@ -322,6 +430,23 @@ class _EventStatistics extends ConsumerWidget {
   /// 构建事件状态、完成趋势与近期压力摘要。
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // 安卓统计在任一依赖失败时明确提示，避免把缺失数据当成零。
+    final bool mobileError = events.hasError || completions.hasError;
+    // 首次加载时缺少任一统计依赖都暂不展示数字。
+    final bool mobileLoading =
+        (events.isLoading && !events.hasValue) ||
+        (completions.isLoading && !completions.hasValue);
+    if (useCarousel && (mobileError || mobileLoading)) {
+      return ManagementSummaryLine(
+        metrics: const <ManagementSummaryMetric>[],
+        loading: !mobileError && mobileLoading,
+        error: mobileError ? '事件统计暂时无法读取' : null,
+        onRetry: () {
+          ref.invalidate(activeEventsProvider);
+          ref.invalidate(activeEventCompletionsProvider);
+        },
+      );
+    }
     // 事件仓储。
     final EventRepository repository = ref.watch(eventRepositoryProvider);
     // 当前全部进行中事件。
@@ -410,6 +535,97 @@ class _EventStatistics extends ConsumerWidget {
         : nextSevenDaysCount > 0
         ? colors.warning
         : colors.success;
+    if (summaryOnly) {
+      return ManagementSummaryLine(
+        metrics: <ManagementSummaryMetric>[
+          ManagementSummaryMetric(
+            label: '近期应做',
+            value: '$nearbyDueTotal',
+            color: nearbyAccent,
+          ),
+          ManagementSummaryMetric(
+            label: '进行中',
+            value: '${eventRecords.length}',
+            color: colors.event,
+          ),
+          ManagementSummaryMetric(
+            label: '本月完成',
+            value: '${monthCompletions.length}',
+            color: colors.brand,
+          ),
+        ],
+      );
+    }
+    if (useCarousel) {
+      return Column(
+        key: const ValueKey<String>('event-mobile-statistics'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _EventMobileStatisticSection(
+            label: '近期应做',
+            value: '$nearbyDueTotal 项',
+            description: '超期 $overdueCount · 7 天内 $nextSevenDaysCount',
+            annotation: nearbyBadge,
+            accent: nearbyAccent,
+            primary: true,
+            chart: _EventMiniBarChart(
+              values: nearbyDueCounts,
+              colors: <Color>[
+                colors.danger,
+                colors.warning,
+                ...List<Color>.filled(6, colors.event),
+              ],
+            ),
+          ),
+          Divider(height: OmniSpacing.lg, color: colors.line),
+          _EventMobileStatisticSection(
+            label: '进行中事件',
+            value: '${eventRecords.length} 项',
+            description: '正常 $normalCount · 待首次记录 $unrecordedCount',
+            annotation:
+                '即将到期 ${statusCounts[EventDueStatus.upcoming] ?? 0} · '
+                '已经超期 ${statusCounts[EventDueStatus.overdue] ?? 0}',
+            accent: colors.event,
+            chart: _EventStatusDistribution(
+              slices: <_EventStatusSlice>[
+                _EventStatusSlice(
+                  label: '节奏正常',
+                  count: normalCount,
+                  color: colors.success,
+                ),
+                _EventStatusSlice(
+                  label: '即将到期',
+                  count: statusCounts[EventDueStatus.upcoming] ?? 0,
+                  color: colors.warning,
+                ),
+                _EventStatusSlice(
+                  label: '已经超期',
+                  count: statusCounts[EventDueStatus.overdue] ?? 0,
+                  color: colors.danger,
+                ),
+                _EventStatusSlice(
+                  label: '待首次记录',
+                  count: unrecordedCount,
+                  color: colors.info,
+                ),
+              ],
+            ),
+          ),
+          Divider(height: OmniSpacing.lg, color: colors.line),
+          _EventMobileStatisticSection(
+            label: '本月完成',
+            value: '${monthCompletions.length} 次',
+            description: '覆盖 $coveredEventCount 个事件 · $monthComparison',
+            annotation: '本月完成分布',
+            accent: colors.brand,
+            chart: _EventMiniBarChart(
+              values: _monthWeeklyCompletions(completionRecords),
+              colors: List<Color>.filled(5, colors.brand),
+            ),
+          ),
+        ],
+      );
+    }
     // 三张事件统计卡片。
     final List<Widget> cards = <Widget>[
       _EventMetricCard(
@@ -476,13 +692,6 @@ class _EventStatistics extends ConsumerWidget {
         ),
       ),
     ];
-    if (useCarousel) {
-      return OmniStatisticsCarousel(
-        key: const ValueKey<String>('event-statistics-carousel'),
-        cardHeight: 144,
-        children: cards,
-      );
-    }
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // 摘要卡片是否横向完整展示。
@@ -514,6 +723,68 @@ class _EventStatistics extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// 安卓展开摘要中不带独立卡片表面的统计分区。
+class _EventMobileStatisticSection extends StatelessWidget {
+  /// 指标名称。
+  final String label;
+
+  /// 指标数值。
+  final String value;
+
+  /// 指标范围和组成说明。
+  final String description;
+
+  /// 趋势或状态说明。
+  final String annotation;
+
+  /// 指标的语义强调色。
+  final Color accent;
+
+  /// 该指标是否作为展开面板的重点显示。
+  final bool primary;
+
+  /// 当前指标对应的图表。
+  final Widget chart;
+
+  /// 创建自然高度的移动统计分区。
+  const _EventMobileStatisticSection({
+    required this.label,
+    required this.value,
+    required this.description,
+    required this.annotation,
+    required this.accent,
+    required this.chart,
+    this.primary = false,
+  });
+
+  /// 以可换行文字和轻量图表展示指标。
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      key: ValueKey<String>('event-mobile-metric-$label'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(label, style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: OmniSpacing.xxs),
+        Text(
+          value,
+          style:
+              (primary
+                      ? Theme.of(context).textTheme.displaySmall
+                      : Theme.of(context).textTheme.headlineSmall)
+                  ?.copyWith(color: accent, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: OmniSpacing.xxs),
+        Text(description, style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: OmniSpacing.xs),
+        chart,
+        const SizedBox(height: OmniSpacing.xxs),
+        Text(annotation, style: Theme.of(context).textTheme.bodySmall),
+      ],
     );
   }
 }
@@ -907,6 +1178,34 @@ class _EventCardGrid extends StatelessWidget {
   /// 构建可滚动的事件卡片流。
   @override
   Widget build(BuildContext context) {
+    if (compactCards) {
+      return ListView.separated(
+        key: const ValueKey<String>('event-card-grid'),
+        padding: EdgeInsets.only(bottom: safeBottomPadding),
+        itemCount: events.length,
+        separatorBuilder: (BuildContext context, int index) => Divider(
+          height: 1,
+          indent: OmniSpacing.md,
+          endIndent: OmniSpacing.md,
+          color: OmniColors.of(context).line,
+        ),
+        itemBuilder: (BuildContext context, int index) {
+          // 当前平铺事件记录。
+          final EventRecord event = events[index];
+          return _EventCard(
+            key: ValueKey<String>('event-card-${event.id}'),
+            event: event,
+            archived: archived,
+            compact: true,
+            onRecord: () => onRecord(event),
+            onHistory: () => onHistory(event),
+            onEdit: () => onEdit(event),
+            onArchive: () => onArchive(event),
+            onDelete: () => onDelete(event),
+          );
+        },
+      );
+    }
     return ListView(
       key: const ValueKey<String>('event-card-grid'),
       padding: safeBottomPadding > 0
@@ -1101,6 +1400,94 @@ class _EventCard extends ConsumerWidget {
             ),
           ],
         );
+        if (compact) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: OmniSpacing.md,
+              vertical: OmniSpacing.xs,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        event.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    menu,
+                  ],
+                ),
+                Text(
+                  '${effectiveStatusView.$1} · $metadata',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: effectiveStatusView.$2),
+                ),
+                const SizedBox(height: OmniSpacing.xs),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        headline,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    const SizedBox(width: OmniSpacing.xs),
+                    Flexible(
+                      child: Text(
+                        scheduleLabel,
+                        textAlign: TextAlign.end,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: OmniSpacing.xs),
+                _EventCycleTimeline(
+                  key: ValueKey<String>('event-timeline-${event.id}'),
+                  event: event,
+                  dueAt: dueAt,
+                  now: now,
+                  archived: archived,
+                  compact: true,
+                  progressColor: effectiveStatusView.$2,
+                ),
+                Row(
+                  children: <Widget>[
+                    OmniButton(
+                      key: ValueKey<String>('event-history-${event.id}'),
+                      label: '历史',
+                      icon: Icons.history_rounded,
+                      variant: OmniButtonVariant.text,
+                      onPressed: onHistory,
+                    ),
+                    const Spacer(),
+                    _CompactEventActionButton(
+                      key: ValueKey<String>(
+                        archived
+                            ? 'event-restore-${event.id}'
+                            : 'event-record-${event.id}',
+                      ),
+                      label: archived ? '恢复' : '记录',
+                      icon: archived
+                          ? Icons.unarchive_outlined
+                          : Icons.done_rounded,
+                      primary: !archived,
+                      onPressed: archived ? onArchive : onRecord,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }
         return OmniPanel(
           padding: cardPadding,
           child: ConstrainedBox(
@@ -1602,28 +1989,43 @@ class _EmptyEvents extends StatelessWidget {
   /// 当前是否为归档列表。
   final bool archived;
 
+  /// 手机短屏和键盘避让时允许空态正文滚动。
+  final bool mobile;
+
   /// 创建事件空状态。
-  const _EmptyEvents({required this.archived});
+  const _EmptyEvents({required this.archived, this.mobile = false});
 
   /// 构建事件空状态。
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          const Icon(Icons.event_repeat_rounded, size: 48),
-          const SizedBox(height: 14),
-          Text(archived ? '暂时没有归档事件' : '先建立一个需要反复完成的事件'),
-          if (!archived) ...<Widget>[
-            const SizedBox(height: 6),
-            Text(
-              '例如：更换滤芯、整理账单或复查证件。',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
+    // 桌面与移动共用原有提示内容，仅移动端增加滚动空间。
+    final Widget content = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        const Icon(Icons.event_repeat_rounded, size: 48),
+        const SizedBox(height: 14),
+        Text(archived ? '暂时没有归档事件' : '先建立一个需要反复完成的事件'),
+        if (!archived) ...<Widget>[
+          const SizedBox(height: 6),
+          Text(
+            '例如：更换滤芯、整理账单或复查证件。',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         ],
-      ),
+      ],
+    );
+    return Center(
+      child: mobile
+          ? SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(
+                OmniSpacing.md,
+                OmniSpacing.md,
+                OmniSpacing.md,
+                _EventsPageState._mobileActionClearance,
+              ),
+              child: content,
+            )
+          : content,
     );
   }
 }

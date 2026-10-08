@@ -557,60 +557,46 @@ void main() {
       find.byKey(ValueKey<String>('inventory-meta-divider-$itemId')),
       findsNothing,
     );
-    // 位置与数量使用 12px，底部配套摘要使用 10px。
+    // 次级信息使用主题正文样式，避免手机上的过小文字。
     final Text locationText = tester.widget<Text>(
       find.byKey(ValueKey<String>('inventory-location-$itemId')),
     );
+    // 数量与位置保持同一级文本层级。
     final Text quantityText = tester.widget<Text>(
       find.byKey(ValueKey<String>('inventory-quantity-$itemId')),
     );
-    final Text accessoryText = tester.widget<Text>(
-      find.byKey(ValueKey<String>('inventory-accessory-count-$itemId')),
-    );
     expect(locationText.style?.fontSize, 12);
     expect(quantityText.style?.fontSize, 12);
-    expect(accessoryText.style?.fontSize, 10);
-    expect(accessoryText.style?.color, quantityText.style?.color);
-    // 已使用文字保持 10px 次级信息层级。
+    // 已使用文字也允许跟随系统字号放大。
     final Text usageText = tester.widget<Text>(
       find.byKey(ValueKey<String>('inventory-usage-$itemId')),
     );
-    expect(usageText.style?.fontSize, 10);
-    // Android 物品记录按左图、中部信息、右侧金额与操作排列。
+    expect(usageText.style?.fontSize, 12);
+    // Android 行使用 64dp 图片与自然高度内容，不再固定为卡片高度。
     final Finder itemCard = find.byKey(
       ValueKey<String>('inventory-card-$itemId'),
     );
+    // 行首缩略图的位置和尺寸。
     final Finder itemImage = find.byKey(
       ValueKey<String>('inventory-card-image-$itemId'),
     );
+    // 行正文包含名称、状态、价格与配套入口。
     final Finder itemContent = find.byKey(
       ValueKey<String>('inventory-card-content-$itemId'),
     );
-    final Finder itemTrailing = find.byKey(
-      ValueKey<String>('inventory-card-trailing-$itemId'),
-    );
-    final Finder itemPrice = find.byKey(
-      ValueKey<String>('inventory-price-$itemId'),
-    );
-    final Finder moreButton = find.byKey(
-      ValueKey<String>('inventory-more-button-$itemId'),
-    );
-    // 三个横向分区的实际位置。
+    // 图片与文字区域的实际几何。
     final Rect imageRect = tester.getRect(itemImage);
-    // 中部信息区的实际位置。
+    // 正文区域的边界。
     final Rect contentRect = tester.getRect(itemContent);
-    // 右侧金额与操作区的实际位置。
-    final Rect trailingRect = tester.getRect(itemTrailing);
-    expect(tester.getSize(itemCard).height, 104);
-    expect(imageRect.width, 88);
+    expect(tester.getSize(itemCard).height, greaterThan(104));
+    expect(imageRect.size, const Size(64, 64));
     expect(imageRect.right, lessThan(contentRect.left));
-    expect(contentRect.right, lessThan(trailingRect.left));
-    expect(trailingRect.contains(tester.getRect(itemPrice).center), isTrue);
-    expect(trailingRect.contains(tester.getRect(moreButton).center), isTrue);
     expect(
-      trailingRect.contains(tester.getRect(accessoryButton).center),
+      contentRect.contains(tester.getRect(accessoryButton).center),
       isTrue,
     );
+    expect(find.byTooltip('更多操作'), findsNothing);
+    expect(tester.getSize(accessoryButton).height, greaterThanOrEqualTo(48));
     expect(tester.takeException(), isNull);
 
     // 从移动端物品项打开详情卡，卡片边界保持在视口内。

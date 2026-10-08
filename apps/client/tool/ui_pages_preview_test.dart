@@ -177,6 +177,66 @@ Future<void> _captureBusinessPages(
         expect(find.text('预览 · 整理本周计划'), findsOneWidget);
       }
       await _capture(tester, captureKey, '$prefix-${route.substring(1)}');
+      if (platform == TargetPlatform.android &&
+          <String>['/memberships', '/inventory'].contains(route)) {
+        // 长按真实记录，检查没有更多按钮时的原操作菜单。
+        final String name = route == '/memberships' ? '预览 · 阅读会员' : '预览 · 阅读台灯';
+        await tester.longPress(find.text(name).hitTestable());
+        await tester.pumpAndSettle();
+        await _capture(
+          tester,
+          captureKey,
+          '$prefix-${route.substring(1)}-more',
+        );
+        // 点击菜单外遮罩关闭，不触发底层业务入口。
+        await tester.tapAt(const Offset(4, 4));
+        await tester.pumpAndSettle();
+      }
+      if (platform == TargetPlatform.android &&
+          <String>['/events', '/memberships', '/inventory'].contains(route)) {
+        await tester.tap(
+          find
+              .byKey(const ValueKey<String>('management-summary-toggle'))
+              .hitTestable(),
+        );
+        await tester.pumpAndSettle();
+        await _capture(
+          tester,
+          captureKey,
+          '$prefix-${route.substring(1)}-expanded',
+        );
+        await tester.drag(
+          find
+              .byKey(const ValueKey<String>('management-summary-details'))
+              .hitTestable(),
+          const Offset(0, -240),
+        );
+        await tester.pumpAndSettle();
+        await _capture(
+          tester,
+          captureKey,
+          '$prefix-${route.substring(1)}-expanded-details',
+        );
+        await tester.tap(
+          find
+              .byKey(const ValueKey<String>('management-summary-toggle'))
+              .hitTestable(),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find
+              .byKey(const ValueKey<String>('management-filter-button'))
+              .hitTestable(),
+        );
+        await tester.pumpAndSettle();
+        await _capture(
+          tester,
+          captureKey,
+          '$prefix-${route.substring(1)}-filters',
+        );
+        await tester.tap(find.byTooltip('取消筛选'));
+        await tester.pumpAndSettle();
+      }
       if (route == '/todos' && platform == TargetPlatform.android) {
         // 历史与进行中使用相同平铺表面，分别捕获真实二级页与分类页。
         await tester.tap(
@@ -311,7 +371,8 @@ Future<void> _seedPreviewData(AppDatabase database) async {
       sortOrder: 1,
     ),
   );
-  await InventoryRepository(database).save(
+  // 预览主物品标识用于展示有配套时的右上角快捷入口。
+  final String previewInventoryId = await InventoryRepository(database).save(
     InventoryDraft(
       name: '预览 · 阅读台灯',
       category: '预览电子设备',
@@ -320,6 +381,14 @@ Future<void> _seedPreviewData(AppDatabase database) async {
       purchaseDate: DateTime(2026, 8, 12),
       location: '预览书桌',
       notes: '仅用于检查真实物品卡片',
+    ),
+  );
+  await InventoryRepository(database).save(
+    InventoryDraft(
+      name: '预览 · 台灯备用灯泡',
+      parentItemId: previewInventoryId,
+      quantity: 1,
+      purchasePriceCents: 1900,
     ),
   );
   await MembershipRepository(database).save(

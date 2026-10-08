@@ -1,10 +1,12 @@
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/router/app_router.dart';
+import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/database/app_database.dart';
@@ -12,7 +14,9 @@ import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/events/data/event_repository.dart';
 import 'package:omni_butler/features/inventory/data/inventory_repository.dart';
 import 'package:omni_butler/features/management/presentation/android_management_shell.dart';
+import 'package:omni_butler/features/management/presentation/management_mobile_scaffold.dart';
 import 'package:omni_butler/features/memberships/data/membership_repository.dart';
+import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/shared/ui/omni_page_header.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -230,382 +234,497 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('Android 管理滑块切换三个功能并记住上次页签', (WidgetTester tester) async {
-    await _configureAndroidView(tester);
-    SharedPreferences.setMockInitialValues(<String, Object>{
-      'appearance.theme_mode': 'light',
-    });
-    // 测试用主题与功能偏好存储。
-    final SharedPreferences preferences = await SharedPreferences.getInstance();
-    // 测试用内存数据库。
-    final AppDatabase database = AppDatabase.forTesting(
-      NativeDatabase.memory(),
-    );
-    // 保证事件分区生成可验证到底部高度的滚动列表。
-    await EventRepository(database).save(
-      const EventDraft(
-        name: '测试事件',
-        intervalValue: 1,
-        intervalUnit: EventIntervalUnit.day,
-      ),
-    );
-    // 显式管理的依赖容器。
-    final ProviderContainer container = ProviderContainer(
-      overrides: [
-        sharedPreferencesProvider.overrideWithValue(preferences),
-        appDatabaseProvider.overrideWithValue(database),
-        nowProvider.overrideWithValue(DateTime(2026, 9, 24, 10)),
-      ],
-    );
-
-    await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: container,
-        child: const OmniButlerApp(),
-      ),
-    );
-    container.read(appRouterProvider).go('/inventory');
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
-
+  testWidgets('Android 管理下划线导航与独立分页保留新增和会话记忆', (WidgetTester tester) async {
+    // 启动真实路由宿主和可滚动的三个管理分区。
+    final _ManagementTestApp app = await _pumpManagementApp(tester);
     expect(
       find.byKey(const ValueKey<String>('android-management-shell')),
       findsOneWidget,
     );
-    expect(
+    expect(find.byType(OmniPageHeader), findsNothing);
+    // 固定顶部导航与当前下划线位置。
+    final Rect header = tester.getRect(
       find.byKey(const ValueKey<String>('management-section-control')),
-      findsOneWidget,
     );
-    // 事件、会员与物品页签的实际位置。
-    final Rect eventsSectionRect = tester.getRect(
+    // 事件标签的实际触控边界。
+    final Rect eventTab = tester.getRect(
       find.byKey(const ValueKey<String>('management-section-events')),
     );
-    final Rect membershipsSectionRect = tester.getRect(
+    // 会员标签的实际触控边界。
+    final Rect memberTab = tester.getRect(
       find.byKey(const ValueKey<String>('management-section-memberships')),
     );
-    final Rect inventorySectionRect = tester.getRect(
+    // 物品标签的实际触控边界。
+    final Rect itemTab = tester.getRect(
       find.byKey(const ValueKey<String>('management-section-inventory')),
     );
-    expect(eventsSectionRect.left, lessThan(membershipsSectionRect.left));
-    expect(membershipsSectionRect.left, lessThan(inventorySectionRect.left));
-    expect(find.byType(OmniPageHeader), findsNothing);
-    expect(
-      find.byKey(const ValueKey<String>('inventory-mobile-create')),
-      findsOneWidget,
-    );
-    expect(find.text('管理'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey<String>('inventory-statistics-carousel')),
-      findsOneWidget,
-    );
-    // 顶部滑块与首张统计卡之间的紧凑外间距。
-    final Rect sectionControlRect = tester.getRect(
-      find.byKey(const ValueKey<String>('management-section-control')),
-    );
-    // 物品统计轮播的实际位置。
-    final Rect inventoryStatisticsRect = tester.getRect(
-      find.byKey(const ValueKey<String>('inventory-statistics-carousel')),
-    );
-    expect(
-      inventoryStatisticsRect.top - sectionControlRect.bottom,
-      closeTo(OmniSpacing.xs, 0.1),
-    );
+    expect(eventTab.left, lessThan(memberTab.left));
+    expect(memberTab.left, lessThan(itemTab.left));
     expect(
       tester
-          .getSize(
-            find.byKey(
-              const ValueKey<String>('statistics-carousel-indicator-0'),
-            ),
+          .getRect(
+            find.byKey(const ValueKey<String>('management-section-indicator')),
           )
-          .width,
-      18,
+          .center
+          .dx,
+      closeTo(itemTab.center.dx, 0.1),
     );
     expect(
-      find.byKey(const ValueKey<String>('statistics-carousel-indicator-2')),
+      find.byKey(const ValueKey<String>('inventory-statistics-carousel')),
       findsNothing,
     );
-
-    // 统计区域横滑只切换物品统计卡，不切换管理分区。
-    await tester.drag(
-      find.byKey(const ValueKey<String>('inventory-statistics-carousel')),
-      const Offset(-260, 0),
-    );
-    await tester.pumpAndSettle();
     expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/inventory',
-    );
-    expect(
-      tester
-          .getSize(
-            find.byKey(
-              const ValueKey<String>('statistics-carousel-indicator-1'),
-            ),
-          )
-          .width,
-      18,
+      find
+          .byKey(const ValueKey<String>('management-summary-toggle'))
+          .hitTestable(),
+      findsOneWidget,
     );
 
     await tester.tap(
-      find.byKey(const ValueKey<String>('inventory-mobile-create')),
+      find
+          .byKey(const ValueKey<String>('inventory-mobile-create'))
+          .hitTestable(),
     );
     await tester.pumpAndSettle();
     expect(find.text('添加物品'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
+    // 末页横滑不会进入设置，浮动操作区也不泄漏一级手势。
+    await _dragManagementPage(tester, -260);
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/inventory');
+    await tester.drag(
+      find
+          .byKey(const ValueKey<String>('inventory-mobile-create'))
+          .hitTestable(),
+      const Offset(-120, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/inventory');
 
-    // 顶部滑块可以从当前物品页直接切换到新的第一项事件记录。
     await tester.tap(
       find.byKey(const ValueKey<String>('management-section-events')),
     );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/events',
-    );
-
-    // 第一个管理分区继续向右横滑时接力返回时间页。
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/events');
     await _dragManagementPage(tester, 260);
     await tester.pumpAndSettle();
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/timeline',
+    expect(_managementPath(app), '/events');
+    await tester.tap(
+      find.byKey(const ValueKey<String>('event-mobile-create')).hitTestable(),
     );
-    // 返回事件页继续验证管理分区内部手势。
-    container.read(appRouterProvider).go('/events');
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
-    expect(
-      find.byKey(const ValueKey<String>('statistics-carousel-indicator-2')),
-      findsOneWidget,
-    );
-    // 事件统计轮播同样优先消费横向手势。
-    await tester.drag(
-      find.byKey(const ValueKey<String>('event-statistics-carousel')),
-      const Offset(-260, 0),
-    );
-    await tester.pumpAndSettle();
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/events',
-    );
-    expect(
-      tester
-          .getSize(
-            find.byKey(
-              const ValueKey<String>('statistics-carousel-indicator-1'),
-            ),
-          )
-          .width,
-      18,
-    );
-    await tester.tap(find.byKey(const ValueKey<String>('event-mobile-create')));
     await tester.pumpAndSettle();
     expect(find.text('新建周期事件'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
 
-    // 管理分区内部横滑应与一级导航一样展示真实双卡片跟手动效。
-    final Finder managementSwipeSurface = find.byKey(
+    // 真实短拖使下划线跟手，顶部边界保持固定。
+    final Finder surface = find.byKey(
       const ValueKey<String>('android-management-swipe-surface'),
     );
-    // 横滑前固定管理导航的边界。
-    final Rect managementNavigationRect = tester.getRect(
-      find.byKey(const ValueKey<String>('management-section-control')),
-    );
-    // 横滑前管理导航滑块的水平位置。
-    final double managementIndicatorStart = tester
-        .widget<AnimatedAlign>(
-          find.descendant(
-            of: find.byKey(
-              const ValueKey<String>('management-section-control'),
-            ),
-            matching: find.byType(AnimatedAlign),
-          ),
+    // 真实分页表面的边界用于选择拖动起点。
+    final Rect surfaceRect = tester.getRect(surface);
+    // 手势开始前下划线的位置。
+    final double indicatorStart = tester
+        .getRect(
+          find.byKey(const ValueKey<String>('management-section-indicator')),
         )
-        .alignment
-        .resolve(TextDirection.ltr)
-        .x;
-    // 管理分区横滑表面的实际边界。
-    final Rect managementSwipeRect = tester.getRect(managementSwipeSurface);
-    // 用于检查管理分区跟手中间态的真实触摸手势。
-    final TestGesture managementGesture = await tester.startGesture(
-      Offset(managementSwipeRect.right - 60, managementSwipeRect.bottom - 200),
+        .left;
+    // 在页面正文上启动的真实触摸指针。
+    final TestGesture gesture = await tester.startGesture(
+      Offset(surfaceRect.right - 60, surfaceRect.bottom - 180),
     );
-    await managementGesture.moveBy(const Offset(-24, 0));
+    await gesture.moveBy(const Offset(-24, 0));
     await tester.pump();
-    await managementGesture.moveBy(const Offset(-72, 0));
+    await gesture.moveBy(const Offset(-72, 0));
     await tester.pump();
-    // 正在离开的事件分区卡片缩放变换。
-    final Transform managementCurrentScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-0-scale')),
-    );
-    // 正在进入的会员分区卡片缩放变换。
-    final Transform managementTargetScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-1-scale')),
-    );
-    // 正在离开的事件分区卡片外观。
-    final PhysicalModel managementCurrentCard = tester.widget<PhysicalModel>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-0-card')),
-    );
-    // 跟手中的管理导航滑块水平位置。
-    final double managementIndicatorDragged = tester
-        .widget<AnimatedAlign>(
-          find.descendant(
-            of: find.byKey(
-              const ValueKey<String>('management-section-control'),
-            ),
-            matching: find.byType(AnimatedAlign),
-          ),
-        )
-        .alignment
-        .resolve(TextDirection.ltr)
-        .x;
-    expect(managementCurrentScale.transform.storage[0], lessThan(1));
-    expect(managementTargetScale.transform.storage[0], greaterThan(0.985));
-    expect(managementCurrentCard.elevation, greaterThan(0));
     expect(
       tester.getRect(
         find.byKey(const ValueKey<String>('management-section-control')),
       ),
-      managementNavigationRect,
+      header,
     );
-    expect(managementIndicatorDragged, greaterThan(managementIndicatorStart));
     expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/events',
+      tester
+          .getRect(
+            find.byKey(const ValueKey<String>('management-section-indicator')),
+          )
+          .left,
+      greaterThan(indicatorStart),
     );
-    await managementGesture.moveBy(const Offset(72, 0));
-    await managementGesture.up();
+    expect(_managementPath(app), '/events');
+    await gesture.moveBy(const Offset(72, 0));
+    await gesture.up();
     await tester.pumpAndSettle();
-
-    // 短距离拖动不应误切管理分区。
+    expect(_managementPath(app), '/events');
     await _dragManagementPage(tester, -20);
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/events',
-    );
-
-    // 向左横滑进入新顺序中的下一个分区会员管理。
-    await _dragManagementPage(tester, -260);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-    // 松手后的弹簧位移也必须持续驱动顶部滑块，导航区域本身保持固定。
-    final double settlingOffset = tester
-        .widget<Transform>(
-          find.byKey(const ValueKey<String>('nested-page-swipe-0-translation')),
-        )
-        .transform
-        .storage[12];
-    // 三个分区中从第一项向第二项移动时的连续滑块坐标。
-    final double settlingIndicator = tester
-        .widget<AnimatedAlign>(
-          find.descendant(
-            of: find.byKey(
-              const ValueKey<String>('management-section-control'),
-            ),
-            matching: find.byType(AnimatedAlign),
-          ),
-        )
-        .alignment
-        .resolve(TextDirection.ltr)
-        .x;
-    expect(
-      tester.getRect(
-        find.byKey(const ValueKey<String>('management-section-control')),
-      ),
-      managementNavigationRect,
-    );
-    expect(
-      settlingIndicator,
-      closeTo(-1 - settlingOffset / managementSwipeRect.width, 0.001),
-    );
-    // 原生弹簧按距离和速度自然收敛，不依赖固定 600ms 时长。
     await tester.pumpAndSettle();
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/memberships',
-    );
-    expect(
-      find.byKey(const ValueKey<String>('membership-mobile-create')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey<String>('membership-statistics-carousel')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey<String>('statistics-carousel-indicator-2')),
-      findsOneWidget,
-    );
-    // 再次向左横滑进入新顺序中的最后一个分区物品管理。
+    expect(_managementPath(app), '/events');
     await _dragManagementPage(tester, -260);
     await tester.pumpAndSettle();
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/inventory',
-    );
-    // 向右横滑可以返回上一个管理分区。
-    await _dragManagementPage(tester, 260);
-    await tester.pumpAndSettle();
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/memberships',
-    );
-    // 返回会员管理后继续验证新增操作与会话记忆。
+    expect(_managementPath(app), '/memberships');
     await tester.tap(
-      find.byKey(const ValueKey<String>('membership-mobile-create')),
+      find
+          .byKey(const ValueKey<String>('membership-mobile-create'))
+          .hitTestable(),
     );
     await tester.pumpAndSettle();
     expect(find.text('添加会员'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
+    await _dragManagementPage(tester, -260);
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/inventory');
+    await _dragManagementPage(tester, 260);
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/memberships');
 
     await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(const ValueKey<String>('navigation-/inventory')),
     );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/memberships');
     expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/memberships',
-    );
-    expect(
-      container.read(managementSectionProvider),
+      app.container.read(managementSectionProvider),
       ManagementSection.memberships,
     );
-
-    await tester.tap(
-      find.byKey(const ValueKey<String>('navigation-/settings')),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
-    expect(
-      find.byKey(const ValueKey<String>('android-settings-overview')),
-      findsOneWidget,
-    );
-    expect(find.text('事件记录'), findsNothing);
-    expect(find.text('会员管理'), findsNothing);
-    await tester.tap(
-      find.byKey(const ValueKey<String>('android-settings-category-features')),
-    );
-    await tester.pump();
-    expect(find.text('会员管理'), findsOneWidget);
-
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
-    container.dispose();
-    await tester.pump(const Duration(milliseconds: 100));
-    await database.close();
-    debugDefaultTargetPlatformOverride = null;
+    expect(tester.takeException(), isNull);
+    await _disposeManagementApp(tester, app);
   });
 
-  testWidgets('Android 物品拆分按钮收纳次要操作并支持筛选单行横滑', (WidgetTester tester) async {
+  testWidgets('管理横滑消费层无空滚动语义且保留悬浮按钮读屏范围', (WidgetTester tester) async {
+    // 读取实际交给系统辅助功能的语义节点。
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    try {
+      // 使用真实路由和业务按钮复现外层语义合并。
+      final _ManagementTestApp app = await _pumpManagementApp(tester);
+      // 物品主操作的独立读屏节点。
+      final SemanticsNode create = tester.getSemantics(
+        find.bySemanticsLabel('新增物品'),
+      );
+      // 读屏热区不能超过可见拆分按钮。
+      final Size size = tester.getSize(
+        find.byKey(const ValueKey<String>('inventory-mobile-create-split')),
+      );
+      expect(create.rect.isEmpty, isFalse);
+      expect(create.rect.width, lessThanOrEqualTo(size.width));
+      expect(create.rect.height, lessThanOrEqualTo(size.height));
+      expect(create.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+      expect(
+        create.getSemanticsData().hasAction(SemanticsAction.scrollLeft),
+        isFalse,
+      );
+      expect(
+        create.getSemanticsData().hasAction(SemanticsAction.scrollRight),
+        isFalse,
+      );
+      // 手势拦截边界不应向读屏暴露无法执行的横向滚动。
+      final SemanticsNode boundary = tester.getSemantics(
+        find.byKey(const ValueKey<String>('android-management-shell')),
+      );
+      expect(
+        boundary.getSemanticsData().hasAction(SemanticsAction.scrollLeft),
+        isFalse,
+      );
+      expect(
+        boundary.getSemanticsData().hasAction(SemanticsAction.scrollRight),
+        isFalse,
+      );
+      await _disposeManagementApp(tester, app);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('管理各分区搜索滚动保留且统计随标签底栏和外部路由收起', (WidgetTester tester) async {
+    // 每个分区均写入足够多的独立记录。
+    final _ManagementTestApp app = await _pumpManagementApp(tester);
+    // 记录各分区在查询后的实际滚动位置。
+    final Map<String, double> offsets = <String, double>{};
+    // 分区路由、列表标识与专属搜索词。
+    const List<(String, String, String)> sections = <(String, String, String)>[
+      ('events', 'event-card-grid', '测试事件'),
+      ('memberships', 'membership-card-grid', '测试会员'),
+      ('inventory', 'inventory-management-list', '测试物品'),
+    ];
+    for (final (String section, String listKey, String query) in sections) {
+      await tester.tap(
+        find.byKey(ValueKey<String>('management-section-$section')),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).hitTestable(), query);
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      await tester.drag(
+        _managementListFinder(listKey).hitTestable(),
+        const Offset(0, -360),
+      );
+      await tester.pumpAndSettle();
+      offsets[section] = _managementListOffset(tester, listKey);
+      expect(offsets[section], greaterThan(0));
+    }
+    for (final (String section, String listKey, String query) in sections) {
+      await tester.tap(
+        find.byKey(ValueKey<String>('management-section-$section')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(find.byType(TextField).hitTestable())
+            .controller!
+            .text,
+        query,
+      );
+      expect(
+        _managementListOffset(tester, listKey),
+        closeTo(offsets[section]!, 0.1),
+      );
+    }
+    // 完全展开后横拖正文蒙层和统计内容都不能切换分区。
+    await tester.tap(
+      find
+          .byKey(const ValueKey<String>('management-summary-toggle'))
+          .hitTestable(),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find
+          .byKey(const ValueKey<String>('management-summary-scrim'))
+          .hitTestable(),
+      findsOneWidget,
+    );
+    await tester.drag(
+      find
+          .byKey(const ValueKey<String>('management-summary-scrim'))
+          .hitTestable(),
+      const Offset(260, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/inventory');
+    await tester.drag(
+      find
+          .byKey(const ValueKey<String>('management-summary-toggle'))
+          .hitTestable(),
+      const Offset(260, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/inventory');
+    // 点击标签离开，回来时摘要已收起，搜索和列表仍保留。
+    await tester.tap(
+      find.byKey(const ValueKey<String>('management-section-events')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('management-section-inventory')),
+    );
+    await tester.pumpAndSettle();
+    _expectManagementCollapsed(tester);
+    expect(
+      _managementListOffset(tester, 'inventory-management-list'),
+      closeTo(offsets['inventory']!, 0.1),
+    );
+    // 底部一级导航离开并返回也必须关闭摘要。
+    await tester.tap(
+      find
+          .byKey(const ValueKey<String>('management-summary-toggle'))
+          .hitTestable(),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('navigation-/inventory')),
+    );
+    await tester.pumpAndSettle();
+    _expectManagementCollapsed(tester);
+    expect(
+      tester
+          .widget<TextField>(find.byType(TextField).hitTestable())
+          .controller!
+          .text,
+      '测试物品',
+    );
+    expect(
+      _managementListOffset(tester, 'inventory-management-list'),
+      closeTo(offsets['inventory']!, 0.1),
+    );
+    // 外部原路由直接切换分区时同样保持稳定子树。
+    await tester.tap(
+      find
+          .byKey(const ValueKey<String>('management-summary-toggle'))
+          .hitTestable(),
+    );
+    await tester.pumpAndSettle();
+    app.container.read(appRouterProvider).go('/memberships');
+    await tester.pumpAndSettle();
+    app.container.read(appRouterProvider).go('/inventory');
+    await tester.pumpAndSettle();
+    _expectManagementCollapsed(tester);
+    expect(
+      tester
+          .widget<TextField>(find.byType(TextField).hitTestable())
+          .controller!
+          .text,
+      '测试物品',
+    );
+    expect(
+      _managementListOffset(tester, 'inventory-management-list'),
+      closeTo(offsets['inventory']!, 0.1),
+    );
+    expect(tester.takeException(), isNull);
+    await _disposeManagementApp(tester, app);
+  });
+
+  testWidgets('管理分页中途离开与隐藏零宽变更后均恢复整数页并可继续横滑', (WidgetTester tester) async {
+    // 先用真实一级路由检查在途标签动画和触摸拖动。
+    final _ManagementTestApp app = await _pumpManagementApp(tester);
+    // 当前真实壳层的分页控制器，离开一级页面后仍须保留。
+    final PageController controller = tester
+        .widget<PageView>(
+          find.byKey(
+            const ValueKey<String>('android-management-swipe-surface'),
+          ),
+        )
+        .controller!;
+    await tester.tap(
+      find.byKey(const ValueKey<String>('management-section-events')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    // 标签动画已经启动但尚未停在某个分区整数位置。
+    final double movingPage = controller.page!;
+    expect((movingPage - movingPage.round()).abs(), greaterThan(0.01));
+    // 保存这一帧真正选中的分区，离开后不得被旧动画回调改写。
+    final ManagementSection selectedBeforeLeave = app.container.read(
+      managementSectionProvider,
+    );
+    app.container.read(appRouterProvider).go('/settings');
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('navigation-/inventory')),
+    );
+    await tester.pumpAndSettle();
+    // 当前启用分区顺序决定返回时应当落定的整数页。
+    final List<ManagementSection> enabled = enabledManagementSections(
+      app.container.read(featurePreferenceProvider),
+    );
+    expect(_managementPath(app), selectedBeforeLeave.route);
+    expect(
+      controller.page,
+      closeTo(enabled.indexOf(selectedBeforeLeave).toDouble(), 0.001),
+    );
+    expect(controller.position.isScrollingNotifier.value, isFalse);
+
+    app.container.read(appRouterProvider).go('/events');
+    await tester.pumpAndSettle();
+    // 从事件页正文拖动到未过中点的位置，保持手指仍在屏幕上。
+    final Rect bounds = tester.getRect(
+      find.byKey(const ValueKey<String>('android-management-swipe-surface')),
+    );
+    // 路由离开时仍在进行的真实触摸手势。
+    final TestGesture gesture = await tester.startGesture(
+      Offset(bounds.right - 60, bounds.bottom - 180),
+    );
+    await gesture.moveBy(const Offset(-24, 0));
+    await tester.pump();
+    await gesture.moveBy(const Offset(-90, 0));
+    await tester.pump();
+    expect(controller.page, inExclusiveRange(0, 0.5));
+    app.container.read(appRouterProvider).go('/home');
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('navigation-/inventory')),
+    );
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/events');
+    expect(controller.page, closeTo(0, 0.001));
+    expect(controller.position.isScrollingNotifier.value, isFalse);
+
+    // 使用同一真实壳层的零宽保活宿主，显式复现隐藏布局约束。
+    final ValueNotifier<bool> visible = ValueNotifier<bool>(true);
+    addTearDown(visible.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: app.container,
+        child: MaterialApp(
+          theme: AppTheme.build(brightness: Brightness.light),
+          home: Scaffold(
+            body: ValueListenableBuilder<bool>(
+              valueListenable: visible,
+              builder: (BuildContext context, bool shown, Widget? child) =>
+                  Align(
+                    alignment: Alignment.topLeft,
+                    child: Offstage(
+                      offstage: !shown,
+                      child: TickerMode(
+                        enabled: shown,
+                        child: SizedBox(
+                          width: shown ? 390 : 0,
+                          height: 844,
+                          child: child,
+                        ),
+                      ),
+                    ),
+                  ),
+              child: const AndroidManagementShell(
+                selectedSection: ManagementSection.inventory,
+                child: SizedBox.shrink(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 隐藏与显示始终复用同一个分页控制器。
+    final PageController keptController = tester
+        .widget<PageView>(
+          find.byKey(
+            const ValueKey<String>('android-management-swipe-surface'),
+          ),
+        )
+        .controller!;
+    expect(keptController.page, closeTo(2, 0.001));
+    visible.value = false;
+    await tester.pumpAndSettle();
+    expect(keptController.position.viewportDimension, 0);
+    await app.container
+        .read(featurePreferenceProvider.notifier)
+        .setFeatureEnabled(AppFeature.memberships, false);
+    await tester.pumpAndSettle();
+    expect(keptController.position.viewportDimension, 0);
+    visible.value = true;
+    await tester.pumpAndSettle();
+    expect(keptController.position.viewportDimension, 390);
+    expect(keptController.page, closeTo(1, 0.001));
+    expect(
+      find.byKey(const ValueKey<String>('management-section-memberships')),
+      findsNothing,
+    );
+    // 对齐恢复后真实双向横滑须再次更新稳定分区，不能残留 pending 状态。
+    await _dragManagementPage(tester, 260);
+    await tester.pumpAndSettle();
+    expect(keptController.page, closeTo(0, 0.001));
+    expect(
+      app.container.read(managementSectionProvider),
+      ManagementSection.events,
+    );
+    await _dragManagementPage(tester, -260);
+    await tester.pumpAndSettle();
+    expect(keptController.page, closeTo(1, 0.001));
+    expect(
+      app.container.read(managementSectionProvider),
+      ManagementSection.inventory,
+    );
+    expect(tester.takeException(), isNull);
+    await _disposeManagementApp(tester, app);
+  });
+
+  testWidgets('Android 物品拆分按钮保留次要操作并使用底部筛选', (WidgetTester tester) async {
     await _configureAndroidView(tester);
     // 用于验证拆分按钮无障碍语义的句柄。
     final SemanticsHandle semanticsHandle = tester.ensureSemantics();
@@ -673,11 +792,11 @@ void main() {
 
     // Android 物品筛选开关。
     final Finder filterToggle = find.byKey(
-      const ValueKey<String>('inventory-filter-toggle'),
+      const ValueKey<String>('management-filter-button'),
     );
     // Android 物品搜索框。
     final Finder searchField = find.byKey(
-      const ValueKey<String>('inventory-search-field'),
+      const ValueKey<String>('management-search'),
     );
     // Android 物品新增拆分按钮。
     final Finder splitButton = find.byKey(
@@ -704,9 +823,10 @@ void main() {
       find.byKey(const ValueKey<String>('inventory-layout-selector')),
       findsNothing,
     );
-    expect(filterRect.size, const Size.square(OmniSize.touch));
+    expect(filterRect.height, OmniSize.touch);
+    expect(filterRect.width, greaterThanOrEqualTo(OmniSize.touch));
     expect(searchRect.height, OmniSize.touch);
-    expect(searchRect.width, greaterThan(300));
+    expect(searchRect.width, greaterThan(250));
     expect(searchRect.top, closeTo(filterRect.top, 0.1));
     expect(tester.getSize(splitButton).height, OmniSize.touch);
     expect(createButtonRect.height, OmniSize.touch);
@@ -717,7 +837,7 @@ void main() {
     expect(find.bySemanticsLabel(RegExp('更多物品操作')), findsOneWidget);
     _expectManagementScrollableLayout(
       tester,
-      find.byKey(const ValueKey<String>('inventory-card-grid')),
+      find.byKey(const PageStorageKey<String>('inventory-management-list')),
     );
     expect(
       find.byKey(const ValueKey<String>('inventory-move-button')),
@@ -845,62 +965,32 @@ void main() {
     await tester.tap(filterToggle);
     await tester.pumpAndSettle();
 
-    // Android 标签筛选行。
-    final Finder tagFilters = find.byKey(
-      const ValueKey<String>('inventory-tag-filters'),
+    // 标签和位置在底部面板中换行展示，草稿不会即时过滤列表。
+    final Finder filterSheet = find.byKey(
+      const ValueKey<String>('management-filter-sheet'),
     );
-    // Android 位置筛选行。
-    final Finder locationFilters = find.byKey(
-      const ValueKey<String>('inventory-location-filters'),
-    );
-    expect(tester.getSize(tagFilters).height, OmniSize.touch);
-    expect(tester.getSize(locationFilters).height, OmniSize.touch);
-    expect(
-      tester.getRect(locationFilters).top,
-      greaterThan(tester.getRect(tagFilters).bottom),
-    );
-
-    // 当前可见的第一个具体标签筛选项。
-    final Finder firstTagChip = find
-        .descendant(of: tagFilters, matching: find.byType(ChoiceChip))
-        .at(1);
-    await tester.tap(firstTagChip);
+    expect(filterSheet, findsOneWidget);
+    await _tapManagementOption(tester, categories.first);
     await tester.pumpAndSettle();
     expect(
-      find.descendant(of: filterToggle, matching: find.text('1')),
-      findsOneWidget,
+      tester
+          .widget<ManagementSearchToolbar>(
+            find.byType(ManagementSearchToolbar).first,
+          )
+          .filterCount,
+      0,
     );
-
-    // 标签筛选行内的水平滚动区域。
-    final Finder tagScrollable = find.descendant(
-      of: tagFilters,
-      matching: find.byType(Scrollable),
-    );
-    // 位置筛选行内的水平滚动区域。
-    final Finder locationScrollable = find.descendant(
-      of: locationFilters,
-      matching: find.byType(Scrollable),
-    );
-    // 标签横向列表的滚动状态。
-    final ScrollableState tagScrollState = tester.state(tagScrollable);
-    // 位置横向列表的滚动状态。
-    final ScrollableState locationScrollState = tester.state(
-      locationScrollable,
-    );
-    expect(tagScrollState.position.maxScrollExtent, greaterThan(0));
-    expect(locationScrollState.position.maxScrollExtent, greaterThan(0));
-
-    await tester.drag(tagScrollable, const Offset(-500, 0));
+    await tester.tap(find.text('应用'));
     await tester.pumpAndSettle();
-    expect(tagScrollState.position.pixels, greaterThan(0));
+    expect(filterSheet, findsNothing);
     expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/inventory',
+      tester
+          .widget<ManagementSearchToolbar>(
+            find.byType(ManagementSearchToolbar).hitTestable(),
+          )
+          .filterCount,
+      1,
     );
-
-    await tester.drag(locationScrollable, const Offset(-500, 0));
-    await tester.pumpAndSettle();
-    expect(locationScrollState.position.pixels, greaterThan(0));
     expect(
       container.read(appRouterProvider).routeInformationProvider.value.uri.path,
       '/inventory',
@@ -915,7 +1005,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('Android 会员工具栏紧凑排列并支持分类单行横滑', (WidgetTester tester) async {
+  testWidgets('Android 会员工具栏使用底部筛选并保留分类管理', (WidgetTester tester) async {
     await _configureAndroidView(tester);
     SharedPreferences.setMockInitialValues(<String, Object>{
       'appearance.theme_mode': 'light',
@@ -971,117 +1061,60 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
 
-    // Android 会员快捷筛选轨道，初始应随筛选区折叠。
-    final Finder quickFilters = find.byKey(
-      const ValueKey<String>('membership-quick-filters'),
-    );
-    // Android 会员搜索框。
-    final Finder searchField = find.byKey(
-      const ValueKey<String>('membership-search-field'),
-    );
-    // Android 会员筛选开关。
-    final Finder filterToggle = find.byKey(
-      const ValueKey<String>('membership-filter-toggle'),
-    );
-    // Android 会员分类筛选行。
-    final Finder categoryFilters = find.byKey(
-      const ValueKey<String>('membership-category-filters'),
-    );
-    // 搜索框的实际位置。
+    // 搜索靠左，独立筛选按钮在右侧保留完整触区。
+    final Finder searchField = find
+        .byKey(const ValueKey<String>('management-search'))
+        .hitTestable();
+    // 搜索栏右侧的筛选操作。
+    final Finder filterToggle = find
+        .byKey(const ValueKey<String>('management-filter-button'))
+        .hitTestable();
+    // 当前搜索输入的实际边界。
     final Rect searchRect = tester.getRect(searchField);
-    // 筛选开关的实际位置。
+    // 当前筛选按钮的实际边界。
     final Rect filterRect = tester.getRect(filterToggle);
-    // Android 会员新增拆分按钮。
+    // 菜单打开后仍可读取几何的拆分按钮。
     final Finder splitButton = find.byKey(
       const ValueKey<String>('membership-mobile-create-split'),
     );
-    // Android 会员次要操作菜单入口。
-    final Finder moreActionsButton = find.byKey(
-      const ValueKey<String>('membership-mobile-more-actions'),
-    );
-
+    // 分类管理菜单的可触控入口。
+    final Finder moreActionsButton = find
+        .byKey(const ValueKey<String>('membership-mobile-more-actions'))
+        .hitTestable();
     expect(
       find.byKey(const ValueKey<String>('membership-layout-toggle')),
       findsNothing,
     );
-    expect(quickFilters, findsNothing);
-    expect(categoryFilters, findsNothing);
     expect(searchRect.height, OmniSize.touch);
-    expect(filterRect.size, const Size.square(OmniSize.touch));
-    expect(searchRect.top, closeTo(filterRect.top, 0.1));
-    expect(searchRect.width, greaterThan(300));
+    expect(filterRect.height, OmniSize.touch);
+    expect(filterRect.width, greaterThanOrEqualTo(OmniSize.touch));
+    expect(searchRect.right, lessThan(filterRect.left));
     expect(tester.getSize(splitButton).height, OmniSize.touch);
-    expect(
-      tester.getSize(moreActionsButton),
-      const Size.square(OmniSize.touch),
-    );
-    expect(
-      find.byKey(const ValueKey<String>('membership-manage-category')),
-      findsNothing,
-    );
     _expectManagementScrollableLayout(
       tester,
-      find.byKey(const ValueKey<String>('membership-card-grid')),
+      find.byKey(const ValueKey<String>('membership-card-grid')).hitTestable(),
     );
-
     await tester.tap(filterToggle);
     await tester.pumpAndSettle();
-    // 全宽状态轨道的实际位置。
-    final Rect quickRect = tester.getRect(quickFilters);
-    // 分类筛选行的实际位置。
-    final Rect categoryRect = tester.getRect(categoryFilters);
-    expect(quickRect.height, OmniSize.touch);
-    expect(quickRect.width, greaterThan(360));
-    expect(categoryRect.height, OmniSize.touch);
-    expect(quickRect.top, greaterThan(searchRect.bottom));
-    expect(categoryRect.top, greaterThan(quickRect.bottom));
-
-    await tester.tap(
-      find.byKey(const ValueKey<String>('membership-quick-autoRenew')),
-    );
+    await _tapManagementOption(tester, '自动续费');
+    await _tapManagementOption(tester, categories.first);
+    await tester.tap(find.text('应用'));
     await tester.pumpAndSettle();
     expect(
-      find.descendant(of: filterToggle, matching: find.text('1')),
-      findsOneWidget,
+      find.byKey(const ValueKey<String>('management-filter-sheet')),
+      findsNothing,
     );
-
-    // 当前可见的第一个具体分类筛选项。
-    final Finder firstCategoryChip = find
-        .descendant(of: categoryFilters, matching: find.byType(ChoiceChip))
-        .at(1);
-    await tester.tap(firstCategoryChip);
-    await tester.pumpAndSettle();
     expect(
-      find.descendant(of: filterToggle, matching: find.text('2')),
-      findsOneWidget,
+      tester
+          .widget<ManagementSearchToolbar>(
+            find.byType(ManagementSearchToolbar).hitTestable(),
+          )
+          .filterCount,
+      2,
     );
-
-    // 分类筛选行内的水平滚动区域。
-    final Finder categoryScrollable = find.descendant(
-      of: categoryFilters,
-      matching: find.byType(Scrollable),
-    );
-    // 分类横向列表的滚动状态。
-    final ScrollableState categoryScrollState = tester.state(
-      categoryScrollable,
-    );
-    expect(categoryScrollState.position.maxScrollExtent, greaterThan(0));
-
-    await tester.drag(categoryScrollable, const Offset(-500, 0));
-    await tester.pumpAndSettle();
-    expect(categoryScrollState.position.pixels, greaterThan(0));
     expect(
       container.read(appRouterProvider).routeInformationProvider.value.uri.path,
       '/memberships',
-    );
-
-    await tester.tap(filterToggle);
-    await tester.pumpAndSettle();
-    expect(quickFilters, findsNothing);
-    expect(categoryFilters, findsNothing);
-    expect(
-      find.descendant(of: filterToggle, matching: find.text('2')),
-      findsOneWidget,
     );
 
     await tester.tap(moreActionsButton);
@@ -1143,7 +1176,7 @@ void main() {
 
     expect(
       find.byKey(const ValueKey<String>('management-section-inventory')),
-      findsOneWidget,
+      findsNothing,
     );
     expect(
       find.byKey(const ValueKey<String>('management-section-events')),
@@ -1153,12 +1186,12 @@ void main() {
       find.byKey(const ValueKey<String>('management-section-memberships')),
       findsNothing,
     );
-    // 只剩一个管理分区时向左横滑直接接力进入更多页。
+    // 只剩一个管理分区时隐藏标签，横滑仍停留当前管理。
     await _dragManagementPage(tester, -260);
     await tester.pumpAndSettle();
     expect(
       container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/settings',
+      '/inventory',
     );
     expect(tester.takeException(), isNull);
 
@@ -1285,7 +1318,7 @@ Future<void> _configureAndroidView(WidgetTester tester) async {
   addTearDown(() => debugDefaultTargetPlatformOverride = null);
 }
 
-/// 从管理页内容下部执行横向拖动，避开顶部统计轮播。
+/// 从管理页内容下部执行横向拖动，避开顶部摘要和悬浮操作。
 Future<void> _dragManagementPage(WidgetTester tester, double deltaX) async {
   // Android 管理页整页横滑表面。
   final Finder swipeSurface = find.byKey(
@@ -1318,4 +1351,164 @@ void _expectManagementScrollableLayout(WidgetTester tester, Finder scrollable) {
     closeTo(tester.getRect(compactNavigation).top, 0.1),
   );
   expect(contentPadding.bottom, 88);
+}
+
+/// 持有真实管理壳层测试的隔离依赖。
+class _ManagementTestApp {
+  /// 当前测试的依赖容器。
+  final ProviderContainer container;
+
+  /// 当前测试的内存数据库。
+  final AppDatabase database;
+
+  /// 避免成功路径与失败清理重复关闭数据库。
+  bool disposed = false;
+
+  /// 创建管理壳层测试环境。
+  _ManagementTestApp({required this.container, required this.database});
+}
+
+/// 启动三分区均含长列表的真实安卓路由宿主。
+Future<_ManagementTestApp> _pumpManagementApp(WidgetTester tester) async {
+  await _configureAndroidView(tester);
+  SharedPreferences.setMockInitialValues(<String, Object>{
+    'appearance.theme_mode': 'light',
+  });
+  // 当前测试使用的偏好配置。
+  final SharedPreferences preferences = await SharedPreferences.getInstance();
+  // 当前测试独立的内存数据库。
+  final AppDatabase database = AppDatabase.forTesting(NativeDatabase.memory());
+  // 三个业务仓储只写入本测试数据。
+  final EventRepository events = EventRepository(database);
+  // 为会员分区准备独立的长列表。
+  final MembershipRepository memberships = MembershipRepository(database);
+  // 为物品分区准备独立的长列表。
+  final InventoryRepository inventory = InventoryRepository(database);
+  // 每个分区写入十六条可搜索且可滚动的记录。
+  for (int index = 0; index < 16; index++) {
+    await events.save(
+      EventDraft(
+        name: '测试事件 $index',
+        description: '日常维护测试记录',
+        intervalValue: index + 1,
+        intervalUnit: EventIntervalUnit.day,
+      ),
+    );
+    await memberships.save(
+      MembershipDraft(
+        name: '测试会员 $index',
+        category: '测试分类',
+        priceCents: 1200,
+        purchaseDate: DateTime(2026, 9, 1),
+        expirationDate: DateTime(2027, 9, 1),
+        isPermanent: false,
+        autoRenew: false,
+      ),
+    );
+    await inventory.save(
+      InventoryDraft(
+        name: '测试物品 $index',
+        category: '测试分类',
+        quantity: 1,
+        location: '测试位置',
+      ),
+    );
+  }
+  // 固定时间避免统计随实际日期变化。
+  final ProviderContainer container = ProviderContainer(
+    overrides: [
+      sharedPreferencesProvider.overrideWithValue(preferences),
+      appDatabaseProvider.overrideWithValue(database),
+      nowProvider.overrideWithValue(DateTime(2026, 9, 24, 10)),
+    ],
+  );
+  await tester.pumpWidget(
+    UncontrolledProviderScope(
+      container: container,
+      child: const OmniButlerApp(),
+    ),
+  );
+  container.read(appRouterProvider).go('/inventory');
+  await tester.pumpAndSettle();
+  // 同时注册失败路径清理，避免一个失败污染后续用例。
+  final _ManagementTestApp app = _ManagementTestApp(
+    container: container,
+    database: database,
+  );
+  addTearDown(() => _disposeManagementApp(tester, app));
+  return app;
+}
+
+/// 读取真实路由中当前管理地址。
+String _managementPath(_ManagementTestApp app) => app.container
+    .read(appRouterProvider)
+    .routeInformationProvider
+    .value
+    .uri
+    .path;
+
+/// 读取当前列表真实纵向滚动位置。
+double _managementListOffset(WidgetTester tester, String listKey) {
+  // 对应业务列表的唯一纵向滚动状态。
+  final ScrollableState scrollable = tester.state(
+    find
+        .descendant(
+          of: _managementListFinder(listKey),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  return scrollable.position.pixels;
+}
+
+/// 兼容物品分页使用的持久滚动身份。
+Finder _managementListFinder(String listKey) => find.byKey(
+  listKey == 'inventory-management-list'
+      ? PageStorageKey<String>(listKey)
+      : ValueKey<String>(listKey),
+);
+
+/// 验证可见页已收起统计且正文回到原几何位置。
+void _expectManagementCollapsed(WidgetTester tester) {
+  expect(
+    find
+        .byKey(const ValueKey<String>('management-summary-scrim'))
+        .hitTestable(),
+    findsNothing,
+  );
+  // 正文的实际变换在收起状态归零。
+  final Transform translation = tester.widget<Transform>(
+    find
+        .byKey(const ValueKey<String>('management-body-translation'))
+        .hitTestable(),
+  );
+  expect(translation.transform.storage[13], 0);
+}
+
+/// 点击包含可选数量后缀的筛选选项。
+Future<void> _tapManagementOption(WidgetTester tester, String label) async {
+  // 只在底部面板内部寻找业务条件，避免碰到背后的记录文案。
+  final Finder option = find.byWidgetPredicate(
+    (Widget widget) =>
+        widget is ManagementFilterOption &&
+        (widget.label == label || widget.label.startsWith('$label ')),
+  );
+  await tester.ensureVisible(option);
+  await tester.tap(option);
+  await tester.pumpAndSettle();
+}
+
+/// 释放测试容器和原生数据库句柄。
+Future<void> _disposeManagementApp(
+  WidgetTester tester,
+  _ManagementTestApp app,
+) async {
+  if (app.disposed) return;
+  app.disposed = true;
+  await tester.pumpWidget(const SizedBox.shrink());
+  await tester.pump();
+  app.container.dispose();
+  await tester.pump(const Duration(milliseconds: 100));
+  await app.database.close();
+  debugDefaultTargetPlatformOverride = null;
 }

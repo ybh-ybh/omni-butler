@@ -104,8 +104,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(_currentPath(app.container), '/inventory');
 
-    // 通过协调器继续验证完整的正向一级页面顺序。
-    await _swipePrimary(tester, -220);
+    // 管理末页不能横滑进入更多，通过底栏继续一级导航。
+    await _dragNestedPage(
+      tester,
+      'android-management-swipe-surface',
+      -250,
+      1200,
+    );
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/inventory');
+    await tester.tap(
+      find.byKey(const ValueKey<String>('navigation-/settings')),
+    );
+    await tester.pumpAndSettle();
     expect(_currentPath(app.container), '/settings');
     // 更多页到达末端后不会循环回首页。
     await _swipePrimary(tester, -220);
@@ -288,8 +299,8 @@ void main() {
     await _disposePrimaryNavigationApp(tester, app);
   });
 
-  testWidgets('管理连续快滑内部页保持顶部固定并在末页接力一级导航', (WidgetTester tester) async {
-    // 管理继续使用共享分页接力，待办自己的分页不影响此处。
+  testWidgets('管理连续真实快滑保持顶部固定且首尾不接力一级导航', (WidgetTester tester) async {
+    // 管理使用独立原生分页，手势不会越过分区边界。
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
       tester,
     );
@@ -299,19 +310,53 @@ void main() {
     final Rect managementHeader = tester.getRect(
       find.byKey(const ValueKey<String>('management-section-control')),
     );
+    // 两次真实快速滑动在前一吸附尚未完成时接续执行。
     for (final int index in <int>[1, 2]) {
-      _dragNestedPage(
+      await _dragNestedPage(
         tester,
         'android-management-swipe-surface',
-        index == 2 ? -390 : -230,
-        -900,
+        -250,
+        1500,
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
       expect(
-        find.byKey(ValueKey<String>('nested-page-swipe-$index-translation')),
-        findsOneWidget,
+        tester.getRect(
+          find.byKey(const ValueKey<String>('management-section-control')),
+        ),
+        managementHeader,
       );
+      // 当前分页已越过下一页中点，不依赖任何旧手势回调。
+      final PageView pages = tester.widget<PageView>(
+        find.byKey(const ValueKey<String>('android-management-swipe-surface')),
+      );
+      expect(pages.controller!.page, greaterThan(index - 0.5));
+    }
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/inventory');
+    await _dragNestedPage(
+      tester,
+      'android-management-swipe-surface',
+      -250,
+      1500,
+    );
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/inventory');
+    // 反向快速连续切回事件，再从首项右滑仍停留事件。
+    for (final int index in <int>[1, 0]) {
+      await _dragNestedPage(
+        tester,
+        'android-management-swipe-surface',
+        250,
+        1500,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      // 反向分页也应跨过对应分区的中点。
+      final PageView pages = tester.widget<PageView>(
+        find.byKey(const ValueKey<String>('android-management-swipe-surface')),
+      );
+      expect(pages.controller!.page, lessThan(index + 0.5));
       expect(
         tester.getRect(
           find.byKey(const ValueKey<String>('management-section-control')),
@@ -319,9 +364,16 @@ void main() {
         managementHeader,
       );
     }
-    _dragNestedPage(tester, 'android-management-swipe-surface', -230, -900);
     await tester.pumpAndSettle();
-    expect(_currentPath(app.container), '/settings');
+    expect(_currentPath(app.container), '/events');
+    await _dragNestedPage(
+      tester,
+      'android-management-swipe-surface',
+      250,
+      1500,
+    );
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/events');
     expect(tester.takeException(), isNull);
     await _disposePrimaryNavigationApp(tester, app);
   });
@@ -360,33 +412,21 @@ void main() {
   });
 }
 
-/// 通过实际内部手势表面传入固定距离和速度，避免快滑测试的速度估算噪声。
-void _dragNestedPage(
+/// 从列表下部真实甩动，避免直接调用内部手势回调绕开竞争。
+Future<void> _dragNestedPage(
   WidgetTester tester,
   String surfaceKey,
   double distance,
-  double velocity,
-) {
-  // 当前内部页的横滑检测器。
-  final GestureDetector detector = tester.widget<GestureDetector>(
-    find.byKey(ValueKey<String>(surfaceKey)),
+  double speed,
+) async {
+  // 独立管理分页的实际边界。
+  final Rect bounds = tester.getRect(find.byKey(ValueKey<String>(surfaceKey)));
+  // 选择避开摘要、搜索栏和新增按钮的内容区域。
+  final Offset start = Offset(
+    distance < 0 ? bounds.right - 60 : bounds.left + 60,
+    bounds.bottom - 180,
   );
-  detector.onHorizontalDragStart!(
-    DragStartDetails(globalPosition: Offset.zero),
-  );
-  detector.onHorizontalDragUpdate!(
-    DragUpdateDetails(
-      delta: Offset(distance, 0),
-      primaryDelta: distance,
-      globalPosition: Offset.zero,
-    ),
-  );
-  detector.onHorizontalDragEnd!(
-    DragEndDetails(
-      velocity: Velocity(pixelsPerSecond: Offset(velocity, 0)),
-      primaryVelocity: velocity,
-    ),
-  );
+  await tester.flingFrom(start, Offset(distance, 0), speed);
 }
 
 /// 单个全局导航测试持有的依赖容器与内存数据库。

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -227,6 +229,103 @@ class OmniPopupMenuButton<T> extends StatelessWidget {
       child: child,
     );
   }
+}
+
+/// 将整行长按和读屏长按映射到原有操作菜单，不显示更多按钮。
+class OmniContextMenu<T> extends StatefulWidget {
+  /// 保留原点击和滚动行为的记录内容。
+  final Widget child;
+
+  /// 复用业务原有菜单项。
+  final PopupMenuItemBuilder<T> itemBuilder;
+
+  /// 菜单选择后的业务操作。
+  final PopupMenuItemSelected<T> onSelected;
+
+  /// 可选菜单宽度，默认沿用操作菜单尺寸。
+  final BoxConstraints? menuConstraints;
+
+  /// 创建没有可见触发按钮的操作菜单。
+  const OmniContextMenu({
+    required this.child,
+    required this.itemBuilder,
+    required this.onSelected,
+    this.menuConstraints,
+    super.key,
+  });
+
+  /// 创建菜单防重入状态。
+  @override
+  State<OmniContextMenu<T>> createState() => _OmniContextMenuState<T>();
+}
+
+/// 管理指针定位及读屏操作的共用菜单。
+class _OmniContextMenuState<T> extends State<OmniContextMenu<T>> {
+  /// 避免连续长按重复创建菜单路由。
+  bool _menuOpen = false;
+
+  /// 在当前导航覆盖层中按长按位置打开菜单。
+  Future<void> _showContextMenu(Offset globalPosition) async {
+    if (_menuOpen) return;
+    _menuOpen = true;
+    try {
+      // 与原弹出菜单使用同一导航覆盖层。
+      final RenderBox overlay =
+          Navigator.of(context).overlay!.context.findRenderObject()!
+              as RenderBox;
+      // 将屏幕指针位置转换为覆盖层坐标。
+      final Offset position = overlay.globalToLocal(globalPosition);
+      // 取消时为空，仅选择有效操作后调用业务回调。
+      final T? action = await showMenu<T>(
+        context: context,
+        position: RelativeRect.fromRect(
+          position & Size.zero,
+          Offset.zero & overlay.size,
+        ),
+        menuPadding: const EdgeInsets.all(OmniSpacing.xxs),
+        constraints:
+            widget.menuConstraints ??
+            const BoxConstraints(
+              minWidth: OmniDropdownMetrics.actionMenuMinWidth,
+              maxWidth: OmniDropdownMetrics.actionMenuMaxWidth,
+            ),
+        popUpAnimationStyle: OmniMotion.reduce(context)
+            ? AnimationStyle.noAnimation
+            : const AnimationStyle(
+                duration: OmniMotion.fast,
+                reverseDuration: OmniMotion.fast,
+                curve: OmniMotion.standardCurve,
+                reverseCurve: Curves.easeInCubic,
+              ),
+        items: widget.itemBuilder(context),
+      );
+      if (mounted && action != null) widget.onSelected(action);
+    } finally {
+      _menuOpen = false;
+    }
+  }
+
+  /// 读屏长按以当前记录中心定位，无需最后一次触屏坐标。
+  void _showCenteredMenu() {
+    // 当前记录的实际几何区域。
+    final RenderBox box = context.findRenderObject()! as RenderBox;
+    unawaited(
+      _showContextMenu(box.localToGlobal(box.size.center(Offset.zero))),
+    );
+  }
+
+  /// 长按只打开菜单，子控件的正常点按和列表纵滚保持不变。
+  @override
+  Widget build(BuildContext context) => Semantics(
+    onLongPress: _showCenteredMenu,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      excludeFromSemantics: true,
+      onLongPressStart: (LongPressStartDetails details) =>
+          unawaited(_showContextMenu(details.globalPosition)),
+      child: widget.child,
+    ),
+  );
 }
 
 /// 统一的带图标操作菜单项。
