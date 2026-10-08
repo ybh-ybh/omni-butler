@@ -195,3 +195,12 @@
 - Android 紧凑首页设置由侧滑面板改为设置分类二级页，复用通知提醒的居中标题、返回按钮、主题背景和持久底栏；横幅、已添加模块与可添加模块使用统一实底圆角列表及分隔线。名言独立开关、内容排序和功能依赖条件继续沿用 `home.cards.order`，功能管理入口在设置内直接切换分类。
 - 9 个相关测试文件共 **63 项通过**，覆盖 Windows 入口迁移及配置保存、网格缩放/滚动、Android 名言开关与增删、真实连续拖拽与键盘排序、360 小屏 1.5 倍字号明暗主题、系统返回、底栏状态及既有设置分类。仅更新两张受影响的 Windows 首页 Golden；Android 首页 Golden 保持不变。证据：`output/home-settings-final-tests.log`。
 - 全量静态分析、样式检查（43 项既有受控例外）和 `git diff --check` 通过。证据：`output/home-settings-final-analyze.log`、`output/home-settings-final-style.log`。中文业务预览四组生成通过，逐图检查 Windows 首页/首页设置及 Android 首页设置首屏/底部的明暗外观，图片位于 `output/ui-pages-preview/`。本轮未构建或安装运行包，实体设备交互手感未验收。
+
+## 2026-10-08 Android 会员与物品记录布局优化
+
+- 按用户参考图调整Android小于720dp管理记录行：物品图片由64dp增至96dp，名称与浅色状态标签在上方，位置/数量和使用时长/价格分别在底部左右排列；自然行高随内容增加。
+- 会员图标旁分层展示名称、浅色状态标签和中性色分类描述，价格及周期优先在右侧同排；进度条下起始日期、剩余时间和到期日期优先左中右分列。按实际字体宽度判断价格排布，窄屏、长金额及大字号保留完整信息并换行。
+- 保留整行触屏/读屏长按原菜单、原手动续费条件和有配套时的快捷入口；大字号下配套按钮空间不足时换行靠右。桌面、仓储、统计口径及业务回调沿用现状。
+- 37项相关回归通过：6文件27项最终运行、追加1项320dp双倍字号长金额与续费、9项管理导航；覆盖320/360/390dp、短屏、自然增高、旧操作流程与桌面布局。9张管理Golden最终匹配，审查后仅更新会员/物品6张基线，事件3张内容保持相同。证据：output/management-row-layout-{final-tests,long-price-tests,navigation,golden-update}.log。
+- 全量静态分析无问题、样式检查通过（43项既有受控例外）、定向格式和diff检查通过。真实中文明暗预览2项通过，已查看两页明暗常态；图片位于output/ui-pages-preview/android-{light,dark}-390-{memberships,inventory}.png。证据：output/management-row-layout-{analyze,style,preview}.log。本轮未重新打包安装，实体设备与实际TalkBack未复验。
+- 扩展运行还发现设置页的既有“Android 更多页展示分组设置并支持二级返回”测试查找旧group-features标识；HEAD设置页已在首页设置迁移后改为group-home，源码与本轮无关。记录至agent_memory/bugs.md，未修改设置页或其旧测试；其余9项管理导航定向运行通过。

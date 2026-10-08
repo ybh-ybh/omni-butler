@@ -23,7 +23,7 @@ void main() {
     final Finder image = find.byKey(
       ValueKey<String>('inventory-card-image-${fixture.cameraId}'),
     );
-    expect(tester.getSize(image), const Size(64, 64));
+    expect(tester.getSize(image), const Size(96, 96));
     expect(tester.getSize(record).height, greaterThan(104));
     expect(
       find.byKey(const ValueKey<String>('inventory-card-grid')),

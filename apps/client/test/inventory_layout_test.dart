@@ -572,7 +572,7 @@ void main() {
       find.byKey(ValueKey<String>('inventory-usage-$itemId')),
     );
     expect(usageText.style?.fontSize, 12);
-    // Android 行使用 64dp 图片与自然高度内容，不再固定为卡片高度。
+    // Android 行使用 96dp 图片与自然高度内容，不再固定为卡片高度。
     final Finder itemCard = find.byKey(
       ValueKey<String>('inventory-card-$itemId'),
     );
@@ -589,8 +589,33 @@ void main() {
     // 正文区域的边界。
     final Rect contentRect = tester.getRect(itemContent);
     expect(tester.getSize(itemCard).height, greaterThan(104));
-    expect(imageRect.size, const Size(64, 64));
+    expect(imageRect.size, const Size(96, 96));
     expect(imageRect.right, lessThan(contentRect.left));
+    // 名称和图片顶端对齐，底部两组信息共用左右边界。
+    expect(
+      tester
+          .getRect(find.byKey(ValueKey<String>('inventory-name-$itemId')))
+          .top,
+      imageRect.top,
+    );
+    expect(
+      tester
+          .getRect(find.byKey(ValueKey<String>('inventory-location-$itemId')))
+          .left,
+      contentRect.left,
+    );
+    expect(
+      tester
+          .getRect(find.byKey(ValueKey<String>('inventory-quantity-$itemId')))
+          .right,
+      contentRect.right,
+    );
+    expect(
+      tester
+          .getRect(find.byKey(ValueKey<String>('inventory-price-$itemId')))
+          .right,
+      contentRect.right,
+    );
     expect(
       contentRect.contains(tester.getRect(accessoryButton).center),
       isTrue,

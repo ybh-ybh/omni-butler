@@ -239,7 +239,7 @@ void main() {
           expect(_key('inventory-more-button-${section.id}'), findsNothing);
           expect(
             tester.getSize(_key('inventory-card-image-${section.id}')),
-            const Size(64, 64),
+            const Size(96, 96),
           );
           expect(
             find.descendant(of: row, matching: find.byType(OmniPanel)),

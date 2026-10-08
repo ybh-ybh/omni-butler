@@ -2917,150 +2917,194 @@ class _InventoryCard extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Padding(
-                padding: const EdgeInsets.only(top: OmniSpacing.xs),
-                child: ClipRRect(
-                  key: ValueKey<String>('inventory-card-image-${item.id}'),
-                  borderRadius: BorderRadius.circular(OmniRadius.control),
-                  child: SizedBox.square(
-                    dimension: 64,
-                    child: _InventoryImage(
-                      item: item,
-                      colors: colors,
-                      compact: true,
-                    ),
+              ClipRRect(
+                key: ValueKey<String>('inventory-card-image-${item.id}'),
+                borderRadius: BorderRadius.circular(OmniRadius.control),
+                child: SizedBox.square(
+                  dimension: 96,
+                  child: _InventoryImage(
+                    item: item,
+                    colors: colors,
+                    compact: true,
                   ),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Column(
-                  key: ValueKey<String>('inventory-card-content-${item.id}'),
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: OmniSpacing.xs),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 96),
+                  child: Column(
+                    key: ValueKey<String>('inventory-card-content-${item.id}'),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: <Widget>[
+                      _buildHorizontalHeader(
+                        context,
+                        colors: colors,
+                        theme: theme,
+                        accessoryCount: accessoryCount,
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(top: OmniSpacing.sm),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: <Widget>[
+                            OverflowBar(
+                              alignment: MainAxisAlignment.spaceBetween,
+                              spacing: OmniSpacing.sm,
+                              overflowSpacing: OmniSpacing.xxs,
                               children: <Widget>[
                                 Text(
-                                  item.name,
+                                  item.location ?? '未记录位置',
                                   key: ValueKey<String>(
-                                    'inventory-name-${item.id}',
+                                    'inventory-location-${item.id}',
                                   ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: theme.textTheme.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.w700,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: colors.muted,
                                   ),
                                 ),
-                                const SizedBox(height: OmniSpacing.xxs),
-                                Wrap(
+                                Text(
+                                  '数量 ${item.quantity}',
                                   key: ValueKey<String>(
-                                    'inventory-status-row-${item.id}',
+                                    'inventory-quantity-${item.id}',
                                   ),
-                                  spacing: OmniSpacing.xs,
-                                  runSpacing: OmniSpacing.xxs,
-                                  children: <Widget>[
-                                    Text(
-                                      _statusLabel(item.status),
-                                      style: theme.textTheme.bodySmall
-                                          ?.copyWith(
-                                            color: _statusColor(
-                                              colors,
-                                              item.status,
-                                            ),
-                                          ),
-                                    ),
-                                    Text(
-                                      item.category ?? '未分类',
-                                      style: theme.textTheme.bodySmall
-                                          ?.copyWith(color: colors.muted),
-                                    ),
-                                  ],
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: colors.muted,
+                                  ),
                                 ),
                               ],
                             ),
-                          ),
-                        ),
-                        if (accessoryCount > 0)
-                          KeyedSubtree(
-                            key: ValueKey<String>(
-                              'inventory-accessory-count-${item.id}',
-                            ),
-                            child: OmniButton(
-                              key: ValueKey<String>(
-                                'inventory-accessories-button-${item.id}',
+                            const SizedBox(height: OmniSpacing.xxs),
+                            SizedBox(
+                              width: double.infinity,
+                              child: OverflowBar(
+                                spacing: OmniSpacing.sm,
+                                overflowSpacing: OmniSpacing.xxs,
+                                alignment: MainAxisAlignment.spaceBetween,
+                                overflowAlignment: OverflowBarAlignment.end,
+                                children: <Widget>[
+                                  Text(
+                                    usageDuration,
+                                    key: ValueKey<String>(
+                                      'inventory-usage-${item.id}',
+                                    ),
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: colors.muted,
+                                    ),
+                                  ),
+                                  Text(
+                                    price,
+                                    key: ValueKey<String>(
+                                      'inventory-price-${item.id}',
+                                    ),
+                                    style: theme.textTheme.titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                ],
                               ),
-                              label: '配套 $accessoryCount',
-                              variant: OmniButtonVariant.text,
-                              onPressed: onAccessories,
                             ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: OmniSpacing.xs),
-                    Wrap(
-                      spacing: OmniSpacing.sm,
-                      runSpacing: OmniSpacing.xxs,
-                      children: <Widget>[
-                        Text(
-                          item.location ?? '未记录位置',
-                          key: ValueKey<String>(
-                            'inventory-location-${item.id}',
-                          ),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: colors.muted,
-                          ),
+                          ],
                         ),
-                        Text(
-                          '数量 ${item.quantity}',
-                          key: ValueKey<String>(
-                            'inventory-quantity-${item.id}',
-                          ),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: colors.muted,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: OmniSpacing.xxs),
-                    SizedBox(
-                      width: double.infinity,
-                      child: Wrap(
-                        spacing: OmniSpacing.sm,
-                        runSpacing: OmniSpacing.xxs,
-                        alignment: WrapAlignment.spaceBetween,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: <Widget>[
-                          Text(
-                            usageDuration,
-                            key: ValueKey<String>('inventory-usage-${item.id}'),
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: colors.muted,
-                            ),
-                          ),
-                          Text(
-                            price,
-                            key: ValueKey<String>('inventory-price-${item.id}'),
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  /// 配套按钮与名称优先同排，窄屏大字号时移到身份信息下方靠右。
+  Widget _buildHorizontalHeader(
+    BuildContext context, {
+    required OmniColors colors,
+    required ThemeData theme,
+    required int accessoryCount,
+  }) {
+    // 名称与状态共享自然高度，按钮换行时不改变业务内容。
+    final Widget identity = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          item.name,
+          key: ValueKey<String>('inventory-name-${item.id}'),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: OmniSpacing.xxs),
+        Wrap(
+          key: ValueKey<String>('inventory-status-row-${item.id}'),
+          spacing: OmniSpacing.xs,
+          runSpacing: OmniSpacing.xxs,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: <Widget>[
+            OmniTag(
+              label: _statusLabel(item.status),
+              color: _statusColor(colors, item.status),
+            ),
+            Text(
+              item.category ?? '未分类',
+              style: theme.textTheme.bodySmall?.copyWith(color: colors.muted),
+            ),
+          ],
+        ),
+      ],
+    );
+    if (accessoryCount == 0) return identity;
+    // 完整配套文案的文字宽度随系统字号变化。
+    final TextPainter actionPainter = TextPainter(
+      text: TextSpan(
+        text: '配套 $accessoryCount',
+        style: theme.textTheme.labelLarge?.copyWith(
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+      textScaler: MediaQuery.textScalerOf(context),
+      textDirection: Directionality.of(context),
+    )..layout();
+    // 为按钮内边距预留宽度，避免状态标签被压缩溢出。
+    final double actionWidth = actionPainter.width + 32;
+    actionPainter.dispose();
+    // 状态标签与名称至少保留随字号增长的可读宽度。
+    final double identityWidth =
+        MediaQuery.textScalerOf(context).scale(48) + 16;
+    // 配套入口只有存在配套时出现，仍复用原业务回调。
+    final Widget action = KeyedSubtree(
+      key: ValueKey<String>('inventory-accessory-count-${item.id}'),
+      child: OmniButton(
+        key: ValueKey<String>('inventory-accessories-button-${item.id}'),
+        label: '配套 $accessoryCount',
+        variant: OmniButtonVariant.text,
+        onPressed: onAccessories,
+      ),
+    );
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        if (constraints.maxWidth >= actionWidth + identityWidth) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Expanded(child: identity),
+              action,
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            identity,
+            Align(alignment: Alignment.centerRight, child: action),
+          ],
+        );
+      },
     );
   }
 

@@ -2089,6 +2089,37 @@ class _MembershipCard extends ConsumerWidget {
     final String priceLabel =
         '¥ ${(membership.priceCents / 100).toStringAsFixed(2)}'
         '${membership.isPermanent ? ' · ' : ' / '}$billingCycleLabel';
+    // 价格按实际字体与系统字号测量，长金额不会挤掉名称。
+    final TextPainter pricePainter = TextPainter(
+      text: TextSpan(
+        text: priceLabel,
+        style: Theme.of(context).textTheme.titleSmall,
+      ),
+      textScaler: MediaQuery.textScalerOf(context),
+      textDirection: Directionality.of(context),
+    )..layout();
+    // 一行价格需要的完整宽度。
+    final double priceWidth = pricePainter.width;
+    pricePainter.dispose();
+    // 续费按钮留足文字内边距与触控宽度。
+    final double renewalWidth = membership.autoRenew || membership.isPermanent
+        ? 0
+        : MediaQuery.textScalerOf(context).scale(14) * 2 + 32;
+    // 两种排布共享价格内容与稳定标识。
+    final Widget price = Text(
+      priceLabel,
+      key: ValueKey<String>('membership-price-${membership.id}'),
+      style: Theme.of(context).textTheme.titleSmall,
+    );
+    // 沿用手动续费条件及支付表单回调。
+    final Widget? renewal = membership.autoRenew || membership.isPermanent
+        ? null
+        : OmniButton(
+            key: ValueKey<String>('membership-renew-${membership.id}'),
+            label: '续费',
+            variant: OmniButtonVariant.text,
+            onPressed: onRenew,
+          );
     return OmniPanel(
       flat: true,
       padding: const EdgeInsets.symmetric(
@@ -2098,66 +2129,40 @@ class _MembershipCard extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: colors.member.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(OmniRadius.control),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: membership.imageLocalPath == null
-                    ? Icon(Icons.loyalty_rounded, color: colors.member)
-                    : Image.file(
-                        File(membership.imageLocalPath!),
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => Icon(
-                          Icons.broken_image_outlined,
-                          color: colors.muted,
+          LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              // 图标、间距、续费与价格之外，至少保留名称的可读宽度。
+              final bool inlinePrice =
+                  constraints.maxWidth >=
+                  40 + OmniSpacing.sm * 3 + 88 + priceWidth + renewalWidth;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: <Widget>[
+                      Expanded(
+                        child: _buildCompactIdentity(
+                          context,
+                          colors: colors,
+                          statusView: statusView,
+                          detail: detail,
                         ),
                       ),
-              ),
-              const SizedBox(width: OmniSpacing.sm),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      membership.name,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: OmniSpacing.xxs),
-                    Text(
-                      '${statusView.$1} · $detail',
-                      style: Theme.of(context).textTheme.bodySmall
-                          ?.copyWith(color: statusView.$2),
-                    ),
+                      if (inlinePrice) ...<Widget>[
+                        const SizedBox(width: OmniSpacing.sm),
+                        price,
+                      ],
+                      ?renewal,
+                    ],
+                  ),
+                  if (!inlinePrice) ...<Widget>[
+                    const SizedBox(height: OmniSpacing.xs),
+                    Align(alignment: Alignment.centerRight, child: price),
                   ],
-                ),
-              ),
-              if (!membership.autoRenew && !membership.isPermanent)
-                OmniButton(
-                  key: ValueKey<String>('membership-renew-${membership.id}'),
-                  label: '续费',
-                  variant: OmniButtonVariant.text,
-                  onPressed: onRenew,
-                ),
-            ],
-          ),
-          const SizedBox(height: OmniSpacing.xs),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: Text(
-                  priceLabel,
-                  key: ValueKey<String>('membership-price-${membership.id}'),
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
-              ),
-            ],
+                ],
+              );
+            },
           ),
           const SizedBox(height: OmniSpacing.xs),
           _MembershipExpirationTimeline(
@@ -2172,6 +2177,66 @@ class _MembershipCard extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+
+  /// 将会员名称、状态与分类组织为图标旁的两层信息。
+  Widget _buildCompactIdentity(
+    BuildContext context, {
+    required OmniColors colors,
+    required (String, Color) statusView,
+    required String detail,
+  }) {
+    return Row(
+      key: ValueKey<String>('membership-identity-${membership.id}'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: colors.member.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(OmniRadius.control),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: membership.imageLocalPath == null
+              ? Icon(Icons.loyalty_rounded, color: colors.member)
+              : Image.file(
+                  File(membership.imageLocalPath!),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) =>
+                      Icon(Icons.broken_image_outlined, color: colors.muted),
+                ),
+        ),
+        const SizedBox(width: OmniSpacing.sm),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                membership.name,
+                key: ValueKey<String>('membership-name-${membership.id}'),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: OmniSpacing.xxs),
+              Wrap(
+                spacing: OmniSpacing.xs,
+                runSpacing: OmniSpacing.xxs,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[
+                  OmniTag(label: statusView.$1, color: statusView.$2),
+                  Text(
+                    detail,
+                    key: ValueKey<String>('membership-detail-${membership.id}'),
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: colors.muted),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -2375,9 +2440,10 @@ class _MembershipExpirationTimeline extends StatelessWidget {
         ),
         SizedBox(height: compact ? 2 : OmniSpacing.xxs),
         if (compact)
-          Wrap(
+          OverflowBar(
+            alignment: MainAxisAlignment.spaceBetween,
             spacing: OmniSpacing.sm,
-            runSpacing: OmniSpacing.xxs,
+            overflowSpacing: OmniSpacing.xxs,
             children: <Widget>[
               Text(
                 '${startsFromRenewal ? '续费' : '购买'} '

@@ -14,6 +14,86 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 验证会员移动布局的数据口径、筛选事务和自然字号排版。
 void main() {
+  testWidgets('会员价格与名称同排，状态分类分色且日期在进度条下分列', (WidgetTester tester) async {
+    // 普通字号下读取真实会员布局，而非模拟行组件。
+    final _MembershipFixture fixture = await _pumpMemberships(
+      tester,
+      size: const Size(440, 844),
+    );
+    // 左侧身份信息区域与右侧价格的边界。
+    final Rect identity = tester.getRect(
+      _key('membership-identity-${fixture.firstId}'),
+    );
+    // 同排价格应处于身份信息高度内。
+    final Rect price = tester.getRect(
+      _key('membership-price-${fixture.firstId}'),
+    );
+    expect(price.left, greaterThan(identity.right));
+    expect(price.center.dy, inInclusiveRange(identity.top, identity.bottom));
+    // 分类描述使用中性色，状态单独使用带浅色底的标签。
+    final Finder detail = _key('membership-detail-${fixture.firstId}');
+    expect(
+      tester.widget<Text>(detail).style?.color,
+      OmniColors.of(tester.element(detail)).muted,
+    );
+    expect(
+      find.descendant(
+        of: _key('membership-card-${fixture.firstId}'),
+        matching: find.byType(OmniTag),
+      ),
+      findsOneWidget,
+    );
+    // 三段日期说明在进度条下共享一行且占据左、中、右位置。
+    final Rect start = tester.getRect(find.text('购买 2026-09-01'));
+    // 当前会员的剩余时长文字。
+    final Rect remaining = tester.getRect(
+      find.descendant(
+        of: _key('membership-timeline-${fixture.firstId}'),
+        matching: find.textContaining('剩余'),
+      ),
+    );
+    // 到期日期保持靠右，完整金额与日期不截断。
+    final Rect expiration = tester.getRect(find.text('到期 2027-09-01'));
+    expect(start.top, remaining.top);
+    expect(expiration.top, remaining.top);
+    expect(start.right, lessThan(remaining.left));
+    expect(remaining.right, lessThan(expiration.left));
+    expect(start.left, 16);
+    expect(expiration.right, 424);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('320dp双倍字号下长金额完整换行且续费入口仍可点击', (WidgetTester tester) async {
+    // 长金额使用真实保存记录，验证宽度测量后的换行分支。
+    final _MembershipFixture fixture = await _pumpMemberships(
+      tester,
+      size: const Size(320, 844),
+      textScale: 2,
+      manualPriceCents: 12345678900,
+    );
+    await tester.enterText(_searchField(), '音乐');
+    await tester.pumpAndSettle();
+    // 完整金额位于身份信息下方，不超过记录的左右留白。
+    final Finder price = _key('membership-price-${fixture.manualId}');
+    // 自然换行后的价格几何。
+    final Rect priceRect = tester.getRect(price);
+    expect(tester.widget<Text>(price).data, contains('123456789.00'));
+    expect(priceRect.left, greaterThanOrEqualTo(16));
+    expect(priceRect.right, lessThanOrEqualTo(304));
+    expect(
+      priceRect.top,
+      greaterThanOrEqualTo(
+        tester.getRect(_key('membership-identity-${fixture.manualId}')).bottom,
+      ),
+    );
+    expect(priceRect.height, greaterThan(42));
+    expect(tester.takeException(), isNull);
+    await tester.tap(_key('membership-renew-${fixture.manualId}'));
+    await tester.pumpAndSettle();
+    expect(find.text('新增支付记录'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('会员摘要保持全量口径，完整统计保留支出趋势和续费', (WidgetTester tester) async {
     await _pumpMemberships(tester);
     expect(find.text('本月 ¥96.00', findRichText: true), findsOneWidget);
@@ -99,6 +179,20 @@ void main() {
     expect(panel.flat, isTrue);
     expect(find.text('购买 2026-09-01'), findsOneWidget);
     expect(find.text('到期 2027-09-01'), findsOneWidget);
+    // 大字号自动将价格移到身份信息下方，日期按完整内容换行。
+    final Rect identity = tester.getRect(
+      _key('membership-identity-${fixture.firstId}'),
+    );
+    // 完整价格不挤占两层身份信息。
+    final Rect price = tester.getRect(
+      _key('membership-price-${fixture.firstId}'),
+    );
+    expect(price.top, greaterThanOrEqualTo(identity.bottom));
+    expect(price.right, lessThanOrEqualTo(374));
+    expect(
+      tester.getRect(find.text('到期 2027-09-01')).top,
+      greaterThan(tester.getRect(find.text('购买 2026-09-01')).top),
+    );
     // 移动行不显示更多按钮，长按操作覆盖整条记录。
     final Finder menu = find.descendant(
       of: firstCard,
@@ -211,11 +305,13 @@ class _MembershipFixture {
 /// 使用真实内存仓储和独立页面验证会员移动视图。
 Future<_MembershipFixture> _pumpMemberships(
   WidgetTester tester, {
+  Size size = const Size(390, 844),
   double textScale = 1,
+  int manualPriceCents = 1800,
   bool paymentError = false,
   bool paymentLoading = false,
 }) async {
-  tester.view.physicalSize = const Size(390, 844);
+  tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
@@ -242,7 +338,7 @@ Future<_MembershipFixture> _pumpMemberships(
     MembershipDraft(
       name: '音乐会员',
       category: '影音娱乐',
-      priceCents: 1800,
+      priceCents: manualPriceCents,
       purchaseDate: DateTime(2026, 8, 1),
       expirationDate: DateTime(2027, 8, 1),
       isPermanent: false,
