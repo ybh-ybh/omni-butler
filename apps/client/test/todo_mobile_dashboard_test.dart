@@ -19,6 +19,54 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证真实待办页面的视口、分页恢复与手势接管。
 void main() {
+  _todoTest('新增与象限入口使用全屏待办并保留象限预填', (WidgetTester tester) async {
+    // 完整应用和真实仓储提供待办页的业务入口。
+    final _TodoFixture fixture = await _startTodos(tester);
+    // 两次取消均不应改变现有任务数量。
+    final int initialCount =
+        (await fixture.container
+                .read(appDatabaseProvider)
+                .select(fixture.container.read(appDatabaseProvider).todoItems)
+                .get())
+            .length;
+    await tester.tap(find.byKey(const ValueKey<String>('todo-mobile-create')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-android-editor')),
+      findsOneWidget,
+    );
+    expect(
+      tester.getSize(find.byType(Dialog)),
+      tester.view.physicalSize / tester.view.devicePixelRatio,
+    );
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('todo-mobile-quadrant-1')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('todo-quadrant-create-1')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('紧急·不重要'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('todo-priority-dropdown')),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(
+      (await fixture.container
+              .read(appDatabaseProvider)
+              .select(fixture.container.read(appDatabaseProvider).todoItems)
+              .get())
+          .length,
+      initialCount,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   _todoTest('隐藏待办从零宽恢复后不会继续执行过期标签滚动', (WidgetTester tester) async {
     // 模拟Android引擎在真实尺寸到达前预载隐藏待办。
     await tester.pumpWidget(_startupDashboard(width: 0, visible: false));

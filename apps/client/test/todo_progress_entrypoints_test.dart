@@ -469,6 +469,13 @@ void main() {
           await tester.tap(find.text('编辑'));
           await tester.pumpAndSettle();
           expect(find.byType(TodoEditorDialog), findsOneWidget);
+          if (platform == TargetPlatform.android) {
+            // 主任务菜单编辑使用覆盖根导航的全屏表单。
+            expect(
+              find.byKey(const ValueKey<String>('todo-android-editor')),
+              findsOneWidget,
+            );
+          }
           await tester.tap(find.text('取消'));
           await tester.pumpAndSettle();
           await _openTaskMenu(tester, childTitle, platform);
@@ -486,6 +493,13 @@ void main() {
           await tester.tap(find.text('编辑'));
           await tester.pumpAndSettle();
           expect(find.byType(TodoEditorDialog), findsOneWidget);
+          if (platform == TargetPlatform.android) {
+            // 进度任务菜单编辑与普通任务采用同一个安卓壳体。
+            expect(
+              find.byKey(const ValueKey<String>('todo-android-editor')),
+              findsOneWidget,
+            );
+          }
           await tester.tap(find.text('取消'));
           await tester.pumpAndSettle();
           await tester.tap(

@@ -440,6 +440,11 @@ Future<TodoRecord> _createScheduledTodo(
 
 /// 展开时间设置前先滚动到实际标题位置。
 Future<void> _expandTimeSettings(WidgetTester tester) async {
+  // 安卓编辑既有时间时默认展开，不重复点击将其收起。
+  final ExpansionTile settings = tester.widget<ExpansionTile>(
+    find.byKey(const ValueKey<String>('todo-time-settings')),
+  );
+  if (settings.controller?.isExpanded == true) return;
   await tester.ensureVisible(find.text('时间设置'));
   await tester.tap(find.text('时间设置'));
   await tester.pumpAndSettle();

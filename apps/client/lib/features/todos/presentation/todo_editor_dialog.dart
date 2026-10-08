@@ -44,17 +44,25 @@ class TodoEditorDialog extends ConsumerStatefulWidget {
     TodoPriorityQuadrant initialPriorityQuadrant =
         TodoPriorityQuadrant.importantNotUrgent,
   }) {
-    return showOmniSideSheet<bool>(
-      context,
-      builder: (BuildContext context) {
-        return TodoEditorDialog(
-          record: record,
-          parent: parent,
-          initialDate: initialDate,
-          initialPriorityQuadrant: initialPriorityQuadrant,
-        );
-      },
+    // 安卓所有待办编辑入口共用覆盖根导航的全屏路由。
+    final bool android = Theme.of(context).platform == TargetPlatform.android;
+    // 两个平台保留同一组参数和业务编辑状态。
+    Widget buildEditor(BuildContext context) => TodoEditorDialog(
+      record: record,
+      parent: parent,
+      initialDate: initialDate,
+      initialPriorityQuadrant: initialPriorityQuadrant,
     );
+    if (android) {
+      return showOmniDialog<bool>(
+        context: context,
+        fullscreenDialog: true,
+        useSafeArea: false,
+        barrierDismissible: false,
+        builder: buildEditor,
+      );
+    }
+    return showOmniSideSheet<bool>(context, builder: buildEditor);
   }
 
   /// 创建待办编辑状态。
@@ -161,6 +169,24 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
   /// 表单校验键。
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
+  /// 校验失败时定位标题输入区。
+  final GlobalKey _titleFieldKey = GlobalKey();
+
+  /// 进度输入错误的可见定位点。
+  final GlobalKey _progressSettingsKey = GlobalKey();
+
+  /// 保存错误的可见定位点。
+  final GlobalKey _saveErrorKey = GlobalKey();
+
+  /// 校验时间失败时主动展开时间设置。
+  final ExpansibleController _timeSettingsExpansion = ExpansibleController();
+
+  /// 描述折叠只改变呈现，不丢弃输入内容。
+  bool _descriptionExpanded = false;
+
+  /// 初次挂载时按平台设置展开状态，后续主题切换不覆盖用户操作。
+  bool _presentationInitialized = false;
+
   /// 标题输入控制器。
   late final TextEditingController _titleController;
 
@@ -228,6 +254,9 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
   /// 是否正在保存。
   bool _saving = false;
 
+  /// 成功解锁到路由退出之间仍阻止再次提交。
+  bool _saved = false;
+
   /// 初始化编辑表单。
   @override
   void initState() {
@@ -266,6 +295,22 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
     );
     _dueAt = record?.dueAt;
     _reminderAt = record?.reminderAt;
+    _descriptionExpanded = _descriptionController.text.isNotEmpty;
+  }
+
+  /// 安卓编辑已有时间设置时直接展开，桌面沿用原有默认折叠状态。
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_presentationInitialized) return;
+    _presentationInitialized = true;
+    if (_isAndroid && widget.record != null) {
+      _timeSettingsExpanded =
+          _dueAt != null ||
+          _reminderAt != null ||
+          (_taskType == TodoTaskType.normal &&
+              _repeatRule != TodoRepeatRule.none);
+    }
   }
 
   /// 释放文本输入控制器。
@@ -277,6 +322,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
     _stepCountController.dispose();
     _progressListExpansion.dispose();
     _progressListScroll.dispose();
+    _timeSettingsExpansion.dispose();
     for (final _EditableProgressStep step in _progressSteps) {
       step.dispose();
     }
@@ -294,6 +340,10 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
     // 当前是否新增或编辑子任务。
     final bool isChild =
         widget.parent != null || widget.record?.parentId != null;
+
+    if (_isAndroid) {
+      return _buildAndroidEditor(isEditing: isEditing, isChild: isChild);
+    }
 
     return OmniSideSheetScaffold(
       onWindowsEnter: _saving || _loadingSteps || _stepsLoadFailed
@@ -361,6 +411,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
                 const SizedBox(height: OmniSpacing.md),
               ],
               OmniTextFormField(
+                key: _titleFieldKey,
                 controller: _titleController,
                 autofocus: true,
                 maxLength: 200,
@@ -420,6 +471,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
               const SizedBox(height: OmniSpacing.xl),
               if (_saveError != null)
                 Text(
+                  key: _saveErrorKey,
                   _saveError!,
                   style: TextStyle(color: OmniColors.of(context).danger),
                 ),
@@ -427,6 +479,369 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
           ),
         ),
       ),
+    );
+  }
+
+  /// 按实际平台选择全屏表单，不将安卓宽屏降为桌面侧栏。
+  bool get _isAndroid => Theme.of(context).platform == TargetPlatform.android;
+
+  /// 沿用补记的无边框分组输入，保留表单校验与触控高度。
+  static const InputDecoration _groupedInputDecoration = InputDecoration(
+    filled: false,
+    contentPadding: EdgeInsets.symmetric(vertical: OmniSpacing.sm),
+    border: InputBorder.none,
+    enabledBorder: InputBorder.none,
+    focusedBorder: InputBorder.none,
+    disabledBorder: InputBorder.none,
+    errorBorder: InputBorder.none,
+    focusedErrorBorder: InputBorder.none,
+  );
+
+  /// 构建固定顶栏与独立滚动正文的安卓全屏编辑器。
+  Widget _buildAndroidEditor({required bool isEditing, required bool isChild}) {
+    // 当前主题的背景和文字语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 编辑器的业务标题与原有入口保持一致。
+    final String title = isEditing
+        ? (isChild ? '编辑子任务' : '编辑待办')
+        : (isChild ? '新增子任务' : '新增待办');
+    // 两侧操作等宽，包含保存加载图标所需空间，保证标题始终居中。
+    final TextPainter actionMeasure = TextPainter(
+      text: TextSpan(
+        text: '取消',
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(fontSize: 14),
+      ),
+      textScaler: MediaQuery.textScalerOf(context),
+      textDirection: Directionality.of(context),
+    )..layout();
+    // 常态与保存中使用同一列宽，不因加载状态移动标题。
+    final double actionWidth =
+        actionMeasure.width.ceilToDouble() +
+        OmniSpacing.md * 2 +
+        OmniSpacing.xs +
+        OmniSize.icon;
+    actionMeasure.dispose();
+
+    return PopScope(
+      canPop: !_saving,
+      child: Dialog.fullscreen(
+        key: const ValueKey<String>('todo-android-editor'),
+        backgroundColor: colors.canvas,
+        child: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+                child: Row(
+                  children: <Widget>[
+                    SizedBox(
+                      width: actionWidth,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: OmniButton(
+                          label: '取消',
+                          variant: OmniButtonVariant.text,
+                          onPressed: _saving
+                              ? null
+                              : () => Navigator.pop(context, false),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Semantics(
+                        namesRoute: true,
+                        header: true,
+                        child: Text(
+                          title,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: actionWidth,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: OmniButton(
+                          key: const ValueKey<String>('todo-android-submit'),
+                          label: '保存',
+                          visualHeight: OmniSize.control,
+                          loading: _saving,
+                          onPressed:
+                              _saving || _loadingSteps || _stepsLoadFailed
+                              ? null
+                              : _save,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: AbsorbPointer(
+                  absorbing: _saving,
+                  child: SingleChildScrollView(
+                    key: const ValueKey<String>('todo-android-body'),
+                    padding: const EdgeInsets.all(OmniSpacing.md),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: <Widget>[
+                          if (!isChild && !isEditing) ...<Widget>[
+                            _buildTaskTypeControl(),
+                            const SizedBox(height: OmniSpacing.lg),
+                          ],
+                          if (isChild) ...<Widget>[
+                            Text(
+                              widget.parent == null
+                                  ? '计划日期和象限跟随主任务。'
+                                  : '所属主任务：${widget.parent!.title}；计划日期和象限跟随主任务。',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: colors.muted),
+                            ),
+                            const SizedBox(height: OmniSpacing.lg),
+                          ],
+                          _buildAndroidDetails(
+                            isEditing: isEditing,
+                            isChild: isChild,
+                          ),
+                          if (!isChild) ...<Widget>[
+                            const SizedBox(height: OmniSpacing.lg),
+                            _buildAndroidSchedule(),
+                          ],
+                          if (_taskType == TodoTaskType.progress) ...<Widget>[
+                            const SizedBox(height: OmniSpacing.lg),
+                            _buildProgressSettings(),
+                          ],
+                          const SizedBox(height: OmniSpacing.lg),
+                          _buildTimeSettings(isChild: isChild),
+                          if (_saveError != null) ...<Widget>[
+                            const SizedBox(height: OmniSpacing.sm),
+                            Text(
+                              _saveError!,
+                              key: _saveErrorKey,
+                              style: TextStyle(color: colors.danger),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 主任务的新建类型使用原有分段控件与切换规则。
+  Widget _buildTaskTypeControl() {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) =>
+          OmniSlidingSegmentedControl<TodoTaskType>(
+            key: const ValueKey<String>('todo-task-type'),
+            options: TodoTaskType.values,
+            selected: _taskType,
+            width: constraints.maxWidth,
+            labelBuilder: (TodoTaskType type) =>
+                type == TodoTaskType.progress ? '进度任务' : '普通任务',
+            onChanged: (TodoTaskType type) {
+              if (_saving) return;
+              setState(() {
+                _taskType = type;
+                if (type == TodoTaskType.progress) {
+                  _repeatRule = TodoRepeatRule.none;
+                }
+              });
+            },
+          ),
+    );
+  }
+
+  /// 使用与补记相同的无阴影实底分组容器。
+  Widget _buildAndroidGroup({required Widget child, Key? key}) {
+    return Material(
+      key: key,
+      color: OmniColors.of(context).paper,
+      borderRadius: BorderRadius.circular(OmniRadius.panel),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
+        child: child,
+      ),
+    );
+  }
+
+  /// 内容卡片包含标题、只读类型以及保留草稿的可折叠描述。
+  Widget _buildAndroidDetails({
+    required bool isEditing,
+    required bool isChild,
+  }) {
+    return _buildAndroidGroup(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Semantics(
+            label: '标题，必填',
+            child: OmniTextFormField(
+              key: _titleFieldKey,
+              controller: _titleController,
+              maxLength: 200,
+              textInputAction: TextInputAction.done,
+              decoration: _groupedInputDecoration.copyWith(
+                hintText: '例如：整理本周发票',
+                counterText: '',
+              ),
+              validator: (String? value) =>
+                  value == null || value.trim().isEmpty ? '请输入待办标题' : null,
+            ),
+          ),
+          if (isEditing && !isChild) ...<Widget>[
+            const Divider(height: 1),
+            _buildGroupedRow(
+              label: '任务类型',
+              child: Text(_taskType == TodoTaskType.progress ? '进度任务' : '普通任务'),
+            ),
+          ],
+          const Divider(height: 1),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Semantics(
+              expanded: _descriptionExpanded,
+              child: OmniButton(
+                key: const ValueKey<String>('todo-description-toggle'),
+                label: _descriptionExpanded ? '收起描述' : '描述（可选）',
+                icon: _descriptionExpanded
+                    ? Icons.expand_less_rounded
+                    : Icons.expand_more_rounded,
+                variant: OmniButtonVariant.text,
+                onPressed: _saving
+                    ? null
+                    : () => setState(
+                        () => _descriptionExpanded = !_descriptionExpanded,
+                      ),
+              ),
+            ),
+          ),
+          if (_descriptionExpanded)
+            OmniTextFormField(
+              key: const ValueKey<String>('todo-description-input'),
+              controller: _descriptionController,
+              maxLines: 3,
+              decoration: _groupedInputDecoration.copyWith(hintText: '补充任务说明'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 计划日期和优先象限始终直接可见，避免常用安排藏在时间折叠区。
+  Widget _buildAndroidSchedule() {
+    // 象限图标和文字使用同一语义颜色，选择状态由统一菜单表达。
+    final OmniColors colors = OmniColors.of(context);
+    return _buildAndroidGroup(
+      child: Column(
+        children: <Widget>[
+          _buildGroupedRow(label: '计划日期', child: _buildScheduledDateControl()),
+          const Divider(height: 1),
+          _buildGroupedRow(
+            label: '优先象限',
+            child: OmniDropdownButtonFormField<TodoPriorityQuadrant>(
+              key: const ValueKey<String>('todo-priority-dropdown'),
+              initialValue: _priorityQuadrant,
+              decoration: _groupedInputDecoration,
+              selectionIndicatorPosition:
+                  OmniDropdownSelectionIndicatorPosition.trailing,
+              items: <DropdownMenuItem<TodoPriorityQuadrant>>[
+                // 菜单顺序沿用现有四象限矩阵。
+                for (final TodoPriorityQuadrant quadrant
+                    in todoPriorityQuadrantMatrixOrder)
+                  DropdownMenuItem<TodoPriorityQuadrant>(
+                    value: quadrant,
+                    child: Row(
+                      children: <Widget>[
+                        Icon(
+                          quadrant.icon,
+                          color: quadrant.color(colors),
+                          size: OmniSize.icon,
+                        ),
+                        const SizedBox(width: OmniSpacing.xs),
+                        Flexible(child: Text(quadrant.label)),
+                      ],
+                    ),
+                  ),
+              ],
+              onChanged: (TodoPriorityQuadrant? value) {
+                if (value != null && !_saving) {
+                  setState(() => _priorityQuadrant = value);
+                }
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 分组行在正常字号下横排，大字号或窄屏时标签置顶。
+  Widget _buildGroupedRow({required String label, required Widget child}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: OmniSpacing.xs),
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          // 放大文字需要完整控件宽度，避免象限和日期被挤压。
+          final bool stacked =
+              constraints.maxWidth < 280 ||
+              MediaQuery.textScalerOf(context).scale(14) > 21;
+          if (stacked) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Text(label),
+                const SizedBox(height: OmniSpacing.xs),
+                child,
+              ],
+            );
+          }
+          return Row(
+            children: <Widget>[
+              Text(label),
+              const SizedBox(width: OmniSpacing.xl),
+              Expanded(child: child),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// 两种布局共用计划日期输入，不改变日期初值与范围。
+  Widget _buildScheduledDateControl() => OmniDatePickerButton(
+    value: _scheduledDate,
+    initialDate: _scheduledDate,
+    firstDate: DateTime(2000),
+    lastDate: DateTime(2100),
+    label: _timeDateLabel(_scheduledDate),
+    icon: null,
+    onChanged: (DateTime selected) => setState(() => _scheduledDate = selected),
+  );
+
+  /// 让提交错误对应的字段或提示进入滚动视口。
+  Future<void> _revealError(GlobalKey key) async {
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    // 控件展开和校验渲染完成后才读取实际挂载位置。
+    final BuildContext? target = key.currentContext;
+    if (target == null || !target.mounted) return;
+    await Scrollable.ensureVisible(
+      target,
+      alignment: 0.2,
+      duration: OmniMotion.duration(context, OmniMotion.panel),
+      curve: OmniMotion.standardCurve,
     );
   }
 
@@ -477,64 +892,74 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
     // 加载、错误和提交期间禁止修改结构。
     final bool enabled =
         !_saving && !_loadingSteps && !_stepsLoadFailed && !readOnly;
-    return OmniPanel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Text('进度设置', style: Theme.of(context).textTheme.titleSmall),
-          if (readOnly) ...<Widget>[
-            const SizedBox(height: OmniSpacing.xs),
-            Text(
-              '任务已完成，重新打开后才能修改步骤。',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-          const SizedBox(height: OmniSpacing.sm),
-          _buildProgressBasics(enabled: enabled),
-          if (_progressError != null) ...<Widget>[
-            const SizedBox(height: OmniSpacing.xs),
-            Text(
-              _progressError!,
-              style: TextStyle(color: OmniColors.of(context).danger),
-            ),
-            if (_progressSteps.isEmpty && widget.record != null)
-              OmniButton(
-                label: '重新读取步骤',
-                variant: OmniButtonVariant.text,
-                onPressed: _loadingSteps
-                    ? null
-                    : () {
-                        setState(() => _loadingSteps = true);
-                        _loadProgressSteps();
-                      },
-              ),
-          ],
-          if (_loadingSteps) const Text('正在读取步骤…'),
-          const SizedBox(height: OmniSpacing.sm),
-          ExpansionTile(
-            key: const ValueKey<String>('todo-progress-step-names'),
-            controller: _progressListExpansion,
-            initiallyExpanded: widget.record != null,
-            tilePadding: EdgeInsets.zero,
-            shape: const Border(),
-            collapsedShape: const Border(),
-            title: Text('步骤列表 · ${_progressSteps.length} 项'),
-            children: <Widget>[_buildProgressStepList(enabled: enabled)],
-          ),
+    // 步骤业务输入共用，仅切换外围分组的视觉外壳。
+    final Widget content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Text('进度设置', style: Theme.of(context).textTheme.titleSmall),
+        if (readOnly) ...<Widget>[
           const SizedBox(height: OmniSpacing.xs),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OmniButton(
-              label: '添加步骤',
-              icon: Icons.add_rounded,
-              variant: OmniButtonVariant.text,
-              onPressed: enabled && _progressSteps.length < 1000
-                  ? _addProgressStep
-                  : null,
-            ),
+          Text(
+            '任务已完成，重新打开后才能修改步骤。',
+            style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
-      ),
+        const SizedBox(height: OmniSpacing.sm),
+        _buildProgressBasics(enabled: enabled),
+        if (_progressError != null) ...<Widget>[
+          const SizedBox(height: OmniSpacing.xs),
+          Text(
+            _progressError!,
+            style: TextStyle(color: OmniColors.of(context).danger),
+          ),
+          if (_progressSteps.isEmpty && widget.record != null)
+            OmniButton(
+              label: '重新读取步骤',
+              variant: OmniButtonVariant.text,
+              onPressed: _loadingSteps
+                  ? null
+                  : () {
+                      setState(() => _loadingSteps = true);
+                      _loadProgressSteps();
+                    },
+            ),
+        ],
+        if (_loadingSteps) const Text('正在读取步骤…'),
+        const SizedBox(height: OmniSpacing.sm),
+        ExpansionTile(
+          key: const ValueKey<String>('todo-progress-step-names'),
+          controller: _progressListExpansion,
+          initiallyExpanded: widget.record != null,
+          tilePadding: EdgeInsets.zero,
+          shape: const Border(),
+          collapsedShape: const Border(),
+          title: Text('步骤列表 · ${_progressSteps.length} 项'),
+          children: <Widget>[_buildProgressStepList(enabled: enabled)],
+        ),
+        const SizedBox(height: OmniSpacing.xs),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OmniButton(
+            label: '添加步骤',
+            icon: Icons.add_rounded,
+            variant: OmniButtonVariant.text,
+            onPressed: enabled && _progressSteps.length < 1000
+                ? _addProgressStep
+                : null,
+          ),
+        ),
+      ],
+    );
+    return KeyedSubtree(
+      key: _progressSettingsKey,
+      child: _isAndroid
+          ? _buildAndroidGroup(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: OmniSpacing.md),
+                child: content,
+              ),
+            )
+          : OmniPanel(child: content),
     );
   }
 
@@ -1089,7 +1514,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
   String _timeSettingsSummary({required bool isChild}) {
     // 只汇总当前任务可设置且已有值的字段。
     final List<String> parts = <String>[
-      if (!isChild) '计划 ${_timeDateLabel(_scheduledDate)}',
+      if (!isChild && !_isAndroid) '计划 ${_timeDateLabel(_scheduledDate)}',
       if (_dueAt != null)
         '截止 ${_timeDateLabel(_dueAt!)} ${DateFormat('HH:mm').format(_dueAt!)}',
       if (_reminderAt != null)
@@ -1104,101 +1529,95 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
 
   /// 以统一外置标签组织计划日期、截止、提醒和重复。
   Widget _buildTimeSettings({required bool isChild}) {
+    // 安卓时间卡只放高级设置；桌面保留原有字段组织方式。
+    final Widget content = ExpansionTile(
+      key: const ValueKey<String>('todo-time-settings'),
+      controller: _timeSettingsExpansion,
+      initiallyExpanded: _timeSettingsExpanded,
+      onExpansionChanged: (bool expanded) {
+        setState(() => _timeSettingsExpanded = expanded);
+      },
+      leading: const Icon(Icons.schedule_outlined),
+      title: const Text('时间设置'),
+      subtitle: _timeSettingsExpanded
+          ? null
+          : Text(
+              _timeSettingsSummary(isChild: isChild),
+              maxLines: _isAndroid ? null : 1,
+              overflow: _isAndroid ? null : TextOverflow.ellipsis,
+            ),
+      shape: _isAndroid ? const Border() : null,
+      collapsedShape: _isAndroid ? const Border() : null,
+      tilePadding: _isAndroid
+          ? EdgeInsets.zero
+          : const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
+      childrenPadding: _isAndroid
+          ? const EdgeInsets.only(bottom: OmniSpacing.md)
+          : const EdgeInsets.fromLTRB(
+              OmniSpacing.md,
+              OmniSpacing.xxs,
+              OmniSpacing.md,
+              OmniSpacing.md,
+            ),
+      children: <Widget>[
+        if (!isChild && !_isAndroid) ...<Widget>[
+          _buildTimeField(label: '计划日期', child: _buildScheduledDateControl()),
+          const SizedBox(height: OmniSpacing.sm),
+        ],
+        _buildTimeField(
+          label: '截止时间',
+          child: _buildDateTimeControls(
+            value: _dueAt,
+            defaultHour: 18,
+            emptyDateLabel: '添加截止',
+            clearTooltip: '清除截止时间',
+            onChanged: (DateTime? value) => setState(() => _dueAt = value),
+          ),
+        ),
+        const SizedBox(height: OmniSpacing.sm),
+        _buildTimeField(
+          label: '提醒时间',
+          child: _buildDateTimeControls(
+            value: _reminderAt,
+            defaultHour: 9,
+            emptyDateLabel: '添加提醒',
+            clearTooltip: '清除提醒时间',
+            onChanged: (DateTime? value) => setState(() => _reminderAt = value),
+          ),
+        ),
+        if (!isChild && _taskType == TodoTaskType.normal) ...<Widget>[
+          const SizedBox(height: OmniSpacing.sm),
+          _buildTimeField(
+            label: '重复',
+            child: OmniDropdownButton<TodoRepeatRule>(
+              value: _repeatRule,
+              width: double.infinity,
+              height: OmniDensity.controlHeight(context, large: true),
+              items: <DropdownMenuItem<TodoRepeatRule>>[
+                // 当前可选重复规则。
+                for (final TodoRepeatRule rule in TodoRepeatRule.values)
+                  DropdownMenuItem<TodoRepeatRule>(
+                    value: rule,
+                    child: Text(_repeatLabel(rule)),
+                  ),
+              ],
+              onChanged: (TodoRepeatRule? value) {
+                if (value != null) {
+                  setState(() => _repeatRule = value);
+                }
+              },
+            ),
+          ),
+        ],
+      ],
+    );
     return OutlinedButtonTheme(
       data: OutlinedButtonThemeData(
         style: _timeControlStyle.merge(OutlinedButtonTheme.of(context).style),
       ),
-      child: OmniPanel(
-        padding: EdgeInsets.zero,
-        child: ExpansionTile(
-          key: const ValueKey<String>('todo-time-settings'),
-          initiallyExpanded: _timeSettingsExpanded,
-          onExpansionChanged: (bool expanded) {
-            setState(() => _timeSettingsExpanded = expanded);
-          },
-          leading: const Icon(Icons.schedule_outlined),
-          title: const Text('时间设置'),
-          subtitle: _timeSettingsExpanded
-              ? null
-              : Text(
-                  _timeSettingsSummary(isChild: isChild),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-          tilePadding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
-          childrenPadding: const EdgeInsets.fromLTRB(
-            OmniSpacing.md,
-            OmniSpacing.xxs,
-            OmniSpacing.md,
-            OmniSpacing.md,
-          ),
-          children: <Widget>[
-            if (!isChild) ...<Widget>[
-              _buildTimeField(
-                label: '计划日期',
-                child: OmniDatePickerButton(
-                  value: _scheduledDate,
-                  initialDate: _scheduledDate,
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime(2100),
-                  label: _timeDateLabel(_scheduledDate),
-                  icon: null,
-                  onChanged: (DateTime selected) {
-                    setState(() => _scheduledDate = selected);
-                  },
-                ),
-              ),
-              const SizedBox(height: OmniSpacing.sm),
-            ],
-            _buildTimeField(
-              label: '截止时间',
-              child: _buildDateTimeControls(
-                value: _dueAt,
-                defaultHour: 18,
-                emptyDateLabel: '添加截止',
-                clearTooltip: '清除截止时间',
-                onChanged: (DateTime? value) => setState(() => _dueAt = value),
-              ),
-            ),
-            const SizedBox(height: OmniSpacing.sm),
-            _buildTimeField(
-              label: '提醒时间',
-              child: _buildDateTimeControls(
-                value: _reminderAt,
-                defaultHour: 9,
-                emptyDateLabel: '添加提醒',
-                clearTooltip: '清除提醒时间',
-                onChanged: (DateTime? value) =>
-                    setState(() => _reminderAt = value),
-              ),
-            ),
-            if (!isChild && _taskType == TodoTaskType.normal) ...<Widget>[
-              const SizedBox(height: OmniSpacing.sm),
-              _buildTimeField(
-                label: '重复',
-                child: OmniDropdownButton<TodoRepeatRule>(
-                  value: _repeatRule,
-                  width: double.infinity,
-                  height: OmniDensity.controlHeight(context, large: true),
-                  items: <DropdownMenuItem<TodoRepeatRule>>[
-                    // 当前可选重复规则。
-                    for (final TodoRepeatRule rule in TodoRepeatRule.values)
-                      DropdownMenuItem<TodoRepeatRule>(
-                        value: rule,
-                        child: Text(_repeatLabel(rule)),
-                      ),
-                  ],
-                  onChanged: (TodoRepeatRule? value) {
-                    if (value != null) {
-                      setState(() => _repeatRule = value);
-                    }
-                  },
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
+      child: _isAndroid
+          ? _buildAndroidGroup(child: content)
+          : OmniPanel(padding: EdgeInsets.zero, child: content),
     );
   }
 
@@ -1372,43 +1791,44 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
 
   /// 校验并保存待办。
   Future<void> _save() async {
-    if (_saving || _loadingSteps || _stepsLoadFailed) return;
+    if (_saving || _saved || _loadingSteps || _stepsLoadFailed) return;
     if (!(_formKey.currentState?.validate() ?? false)) {
+      await _revealError(
+        _titleController.text.trim().isEmpty
+            ? _titleFieldKey
+            : _progressSettingsKey,
+      );
       return;
     }
-    if (_taskType == TodoTaskType.progress && widget.record == null) {
-      // 新建时直接采用输入数量，预览按钮不是保存的前置操作。
-      final bool applied;
-      setState(() => _saving = true);
-      try {
-        applied = await _applyStepCount();
-      } finally {
-        if (mounted) setState(() => _saving = false);
-      }
-      if (!applied || !mounted) return;
-    }
-    if (_taskType == TodoTaskType.progress &&
-        widget.record?.isCompleted != true) {
-      if (_progressSteps.isEmpty) {
-        setState(() => _progressError = '请先补充至少一个步骤。');
-        return;
-      }
-      if (int.tryParse(_stepCountController.text.trim()) !=
-          _progressSteps.length) {
-        setState(() => _progressError = '步骤数量尚未更新，请先点击“更新步骤”。');
-        return;
-      }
-    }
-    // 重复系列编辑范围。
-    final TodoSeriesScope? scope = await _chooseSeriesScope();
-    if (scope == null) {
-      return;
-    }
+    // 从结构确认到落库共用一把锁，嵌套弹窗由自身路由处理取消。
     setState(() {
       _saving = true;
       _saveError = null;
     });
+    FocusManager.instance.primaryFocus?.unfocus();
     try {
+      if (_taskType == TodoTaskType.progress && widget.record == null) {
+        // 新建时直接采用输入数量，预览按钮不是保存的前置操作。
+        final bool applied = await _applyStepCount();
+        if (!applied || !mounted) return;
+      }
+      if (_taskType == TodoTaskType.progress &&
+          widget.record?.isCompleted != true) {
+        if (_progressSteps.isEmpty) {
+          setState(() => _progressError = '请先补充至少一个步骤。');
+          await _revealError(_progressSettingsKey);
+          return;
+        }
+        if (int.tryParse(_stepCountController.text.trim()) !=
+            _progressSteps.length) {
+          setState(() => _progressError = '步骤数量尚未更新，请先点击“更新步骤”。');
+          await _revealError(_progressSettingsKey);
+          return;
+        }
+      }
+      // 重复系列确认也处于提交保护中，取消后恢复原有草稿。
+      final TodoSeriesScope? scope = await _chooseSeriesScope();
+      if (scope == null || !mounted) return;
       // 待办仓储。
       final TodoRepository repository = ref.read(todoRepositoryProvider);
       await repository.save(
@@ -1449,7 +1869,13 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
         scope: scope,
       );
       if (mounted) {
-        Navigator.pop(context, true);
+        setState(() {
+          _saved = true;
+          _saving = false;
+        });
+        // 先使返回保护更新，确保成功结果能够关闭安卓全屏路由。
+        await WidgetsBinding.instance.endOfFrame;
+        if (mounted) Navigator.pop(context, true);
       }
     } on FormatException catch (error) {
       if (mounted) {
@@ -1459,9 +1885,18 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
           message: error.message,
           tone: OmniMessageTone.error,
         );
+        if (_isAndroid &&
+            (error.message.toString().contains('提醒') ||
+                error.message.toString().contains('截止'))) {
+          _timeSettingsExpansion.expand();
+        }
+        await _revealError(_saveErrorKey);
       }
     } catch (_) {
-      if (mounted) setState(() => _saveError = '保存失败，请重试。输入内容已保留。');
+      if (mounted) {
+        setState(() => _saveError = '保存失败，请重试。输入内容已保留。');
+        await _revealError(_saveErrorKey);
+      }
     } finally {
       if (mounted) {
         setState(() => _saving = false);

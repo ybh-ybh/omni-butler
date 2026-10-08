@@ -91,6 +91,10 @@
     "count": 1,
     "reason": "Android 新增补记按用户要求使用 Dialog.fullscreen 承载固定取消/标题/保存及实时总时长；路由仍通过 showOmniDialog，表单、按钮、主题和动效复用 Omni，不扩展其他编辑器。"
   },
+  "lib/features/todos/presentation/todo_editor_dialog.dart :: Dialog": {
+    "count": 1,
+    "reason": "Android 新增、编辑待办及子任务按已确认方案使用 Dialog.fullscreen，固定取消、居中标题与保存；根路由、控件、主题与动效沿用 Omni，Windows 继续使用侧栏。"
+  },
   "lib/features/timeline/presentation/timeline_page.dart :: RangeSlider": {
     "count": 1,
     "reason": "时间区间选择带业务占用段绘制，主题统一颜色，保留范围拖动逻辑。"

@@ -425,6 +425,15 @@ void main() {
     await tester.tap(find.text('新增待办'));
     await tester.pumpAndSettle();
     expect(find.text('新增待办'), findsOneWidget);
+    // 新增待办与补记一样覆盖根导航和底部栏。
+    expect(
+      find.byKey(const ValueKey<String>('todo-android-editor')),
+      findsOneWidget,
+    );
+    expect(
+      tester.getSize(find.byType(Dialog)),
+      tester.view.physicalSize / tester.view.devicePixelRatio,
+    );
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
 
