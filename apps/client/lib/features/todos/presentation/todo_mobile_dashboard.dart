@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
+import 'package:omni_butler/features/todos/presentation/todo_priority_quadrant_style.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 安卓待办内部分类的稳定顺序。
@@ -344,7 +345,7 @@ class _TodoMobileViewportState extends State<_TodoMobileViewport>
   }
 }
 
-/// 不压缩文字的横向分类标签和固定历史入口。
+/// 选中项展开文字的胶囊分类导航和固定历史入口。
 class _TodoMobileTabs extends StatefulWidget {
   /// 当前会话分类。
   final TodoPriorityQuadrant? selected;
@@ -352,7 +353,7 @@ class _TodoMobileTabs extends StatefulWidget {
   /// 分类右上角展示的父任务数量。
   final Map<TodoPriorityQuadrant, int> quadrantCounts;
 
-  /// 正文分页位置，用于连续移动下划线。
+  /// 正文分页位置，用于连续移动背景与展开标签。
   final PageController pageController;
 
   /// 点按分类。
@@ -361,7 +362,7 @@ class _TodoMobileTabs extends StatefulWidget {
   /// 打开完成历史。
   final VoidCallback onHistory;
 
-  /// 创建文字分类导航。
+  /// 创建胶囊分类导航。
   const _TodoMobileTabs({
     required this.selected,
     required this.quadrantCounts,
@@ -384,11 +385,13 @@ class _TodoMobileTabsState extends State<_TodoMobileTabs> {
   String? _revealSignature;
 
   /// 在布局后将当前标签完整移入导航视口。
-  void _revealSelected(List<double> widths, double viewportWidth) {
+  void _revealSelected(
+    List<double> widths,
+    double viewportWidth,
+    int selectedIndex,
+  ) {
     // 引擎尚未提供真实尺寸时不启动隐藏页动画，避免切入后错误恢复。
     if (viewportWidth <= 0) return;
-    // 选中标签在固定顺序中的位置。
-    final int selectedIndex = _quadrants.indexOf(widget.selected);
     // 分类和字体变化都需要重新计算标签位置。
     final String signature =
         '$selectedIndex/$viewportWidth/${widths.join(',')}';
@@ -415,20 +418,8 @@ class _TodoMobileTabsState extends State<_TodoMobileTabs> {
                   : current)
               .clamp(0, _scrollController.position.maxScrollExtent)
               .toDouble();
-      if ((target - current).abs() < 0.5) {
-        // 新目标已可见时仍需取消被隐藏Ticker冻结的旧滚动动画。
-        _scrollController.jumpTo(target);
-        return;
-      }
-      if (OmniMotion.reduce(context)) {
-        _scrollController.jumpTo(target);
-      } else {
-        _scrollController.animateTo(
-          target,
-          duration: OmniMotion.panel,
-          curve: OmniMotion.standardCurve,
-        );
-      }
+      // 背景和项宽已随正文逐帧过渡，导航视口同步跟随，不叠加滚动动画。
+      _scrollController.jumpTo(target);
     });
   }
 
@@ -439,35 +430,20 @@ class _TodoMobileTabsState extends State<_TodoMobileTabs> {
     super.dispose();
   }
 
-  /// 测量完整标签宽度后立即释放文字布局资源。
+  /// 测量选中项的完整文字，收起项不为文字占位。
   double _labelWidth(
     TodoPriorityQuadrant? quadrant,
     TextStyle style,
     TextScaler scaler,
   ) {
-    // 标签按选中时的较粗字重测量，避免选中后被裁切。
+    // 与实际展开文字保持同一字体和字重。
     final TextPainter painter = TextPainter(
-      text: TextSpan(
-        text: quadrant?.actionLabel ?? '全部',
-        style: style.copyWith(fontWeight: FontWeight.w600),
-      ),
+      text: TextSpan(text: quadrant?.actionLabel ?? '全部', style: style),
       textDirection: Directionality.of(context),
       textScaler: scaler,
     )..layout();
-    // 数量角标与完整文字一起分配宽度，避免覆盖标签。
-    double contentWidth = painter.width;
-    // 空分类不显示角标，也不预留角标宽度。
-    final int count = widget.quadrantCounts[quadrant] ?? 0;
-    if (count > 0) {
-      painter.text = TextSpan(text: '$count', style: _countStyle(style));
-      painter.layout();
-      contentWidth += math.max(scaler.scale(12), painter.width + 6) + 2;
-    }
-    // 加入文字两侧的标准内边距和最小触控宽度。
-    final double width = math.max(
-      OmniSize.touch,
-      contentWidth + OmniSpacing.sm * 2,
-    );
+    // 完整文字宽度只在选中时参与布局。
+    final double width = painter.width;
     painter.dispose();
     return width;
   }
@@ -476,138 +452,270 @@ class _TodoMobileTabsState extends State<_TodoMobileTabs> {
   TextStyle _countStyle(TextStyle style) =>
       style.copyWith(fontSize: 10, height: 1, fontWeight: FontWeight.w600);
 
-  /// 将父任务数量放在分类文字右上方，不挤压完整名称。
-  Widget _buildLabel(
+  /// 为图标和数量角标保留完整空间及最小触控宽度。
+  double _iconWidth(
     TodoPriorityQuadrant? quadrant,
     TextStyle style,
     TextScaler scaler,
   ) {
-    // 当前主题语义色。
+    // 空分类不显示角标，不额外占位。
+    final int count = widget.quadrantCounts[quadrant] ?? 0;
+    if (count <= 0) return OmniSize.touch;
+    // 大数量与系统字号也不能覆盖相邻项。
+    final TextPainter painter = TextPainter(
+      text: TextSpan(text: '$count', style: _countStyle(style)),
+      textDirection: Directionality.of(context),
+      textScaler: scaler,
+    )..layout();
+    // 角标从图标中心向右展开，外侧仍留紧凑间距。
+    final double width = math.max(
+      OmniSize.touch,
+      OmniSize.navigationIcon + painter.width + OmniSpacing.sm * 2,
+    );
+    painter.dispose();
+    return width;
+  }
+
+  /// 构建常驻图标角标，以及随分页进度展开的文字。
+  Widget _buildLabel(
+    TodoPriorityQuadrant? quadrant,
+    TextStyle style,
+    TextScaler scaler,
+    double iconWidth,
+    double labelWidth,
+    double expansion,
+  ) {
+    // 图标和文字随胶囊连续强调，不额外启动独立动画。
     final OmniColors colors = OmniColors.of(context);
-    // 当前分类的选中状态。
-    final bool selected = quadrant == widget.selected;
-    // 文字与角标同步强调当前分类。
-    final Color color = selected ? colors.brand : colors.muted;
-    // 只有非空分类才展示父任务数量。
+    // 四象限使用自身语义色，全部入口使用主题色，并随滑块连续强调。
+    final Color color = Color.lerp(
+      colors.muted,
+      quadrant?.color(colors) ?? colors.brandStrong,
+      expansion,
+    )!;
+    // 父任务数量始终可见，收起项也保留角标。
     final int count = widget.quadrantCounts[quadrant] ?? 0;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        Text(
-          quadrant?.actionLabel ?? '全部',
-          style: style.copyWith(
-            color: color,
-            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+        SizedBox(
+          width: math.max(
+            OmniSize.navigationIcon,
+            iconWidth - OmniSpacing.sm * 2,
+          ),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: <Widget>[
+              Icon(
+                quadrant?.icon ?? Icons.dashboard_rounded,
+                size: OmniSize.navigationIcon,
+                color: color,
+              ),
+              if (quadrant != null && count > 0)
+                Positioned(
+                  left: OmniSize.navigationIcon / 2,
+                  top: -scaler.scale(5),
+                  child: Container(
+                    key: ValueKey<String>(
+                      'todo-mobile-count-${quadrant.value}',
+                    ),
+                    constraints: BoxConstraints(minWidth: scaler.scale(12)),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 3,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      color: colors.paper,
+                      borderRadius: BorderRadius.circular(OmniRadius.pill),
+                    ),
+                    child: Text(
+                      '$count',
+                      textAlign: TextAlign.center,
+                      style: _countStyle(style).copyWith(color: color),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
-        if (quadrant != null && count > 0) ...<Widget>[
-          const SizedBox(width: 2),
-          Transform.translate(
-            offset: Offset(0, -scaler.scale(5)),
-            child: Container(
-              key: ValueKey<String>('todo-mobile-count-${quadrant.value}'),
-              constraints: BoxConstraints(minWidth: scaler.scale(12)),
-              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(OmniRadius.pill),
-              ),
-              child: Text(
-                '$count',
-                textAlign: TextAlign.center,
-                style: _countStyle(style).copyWith(color: color),
+        if (expansion > 0)
+          ClipRect(
+            child: SizedBox(
+              width: (labelWidth + OmniSpacing.xs) * expansion,
+              child: OverflowBox(
+                alignment: Alignment.centerLeft,
+                minWidth: labelWidth + OmniSpacing.xs,
+                maxWidth: labelWidth + OmniSpacing.xs,
+                child: Opacity(
+                  opacity: expansion,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: OmniSpacing.xs),
+                    child: Text(
+                      quadrant?.actionLabel ?? '全部',
+                      key: ValueKey<String>(
+                        'todo-mobile-label-${quadrant?.value ?? 'all'}',
+                      ),
+                      maxLines: 1,
+                      softWrap: false,
+                      style: style.copyWith(color: color),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-        ],
       ],
     );
   }
 
-  /// 构建与首页一致的文字和短下划线。
+  /// 构建胶囊底槽、随正文连续滑动的背景与展开标签。
   @override
   Widget build(BuildContext context) {
-    // 当前主题语义色。
+    // 复用主题表面与强调色，支持所有明暗配色。
     final OmniColors colors = OmniColors.of(context);
-    // 首页同款导航文字样式。
-    final TextStyle style = Theme.of(context).textTheme.titleSmall!;
-    // 保留系统字号缩放，不将标签压小。
+    // 选中标签测量和绘制均使用相同主题字体。
+    final TextStyle style = Theme.of(context).textTheme.titleSmall!
+        .copyWith(fontWeight: FontWeight.w600);
+    // 保留系统文字缩放，空间不足时只滚动导航。
     final TextScaler scaler = MediaQuery.textScalerOf(context);
-    // 导航高度随大字号增长，但不低于触控热区。
-    final double height = math.max(
-      OmniSize.touch,
-      scaler.scale(style.fontSize!) * 1.4 + OmniSpacing.md,
+    // 胶囊视觉高度与最小触控高度分别计算。
+    final double pillHeight = math.max(
+      OmniSize.control,
+      scaler.scale(style.fontSize!) * 1.4 + OmniSpacing.xs,
     );
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        SizedBox(
-          height: height,
-          child: Row(
-            children: <Widget>[
-              Expanded(
-                child: LayoutBuilder(
-                  builder: (BuildContext context, BoxConstraints constraints) {
-                    // 每个完整标签按实际文字宽度分配空间。
-                    final List<double> widths = <double>[
-                      for (final TodoPriorityQuadrant? quadrant in _quadrants)
-                        _labelWidth(quadrant, style, scaler),
-                    ];
-                    // 宽屏时均匀填满导航，窄屏时保留自然文字宽度。
-                    final double naturalWidth = widths.fold(0, (a, b) => a + b);
-                    if (naturalWidth < constraints.maxWidth) {
-                      for (int index = 0; index < widths.length; index++) {
-                        widths[index] +=
-                            (constraints.maxWidth - naturalWidth) /
+    // 外侧空隙也为大字号角标保留绘制空间。
+    final double height = math.max(OmniSize.touch, pillHeight + OmniSpacing.xs);
+    // 每个标签完整展开时的文字宽度。
+    final List<double> labelWidths = <double>[
+      for (final TodoPriorityQuadrant? quadrant in _quadrants)
+        _labelWidth(quadrant, style, scaler),
+    ];
+    // 未选中项的自然宽度，仅容纳图标与角标。
+    final List<double> iconWidths = <double>[
+      for (final TodoPriorityQuadrant? quadrant in _quadrants)
+        _iconWidth(quadrant, style, scaler),
+    ];
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: OmniSpacing.xs,
+        vertical: OmniSpacing.xxs,
+      ),
+      child: DecoratedBox(
+        key: const ValueKey<String>('todo-mobile-tabs-track'),
+        decoration: BoxDecoration(
+          color: colors.mist,
+          borderRadius: BorderRadius.circular(OmniRadius.pill),
+        ),
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              child: LayoutBuilder(
+                builder: (BuildContext context, BoxConstraints constraints) =>
+                    AnimatedBuilder(
+                      animation: widget.pageController,
+                      builder: (BuildContext context, Widget? child) {
+                        // 正文是动效的唯一进度来源，反向拖动可以直接接管。
+                        final double page =
+                            (widget.pageController.hasClients &&
+                                    widget
+                                        .pageController
+                                        .position
+                                        .hasContentDimensions
+                                ? widget.pageController.page
+                                : null) ??
+                            _quadrants.indexOf(widget.selected).toDouble();
+                        // 首尾钳制避免滚动边缘的几何越界。
+                        final double clamped = page.clamp(
+                          0,
+                          _quadrants.length - 1,
+                        );
+                        // 相邻项分别收起和展开，落位后只有一项保留文字。
+                        final List<double> expansions = <double>[
+                          for (
+                            int index = 0;
+                            index < _quadrants.length;
+                            index++
+                          )
+                            (1 - (clamped - index).abs()).clamp(0, 1),
+                        ];
+                        // 项宽与文字展开使用同一进度，避免文字和背景脱节。
+                        final List<double> widths = <double>[
+                          for (
+                            int index = 0;
+                            index < _quadrants.length;
+                            index++
+                          )
+                            iconWidths[index] +
+                                (labelWidths[index] + OmniSpacing.xs) *
+                                    expansions[index],
+                        ];
+                        // 空间充足时均匀分配余量，窄屏保留触控宽度。
+                        final double naturalWidth = widths.fold(
+                          0,
+                          (a, b) => a + b,
+                        );
+                        // 宽屏和窄屏都保持同一套展开规则。
+                        final double extra =
+                            math.max(0, constraints.maxWidth - naturalWidth) /
                             widths.length;
-                      }
-                    }
-                    _revealSelected(widths, constraints.maxWidth);
-                    return SingleChildScrollView(
-                      key: const ValueKey<String>('todo-mobile-tabs-scroll'),
-                      controller: _scrollController,
-                      scrollDirection: Axis.horizontal,
-                      child: SizedBox(
-                        width: widths.fold<double>(0, (a, b) => a + b),
-                        height: height,
-                        child: AnimatedBuilder(
-                          animation: widget.pageController,
-                          builder: (BuildContext context, Widget? child) {
-                            // 拖动时使用连续页码，首帧使用会话索引。
-                            final double page =
-                                (widget.pageController.hasClients &&
-                                        widget
-                                            .pageController
-                                            .position
-                                            .hasContentDimensions
-                                    ? widget.pageController.page
-                                    : null) ??
-                                _quadrants.indexOf(widget.selected).toDouble();
-                            // 指示线在实际标签中心之间连续插值。
-                            final double clamped = page.clamp(
-                              0,
-                              widths.length - 1,
-                            );
-                            // 连续页码左侧对应的标签索引。
-                            final int lower = clamped.floor();
-                            // 连续页码右侧对应的标签索引。
-                            final int upper = clamped.ceil();
-                            // 左侧标签在自然宽度导航中的中心。
-                            final double lowerCenter =
-                                widths.take(lower).fold(0.0, (a, b) => a + b) +
-                                widths[lower] / 2;
-                            // 右侧标签在自然宽度导航中的中心。
-                            final double upperCenter =
-                                widths.take(upper).fold(0.0, (a, b) => a + b) +
-                                widths[upper] / 2;
-                            // 随正文拖动连续移动的指示线中心。
-                            final double center =
-                                lowerCenter +
-                                (upperCenter - lowerCenter) * (clamped - lower);
-                            return Stack(
+                        // 每项最终实际宽度。
+                        for (int index = 0; index < widths.length; index++) {
+                          widths[index] += extra;
+                        }
+                        _revealSelected(
+                          widths,
+                          constraints.maxWidth,
+                          clamped.round(),
+                        );
+                        // 连续页码左右两项用于背景插值。
+                        final int lower = clamped.floor();
+                        // 右侧相邻分类索引。
+                        final int upper = clamped.ceil();
+                        // 背景在当前几何中的起点。
+                        final double start = widths
+                            .take(lower)
+                            .fold(0.0, (a, b) => a + b);
+                        // 在相邻项间连续滑动的比例。
+                        final double fraction = clamped - lower;
+                        // 胶囊左右均保留底槽内边距。
+                        final double left =
+                            start + widths[lower] * fraction + OmniSpacing.xxs;
+                        // 背景大小也与收起、展开的项宽同步变化。
+                        final double width =
+                            widths[lower] +
+                            (widths[upper] - widths[lower]) * fraction -
+                            OmniSpacing.xxs * 2;
+                        return SingleChildScrollView(
+                          key: const ValueKey<String>(
+                            'todo-mobile-tabs-scroll',
+                          ),
+                          controller: _scrollController,
+                          scrollDirection: Axis.horizontal,
+                          child: SizedBox(
+                            width: widths.fold<double>(0, (a, b) => a + b),
+                            height: height,
+                            child: Stack(
                               children: <Widget>[
+                                PositionedDirectional(
+                                  start: left,
+                                  top: (height - pillHeight) / 2,
+                                  width: width,
+                                  height: pillHeight,
+                                  child: DecoratedBox(
+                                    key: const ValueKey<String>(
+                                      'todo-mobile-tabs-indicator',
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: colors.paper,
+                                      borderRadius: BorderRadius.circular(
+                                        OmniRadius.pill,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                                 Row(
                                   children: <Widget>[
+                                    // 所有分类均保留完整读屏标签及点击动作。
                                     for (
                                       int index = 0;
                                       index < _quadrants.length;
@@ -625,21 +733,33 @@ class _TodoMobileTabsState extends State<_TodoMobileTabs> {
                                         selected:
                                             _quadrants[index] ==
                                             widget.selected,
-                                        child: InkWell(
-                                          key: ValueKey<String>(
-                                            'todo-mobile-quadrant-${_quadrants[index]?.value ?? 'all'}',
-                                          ),
-                                          onTap: () => widget.onSelected(
-                                            _quadrants[index],
-                                          ),
-                                          child: SizedBox(
-                                            width: widths[index],
-                                            height: height,
-                                            child: Center(
-                                              child: _buildLabel(
-                                                _quadrants[index],
-                                                style,
-                                                scaler,
+                                        child: Tooltip(
+                                          message:
+                                              _quadrants[index]?.actionLabel ??
+                                              '全部',
+                                          excludeFromSemantics: true,
+                                          child: InkWell(
+                                            key: ValueKey<String>(
+                                              'todo-mobile-quadrant-${_quadrants[index]?.value ?? 'all'}',
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              OmniRadius.pill,
+                                            ),
+                                            onTap: () => widget.onSelected(
+                                              _quadrants[index],
+                                            ),
+                                            child: SizedBox(
+                                              width: widths[index],
+                                              height: height,
+                                              child: Center(
+                                                child: _buildLabel(
+                                                  _quadrants[index],
+                                                  style,
+                                                  scaler,
+                                                  iconWidths[index],
+                                                  labelWidths[index],
+                                                  expansions[index],
+                                                ),
                                               ),
                                             ),
                                           ),
@@ -647,33 +767,23 @@ class _TodoMobileTabsState extends State<_TodoMobileTabs> {
                                       ),
                                   ],
                                 ),
-                                Positioned(
-                                  left: center - OmniSpacing.xl / 2,
-                                  bottom: 0,
-                                  width: OmniSpacing.xl,
-                                  height: 2,
-                                  child: ColoredBox(color: colors.brand),
-                                ),
                               ],
-                            );
-                          },
-                        ),
-                      ),
-                    );
-                  },
-                ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
               ),
-              OmniIconButton(
-                key: const ValueKey<String>('todo-mobile-history-open'),
-                tooltip: '完成历史',
-                onPressed: widget.onHistory,
-                icon: const Icon(Icons.history_rounded),
-              ),
-            ],
-          ),
+            ),
+            OmniIconButton(
+              key: const ValueKey<String>('todo-mobile-history-open'),
+              tooltip: '完成历史',
+              onPressed: widget.onHistory,
+              icon: const Icon(Icons.history_rounded),
+            ),
+          ],
         ),
-        Divider(height: 1, color: colors.line),
-      ],
+      ),
     );
   }
 }

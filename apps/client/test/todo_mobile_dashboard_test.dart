@@ -19,6 +19,143 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证真实待办页面的视口、分页恢复与手势接管。
 void main() {
+  _todoTest('胶囊导航仅展开选中项且背景对齐实际点击区域', (WidgetTester tester) async {
+    await _startTodos(tester, seedTasks: false);
+    // 全部与四个象限均通过真实点击验证展开和收起。
+    for (final String category in <String>['all', '3', '2', '1', '0', 'all']) {
+      // 每次分类切换前定位真实触控区域。
+      final Finder tab = find.byKey(
+        ValueKey<String>('todo-mobile-quadrant-$category'),
+      );
+      await tester.tap(tab);
+      await tester.pumpAndSettle();
+      // 落位后每个收起项都仅保留图标，选中项保留完整文字。
+      for (final String option in <String>['all', '3', '2', '1', '0']) {
+        expect(
+          find.byKey(ValueKey<String>('todo-mobile-label-$option')),
+          option == category ? findsOneWidget : findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(ValueKey<String>('todo-mobile-quadrant-$option')),
+            matching: find.byType(Icon),
+          ),
+          findsOneWidget,
+        );
+      }
+      // 单个背景块填入选中项，左右仅保留底槽内边距。
+      final Rect indicator = tester.getRect(
+        find.byKey(const ValueKey<String>('todo-mobile-tabs-indicator')),
+      );
+      // 使用实际布局验证，避免只断言选中属性。
+      final Rect selected = tester.getRect(tab);
+      expect(indicator.left, closeTo(selected.left + 4, 0.01));
+      expect(indicator.right, closeTo(selected.right - 4, 0.01));
+      expect(indicator.center.dy, closeTo(selected.center.dy, 0.01));
+      expect(selected.height, greaterThanOrEqualTo(48));
+      // 选中前景与象限语义一致，全部入口继续使用品牌色。
+      final OmniColors colors = OmniColors.of(tester.element(tab));
+      // 单独验证实际绘制的图标和文字，避免只检查选中状态。
+      final Color expectedColor = switch (category) {
+        '3' => colors.danger,
+        '2' => colors.todo,
+        '1' => colors.warning,
+        '0' => colors.muted,
+        _ => colors.brandStrong,
+      };
+      expect(
+        tester
+            .widget<Icon>(find.descendant(of: tab, matching: find.byType(Icon)))
+            .color,
+        expectedColor,
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(ValueKey<String>('todo-mobile-label-$category')),
+            )
+            .style!
+            .color,
+        expectedColor,
+      );
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  _todoTest('正文拖动时胶囊连续移动并支持反向接管', (WidgetTester tester) async {
+    await _startTodos(tester, seedTasks: false);
+    // 读取初始背景位置，随后只推进到分页中途。
+    final Finder indicator = find.byKey(
+      const ValueKey<String>('todo-mobile-tabs-indicator'),
+    );
+    // 初始背景中心应位于全部分类。
+    final double initialCenter = tester.getCenter(indicator).dx;
+    // 持续手势不能使用 drag 自动结束后再断言动画中途。
+    final TestGesture gesture = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey<String>('todo-mobile-pager'))),
+    );
+    await gesture.moveBy(const Offset(-30, 0));
+    await tester.pump();
+    await gesture.moveBy(const Offset(-100, 0));
+    await tester.pump();
+    // 真实半途位置用于检查背景并非等落位后跳动。
+    final double forwardCenter = tester.getCenter(indicator).dx;
+    expect(_pager(tester).page, greaterThan(0));
+    expect(_pager(tester).page, lessThan(1));
+    expect(forwardCenter, greaterThan(initialCenter));
+    await gesture.moveBy(const Offset(60, 0));
+    await tester.pump();
+    expect(tester.getCenter(indicator).dx, lessThan(forwardCenter));
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(_selected(tester), isNull);
+    expect(_pager(tester).page, 0);
+    expect(tester.getCenter(indicator).dx, closeTo(initialCenter, 0.01));
+    expect(tester.takeException(), isNull);
+  });
+
+  _todoTest('窄屏双倍字号切换每个分类后文字完整可见且角标不覆盖标签', (WidgetTester tester) async {
+    // 真实父任务计数提供两位数角标，使用真实路由切换窄屏分类。
+    final _TodoFixture fixture = await _startTodos(tester);
+    tester.view.physicalSize = const Size(320, 600);
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    for (final String category in <String>['3', '2', '1', '0']) {
+      fixture.container.read(appRouterProvider).go('/todos?quadrant=$category');
+      await tester.pumpAndSettle();
+      // 完整文字必须在导航视口中，而非仅存在于横滚内容树。
+      final Finder label = find.byKey(
+        ValueKey<String>('todo-mobile-label-$category'),
+      );
+      // 文字的实际绘制矩形用于验证全部字符均已进入视口。
+      final Rect labelRect = tester.getRect(label);
+      // 独立导航视口仍需给固定历史入口留出空间。
+      final Rect viewport = tester.getRect(
+        find.byKey(const ValueKey<String>('todo-mobile-tabs-scroll')),
+      );
+      expect(labelRect.left, greaterThanOrEqualTo(viewport.left));
+      expect(labelRect.right, lessThanOrEqualTo(viewport.right + 0.01));
+      // 文本本身不能被省略号或行数上限截断。
+      final RenderParagraph paragraph = tester.renderObject<RenderParagraph>(
+        find.descendant(of: label, matching: find.byType(RichText)),
+      );
+      expect(paragraph.didExceedMaxLines, isFalse);
+      if (category == '3') {
+        // 选中项的角标与标签分别分配空间，大字号也不能叠在一起。
+        final Rect badge = tester.getRect(
+          find.byKey(const ValueKey<String>('todo-mobile-count-3')),
+        );
+        expect(badge.right, lessThanOrEqualTo(labelRect.left));
+      }
+      expect(
+        find
+            .byKey(const ValueKey<String>('todo-mobile-history-open'))
+            .hitTestable(),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    }
+  });
+
   _todoTest('新增与象限入口使用全屏待办并保留象限预填', (WidgetTester tester) async {
     // 完整应用和真实仓储提供待办页的业务入口。
     final _TodoFixture fixture = await _startTodos(tester);
@@ -102,6 +239,27 @@ void main() {
         todoRepositoryProvider,
       );
       expect(_countLabel(tester, 3), '24');
+      await tester.tap(
+        find.byKey(const ValueKey<String>('todo-mobile-quadrant-3')),
+      );
+      await tester.pumpAndSettle();
+      // 选中的父任务角标同样沿用该象限色。
+      final Finder badge = find.byKey(
+        const ValueKey<String>('todo-mobile-count-3'),
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.descendant(of: badge, matching: find.byType(Text)),
+            )
+            .style!
+            .color,
+        OmniColors.of(tester.element(badge)).danger,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey<String>('todo-mobile-quadrant-all')),
+      );
+      await tester.pumpAndSettle();
       // 其余三个空分类不生成角标节点。
       for (final int quadrant in <int>[2, 1, 0]) {
         expect(
@@ -303,19 +461,26 @@ void main() {
         }
       }
     }
-    // 导航滚动至末尾后完整显示分类，不缩小字号。
+    // 收起项只显示图标，滚动到末尾后点击才展开完整文字。
     await tester.drag(
       find.byKey(const ValueKey<String>('todo-mobile-tabs-scroll')),
       const Offset(-900, 0),
     );
     await tester.pumpAndSettle();
-    expect(find.text('有空再做').hitTestable(), findsWidgets);
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-label-0')),
+      findsNothing,
+    );
     await tester.tap(
       find
           .byKey(const ValueKey<String>('todo-mobile-quadrant-0'))
           .hitTestable(),
     );
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-label-0')).hitTestable(),
+      findsOneWidget,
+    );
     expect(find.text('暂无进行中任务'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.tap(
