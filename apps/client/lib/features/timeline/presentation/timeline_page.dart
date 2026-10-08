@@ -3068,6 +3068,7 @@ class _AbsoluteTimeEntryDialogState
                             ),
                             label: '保存',
                             variant: OmniButtonVariant.primary,
+                            visualHeight: OmniSize.control,
                             loading: _saving,
                             onPressed: onSave,
                           ),
