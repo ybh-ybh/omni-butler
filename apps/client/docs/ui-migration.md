@@ -43,7 +43,7 @@
 | D08 | `_QuoteEditorDialog`；同上 | 新增/编辑、正文多行、作者、必填/保存状态 | 已接统一侧栏、表单字段和按钮 | `quote_library_dialog_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | D09 | `TodoEditorDialog`；`lib/features/todos/presentation/todo_editor_dialog.dart` | 新建/编辑/子任务、日期时间、提醒、重复规则、进度结构、重复系列范围、保存失败 | 统一侧栏和控件；时间设置外置标签、空值入口等宽与折叠摘要；进度设置基础字段并排、步骤行内操作/窄屏菜单、短列表完整展示、添加定位聚焦，均适配大字号 | `todo_editor_time_settings_test.dart`、`todo_progress_editor_layout_test.dart`、`todo_progress_ui_test.dart`、`todo_quadrant_ui_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化与中文宽窄屏预览通过；真机手感及完整人工矩阵待验 |
 | D10 | `_TimeEntryEditorDialog`；`lib/features/timeline/presentation/timeline_page.dart` | 区间编辑、日期/分类、备注、多段占用冲突、拖动范围、保存失败 | 共享侧栏/输入/选择；业务范围滑块与冲突图形保留 | `timeline_editor_test.dart`、`timeline_layout_test.dart` | 自动化通过；人工矩阵待验 |
-| D11 | `_AbsoluteTimeEntryDialog`；同上；`time_entry_time_picker.dart` | 开始记录、完整补记/编辑、结束进行中、逐分钟/跨日日期、时间冲突、类别逐项颜色、备注折叠 | 补记/已完成编辑按时间区间、活动信息、固定操作区排列；Android 双列时分滚轮，Windows 精确输入与双手柄，可向昨日/前日及次日连续扩展，遇占用边界阻挡并回弹，减少动画时取消位移；两端新增补记默认最近空闲段、最多一小时，读取失败可重试；共享日期/表单/下拉保留类别左侧色点；结束流程保留原遮罩关闭限制 | `time_entry_dialog_test.dart`、`time_entry_interval_test.dart`、`timeline_android_ui_test.dart`、`timeline_editor_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化及真实 Flutter 中文截图检查通过；实机手感/读屏待验 |
+| D11 | `_AbsoluteTimeEntryDialog`；同上；`time_entry_time_picker.dart` | 半屏/全屏开始记录、完整补记/编辑、结束进行中、逐分钟/跨日日期、时间冲突、类别逐项颜色、备注折叠 | Android 开始记录使用 Omni 可展开底部面板，横线独立拖拽/点击，顶部固定取消/开始；半屏只显示活动和类别，全屏才增加开始时间与描述，收起保留输入，键盘避让不改变展开状态；提交期间锁定关闭/拖拽。Android 新增补记改为根导航全屏弹窗，顶部固定取消/补记/保存和灰色小时摘要，正文以时间卡片及活动/类别/备注分组呈现，保存期间保护返回、失败保留草稿；补记/已完成编辑保留 Android 双列时分滚轮与 Windows 精确输入/双手柄、连续跨日扩展、占用边界阻挡回弹和默认最近空闲段；共享日期/表单/下拉保留类别左侧色点；结束流程保留原遮罩关闭限制 | `start_time_entry_sheet_test.dart`、`time_entry_dialog_test.dart`、`time_entry_interval_test.dart`、`timeline_android_ui_test.dart`、`timeline_editor_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化、真实中文截图及 API 36 独立包交互通过；实体设备手感/读屏待验 |
 | D12 | `_EventEditorDialog`；`lib/features/events/presentation/events_page.dart` | 新增/编辑、周期单位/间隔、提醒开关/时间、必填和保存失败 | 已接共享侧栏、表单、下拉、开关和按钮 | `events_layout_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | D13 | `_EventHistoryDialog`；同上 | 历史列表、分组、空态、编辑/删除记录 | 已接统一居中弹窗、操作菜单和确认/消息 | `events_layout_test.dart` | 自动化通过；人工矩阵待验 |
 | D14 | `_EventHistoryEditorDialog`；同上 | 历史时间、备注、保存/取消 | 已接统一居中弹窗、日期时间和文本字段 | `events_layout_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
@@ -120,3 +120,21 @@
 
 新增功能应先运行组件展示和边界检查；迁移清单的人工项完成后逐项记录平台、场景与结果，不以更新基线代替验收。
 
+### 2026-10-08 安卓开始记录面板验收
+
+- 首页和时间页共用半屏/全屏底部面板；13 项专项回归覆盖拖拽、反向接管、输入保留、键盘避让、旋转、大字号、关闭保护、失败重试和实际保存。最终 9 个相关测试文件合计 **92 项通过**，包含 Windows、补记及结束记录回归。
+- `flutter analyze --no-pub` 与 UI 样式检查通过；当前 41 项既有受控例外，无新增绕过入口。独立内存预览宿主 Android Debug APK 构建通过。证据：`output/start-sheet-tests.log`、`output/start-sheet-analyze.log`、`output/start-sheet-build.log`。
+- 已查看真实中文半屏、全屏、明暗、大字号和横屏键盘预览；PNG 位于 `output/start-sheet-preview/` 与 `output/start-sheet-android-*.png`，未更新既有 Golden。
+- API 36 模拟器使用独立 `dev.omnibutler.ui_preview` 内存包验证上拉/下拉、输入、返回和半屏提交，确认活动与描述跨状态保留并保存；结束后已卸载预览包并恢复键盘显示设置。实体设备中文输入法、读屏与拖拽手感仍待人工验收。
+- 同日按截图反馈收紧开始按钮：蓝色视觉高度从 48px 调至 32px，保留原字号、水平间距及 48px 触控热区。后续 20 项相关回归、静态分析及样式检查通过，并重新查看中文半屏预览；证据：`output/start-sheet-button-tests.log`、`output/start-sheet-button-analyze.log`、`output/start-sheet-preview/android-half.png`。本次尺寸微调未重复运行模拟器。
+
+
+## 2026-10-08 安卓补记全屏布局
+
+- 右上角保存采用主题主色实底与白色文字，复用 Omni 主按钮的禁用/加载规则。补记专项 36 项、定向 analyze 和样式检查通过，浅/深色中文预览已查看（`output/backfill-save-color-tests.log`）。
+- 时间合法性错误在滚轮上方替换“调整开始时间/调整结束时间”，不在滚轮下重复展示；恢复有效区间后恢复正常提示。补记专项 36 项回归、定向 analyze 和样式检查通过，错误态中文预览已查看（`output/backfill-error-position-tests.log`、`output/backfill-fullscreen-preview/android-invalid-time.png`）。
+- 首页、时间页菜单及时间轴预填补记采用覆盖根导航的全屏弹窗，顶部固定取消/补记/保存，灰色总时长按小时显示；表单为时间与活动/类别/备注两组圆角卡片。
+- 复用既有分钟滚轮、跨天日期、类别颜色、默认空闲段及保存逻辑；提交时禁止返回，失败保留草稿可重试。修复字号变化引发滚轮像素偏移误改时间的问题。
+- 7 个相关测试文件共 **72 项通过**，补记专项中文预览 **36 项通过**；浅色、深色、安全区、类别菜单和双倍字号键盘截图已查看。未更新既有 Golden。
+- 全量 `flutter analyze --no-pub` 和 UI 样式检查通过。新增一处精确限定的 `Dialog.fullscreen` 例外（共 42 项），原因是顶部固定操作与总时长的专用全屏结构；仍经 `showOmniDialog` 路由并复用 Omni 控件/主题。
+- 证据：`output/backfill-fullscreen-tests.log`、`output/backfill-fullscreen-preview.log`、`output/backfill-fullscreen-analyze.log`、`output/backfill-fullscreen-style.log`、`output/backfill-fullscreen-preview/`。本轮未构建安装 APK，实体设备输入法/读屏/手感待验。

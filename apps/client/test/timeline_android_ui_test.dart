@@ -110,6 +110,16 @@ void main() {
       find.byKey(const ValueKey<String>('time-entry-editor')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const ValueKey<String>('omni-expandable-sheet-surface')),
+      findsOneWidget,
+    );
+    expect(find.text('开始时间'), findsNothing);
+    expect(find.text('详细描述（可选）'), findsNothing);
+    expect(
+      find.byKey(const ValueKey<String>('time-entry-start-submit')),
+      findsOneWidget,
+    );
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
@@ -143,6 +153,13 @@ void main() {
       find.descendant(of: actionsMenu, matching: find.text('补记时间')),
     );
     await tester.pumpAndSettle();
+    expect(find.text('补记'), findsOneWidget);
+    expect(find.text('保存'), findsOneWidget);
+    // 时间页根模态覆盖底部导航，取消后回到原有页面。
+    expect(
+      tester.getSize(find.byType(Dialog)),
+      tester.view.physicalSize / tester.view.devicePixelRatio,
+    );
     expect(
       find.byKey(const ValueKey<String>('time-entry-editor')),
       findsOneWidget,

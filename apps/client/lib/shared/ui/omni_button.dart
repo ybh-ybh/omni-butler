@@ -43,6 +43,9 @@ class OmniButton extends StatelessWidget {
   /// 是否使用列表紧凑尺寸；移动端仍保留完整触控热区。
   final bool compact;
 
+  /// 可选视觉最小高度；触控平台仍保留完整点击区域。
+  final double? visualHeight;
+
   /// 创建统一按钮。
   const OmniButton({
     required this.label,
@@ -52,6 +55,7 @@ class OmniButton extends StatelessWidget {
     this.loading = false,
     this.large = false,
     this.compact = false,
+    this.visualHeight,
     super.key,
   });
 
@@ -64,13 +68,15 @@ class OmniButton extends StatelessWidget {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     // 加载时保持标签可读，但不再接受重复操作。
     final VoidCallback? effectiveOnPressed = loading ? null : onPressed;
-    // 页面主操作仅通过尺寸强调，与其他主操作共享外观。
-    final double height = compact
-        ? OmniSize.controlCompact
-        : OmniDensity.controlHeight(
-            context,
-            large: large || variant == OmniButtonVariant.pagePrimary,
-          );
+    // 显式视觉高度优先，否则沿用紧凑尺寸或平台密度。
+    final double height =
+        visualHeight ??
+        (compact
+            ? OmniSize.controlCompact
+            : OmniDensity.controlHeight(
+                context,
+                large: large || variant == OmniButtonVariant.pagePrimary,
+              ));
     // 实色操作使用相应语义颜色。
     final bool filled =
         variant == OmniButtonVariant.primary ||
@@ -98,7 +104,8 @@ class OmniButton extends StatelessWidget {
             )
           : null,
       visualDensity: VisualDensity.standard,
-      tapTargetSize: compact && OmniDensity.isTouch(context)
+      tapTargetSize:
+          (compact || visualHeight != null) && OmniDensity.isTouch(context)
           ? MaterialTapTargetSize.padded
           : MaterialTapTargetSize.shrinkWrap,
       animationDuration: OmniMotion.duration(context, OmniMotion.fast),

@@ -264,6 +264,38 @@ class _CatalogExamplesState extends State<_CatalogExamples> {
                     ),
                   ),
                   OmniButton(
+                    label: '展开底部面板',
+                    variant: OmniButtonVariant.secondary,
+                    onPressed: () => showOmniExpandableBottomSheet<void>(
+                      context: context,
+                      builder: (BuildContext sheetContext) =>
+                          OmniExpandableBottomSheetScaffold(
+                            semanticsLabel: '示例面板',
+                            leading: OmniButton(
+                              label: '取消',
+                              variant: OmniButtonVariant.text,
+                              onPressed: () => Navigator.of(sheetContext).pop(),
+                            ),
+                            trailing: OmniButton(
+                              label: '开始',
+                              onPressed: () => Navigator.of(sheetContext).pop(),
+                            ),
+                            bodyBuilder:
+                                (BuildContext context, bool expanded) => Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: <Widget>[
+                                    const Text('拖动或点击顶部横线展开面板'),
+                                    if (expanded) ...<Widget>[
+                                      const SizedBox(height: OmniSpacing.md),
+                                      const Text('全屏内容；向下拖动横线可收回半屏'),
+                                    ],
+                                  ],
+                                ),
+                          ),
+                    ),
+                  ),
+                  OmniButton(
                     label: '错误提示',
                     variant: OmniButtonVariant.text,
                     onPressed: () => showOmniMessage(

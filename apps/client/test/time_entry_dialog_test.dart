@@ -55,6 +55,138 @@ void main() {
     await icons.load();
   });
 
+  testWidgets('安卓补记全屏覆盖、安全区居中、时长实时更新且取消不落库', (WidgetTester tester) async {
+    // 使用公开入口与真实存储，模拟系统顶部和底部安全区。
+    final _DialogFixture fixture = await _pumpDialog(
+      tester,
+      platform: TargetPlatform.android,
+    );
+    try {
+      fixture.media.value = const MediaQueryData(
+        size: Size(390, 844),
+        padding: EdgeInsets.only(top: 24, bottom: 24),
+        viewPadding: EdgeInsets.only(top: 24, bottom: 24),
+      );
+      await tester.pumpAndSettle();
+      // 全屏表面覆盖窗口，操作内容仍避开系统状态栏。
+      expect(
+        tester.getRect(find.byType(Dialog)),
+        const Rect.fromLTWH(0, 0, 390, 844),
+      );
+      expect(tester.getCenter(find.text('补记')).dx, closeTo(195, 0.1));
+      expect(tester.getTopLeft(find.text('取消')).dy, greaterThanOrEqualTo(24));
+      expect(
+        tester.getCenter(find.text('取消')).dx,
+        lessThan(tester.getCenter(find.text('补记')).dx),
+      );
+      expect(
+        tester.getCenter(find.text('保存')).dx,
+        greaterThan(tester.getCenter(find.text('补记')).dx),
+      );
+      expect(find.text('共 1 小时'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('共 1 小时')).dy,
+        greaterThan(tester.getBottomLeft(find.text('补记')).dy),
+      );
+      expect(find.byTooltip('关闭'), findsNothing);
+      await _wheelTo(tester, hour: 8, minute: 50);
+      expect(find.text('共 1.5 小时'), findsOneWidget);
+      await _capture(tester, 'android-fullscreen-duration');
+      await _enterActivity(tester, '取消草稿');
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(find.byType(Dialog), findsNothing);
+      expect(
+        await fixture.database.select(fixture.database.timeEntries).get(),
+        isEmpty,
+      );
+      expect(tester.takeException(), isNull);
+    } finally {
+      await fixture.dispose(tester);
+    }
+  });
+
+  testWidgets('安卓全屏补记备注收起保留、必填校验及保存失败后重试', (WidgetTester tester) async {
+    // 首次提交失败，重试仍写入同一份真实数据库。
+    final _DialogFixture fixture = await _pumpDialog(
+      tester,
+      platform: TargetPlatform.android,
+      failFirstSave: true,
+    );
+    try {
+      await tester.tap(_saveControl());
+      await tester.pumpAndSettle();
+      expect(find.text('请输入活动内容'), findsOneWidget);
+      await _enterActivity(tester, '保留补记草稿');
+      await tester.tap(
+        find.byKey(const ValueKey<String>('time-entry-notes-toggle')),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey<String>('time-entry-notes')),
+        '完成阅读',
+      );
+      await tester.tap(
+        find.byKey(const ValueKey<String>('time-entry-notes-toggle')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(_saveControl());
+      await tester.pumpAndSettle();
+      expect(find.text('保存失败，请重试'), findsOneWidget);
+      expect(find.text('保留补记草稿'), findsOneWidget);
+      expect(_saveButton(tester).onPressed, isNotNull);
+      await tester.tap(_saveControl());
+      await tester.pumpAndSettle();
+      expect(find.byType(Dialog), findsNothing);
+      // 实际落库结果包含折叠后仍保留的备注，重试未重复创建。
+      final TimeEntryRecord saved = await fixture.database
+          .select(fixture.database.timeEntries)
+          .getSingle();
+      expect(saved.activity, '保留补记草稿');
+      expect(saved.notes, '完成阅读');
+      expect(tester.takeException(), isNull);
+    } finally {
+      await fixture.dispose(tester);
+    }
+  });
+
+  testWidgets('安卓全屏补记提交期间阻止返回与重复保存，成功后关闭', (WidgetTester tester) async {
+    // 暂停提交，覆盖系统返回与异步结果之间的竞态。
+    final Completer<void> gate = Completer<void>();
+    // 共享生产保存方法，仅在提交前等待测试放行。
+    final _DialogFixture fixture = await _pumpDialog(
+      tester,
+      platform: TargetPlatform.android,
+      saveGate: gate,
+    );
+    try {
+      await _enterActivity(tester, '异步提交');
+      await tester.tap(_saveControl());
+      await tester.pump();
+      expect(_saveButton(tester).onPressed, isNull);
+      expect(
+        tester
+            .widget<OmniButton>(find.widgetWithText(OmniButton, '取消'))
+            .onPressed,
+        isNull,
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      expect(find.text('补记'), findsOneWidget);
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(find.byType(Dialog), findsNothing);
+      expect(
+        await fixture.database.select(fixture.database.timeEntries).get(),
+        hasLength(1),
+      );
+      expect(tester.takeException(), isNull);
+    } finally {
+      if (!gate.isCompleted) gate.complete();
+      await fixture.dispose(tester);
+    }
+  });
+
   for (final TargetPlatform platform in <TargetPlatform>[
     TargetPlatform.android,
     TargetPlatform.windows,
@@ -180,7 +312,7 @@ void main() {
         );
         await tester.pumpAndSettle();
         await _enterActivity(tester, '类别色点回归');
-        await tester.tap(find.text('保存记录'));
+        await tester.tap(_saveControl());
         await tester.pumpAndSettle();
         expect(
           (await fixture.database
@@ -234,7 +366,7 @@ void main() {
           find.byKey(const ValueKey<String>('time-category-color-学习')),
           findsOneWidget,
         );
-        await tester.tap(find.text('保存记录'));
+        await tester.tap(_saveControl());
         await tester.pumpAndSettle();
         // 不调整时间时不会取整两端，也不会新建重复记录。
         final TimeEntryRecord saved = (await tester.runAsync(
@@ -349,7 +481,7 @@ void main() {
           );
           expect(_saveButton(tester).onPressed, isNotNull);
           await _enterActivity(tester, '自动空闲补记');
-          await tester.tap(find.text('保存记录'));
+          await tester.tap(_saveControl());
           await tester.pumpAndSettle();
           // 确认计算后的区间真实落库，无冲突异常。
           final List<TimeEntryRecord> saved = await fixture.database
@@ -415,10 +547,39 @@ void main() {
     );
     try {
       await _wheelTo(tester, hour: 23, minute: 57);
+      expect(find.text('调整开始时间'), findsNothing);
+      expect(find.text('结束时间必须晚于开始时间'), findsOneWidget);
+      // 错误位于时间摘要与滚轮之间，替换调整提示且不在滚轮下重复展示。
+      expect(
+        tester
+            .getCenter(
+              find.byKey(const ValueKey<String>('time-entry-time-error')),
+            )
+            .dy,
+        greaterThan(
+          tester
+              .getBottomLeft(
+                find.byKey(const ValueKey<String>('time-start-display')),
+              )
+              .dy,
+        ),
+      );
+      expect(
+        tester
+            .getBottomLeft(
+              find.byKey(const ValueKey<String>('time-entry-time-error')),
+            )
+            .dy,
+        lessThanOrEqualTo(
+          tester.getTopLeft(find.byType(TimeEntryWheelPicker)).dy,
+        ),
+      );
+      await _capture(tester, 'android-invalid-time');
       await tester.tap(find.byKey(const ValueKey<String>('time-end-select')));
       await tester.pumpAndSettle();
       await _wheelTo(tester, hour: 0, minute: 2);
       expect(find.text('结束时间必须晚于开始时间'), findsOneWidget);
+      expect(find.text('调整结束时间'), findsNothing);
       expect(_saveButton(tester).onPressed, isNull);
       expect(
         DateUtils.dateOnly(_dateButton(tester, 'end').value!),
@@ -426,8 +587,13 @@ void main() {
       );
       _dateButton(tester, 'end').onChanged!(DateTime(2026, 10, 8));
       await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('time-entry-time-error')),
+        findsNothing,
+      );
+      expect(find.text('调整结束时间'), findsOneWidget);
       expect(find.text('结束 · 次日'), findsOneWidget);
-      expect(find.text('共 5 分钟'), findsOneWidget);
+      expect(find.text('共 0.08 小时'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey<String>('time-start-select')));
       await tester.pumpAndSettle();
       expect(
@@ -438,7 +604,7 @@ void main() {
       );
       await _capture(tester, 'android-cross-day');
       await _enterActivity(tester, '跨天精确补记');
-      await tester.tap(find.text('保存记录'));
+      await tester.tap(_saveControl());
       await tester.pumpAndSettle();
       // 保存同一条绝对时间记录，不被五分钟步长取整。
       final TimeEntryRecord saved = await fixture.database
@@ -687,7 +853,7 @@ void main() {
       await gesture.up();
       await tester.pumpAndSettle();
       await _enterActivity(tester, '鼠标阻挡回退');
-      await tester.tap(find.text('保存记录'));
+      await tester.tap(_saveControl());
       await tester.pumpAndSettle();
       // 实际保存没有覆盖已有障碍记录。
       final List<TimeEntryRecord> records = await fixture.database
@@ -772,7 +938,7 @@ void main() {
       expect(_dateButton(tester, 'end').value, DateTime(2026, 10, 7, 10, 1, 3));
       expect(_saveButton(tester).onPressed, isNotNull);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('保存记录'));
+      await tester.tap(_saveControl());
       await tester.pumpAndSettle();
       // 反向阻挡不会把已有秒数取整或新增另一条记录。
       final List<TimeEntryRecord> records = (await tester.runAsync(
@@ -843,7 +1009,7 @@ void main() {
         '备注内容',
       );
       await _enterActivity(tester, '逐分钟记录');
-      await tester.tap(find.text('保存记录'));
+      await tester.tap(_saveControl());
       await tester.pumpAndSettle();
       // 真实存储保留一端非整五分钟，以及展开/折叠后的备注。
       final TimeEntryRecord saved = await fixture.database
@@ -892,7 +1058,7 @@ void main() {
       expect(find.textContaining('昨日'), findsWidgets);
       await _enterActivity(tester, '昨日补记');
       await _capture(tester, 'windows-left-yesterday');
-      await tester.tap(find.text('保存记录'));
+      await tester.tap(_saveControl());
       await tester.pumpAndSettle();
       // 保存为真实昨日开始、今日结束的一条记录。
       final TimeEntryRecord saved = await fixture.database
@@ -1054,7 +1220,7 @@ void main() {
         greaterThanOrEqualTo(expectedEnd),
       );
       await _enterActivity(tester, '多天补记');
-      await tester.tap(find.text('保存记录'));
+      await tester.tap(_saveControl());
       await tester.pumpAndSettle();
       expect(
         (await fixture.database
@@ -1102,7 +1268,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         // 固定保存区仍完整位于键盘上方。
-        final Rect saveRect = tester.getRect(find.text('保存记录'));
+        final Rect saveRect = tester.getRect(_saveControl());
         expect(saveRect.bottom, lessThanOrEqualTo(540));
         await tester.ensureVisible(
           find.byKey(const ValueKey<String>('time-entry-activity')),
@@ -1113,7 +1279,14 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(_saveButton(tester).onPressed, isNotNull);
+        // 窗口与文字缩放变化不能被滚轮当作用户改时刻。
+        expect(
+          _dateButton(tester, 'start').value,
+          DateTime(2026, 10, 7, 9, 20),
+        );
+        expect(_dateButton(tester, 'end').value, DateTime(2026, 10, 7, 10, 20));
         expect(tester.takeException(), isNull);
+        await _capture(tester, '${platform.name}-large-text-keyboard');
       } finally {
         await fixture.dispose(tester);
       }
@@ -1131,7 +1304,7 @@ void main() {
       try {
         await _capture(tester, '${platform.name}-dark');
         await _enterActivity(tester, '深色补记');
-        await tester.tap(find.text('保存记录'));
+        await tester.tap(_saveControl());
         await tester.pumpAndSettle();
         expect(
           await fixture.database.select(fixture.database.timeEntries).get(),
@@ -1157,6 +1330,8 @@ Future<_DialogFixture> _pumpDialog(
   bool editing = false,
   Completer<void>? defaultLoadGate,
   bool failFirstDefaultLoad = false,
+  Completer<void>? saveGate,
+  bool failFirstSave = false,
 }) async {
   // 当前平台的代表性窗口尺寸。
   final Size viewport =
@@ -1197,12 +1372,17 @@ Future<_DialogFixture> _pumpDialog(
     overrides: [
       appDatabaseProvider.overrideWithValue(database),
       nowProvider.overrideWithValue(effectiveNow),
-      if (defaultLoadGate != null || failFirstDefaultLoad)
+      if (defaultLoadGate != null ||
+          failFirstDefaultLoad ||
+          saveGate != null ||
+          failFirstSave)
         timeEntryRepositoryProvider.overrideWithValue(
           _DefaultRangeTestRepository(
             database,
             gate: defaultLoadGate,
             failFirst: failFirstDefaultLoad,
+            saveGate: saveGate,
+            failFirstSave: failFirstSave,
           ),
         ),
     ],
@@ -1365,9 +1545,15 @@ Rect _sliderTrack(WidgetTester tester) {
   );
 }
 
+/// 通过当前平台实际操作文案定位保存控件。
+Finder _saveControl() => find.byWidgetPredicate(
+  (Widget widget) =>
+      widget is OmniButton && (widget.label == '保存' || widget.label == '保存记录'),
+);
+
 /// 返回完整保存按钮状态。
 OmniButton _saveButton(WidgetTester tester) =>
-    tester.widget<OmniButton>(find.widgetWithText(OmniButton, '保存记录'));
+    tester.widget<OmniButton>(_saveControl());
 
 /// 返回某一端的日期控件。
 OmniDatePickerButton _dateButton(WidgetTester tester, String endpoint) =>
@@ -1385,6 +1571,15 @@ String _clockText(WidgetTester tester, String endpoint) => tester
 
 /// 控制初始化时机和一次失败，仍使用正式数据库查询。
 class _DefaultRangeTestRepository extends TimeEntryRepository {
+  /// 控制一次提交等待以覆盖返回和防重复提交。
+  final Completer<void>? saveGate;
+
+  /// 是否在首次保存时返回可重试失败。
+  final bool failFirstSave;
+
+  /// 实际提交尝试次数。
+  int _saves = 0;
+
   /// 一次加载等待，不影响实时占用监听。
   final Completer<void>? gate;
 
@@ -1399,7 +1594,18 @@ class _DefaultRangeTestRepository extends TimeEntryRepository {
     super.database, {
     this.gate,
     this.failFirst = false,
+    this.saveGate,
+    this.failFirstSave = false,
   });
+
+  /// 等待测试放行并模拟一次失败，其余沿用正式保存逻辑。
+  @override
+  Future<void> save(TimeEntryDraft draft) async {
+    _saves += 1;
+    if (saveGate != null) await saveGate!.future;
+    if (failFirstSave && _saves == 1) throw StateError('测试首次保存失败');
+    await super.save(draft);
+  }
 
   /// 只控制初始化读取的等待和一次失败。
   @override

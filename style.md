@@ -33,6 +33,7 @@
 | 日期与时间 | `OmniDatePickerButton`、`OmniTimePickerButton` | 通过应用浮层选择；禁用日期与当前日期含义不同 |
 | 分段切换 | `OmniSlidingSegmentedControl` | 需要跟手指示器时使用连续索引；保留既有横滑协调 |
 | 编辑与确认 | `showOmniDialog`、`OmniDialogScaffold`、`OmniSideSheetScaffold` | 不绕过 Windows 应用内弹窗路径；操作区允许换行 |
+| 可展开底部表单 | `showOmniExpandableBottomSheet`、`OmniExpandableBottomSheetScaffold` | 横线独立拖拽/点击，半屏与全屏共享草稿；固定顶部操作、正文独立滚动，键盘避让不展开字段 |
 | 操作结果 | `showOmniMessage` | 保留业务撤销，错误说明具体原因；进行中用持续状态表达 |
 
 操作结果提示的图标、正文、撤销和关闭按钮在同一行垂直居中；窄窗口或文字放大时，正文按剩余宽度自然换行，撤销按钮保持在右侧。
@@ -44,6 +45,7 @@
 - 标签描述字段含义；说明描述格式或限制；错误靠近对应字段。不要把错误只放在短暂消息中。
 - 必填、只读、禁用和加载需要分别表达。保留原业务校验时机与校验条件。
 - 编辑器按内容分组，操作区统一对齐；长内容可滚动，软键盘出现后活动字段仍可访问。
+- Android 新增补记使用覆盖根导航的全屏弹窗，顶部固定取消、居中标题和保存，标题下以灰字显示“共 x 小时”；时间区与活动/类别/备注分组使用主题实底圆角卡片，行间细分隔，正文独立滚动。
 - Windows Enter 提交继续使用 `OmniWindowsEnterSubmit`；多行换行、中文输入法组词、下拉选项确认不得误提交。
 - 组件只负责呈现与输入，业务仓储、保存、撤销和错误恢复由调用方负责。
 

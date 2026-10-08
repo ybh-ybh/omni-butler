@@ -105,6 +105,23 @@ void main() {
     await tester.tap(find.text('保存修改'));
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('编辑事项'), findsNothing);
+    await tester.tap(find.text('展开底部面板'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(
+      find.byKey(const ValueKey<String>('omni-expandable-sheet-handle')),
+    );
+    // 展示页有持续加载指示器，按面板字段出现等待自身弹簧完成。
+    for (
+      int frame = 0;
+      frame < 200 && find.text('全屏内容；向下拖动横线可收回半屏').evaluate().isEmpty;
+      frame += 1
+    ) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(find.text('全屏内容；向下拖动横线可收回半屏'), findsOneWidget);
+    await tester.tap(find.text('取消').last);
+    await tester.pump(const Duration(milliseconds: 500));
     expect(tester.takeException(), isNull);
   });
 }

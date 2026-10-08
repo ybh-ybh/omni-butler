@@ -25,10 +25,17 @@ void main() {
       await tester.tap(find.text('补记时间'));
       await tester.pumpAndSettle();
       await tester.enterText(
-        find.widgetWithText(TextFormField, '例如：睡眠、学习 Text2SQL'),
+        find.byKey(const ValueKey<String>('time-entry-activity')),
         '补记活动',
       );
-      await tester.tap(find.text('保存记录'));
+      await tester.tap(
+        find
+                .byKey(const ValueKey<String>('time-entry-backfill-submit'))
+                .evaluate()
+                .isNotEmpty
+            ? find.byKey(const ValueKey<String>('time-entry-backfill-submit'))
+            : find.text('保存记录'),
+      );
       await tester.pumpAndSettle();
 
       // 按原有五分钟粒度取整的默认结束时间。
@@ -122,10 +129,22 @@ void main() {
     await tester.tap(find.text('开始记录'));
     await tester.pumpAndSettle();
 
-    expect(find.byType(Dialog), findsOneWidget);
+    // 开始记录按平台呈现，安卓使用半屏面板，桌面保持居中弹窗。
+    final bool android =
+        Theme.of(
+          tester.element(
+            find.byKey(const ValueKey<String>('time-entry-editor')),
+          ),
+        ).platform ==
+        TargetPlatform.android;
+    expect(find.byType(Dialog), android ? findsNothing : findsOneWidget);
     expect(find.text('结束时间'), findsNothing);
     expect(find.textContaining('关闭应用也不会丢失'), findsNothing);
-    await tester.tap(find.text('开始记录').last);
+    await tester.tap(
+      android
+          ? find.byKey(const ValueKey<String>('time-entry-start-submit'))
+          : find.text('开始记录').last,
+    );
     await tester.pumpAndSettle();
 
     // 页面出现持久化的进行中提示条。

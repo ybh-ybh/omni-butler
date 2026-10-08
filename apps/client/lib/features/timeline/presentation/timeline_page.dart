@@ -20,6 +20,16 @@ Future<void> showStartTimeEntryDialog(
   BuildContext context, {
   required DateTime day,
 }) async {
+  if (Theme.of(context).platform == TargetPlatform.android) {
+    await showOmniExpandableBottomSheet<void>(
+      context: context,
+      builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
+        mode: _TimeEntryEditorMode.startOnly,
+        day: DateUtils.dateOnly(day),
+      ),
+    );
+    return;
+  }
   await showOmniDialog<void>(
     context: context,
     builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
@@ -34,8 +44,13 @@ Future<void> showBackfillTimeEntryDialog(
   BuildContext context, {
   required DateTime day,
 }) async {
+  // 安卓补记覆盖根导航，安全区由全屏内容统一处理。
+  final bool fullscreen = Theme.of(context).platform == TargetPlatform.android;
   await showOmniDialog<void>(
     context: context,
+    useSafeArea: !fullscreen,
+    fullscreenDialog: fullscreen,
+    barrierDismissible: !fullscreen,
     builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
       mode: _TimeEntryEditorMode.completed,
       day: DateUtils.dateOnly(day),
@@ -130,8 +145,14 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     final DateTime editorDay = DateUtils.dateOnly(
       record?.startedAt ?? day ?? _selectedDay,
     );
+    // 时间页菜单及空白时间轴补记也使用相同的安卓全屏路由。
+    final bool fullscreen =
+        record == null && Theme.of(context).platform == TargetPlatform.android;
     await showOmniDialog<void>(
       context: context,
+      useSafeArea: !fullscreen,
+      fullscreenDialog: fullscreen,
+      barrierDismissible: !fullscreen,
       builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
         mode: record?.endedAt == null && record != null
             ? _TimeEntryEditorMode.ongoing
@@ -1974,6 +1995,17 @@ class _AbsoluteTimeEntryDialog extends ConsumerStatefulWidget {
 /// 使用绝对时间的居中时间记录弹窗状态。
 class _AbsoluteTimeEntryDialogState
     extends ConsumerState<_AbsoluteTimeEntryDialog> {
+  /// 仅安卓新增补记使用全屏分组表单。
+  bool get _usesFullscreenBackfill =>
+      widget.mode == _TimeEntryEditorMode.completed &&
+      widget.record == null &&
+      Theme.of(context).platform == TargetPlatform.android;
+
+  /// 仅安卓开始记录使用可展开底部面板。
+  bool get _usesExpandableSheet =>
+      widget.mode == _TimeEntryEditorMode.startOnly &&
+      Theme.of(context).platform == TargetPlatform.android;
+
   /// 日期控件支持范围内的固定查询，扩展窗口时不清空占用快照。
   static final (DateTime, DateTime) _recordRange = (
     DateTime(1970),
@@ -2161,6 +2193,8 @@ class _AbsoluteTimeEntryDialogState
       _saving = true;
       _saveError = null;
     });
+    // 受关闭保护的安卓编辑器须在提交成功后先解除返回拦截。
+    final bool guardedEditor = _usesExpandableSheet || _usesFullscreenBackfill;
     try {
       await ref
           .read(timeEntryRepositoryProvider)
@@ -2179,6 +2213,11 @@ class _AbsoluteTimeEntryDialogState
             ),
           );
       if (mounted) {
+        if (guardedEditor) {
+          setState(() => _saving = false);
+          await WidgetsBinding.instance.endOfFrame;
+          if (!mounted) return;
+        }
         Navigator.of(context).pop();
       }
     } on ActiveTimeEntryConflict catch (error) {
@@ -2187,6 +2226,9 @@ class _AbsoluteTimeEntryDialogState
       _showError(error.toString());
     } on FormatException catch (error) {
       _showError(error.message);
+    } catch (error) {
+      if (!guardedEditor) rethrow;
+      _showError(_usesFullscreenBackfill ? '保存失败，请重试' : '开始记录失败，请重试');
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -2199,7 +2241,7 @@ class _AbsoluteTimeEntryDialogState
     if (!mounted) {
       return;
     }
-    if (widget.mode == _TimeEntryEditorMode.completed) {
+    if (widget.mode == _TimeEntryEditorMode.completed || _usesExpandableSheet) {
       setState(() => _saveError = message);
     } else {
       showOmniMessage(context, message: message, tone: OmniMessageTone.error);
@@ -2475,14 +2517,16 @@ class _AbsoluteTimeEntryDialogState
       key: const ValueKey<String>('time-entry-activity'),
       controller: _activityController,
       autofocus: !completed && widget.mode != _TimeEntryEditorMode.startOnly,
-      decoration: InputDecoration(
-        labelText: completed
-            ? null
-            : hasEndTime
-            ? '做了什么 *'
-            : '正在做什么（可稍后填写）',
-        hintText: hasEndTime ? '例如：睡眠、学习 Text2SQL' : '留空也可以直接开始',
-      ),
+      decoration: _usesFullscreenBackfill
+          ? _groupedInputDecoration.copyWith(hintText: '做了什么')
+          : InputDecoration(
+              labelText: completed
+                  ? null
+                  : hasEndTime
+                  ? '做了什么 *'
+                  : '正在做什么（可稍后填写）',
+              hintText: hasEndTime ? '例如：睡眠、学习 Text2SQL' : '留空也可以直接开始',
+            ),
       validator: (String? value) =>
           hasEndTime && (value == null || value.trim().isEmpty)
           ? '请输入活动内容'
@@ -2492,7 +2536,11 @@ class _AbsoluteTimeEntryDialogState
     final Widget categoryField = OmniDropdownButtonFormField<String>(
       key: const ValueKey<String>('time-entry-category'),
       initialValue: currentCategory.isEmpty ? null : currentCategory,
-      decoration: InputDecoration(labelText: completed ? null : '类别'),
+      decoration: _usesFullscreenBackfill
+          ? _groupedInputDecoration
+          : InputDecoration(
+              labelText: completed || _usesExpandableSheet ? null : '类别',
+            ),
       hint: const Text('选择类别'),
       selectionIndicatorPosition:
           OmniDropdownSelectionIndicatorPosition.trailing,
@@ -2520,89 +2568,129 @@ class _AbsoluteTimeEntryDialogState
           .toList(growable: false),
       onChanged: (String? value) => _categoryController.text = value ?? '',
     );
-    return OmniDialogScaffold(
-      onWindowsEnter:
-          _saving ||
-              !_defaultRangeReady ||
-              !recordsReady ||
-              sliderConflict != null ||
-              invalidTime
-          ? null
-          : _save,
-      key: const ValueKey<String>('time-entry-editor'),
-      title: _title,
-      width: completed ? (usesWheel ? 440 : 680) : 620,
-      actions: <Widget>[
-        OmniButton(
+    if (_usesExpandableSheet) {
+      return OmniExpandableBottomSheetScaffold(
+        key: const ValueKey<String>('time-entry-editor'),
+        semanticsLabel: '开始记录面板',
+        canClose: !_saving,
+        leading: OmniButton(
           label: '取消',
-          variant: OmniButtonVariant.secondary,
+          variant: OmniButtonVariant.text,
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
         ),
-        OmniButton(
-          label: _saving ? '保存中…' : _actionLabel,
+        trailing: OmniButton(
+          key: const ValueKey<String>('time-entry-start-submit'),
+          label: '开始',
+          visualHeight: OmniSize.control,
           loading: _saving,
-          onPressed:
-              _saving ||
-                  !_defaultRangeReady ||
-                  !recordsReady ||
-                  sliderConflict != null ||
-                  invalidTime
-              ? null
-              : _save,
+          onPressed: _saving ? null : _save,
         ),
-      ],
-      child: !_defaultRangeReady
-          ? Padding(
-              padding: const EdgeInsets.all(OmniSpacing.lg),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  if (_loadingDefaultRange) ...<Widget>[
-                    const CircularProgressIndicator(),
-                    const SizedBox(height: OmniSpacing.md),
-                    const Text('正在计算空闲时间…'),
-                  ] else ...<Widget>[
-                    Text(_saveError ?? '读取已有记录失败，请重试'),
-                    const SizedBox(height: OmniSpacing.md),
-                    OmniButton(label: '重试', onPressed: _loadDefaultRange),
-                  ],
-                ],
-              ),
-            )
-          : SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  if (!recordsReady)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: OmniSpacing.md),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          Text(
-                            recordsState.hasError
-                                ? '读取已记录时间失败，请重试'
-                                : '正在读取已记录时间…',
-                          ),
-                          if (recordsState.hasError)
-                            OmniButton(
-                              label: '重试',
-                              onPressed: () => ref.invalidate(
-                                timeEntriesForRangeProvider(_recordRange),
-                              ),
-                            ),
-                        ],
-                      ),
+        bodyBuilder: (BuildContext context, bool expanded) => AbsorbPointer(
+          absorbing: _saving,
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                activityField,
+                const SizedBox(height: OmniSpacing.lg),
+                categoryField,
+                if (expanded) ...<Widget>[
+                  const SizedBox(height: OmniSpacing.lg),
+                  _AbsoluteDateTimeField(
+                    key: const ValueKey<String>('time-entry-start-time'),
+                    label: '开始时间',
+                    value: _startedAt,
+                    onDateChanged: (DateTime date) => setState(
+                      () => _startedAt = _withDate(_startedAt, date),
                     ),
-                  AbsorbPointer(
-                    absorbing: _saving || !recordsReady,
-                    child: Form(
-                      key: _formKey,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: <Widget>[
-                          if (completed) ...<Widget>[
-                            _buildCompletedTimeSection(
+                    onTimeChanged: (TimeOfDay time) => setState(
+                      () => _startedAt = _withTime(_startedAt, time),
+                    ),
+                  ),
+                  const SizedBox(height: OmniSpacing.lg),
+                  OmniTextField(
+                    key: const ValueKey<String>('time-entry-notes'),
+                    controller: _notesController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: '详细描述（可选）',
+                      hintText: '补充地点、结果或其他上下文',
+                    ),
+                  ),
+                ],
+                if (_saveError != null) ...<Widget>[
+                  const SizedBox(height: OmniSpacing.sm),
+                  Text(
+                    _saveError!,
+                    key: const ValueKey<String>('time-entry-save-error'),
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: OmniColors.of(context).danger),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    // 两种呈现共用时间状态、表单校验及加载失败重试。
+    final Widget editorBody = !_defaultRangeReady
+        ? Padding(
+            padding: const EdgeInsets.all(OmniSpacing.lg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                if (_loadingDefaultRange) ...<Widget>[
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: OmniSpacing.md),
+                  const Text('正在计算空闲时间…'),
+                ] else ...<Widget>[
+                  Text(_saveError ?? '读取已有记录失败，请重试'),
+                  const SizedBox(height: OmniSpacing.md),
+                  OmniButton(label: '重试', onPressed: _loadDefaultRange),
+                ],
+              ],
+            ),
+          )
+        : SingleChildScrollView(
+            padding: _usesFullscreenBackfill
+                ? const EdgeInsets.all(OmniSpacing.md)
+                : EdgeInsets.zero,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                if (!recordsReady)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: OmniSpacing.md),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Text(
+                          recordsState.hasError
+                              ? '读取已记录时间失败，请重试'
+                              : '正在读取已记录时间…',
+                        ),
+                        if (recordsState.hasError)
+                          OmniButton(
+                            label: '重试',
+                            onPressed: () => ref.invalidate(
+                              timeEntriesForRangeProvider(_recordRange),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                AbsorbPointer(
+                  absorbing: _saving || !recordsReady,
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        if (_usesFullscreenBackfill) ...<Widget>[
+                          _backfillGroup(
+                            child: _buildCompletedTimeSection(
                               usesWheel: usesWheel,
                               sliderDay: sliderDay,
                               startMinute: sliderStartMinute,
@@ -2613,163 +2701,401 @@ class _AbsoluteTimeEntryDialogState
                               conflict: sliderConflict,
                               invalidTime: invalidTime,
                             ),
-                            const SizedBox(height: OmniSpacing.lg),
-                            const Divider(),
-                            const SizedBox(height: OmniSpacing.lg),
-                            LayoutBuilder(
-                              builder:
-                                  (
-                                    BuildContext context,
-                                    BoxConstraints constraints,
-                                  ) {
-                                    // 桌面宽窗口让活动和类别同行，触控或大字号则自然分行。
-                                    final bool horizontal =
-                                        !usesWheel &&
-                                        constraints.maxWidth >= 520 &&
-                                        MediaQuery.textScalerOf(context)
-                                                .scale(14) <=
-                                            21;
-                                    // 活动输入的外置标签。
-                                    final Widget activity = _labelledField(
-                                      '做了什么 *',
-                                      activityField,
-                                    );
-                                    // 类别输入的外置标签，内部保留原有颜色圆点。
-                                    final Widget category = _labelledField(
-                                      '类别',
-                                      categoryField,
-                                    );
-                                    return horizontal
-                                        ? Row(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: <Widget>[
-                                              Expanded(
-                                                flex: 2,
-                                                child: activity,
-                                              ),
-                                              const SizedBox(
-                                                width: OmniSpacing.md,
-                                              ),
-                                              Expanded(child: category),
-                                            ],
-                                          )
-                                        : Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.stretch,
-                                            children: <Widget>[
-                                              activity,
-                                              const SizedBox(
-                                                height: OmniSpacing.md,
-                                              ),
-                                              category,
-                                            ],
-                                          );
-                                  },
-                            ),
+                          ),
+                          const SizedBox(height: OmniSpacing.lg),
+                          _buildBackfillDetails(activityField, categoryField),
+                          if (_saveError != null) ...<Widget>[
                             const SizedBox(height: OmniSpacing.sm),
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: OmniButton(
-                                key: const ValueKey<String>(
-                                  'time-entry-notes-toggle',
-                                ),
-                                variant: OmniButtonVariant.text,
-                                onPressed: _saving
-                                    ? null
-                                    : () => setState(
-                                        () => _notesExpanded = !_notesExpanded,
-                                      ),
-                                icon: _notesExpanded
-                                    ? Icons.expand_less_rounded
-                                    : Icons.expand_more_rounded,
-                                label: _notesExpanded ? '收起备注' : '添加备注（可选）',
+                            Text(
+                              _saveError!,
+                              key: const ValueKey<String>(
+                                'time-entry-save-error',
                               ),
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: OmniColors.of(context).danger,
+                                  ),
                             ),
-                            if (_notesExpanded)
-                              OmniTextField(
-                                key: const ValueKey<String>('time-entry-notes'),
-                                controller: _notesController,
-                                maxLines: 3,
-                                decoration: const InputDecoration(
-                                  hintText: '补充地点、结果或其他信息',
-                                ),
+                          ],
+                        ] else if (completed) ...<Widget>[
+                          _buildCompletedTimeSection(
+                            usesWheel: usesWheel,
+                            sliderDay: sliderDay,
+                            startMinute: sliderStartMinute,
+                            endMinute: sliderEndMinute,
+                            minMinute: sliderMinMinute,
+                            maxMinute: sliderMaxMinute,
+                            occupiedRecords: occupiedSliderRecords,
+                            conflict: sliderConflict,
+                            invalidTime: invalidTime,
+                          ),
+                          const SizedBox(height: OmniSpacing.lg),
+                          const Divider(),
+                          const SizedBox(height: OmniSpacing.lg),
+                          LayoutBuilder(
+                            builder:
+                                (
+                                  BuildContext context,
+                                  BoxConstraints constraints,
+                                ) {
+                                  // 桌面宽窗口让活动和类别同行，触控或大字号则自然分行。
+                                  final bool horizontal =
+                                      !usesWheel &&
+                                      constraints.maxWidth >= 520 &&
+                                      MediaQuery.textScalerOf(context)
+                                              .scale(14) <=
+                                          21;
+                                  // 活动输入的外置标签。
+                                  final Widget activity = _labelledField(
+                                    '做了什么 *',
+                                    activityField,
+                                  );
+                                  // 类别输入的外置标签，内部保留原有颜色圆点。
+                                  final Widget category = _labelledField(
+                                    '类别',
+                                    categoryField,
+                                  );
+                                  return horizontal
+                                      ? Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: <Widget>[
+                                            Expanded(flex: 2, child: activity),
+                                            const SizedBox(
+                                              width: OmniSpacing.md,
+                                            ),
+                                            Expanded(child: category),
+                                          ],
+                                        )
+                                      : Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          children: <Widget>[
+                                            activity,
+                                            const SizedBox(
+                                              height: OmniSpacing.md,
+                                            ),
+                                            category,
+                                          ],
+                                        );
+                                },
+                          ),
+                          const SizedBox(height: OmniSpacing.sm),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: OmniButton(
+                              key: const ValueKey<String>(
+                                'time-entry-notes-toggle',
                               ),
-                            if (_saveError != null) ...<Widget>[
-                              const SizedBox(height: OmniSpacing.sm),
-                              Text(
-                                _saveError!,
-                                key: const ValueKey<String>(
-                                  'time-entry-save-error',
-                                ),
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(
-                                      color: OmniColors.of(context).danger,
-                                    ),
-                              ),
-                            ],
-                          ] else ...<Widget>[
-                            activityField,
-                            const SizedBox(height: OmniSpacing.lg),
-                            _AbsoluteDateTimeField(
-                              label: '开始时间',
-                              value: _startedAt,
-                              onDateChanged:
-                                  widget.mode == _TimeEntryEditorMode.finish
+                              variant: OmniButtonVariant.text,
+                              onPressed: _saving
                                   ? null
-                                  : (DateTime date) => setState(
-                                      () => _startedAt = _withDate(
-                                        _startedAt,
-                                        date,
-                                      ),
+                                  : () => setState(
+                                      () => _notesExpanded = !_notesExpanded,
                                     ),
-                              onTimeChanged:
-                                  widget.mode == _TimeEntryEditorMode.finish
-                                  ? null
-                                  : (TimeOfDay time) => setState(
-                                      () => _startedAt = _withTime(
-                                        _startedAt,
-                                        time,
-                                      ),
-                                    ),
+                              icon: _notesExpanded
+                                  ? Icons.expand_less_rounded
+                                  : Icons.expand_more_rounded,
+                              label: _notesExpanded ? '收起备注' : '添加备注（可选）',
                             ),
-                            if (hasEndTime) ...<Widget>[
-                              const SizedBox(height: OmniSpacing.md),
-                              _AbsoluteDateTimeField(
-                                label: '结束时间',
-                                value: _endedAt,
-                                onDateChanged: (DateTime date) => setState(
-                                  () => _endedAt = _withDate(_endedAt, date),
-                                ),
-                                onTimeChanged: (TimeOfDay time) => setState(
-                                  () => _endedAt = _withTime(_endedAt, time),
-                                ),
-                              ),
-                              const SizedBox(height: OmniSpacing.sm),
-                              _TimeSpanHint(
-                                startedAt: _startedAt,
-                                endedAt: _endedAt,
-                              ),
-                            ],
-                            const SizedBox(height: OmniSpacing.lg),
-                            categoryField,
-                            const SizedBox(height: OmniSpacing.md),
+                          ),
+                          if (_notesExpanded)
                             OmniTextField(
+                              key: const ValueKey<String>('time-entry-notes'),
                               controller: _notesController,
                               maxLines: 3,
                               decoration: const InputDecoration(
-                                labelText: '详细描述（可选）',
-                                hintText: '补充地点、结果或其他上下文',
+                                hintText: '补充地点、结果或其他信息',
                               ),
                             ),
+                          if (_saveError != null) ...<Widget>[
+                            const SizedBox(height: OmniSpacing.sm),
+                            Text(
+                              _saveError!,
+                              key: const ValueKey<String>(
+                                'time-entry-save-error',
+                              ),
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: OmniColors.of(context).danger,
+                                  ),
+                            ),
                           ],
+                        ] else ...<Widget>[
+                          activityField,
+                          const SizedBox(height: OmniSpacing.lg),
+                          _AbsoluteDateTimeField(
+                            label: '开始时间',
+                            value: _startedAt,
+                            onDateChanged:
+                                widget.mode == _TimeEntryEditorMode.finish
+                                ? null
+                                : (DateTime date) => setState(
+                                    () => _startedAt = _withDate(
+                                      _startedAt,
+                                      date,
+                                    ),
+                                  ),
+                            onTimeChanged:
+                                widget.mode == _TimeEntryEditorMode.finish
+                                ? null
+                                : (TimeOfDay time) => setState(
+                                    () => _startedAt = _withTime(
+                                      _startedAt,
+                                      time,
+                                    ),
+                                  ),
+                          ),
+                          if (hasEndTime) ...<Widget>[
+                            const SizedBox(height: OmniSpacing.md),
+                            _AbsoluteDateTimeField(
+                              label: '结束时间',
+                              value: _endedAt,
+                              onDateChanged: (DateTime date) => setState(
+                                () => _endedAt = _withDate(_endedAt, date),
+                              ),
+                              onTimeChanged: (TimeOfDay time) => setState(
+                                () => _endedAt = _withTime(_endedAt, time),
+                              ),
+                            ),
+                            const SizedBox(height: OmniSpacing.sm),
+                            _TimeSpanHint(
+                              startedAt: _startedAt,
+                              endedAt: _endedAt,
+                            ),
+                          ],
+                          const SizedBox(height: OmniSpacing.lg),
+                          categoryField,
+                          const SizedBox(height: OmniSpacing.md),
+                          OmniTextField(
+                            controller: _notesController,
+                            maxLines: 3,
+                            decoration: const InputDecoration(
+                              labelText: '详细描述（可选）',
+                              hintText: '补充地点、结果或其他上下文',
+                            ),
+                          ),
                         ],
-                      ),
+                      ],
                     ),
                   ),
-                ],
+                ),
+              ],
+            ),
+          );
+    // 所有入口使用相同的保存门禁，避免未加载或冲突区间提交。
+    final VoidCallback? onSave =
+        _saving ||
+            !_defaultRangeReady ||
+            !recordsReady ||
+            sliderConflict != null ||
+            invalidTime
+        ? null
+        : _save;
+    if (_usesFullscreenBackfill) {
+      return _buildFullscreenBackfill(
+        child: editorBody,
+        onSave: onSave,
+        invalidTime: invalidTime,
+      );
+    }
+    return OmniDialogScaffold(
+      key: const ValueKey<String>('time-entry-editor'),
+      title: _title,
+      width: completed ? (usesWheel ? 440 : 680) : 620,
+      onWindowsEnter: onSave,
+      actions: <Widget>[
+        OmniButton(
+          label: '取消',
+          variant: OmniButtonVariant.secondary,
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+        ),
+        OmniButton(
+          label: _saving ? '保存中…' : _actionLabel,
+          loading: _saving,
+          onPressed: onSave,
+        ),
+      ],
+      child: editorBody,
+    );
+  }
+
+  /// 分组行使用卡片自身的底色和分隔线，输入保持原生校验能力。
+  static const InputDecoration _groupedInputDecoration = InputDecoration(
+    filled: false,
+    contentPadding: EdgeInsets.symmetric(vertical: OmniSpacing.sm),
+    border: InputBorder.none,
+    enabledBorder: InputBorder.none,
+    focusedBorder: InputBorder.none,
+    disabledBorder: InputBorder.none,
+    errorBorder: InputBorder.none,
+    focusedErrorBorder: InputBorder.none,
+  );
+
+  /// 构建实底圆角分组，不叠加外框或阴影。
+  Widget _backfillGroup({required Widget child, Key? key}) {
+    return Material(
+      key: key,
+      color: OmniColors.of(context).paper,
+      borderRadius: BorderRadius.circular(OmniRadius.panel),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
+        child: child,
+      ),
+    );
+  }
+
+  /// 活动、类别和可折叠备注共用设置式分组卡片。
+  Widget _buildBackfillDetails(Widget activityField, Widget categoryField) {
+    return _backfillGroup(
+      key: const ValueKey<String>('time-entry-details-group'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Semantics(label: '做了什么，必填', child: activityField),
+          const Divider(height: 1),
+          LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              // 大字号或极窄窗口将类别标签置于控件上方，保留选项可读宽度。
+              final bool stacked =
+                  constraints.maxWidth < 280 ||
+                  MediaQuery.textScalerOf(context).scale(14) > 21;
+              return stacked
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        const Padding(
+                          padding: EdgeInsets.only(top: OmniSpacing.sm),
+                          child: Text('类别'),
+                        ),
+                        categoryField,
+                      ],
+                    )
+                  : Row(
+                      children: <Widget>[
+                        const Text('类别'),
+                        const SizedBox(width: OmniSpacing.xl),
+                        Expanded(child: categoryField),
+                      ],
+                    );
+            },
+          ),
+          const Divider(height: 1),
+          Semantics(
+            expanded: _notesExpanded,
+            child: OmniButton(
+              key: const ValueKey<String>('time-entry-notes-toggle'),
+              variant: OmniButtonVariant.text,
+              onPressed: _saving
+                  ? null
+                  : () => setState(() => _notesExpanded = !_notesExpanded),
+              icon: _notesExpanded
+                  ? Icons.expand_less_rounded
+                  : Icons.expand_more_rounded,
+              label: _notesExpanded ? '收起备注' : '添加备注（可选）',
+            ),
+          ),
+          if (_notesExpanded)
+            OmniTextField(
+              key: const ValueKey<String>('time-entry-notes'),
+              controller: _notesController,
+              maxLines: 3,
+              decoration: _groupedInputDecoration.copyWith(
+                hintText: '补充地点、结果或其他信息',
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  /// 固定全屏弹窗顶部操作和居中时长，正文随键盘避让并独立滚动。
+  Widget _buildFullscreenBackfill({
+    required Widget child,
+    required VoidCallback? onSave,
+    required bool invalidTime,
+  }) {
+    // 当前主题的背景及辅助文字颜色。
+    final OmniColors colors = OmniColors.of(context);
+    // 非整小时保留最多两位小数，整数不显示多余零。
+    final String hours = NumberFormat('0.##')
+        .format(_endedAt.difference(_startedAt).inMinutes / 60);
+    return PopScope(
+      canPop: !_saving,
+      child: Dialog.fullscreen(
+        key: const ValueKey<String>('time-entry-editor'),
+        backgroundColor: colors.canvas,
+        child: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: OmniButton(
+                          label: '取消',
+                          variant: OmniButtonVariant.text,
+                          onPressed: _saving
+                              ? null
+                              : () => Navigator.of(context).pop(),
+                        ),
+                      ),
+                    ),
+                    Semantics(
+                      namesRoute: true,
+                      header: true,
+                      child: Text(
+                        '补记',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: Theme(
+                          data: Theme.of(context).copyWith(
+                            colorScheme: Theme.of(context).colorScheme
+                                .copyWith(onPrimary: Colors.white),
+                          ),
+                          child: OmniButton(
+                            key: const ValueKey<String>(
+                              'time-entry-backfill-submit',
+                            ),
+                            label: '保存',
+                            variant: OmniButtonVariant.primary,
+                            loading: _saving,
+                            onPressed: onSave,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
+                child: Text(
+                  !_defaultRangeReady
+                      ? (_loadingDefaultRange ? '正在计算时长…' : '时长待计算')
+                      : invalidTime
+                      ? '时间待调整'
+                      : '共 $hours 小时',
+                  key: const ValueKey<String>('time-range-duration'),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: colors.muted),
+                ),
+              ),
+              Expanded(child: child),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -2839,24 +3165,31 @@ class _AbsoluteTimeEntryDialogState
         : '${minutes >= 60 ? '${minutes ~/ 60} 小时' : ''}'
                   '${minutes % 60 != 0 ? ' ${minutes % 60} 分钟' : ''}'
               .trim();
+    // 滚轮上方在时间无效时显示错误，恢复有效后继续提示当前调整端点。
+    final String? timeError = invalidTime
+        ? (!_startInputValid || !_endInputValid
+              ? '请输入有效时刻（HH:mm）'
+              : '结束时间必须晚于开始时间')
+        : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Wrap(
-          alignment: WrapAlignment.spaceBetween,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: OmniSpacing.sm,
-          runSpacing: OmniSpacing.xxs,
-          children: <Widget>[
-            Text('时间区间', style: Theme.of(context).textTheme.labelLarge),
-            Text(
-              invalidTime ? '待调整' : '共 $duration',
-              key: const ValueKey<String>('time-range-duration'),
-              style: Theme.of(context).textTheme.bodySmall
-                  ?.copyWith(color: colors.muted),
-            ),
-          ],
-        ),
+        if (!_usesFullscreenBackfill)
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: OmniSpacing.sm,
+            runSpacing: OmniSpacing.xxs,
+            children: <Widget>[
+              Text('时间区间', style: Theme.of(context).textTheme.labelLarge),
+              Text(
+                invalidTime ? '待调整' : '共 $duration',
+                key: const ValueKey<String>('time-range-duration'),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: colors.muted),
+              ),
+            ],
+          ),
         const SizedBox(height: OmniSpacing.sm),
         LayoutBuilder(
           builder: (BuildContext context, BoxConstraints constraints) {
@@ -2896,15 +3229,23 @@ class _AbsoluteTimeEntryDialogState
         if (usesWheel) ...<Widget>[
           const SizedBox(height: OmniSpacing.sm),
           Text(
-            _editingStart ? '调整开始时间' : '调整结束时间',
+            timeError ?? (_editingStart ? '调整开始时间' : '调整结束时间'),
+            key: timeError == null
+                ? null
+                : const ValueKey<String>('time-entry-time-error'),
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall
-                ?.copyWith(color: colors.muted),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: timeError == null ? colors.muted : colors.danger,
+            ),
           ),
           TimeEntryWheelPicker(
-            key: ValueKey<String>(
-              'time-wheel-${_editingStart ? 'start' : 'end'}',
-            ),
+            // 字号变化会改变刻度高度，重建滚轮以按真实时刻定位，避免像素偏移改写数据。
+            key: ValueKey<(bool, double)>((
+              _editingStart,
+              MediaQuery.textScalerOf(context).scale(
+                Theme.of(context).textTheme.headlineSmall?.fontSize ?? 24,
+              ),
+            )),
             value: TimeOfDay.fromDateTime(
               _editingStart ? _startedAt : _endedAt,
             ),
@@ -2932,17 +3273,15 @@ class _AbsoluteTimeEntryDialogState
             onChanged: _updateSliderRange,
           ),
         ],
-        if (invalidTime) ...<Widget>[
+        if (!usesWheel && invalidTime) ...<Widget>[
           const SizedBox(height: OmniSpacing.xs),
           Text(
-            !_startInputValid || !_endInputValid
-                ? '请输入有效时刻（HH:mm）'
-                : '结束时间必须晚于开始时间',
+            timeError!,
             key: const ValueKey<String>('time-entry-time-error'),
             style: Theme.of(context).textTheme.bodySmall
                 ?.copyWith(color: colors.danger),
           ),
-        ] else if (conflict != null) ...<Widget>[
+        ] else if (!invalidTime && conflict != null) ...<Widget>[
           const SizedBox(height: OmniSpacing.xs),
           _TimeConflictMessage(record: conflict, absolute: true),
         ],
@@ -2971,6 +3310,7 @@ class _AbsoluteDateTimeField extends StatelessWidget {
     required this.value,
     required this.onDateChanged,
     required this.onTimeChanged,
+    super.key,
   });
 
   /// 构建字段标签及日期、时刻选择器。

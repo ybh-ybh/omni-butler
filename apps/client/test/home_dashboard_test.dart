@@ -384,7 +384,13 @@ void main() {
     expect(find.text('新增待办'), findsOneWidget);
     await tester.tap(find.text('补记时间'));
     await tester.pumpAndSettle();
-    expect(find.text('补记一段时间'), findsOneWidget);
+    expect(find.text('补记'), findsOneWidget);
+    expect(find.text('保存'), findsOneWidget);
+    // 首页入口的补记弹窗覆盖根导航和底部栏。
+    expect(
+      tester.getSize(find.byType(Dialog)),
+      tester.view.physicalSize / tester.view.devicePixelRatio,
+    );
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
 
@@ -399,6 +405,51 @@ void main() {
     await tester.pumpAndSettle();
 
     await _disposeApp(tester, database, container);
+  });
+
+  testWidgets('Android 首页开始入口使用只有两个字段的半屏面板', (WidgetTester tester) async {
+    // 入口验证只使用隔离内存数据库。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 加载真实安卓首页与导航。
+    final ProviderContainer container = await _pumpApp(
+      tester,
+      database: database,
+      preferences: await _preferences(<String, Object>{}),
+      now: DateTime(2026, 10, 8, 10, 23),
+      platform: TargetPlatform.android,
+      physicalSize: const Size(412, 915),
+    );
+    try {
+      await tester.tap(
+        find.byKey(const ValueKey<String>('home-mobile-create')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('omni-expandable-sheet-surface')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('time-entry-activity')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('time-entry-category')),
+        findsOneWidget,
+      );
+      expect(find.text('开始时间'), findsNothing);
+      expect(find.text('详细描述（可选）'), findsNothing);
+      expect(
+        find.byKey(const ValueKey<String>('time-entry-start-submit')),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    } finally {
+      await _disposeApp(tester, database, container);
+    }
   });
 
   testWidgets('Android 首页在记录进行中切换为结束主操作', (WidgetTester tester) async {
