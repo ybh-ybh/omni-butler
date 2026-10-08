@@ -115,7 +115,10 @@ void main() {
       'todayContext',
       'dayRuler',
     ]);
-    await tester.tap(find.byTooltip('关闭').last);
+    expect(_key('android-settings-detail-home'), findsOneWidget);
+    expect(_key('navigation-/settings').hitTestable(), findsOneWidget);
+    expect(find.byType(OmniSideSheetScaffold), findsNothing);
+    await tester.tap(_key('android-settings-back'));
     await tester.pumpAndSettle();
     await tester.tap(_key('navigation-/home'));
     await tester.pumpAndSettle();
@@ -126,6 +129,51 @@ void main() {
     expect(tester.takeException(), isNull);
     await _disposeHome(tester, app);
   });
+
+  // 两种明暗主题都验证新设置详情的可用性。
+  for (final String themeMode in <String>['light', 'dark']) {
+    testWidgets('首页设置小屏大字分组与功能管理跳转 $themeMode', (WidgetTester tester) async {
+      // 真实应用按小屏和放大字号启动。
+      final _HomeTestApp app = await _pumpHome(
+        tester,
+        size: const Size(360, 640),
+        textScale: 1.5,
+        themeMode: themeMode,
+      );
+      await tester.tap(_key('navigation-/settings'));
+      await tester.pumpAndSettle();
+      await tester.tap(_key('android-settings-home'));
+      await tester.pumpAndSettle();
+      expect(_key('android-settings-detail-home'), findsOneWidget);
+      expect(_key('home-settings-banner-panel'), findsOneWidget);
+      expect(_key('home-settings-added-panel'), findsOneWidget);
+      expect(find.byType(OmniSideSheetScaffold), findsNothing);
+      expect(_key('navigation-/settings').hitTestable(), findsOneWidget);
+      // 只滚动正文，使底部功能管理入口在大字布局下仍能访问。
+      final Finder contentScrollable = find
+          .descendant(
+            of: _key('home-card-manager-content'),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      await tester.scrollUntilVisible(
+        find.text('前往功能管理'),
+        180,
+        scrollable: contentScrollable,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('前往功能管理').hitTestable(), findsOneWidget);
+      await tester.tap(find.text('前往功能管理'));
+      await tester.pumpAndSettle();
+      expect(_key('android-settings-detail-features'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(_key('android-settings-overview'), findsOneWidget);
+      expect(_currentPath(app), '/settings');
+      expect(tester.takeException(), isNull);
+      await _disposeHome(tester, app);
+    });
+  }
 
   testWidgets('连续快滑和斜向拖动不越界，也不切换一级页面', (WidgetTester tester) async {
     // 使用真实路由与手势竞争环境。
@@ -482,7 +530,7 @@ void main() {
     await _disposeHome(tester, app);
   });
 
-  testWidgets('Windows 首页保留卡片布局与管理卡片入口', (WidgetTester tester) async {
+  testWidgets('Windows 首页移除工具栏并从设置管理卡片', (WidgetTester tester) async {
     // 桌面回归也在测试主体内清理平台模拟。
     final _HomeTestApp app = await _pumpHome(
       tester,
@@ -490,7 +538,8 @@ void main() {
       platform: TargetPlatform.windows,
     );
     expect(_key('home-mobile-pager'), findsNothing);
-    expect(find.text('管理卡片'), findsOneWidget);
+    expect(find.text('今日工作台'), findsNothing);
+    expect(find.text('管理卡片'), findsNothing);
     // 桌面三个业务面板继续使用默认卡片样式。
     for (final String panel in <String>[
       'home-todo-card',
@@ -499,6 +548,22 @@ void main() {
     ]) {
       expect(tester.widget<OmniPanel>(_key(panel)).flat, isFalse);
     }
+    await tester.tap(_key('navigation-/settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(_key('settings-category-home'));
+    await tester.pumpAndSettle();
+    expect(_key('home-card-manager-content'), findsOneWidget);
+    expect(find.byType(OmniSideSheetScaffold), findsNothing);
+    await tester.tap(find.byTooltip('移除每日名言'));
+    await tester.pumpAndSettle();
+    expect(app.preferences.getStringList('home.cards.order'), <String>[
+      'todos',
+      'timeStatus',
+      'todayContext',
+    ]);
+    await tester.tap(_key('navigation-/home'));
+    await tester.pumpAndSettle();
+    expect(_key('home-quote-card'), findsNothing);
     expect(tester.takeException(), isNull);
     await _disposeHome(tester, app);
   });

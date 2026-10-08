@@ -9,7 +9,7 @@ import 'package:omni_butler/features/home/presentation/home_card_catalog.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
-/// 显示首页卡片管理侧滑面板。
+/// 显示首页空态使用的卡片管理侧滑面板。
 Future<void> showHomeCardManager(BuildContext context) {
   // 以首页视口判定移动模式，避免桌面侧栏宽度影响布局选择。
   final bool mobileLayout =
@@ -18,18 +18,33 @@ Future<void> showHomeCardManager(BuildContext context) {
   return showOmniSideSheet<void>(
     context,
     desktopWidth: 360,
-    builder: (BuildContext sheetContext) =>
-        _HomeCardManagerSheet(mobileLayout: mobileLayout),
+    builder: (BuildContext sheetContext) => OmniSideSheetScaffold(
+      title: mobileLayout ? '首页设置' : '管理卡片',
+      child: HomeCardManagerContent(
+        mobileLayout: mobileLayout,
+        onOpenFeatures: () {
+          Navigator.of(sheetContext).pop();
+          context.go('/settings');
+        },
+      ),
+    ),
   );
 }
 
-/// 首页卡片管理侧滑面板。
-class _HomeCardManagerSheet extends ConsumerWidget {
+/// 设置详情和首页空态共用的卡片管理正文。
+class HomeCardManagerContent extends ConsumerWidget {
   /// 是否使用安卓紧凑首页的横幅与内容模块设置。
   final bool mobileLayout;
 
-  /// 创建首页卡片管理侧滑面板。
-  const _HomeCardManagerSheet({required this.mobileLayout});
+  /// 切换到功能管理的回调，由宿主处理返回或分类切换。
+  final VoidCallback onOpenFeatures;
+
+  /// 创建首页卡片管理正文。
+  const HomeCardManagerContent({
+    required this.mobileLayout,
+    required this.onOpenFeatures,
+    super.key,
+  });
 
   /// 构建已添加卡片、可添加卡片和功能提示。
   @override
@@ -62,206 +77,260 @@ class _HomeCardManagerSheet extends ConsumerWidget {
         ? ref.read(homeCardPreferenceProvider.notifier).reorderContentCards
         : ref.read(homeCardPreferenceProvider.notifier).reorder;
 
-    return OmniSideSheetScaffold(
-      title: mobileLayout ? '首页设置' : '管理卡片',
-      child: CustomScrollView(
-        slivers: <Widget>[
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(
-              OmniSpacing.md,
-              OmniSpacing.md,
-              OmniSpacing.md,
-              OmniSpacing.xs,
-            ),
-            sliver: SliverToBoxAdapter(
-              child: Text(
-                mobileLayout
-                    ? '名言固定在顶部，内容模块可拖动排序。修改会立即保存到当前设备。'
-                    : '拖动调整顺序，修改会立即保存到当前设备。',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-          ),
-          if (mobileLayout) ...<Widget>[
-            const SliverPadding(
-              padding: EdgeInsets.symmetric(horizontal: OmniSpacing.md),
-              sliver: SliverToBoxAdapter(
-                child: _SectionLabel(label: '顶部横幅', count: 1),
-              ),
-            ),
-            SliverToBoxAdapter(
-              child: _CardManagerRow(
-                key: const ValueKey<String>('home-settings-quote'),
-                card: HomeCardId.quote,
-                subtitle: '固定显示在内容模块上方',
-                enabled: true,
-                trailing: Semantics(
-                  label: '显示每日名言',
-                  child: OmniSwitch(
-                    key: const ValueKey<String>('home-settings-quote-switch'),
-                    value: cardPreference.contains(HomeCardId.quote),
-                    onChanged: (bool visible) => ref
-                        .read(homeCardPreferenceProvider.notifier)
-                        .setVisible(HomeCardId.quote, visible),
-                  ),
+    /// 构建已添加卡片，移动列表在行间插入同通知设置一致的分隔线。
+    Widget buildAddedCard(BuildContext context, int index) {
+      // 当前已添加卡片。
+      final HomeCardId card = addedCards[index];
+      // 当前卡片不可用的原因。
+      final String? unavailableReason = homeCardUnavailableReason(
+        card,
+        featurePreference,
+      );
+      return Column(
+        key: ValueKey<String>('home-card-manager-${card.name}'),
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (mobileLayout && index > 0) Divider(color: colors.line),
+          _CardManagerRow(
+            card: card,
+            subtitle: unavailableReason ?? card.description,
+            enabled: unavailableReason == null,
+            showIcon: !mobileLayout,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                OmniIconButton(
+                  tooltip: '移除${card.label}',
+                  onPressed: () => ref
+                      .read(homeCardPreferenceProvider.notifier)
+                      .setVisible(card, false),
+                  icon: const Icon(Icons.remove_circle_outline_rounded),
                 ),
-              ),
-            ),
-          ],
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
-            sliver: SliverToBoxAdapter(
-              child: _SectionLabel(
-                label: mobileLayout ? '已添加模块' : '已添加',
-                count: addedCards.length,
-              ),
-            ),
-          ),
-          if (addedCards.isEmpty)
-            SliverPadding(
-              padding: const EdgeInsets.all(OmniSpacing.md),
-              sliver: SliverToBoxAdapter(
-                child: Text(
-                  mobileLayout ? '还没有添加内容模块，可以从下方选择。' : '还没有添加卡片，可以从下方选择。',
+                _KeyboardReorderHandle(
+                  index: index,
+                  itemCount: addedCards.length,
+                  label: card.label,
+                  color: colors.muted,
+                  onReorder: reorderCards,
                 ),
-              ),
-            )
-          else
-            SliverReorderableList(
-              itemCount: addedCards.length,
-              onReorderItem: reorderCards,
-              itemBuilder: (BuildContext context, int index) {
-                // 当前已添加卡片。
-                final HomeCardId card = addedCards[index];
-                // 当前卡片不可用的原因。
-                final String? unavailableReason = homeCardUnavailableReason(
-                  card,
-                  featurePreference,
-                );
-                return _CardManagerRow(
-                  key: ValueKey<String>('home-card-manager-${card.name}'),
-                  card: card,
-                  subtitle: unavailableReason ?? card.description,
-                  enabled: unavailableReason == null,
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      OmniIconButton(
-                        tooltip: '移除${card.label}',
-                        onPressed: () => ref
-                            .read(homeCardPreferenceProvider.notifier)
-                            .setVisible(card, false),
-                        icon: const Icon(Icons.remove_circle_outline_rounded),
-                      ),
-                      _KeyboardReorderHandle(
-                        index: index,
-                        itemCount: addedCards.length,
-                        label: card.label,
-                        color: colors.muted,
-                        onReorder: reorderCards,
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(
-              OmniSpacing.md,
-              OmniSpacing.lg,
-              OmniSpacing.md,
-              0,
-            ),
-            sliver: SliverToBoxAdapter(
-              child: _SectionLabel(
-                label: mobileLayout ? '可添加模块' : '可添加',
-                count: availableCards.length,
-              ),
-            ),
-          ),
-          if (availableCards.isEmpty)
-            SliverPadding(
-              padding: const EdgeInsets.all(OmniSpacing.md),
-              sliver: SliverToBoxAdapter(
-                child: Text(mobileLayout ? '所有内容模块都已添加。' : '所有卡片都已添加。'),
-              ),
-            )
-          else
-            SliverList.builder(
-              itemCount: availableCards.length,
-              itemBuilder: (BuildContext context, int index) {
-                // 当前可添加卡片。
-                final HomeCardId card = availableCards[index];
-                // 当前卡片是否满足功能依赖。
-                final bool enabled = isHomeCardAvailable(
-                  card,
-                  featurePreference,
-                );
-                // 当前卡片不可用的原因。
-                final String? unavailableReason = homeCardUnavailableReason(
-                  card,
-                  featurePreference,
-                );
-                return _CardManagerRow(
-                  card: card,
-                  subtitle: unavailableReason ?? card.description,
-                  enabled: enabled,
-                  trailing: OmniIconButton(
-                    tooltip: enabled ? '添加${card.label}' : '需要先开启相关功能',
-                    onPressed: enabled
-                        ? () => ref
-                              .read(homeCardPreferenceProvider.notifier)
-                              .setVisible(card, true)
-                        : null,
-                    icon: const Icon(Icons.add_circle_outline_rounded),
-                  ),
-                );
-              },
-            ),
-          SliverPadding(
-            padding: const EdgeInsets.all(OmniSpacing.md),
-            sliver: SliverToBoxAdapter(
-              child: Container(
-                padding: const EdgeInsets.all(OmniSpacing.sm),
-                decoration: BoxDecoration(
-                  color: colors.brandSoft,
-                  borderRadius: BorderRadius.circular(OmniRadius.panel),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Icon(
-                      Icons.info_outline_rounded,
-                      color: colors.brand,
-                      size: OmniSize.icon,
-                    ),
-                    const SizedBox(width: OmniSpacing.xs),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(
-                            mobileLayout
-                                ? '功能关闭后，相关内容模块会暂时隐藏，原有顺序会保留。'
-                                : '功能关闭后，相关卡片会暂时隐藏。',
-                          ),
-                          TextButton(
-                            onPressed: () {
-                              Navigator.of(context).pop();
-                              context.go('/settings');
-                            },
-                            child: const Text('前往功能管理'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              ],
             ),
           ),
         ],
-      ),
+      );
+    }
+
+    /// 构建可添加卡片，功能依赖沿用原来的禁用条件。
+    Widget buildAvailableCard(BuildContext context, int index) {
+      // 当前可添加卡片。
+      final HomeCardId card = availableCards[index];
+      // 当前卡片是否满足功能依赖。
+      final bool enabled = isHomeCardAvailable(card, featurePreference);
+      return _CardManagerRow(
+        key: ValueKey<String>('home-card-available-${card.name}'),
+        card: card,
+        subtitle:
+            homeCardUnavailableReason(card, featurePreference) ??
+            card.description,
+        enabled: enabled,
+        showIcon: !mobileLayout,
+        trailing: OmniIconButton(
+          tooltip: enabled ? '添加${card.label}' : '需要先开启相关功能',
+          onPressed: enabled
+              ? () => ref
+                    .read(homeCardPreferenceProvider.notifier)
+                    .setVisible(card, true)
+              : null,
+          icon: const Icon(Icons.add_circle_outline_rounded),
+        ),
+      );
+    }
+
+    return CustomScrollView(
+      key: const ValueKey<String>('home-card-manager-content'),
+      slivers: <Widget>[
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(
+            OmniSpacing.md,
+            mobileLayout ? OmniSpacing.xl : OmniSpacing.md,
+            OmniSpacing.md,
+            OmniSpacing.xxl,
+          ),
+          sliver: SliverMainAxisGroup(
+            slivers: <Widget>[
+              SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    if (mobileLayout) ...<Widget>[
+                      Row(
+                        children: <Widget>[
+                          Icon(
+                            Icons.dashboard_customize_outlined,
+                            color: colors.brand,
+                            size: OmniSize.icon,
+                          ),
+                          const SizedBox(width: OmniSpacing.xs),
+                          Text(
+                            '首页内容',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: OmniSpacing.xxs),
+                    ],
+                    Text(
+                      mobileLayout
+                          ? '名言固定在顶部，内容模块可拖动排序。修改会立即保存到当前设备。'
+                          : '拖动调整顺序，修改会立即保存到当前设备。',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: OmniSpacing.xs),
+                    if (mobileLayout) ...<Widget>[
+                      const _SectionLabel(label: '顶部横幅', count: 1),
+                      const SizedBox(height: OmniSpacing.xs),
+                      OmniListPanel(
+                        key: const ValueKey<String>(
+                          'home-settings-banner-panel',
+                        ),
+                        children: <Widget>[
+                          _CardManagerRow(
+                            key: const ValueKey<String>('home-settings-quote'),
+                            card: HomeCardId.quote,
+                            subtitle: '固定显示在内容模块上方',
+                            enabled: true,
+                            showIcon: false,
+                            trailing: Semantics(
+                              label: '显示每日名言',
+                              child: OmniSwitch(
+                                key: const ValueKey<String>(
+                                  'home-settings-quote-switch',
+                                ),
+                                value: cardPreference.contains(
+                                  HomeCardId.quote,
+                                ),
+                                onChanged: (bool visible) => ref
+                                    .read(homeCardPreferenceProvider.notifier)
+                                    .setVisible(HomeCardId.quote, visible),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: OmniSpacing.lg),
+                    ],
+                    _SectionLabel(
+                      label: mobileLayout ? '已添加模块' : '已添加',
+                      count: addedCards.length,
+                    ),
+                    const SizedBox(height: OmniSpacing.xs),
+                  ],
+                ),
+              ),
+              if (addedCards.isEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.all(OmniSpacing.md),
+                    child: Text(
+                      mobileLayout ? '还没有添加内容模块，可以从下方选择。' : '还没有添加卡片，可以从下方选择。',
+                    ),
+                  ),
+                )
+              else if (mobileLayout)
+                SliverToBoxAdapter(
+                  child: OmniPanel(
+                    key: const ValueKey<String>('home-settings-added-panel'),
+                    padding: EdgeInsets.zero,
+                    child: ReorderableListView.builder(
+                      shrinkWrap: true,
+                      primary: false,
+                      physics: const NeverScrollableScrollPhysics(),
+                      buildDefaultDragHandles: false,
+                      itemCount: addedCards.length,
+                      onReorderItem: reorderCards,
+                      itemBuilder: buildAddedCard,
+                    ),
+                  ),
+                )
+              else
+                SliverReorderableList(
+                  itemCount: addedCards.length,
+                  onReorderItem: reorderCards,
+                  itemBuilder: buildAddedCard,
+                ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.only(
+                    top: OmniSpacing.lg,
+                    bottom: OmniSpacing.xs,
+                  ),
+                  child: _SectionLabel(
+                    label: mobileLayout ? '可添加模块' : '可添加',
+                    count: availableCards.length,
+                  ),
+                ),
+              ),
+              if (availableCards.isEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.all(OmniSpacing.md),
+                    child: Text(mobileLayout ? '所有内容模块都已添加。' : '所有卡片都已添加。'),
+                  ),
+                )
+              else if (mobileLayout)
+                SliverToBoxAdapter(
+                  child: OmniListPanel(
+                    key: const ValueKey<String>(
+                      'home-settings-available-panel',
+                    ),
+                    children: <Widget>[
+                      // 按目录顺序呈现每个可添加模块。
+                      for (
+                        int index = 0;
+                        index < availableCards.length;
+                        index += 1
+                      )
+                        buildAvailableCard(context, index),
+                    ],
+                  ),
+                )
+              else
+                SliverList.builder(
+                  itemCount: availableCards.length,
+                  itemBuilder: buildAvailableCard,
+                ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: OmniSpacing.md),
+                  child: OmniListPanel(
+                    children: <Widget>[
+                      OmniListRow(
+                        leading: Icon(
+                          Icons.info_outline_rounded,
+                          color: colors.brand,
+                          size: OmniSize.icon,
+                        ),
+                        title: Text(
+                          mobileLayout
+                              ? '功能关闭后，相关内容模块会暂时隐藏，原有顺序会保留。'
+                              : '功能关闭后，相关卡片会暂时隐藏。',
+                        ),
+                        subtitle: Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            onPressed: onOpenFeatures,
+                            child: const Text('前往功能管理'),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -417,12 +486,16 @@ class _CardManagerRow extends StatelessWidget {
   /// 右侧操作区。
   final Widget trailing;
 
+  /// 桌面保留卡片图标，移动设置采用同通知设置一致的文字行。
+  final bool showIcon;
+
   /// 创建卡片管理行。
   const _CardManagerRow({
     required this.card,
     required this.subtitle,
     required this.enabled,
     required this.trailing,
+    this.showIcon = true,
     super.key,
   });
 
@@ -431,29 +504,28 @@ class _CardManagerRow extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
-      child: OmniListRow(
-        leading: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: enabled ? colors.brandSoft : colors.paperSubtle,
-            borderRadius: BorderRadius.circular(OmniRadius.control),
-          ),
-          child: Icon(
-            card.icon,
-            color: enabled ? colors.brand : colors.muted,
-            size: OmniSize.navigationIcon,
-          ),
-        ),
-        title: Text(card.label),
-        subtitle: Text(
-          subtitle,
-          style: TextStyle(color: enabled ? colors.muted : colors.warning),
-        ),
-        trailing: trailing,
+    return OmniListRow(
+      leading: showIcon
+          ? Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: enabled ? colors.brandSoft : colors.paperSubtle,
+                borderRadius: BorderRadius.circular(OmniRadius.control),
+              ),
+              child: Icon(
+                card.icon,
+                color: enabled ? colors.brand : colors.muted,
+                size: OmniSize.navigationIcon,
+              ),
+            )
+          : null,
+      title: Text(card.label),
+      subtitle: Text(
+        subtitle,
+        style: TextStyle(color: enabled ? colors.muted : colors.warning),
       ),
+      trailing: trailing,
     );
   }
 }

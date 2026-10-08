@@ -92,6 +92,45 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('移动分组列表可实际拖拽排序并持久化', (WidgetTester tester) async {
+    // 当前测试使用的本机偏好。
+    final SharedPreferences preferences = await _pumpManager(tester);
+    // 第一项的实际拖拽手柄。
+    final Finder handle = find.byKey(
+      const ValueKey<String>('home-card-reorder-今日待办-0'),
+    );
+    // 第三项下沿的目标位置，确保越过最后一个插入阈值。
+    final Offset target =
+        tester.getBottomLeft(
+          find.byKey(const ValueKey<String>('home-card-manager-todayContext')),
+        ) +
+        const Offset(280, -4);
+    // 使用真实手势经过分组列表，避免仅调用排序回调。
+    final TestGesture gesture = await tester.startGesture(
+      tester.getCenter(handle),
+    );
+    await tester.pump();
+    await gesture.moveBy(const Offset(0, 24));
+    await tester.pump();
+    // 连续位置模拟手指移动，等待排序空位动画响应。
+    final Offset start = tester.getCenter(handle);
+    for (final double progress in <double>[0.25, 0.5, 0.75, 1]) {
+      await gesture.moveTo(Offset.lerp(start, target, progress)!);
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await gesture.moveBy(const Offset(0, 4));
+    await tester.pump(const Duration(milliseconds: 300));
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(preferences.getStringList('home.cards.order'), <String>[
+      'timeStatus',
+      'quote',
+      'todayContext',
+      'todos',
+    ]);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('移动模块键盘排序使用内容索引并保留关闭功能', (WidgetTester tester) async {
     // 待办已关闭但仍应保留在管理器和持久化顺序里。
     final SharedPreferences preferences = await _pumpManager(

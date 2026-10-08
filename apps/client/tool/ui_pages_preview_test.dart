@@ -268,14 +268,31 @@ Future<void> _captureBusinessPages(
           await _capture(tester, captureKey, '$prefix-home-$module');
         }
       }
-      if (route == '/settings' && platform == TargetPlatform.android) {
-        // 首页设置从一级设置页进入，截图包含同一个持久化配置面板。
+      if (route == '/settings') {
+        // 首页设置使用与通知提醒一致的二级页面和持久化分组列表。
         await tester.tap(
-          find.byKey(const ValueKey<String>('android-settings-home')),
+          find.byKey(
+            ValueKey<String>(
+              platform == TargetPlatform.android
+                  ? 'android-settings-home'
+                  : 'settings-category-home',
+            ),
+          ),
         );
         await tester.pumpAndSettle();
         await _capture(tester, captureKey, '$prefix-home-settings');
-        await tester.tap(find.byTooltip('关闭').last);
+        if (platform == TargetPlatform.android) {
+          await tester.ensureVisible(find.text('前往功能管理'));
+          await tester.pumpAndSettle();
+          await _capture(tester, captureKey, '$prefix-home-settings-bottom');
+          await tester.tap(
+            find.byKey(const ValueKey<String>('android-settings-back')),
+          );
+        } else {
+          await tester.tap(
+            find.byKey(const ValueKey<String>('settings-category-features')),
+          );
+        }
         await tester.pumpAndSettle();
       }
     }

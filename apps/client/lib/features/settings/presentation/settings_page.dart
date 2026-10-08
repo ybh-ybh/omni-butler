@@ -38,6 +38,9 @@ enum _DisconnectChoice {
 
 /// 设置页一级分类。
 enum _SettingsCategory {
+  /// 首页卡片与模块设置。
+  home,
+
   /// 功能开关。
   features,
 
@@ -58,6 +61,7 @@ enum _SettingsCategory {
 extension _SettingsCategoryPresentation on _SettingsCategory {
   /// 一级分类名称。
   String get label => switch (this) {
+    _SettingsCategory.home => '首页设置',
     _SettingsCategory.features => '功能管理',
     _SettingsCategory.appearance => '外观与主题',
     _SettingsCategory.notifications => '通知提醒',
@@ -67,6 +71,7 @@ extension _SettingsCategoryPresentation on _SettingsCategory {
 
   /// 一级分类说明。
   String get description => switch (this) {
+    _SettingsCategory.home => '调整当前设备首页显示的卡片与顺序。',
     _SettingsCategory.features => '只保留你真正使用的功能，关闭后数据仍会安全保留。',
     _SettingsCategory.appearance => '调整当前设备的显示模式与视觉体验。',
     _SettingsCategory.notifications => '管理当前设备上的系统提醒。',
@@ -76,6 +81,7 @@ extension _SettingsCategoryPresentation on _SettingsCategory {
 
   /// 一级分类图标。
   IconData get icon => switch (this) {
+    _SettingsCategory.home => Icons.dashboard_customize_outlined,
     _SettingsCategory.features => Icons.widgets_outlined,
     _SettingsCategory.appearance => Icons.palette_outlined,
     _SettingsCategory.notifications => Icons.notifications_outlined,
@@ -150,6 +156,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
         final Widget content = _SettingsCategoryContent(
           category: _selectedCategory,
           colors: colors,
+          onOpenFeatures: () => _selectCategory(_SettingsCategory.features),
         );
 
         if (showSidebar) {
@@ -212,6 +219,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
               category: selectedCategory,
               colors: colors,
               showPageHeader: false,
+              onOpenFeatures: () {
+                setState(() {
+                  _selectedCategory = _SettingsCategory.features;
+                  _androidSelectedCategory = _SettingsCategory.features;
+                });
+              },
             ),
           );
     return PopScope<Object?>(
@@ -366,18 +379,15 @@ class _AndroidSettingsOverview extends StatelessWidget {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     // 按用途划分的 Android 设置分类组。
-    const List<List<_SettingsCategory>> categoryGroups =
-        <List<_SettingsCategory>>[
-          <_SettingsCategory>[_SettingsCategory.features],
-          <_SettingsCategory>[
-            _SettingsCategory.appearance,
-            _SettingsCategory.notifications,
-          ],
-          <_SettingsCategory>[
-            _SettingsCategory.sync,
-            _SettingsCategory.storage,
-          ],
-        ];
+    const List<List<_SettingsCategory>>
+    categoryGroups = <List<_SettingsCategory>>[
+      <_SettingsCategory>[_SettingsCategory.home, _SettingsCategory.features],
+      <_SettingsCategory>[
+        _SettingsCategory.appearance,
+        _SettingsCategory.notifications,
+      ],
+      <_SettingsCategory>[_SettingsCategory.sync, _SettingsCategory.storage],
+    ];
 
     return ColoredBox(
       key: const ValueKey<String>('android-settings-overview'),
@@ -404,31 +414,6 @@ class _AndroidSettingsOverview extends StatelessWidget {
                     _AndroidSettingsGroupCard(
                       categories: categoryGroups[index],
                       onSelected: onSelected,
-                      extraEntry: index == 0
-                          ? ConstrainedBox(
-                              constraints: const BoxConstraints(minHeight: 64),
-                              child: OmniListRow(
-                                key: const ValueKey<String>(
-                                  'android-settings-home',
-                                ),
-                                title: Text(
-                                  '首页设置',
-                                  style: Theme.of(context).textTheme.bodyLarge
-                                      ?.copyWith(fontWeight: FontWeight.w500),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: OmniSpacing.lg,
-                                  vertical: OmniSpacing.sm,
-                                ),
-                                trailing: Icon(
-                                  Icons.chevron_right_rounded,
-                                  size: 24,
-                                  color: colors.muted,
-                                ),
-                                onTap: () => showHomeCardManager(context),
-                              ),
-                            )
-                          : null,
                     ),
                     if (index < categoryGroups.length - 1)
                       const SizedBox(height: OmniSpacing.md),
@@ -525,9 +510,6 @@ class _AndroidSettingsHeader extends StatelessWidget {
 
 /// Android 设置分类分组卡片。
 class _AndroidSettingsGroupCard extends StatelessWidget {
-  /// 与现有分类同行呈现的额外设置入口。
-  final Widget? extraEntry;
-
   /// 当前分组分类。
   final List<_SettingsCategory> categories;
 
@@ -538,7 +520,6 @@ class _AndroidSettingsGroupCard extends StatelessWidget {
   const _AndroidSettingsGroupCard({
     required this.categories,
     required this.onSelected,
-    this.extraEntry,
   });
 
   /// 构建无边框圆角卡片与组内分隔线。
@@ -554,14 +535,6 @@ class _AndroidSettingsGroupCard extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          if (extraEntry != null) ...<Widget>[
-            extraEntry!,
-            Divider(
-              indent: OmniSpacing.lg,
-              endIndent: OmniSpacing.lg,
-              color: colors.line,
-            ),
-          ],
           for (
             int index = 0;
             index < categories.length;
@@ -604,7 +577,11 @@ class _AndroidSettingsCategoryRow extends StatelessWidget {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     return InkWell(
-      key: ValueKey<String>('android-settings-category-${category.name}'),
+      key: ValueKey<String>(
+        category == _SettingsCategory.home
+            ? 'android-settings-home'
+            : 'android-settings-category-${category.name}',
+      ),
       onTap: onTap,
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 64),
@@ -824,11 +801,15 @@ class _SettingsCategoryContent extends ConsumerWidget {
   /// 是否展示分类页面标题与说明。
   final bool showPageHeader;
 
+  /// 从首页设置切换到功能管理的回调。
+  final VoidCallback onOpenFeatures;
+
   /// 创建一级分类内容。
   const _SettingsCategoryContent({
     required this.category,
     required this.colors,
     this.showPageHeader = true,
+    required this.onOpenFeatures,
   });
 
   /// 构建带分类标题的可滚动内容区。
@@ -838,6 +819,12 @@ class _SettingsCategoryContent extends ConsumerWidget {
     final bool compact = MediaQuery.sizeOf(context).width < 720;
     // 当前分类的设置主体。
     final Widget categoryBody = switch (category) {
+      _SettingsCategory.home => HomeCardManagerContent(
+        mobileLayout:
+            Theme.of(context).platform == TargetPlatform.android &&
+            OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width),
+        onOpenFeatures: onOpenFeatures,
+      ),
       _SettingsCategory.features => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -852,6 +839,35 @@ class _SettingsCategoryContent extends ConsumerWidget {
       _SettingsCategory.sync => _SyncSettingsCard(colors: colors),
       _SettingsCategory.storage => const RecycleBinSection(),
     };
+    if (category == _SettingsCategory.home) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          if (showPageHeader)
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                compact ? OmniSpacing.md : OmniSpacing.xxl,
+                OmniSpacing.xl,
+                compact ? OmniSpacing.md : OmniSpacing.xxl,
+                0,
+              ),
+              child: OmniPageHeader(
+                title: category.label,
+                description: category.description,
+              ),
+            ),
+          Expanded(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 860),
+                child: categoryBody,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
 
     return SingleChildScrollView(
       key: ValueKey<String>('settings-content-${category.name}'),

@@ -304,11 +304,14 @@ class _HomeDashboard extends StatelessWidget {
     required this.safeBottomPadding,
   });
 
-  /// 构建工作台工具栏、响应式网格与空状态。
+  /// 构建响应式网格与空状态。
   @override
   Widget build(BuildContext context) {
     // 当前是否减少界面动画。
     final bool reduceMotion = OmniMotion.reduce(context);
+    // Windows 管理入口位于设置，其他平台的宽屏布局保留工具栏。
+    final bool showToolbar =
+        Theme.of(context).platform != TargetPlatform.windows;
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // 扣除页面水平边距后的卡片网格宽度。
@@ -323,9 +326,11 @@ class _HomeDashboard extends StatelessWidget {
         final int columnCount = compact ? 1 : (wide ? 3 : 2);
         // 卡片间距。
         const double gap = OmniSpacing.xs;
-        // 工具栏、上下边距与工具栏后间距占用的垂直空间。
-        const double dashboardChromeHeight =
-            OmniSpacing.xs + OmniSpacing.xl + OmniSize.control + OmniSpacing.xs;
+        // 首页边距及可选工具栏占用的垂直空间。
+        final double dashboardChromeHeight =
+            OmniSpacing.xs +
+            OmniSpacing.xl +
+            (showToolbar ? OmniSize.control + OmniSpacing.xs : 0);
         // 非移动布局中卡片网格至少填满的剩余视口高度。
         final double minimumGridHeight =
             !compact && constraints.hasBoundedHeight
@@ -343,8 +348,10 @@ class _HomeDashboard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              _HomeDashboardToolbar(onManageCards: onManageCards),
-              const SizedBox(height: OmniSpacing.xs),
+              if (showToolbar) ...<Widget>[
+                _HomeDashboardToolbar(onManageCards: onManageCards),
+                const SizedBox(height: OmniSpacing.xs),
+              ],
               if (visibleCards.isEmpty)
                 _EmptyHomeDashboard(onManageCards: onManageCards)
               else
