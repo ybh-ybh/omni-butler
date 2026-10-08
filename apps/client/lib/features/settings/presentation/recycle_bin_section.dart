@@ -37,35 +37,44 @@ class _RecycleBinSectionState extends ConsumerState<RecycleBinSection> {
     );
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
+    // 安卓说明与清空操作分行，桌面保留原有紧凑操作条。
+    final bool android = Theme.of(context).platform == TargetPlatform.android;
+    // 保留期说明单独布局，不挤占清空操作所在行。
+    final Widget retentionNotice = Text(
+      '删除的数据保留 30 天，超过保留期自动永久删除',
+      key: const ValueKey<String>('recycle-retention-notice'),
+      style: Theme.of(context).textTheme.bodySmall,
+    );
+    // 全局清空沿用原确认、加载与禁用边界。
+    final Widget clearButton = OmniButton(
+      key: const ValueKey<String>('recycle-empty'),
+      label: '一键清空',
+      compact: true,
+      variant: OmniButtonVariant.danger,
+      loading: _operation == 'empty' && _submitting,
+      onPressed:
+          _operation != null ||
+              !items.hasValue ||
+              items.hasError ||
+              items.isLoading ||
+              items.value!.isEmpty
+          ? null
+          : _empty,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Wrap(
-          spacing: OmniSpacing.md,
-          runSpacing: OmniSpacing.xs,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            Text(
-              '删除的数据保留 30 天，超过保留期自动永久删除',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            OmniButton(
-              key: const ValueKey<String>('recycle-empty'),
-              label: '一键清空',
-              compact: true,
-              variant: OmniButtonVariant.danger,
-              loading: _operation == 'empty' && _submitting,
-              onPressed:
-                  _operation != null ||
-                      !items.hasValue ||
-                      items.hasError ||
-                      items.isLoading ||
-                      items.value!.isEmpty
-                  ? null
-                  : _empty,
-            ),
-          ],
-        ),
+        if (android) ...<Widget>[
+          retentionNotice,
+          const SizedBox(height: OmniSpacing.xs),
+          Align(alignment: Alignment.centerRight, child: clearButton),
+        ] else
+          Wrap(
+            spacing: OmniSpacing.md,
+            runSpacing: OmniSpacing.xs,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [retentionNotice, clearButton],
+          ),
         if (_error != null)
           Padding(
             padding: const EdgeInsets.only(top: OmniSpacing.xs),
@@ -168,8 +177,11 @@ class _RecycleBinSectionState extends ConsumerState<RecycleBinSection> {
   Widget _row(RecycleBinItem item) {
     // 当前记录独立的操作标识。
     final String identity = '${item.type.name}-${item.id}';
+    // 安卓窄屏的行内操作在说明下方靠右排列。
+    final bool android = Theme.of(context).platform == TargetPlatform.android;
     // 本行按钮，触控热区由公共组件保证。
     final Widget actions = Wrap(
+      alignment: android ? WrapAlignment.end : WrapAlignment.start,
       spacing: OmniSpacing.xs,
       runSpacing: OmniSpacing.xxs,
       children: [
@@ -207,7 +219,9 @@ class _RecycleBinSectionState extends ConsumerState<RecycleBinSection> {
               if (stacked)
                 Padding(
                   padding: const EdgeInsets.only(top: OmniSpacing.xxs),
-                  child: actions,
+                  child: android
+                      ? Align(alignment: Alignment.centerRight, child: actions)
+                      : actions,
                 ),
             ],
           ),

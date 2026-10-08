@@ -86,6 +86,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('主题色'), findsOneWidget);
       expect(find.text('明暗模式'), findsOneWidget);
+      if (platform == TargetPlatform.android) {
+        expect(find.byType(ThemePaletteSelector), findsNothing);
+        expect(_option(AppThemePalette.classicBlue), findsNothing);
+        await _openPalettePicker(tester);
+      }
       // 六个入口的触控区域足够大，并且仍然只有一个选中项名称。
       for (final AppThemePalette palette in AppThemePalette.values) {
         expect(_option(palette), findsOneWidget);
@@ -106,8 +111,17 @@ void main() {
           ),
         );
       }
+      if (platform == TargetPlatform.android) {
+        await tester.tap(find.byTooltip('关闭'));
+        await tester.pumpAndSettle();
+        expect(preferences.getString('appearance.theme_palette'), isNull);
+      }
       // 每款主题都验证当前页面、选中状态、实际主题和存储联动。
       for (final AppThemePalette palette in AppThemePalette.values) {
+        if (platform == TargetPlatform.android) {
+          await _openPalettePicker(tester);
+        }
+        await tester.ensureVisible(_option(palette));
         await tester.tap(_option(palette));
         await tester.pumpAndSettle();
         expect(container.read(themeControllerProvider).palette, palette);
@@ -124,7 +138,9 @@ void main() {
         );
         // 读取设置内容实际继承的主题，避免只验证控制器。
         final BuildContext context = tester.element(
-          find.byType(ThemePaletteSelector),
+          platform == TargetPlatform.android
+              ? find.byKey(const ValueKey<String>('theme-palette-entry'))
+              : find.byType(ThemePaletteSelector),
         );
         expect(
           Theme.of(context).colorScheme.primary,
@@ -158,12 +174,19 @@ void main() {
         Color(0xFF30435F),
         Color(0xFF373E4C),
       ];
+      if (platform == TargetPlatform.android) {
+        await _openPalettePicker(tester);
+      }
       // 跳过保留的经典蓝，按截图顺序逐项检查实际渲染色块。
       for (int index = 0; index < darkColors.length; index += 1) {
         expect(
           _swatch(tester, AppThemePalette.values[index + 1]),
           darkColors[index],
         );
+      }
+      if (platform == TargetPlatform.android) {
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
       }
       // 切回跟随系统，使用系统亮度而非仅判断 ThemeMode.dark。
       tester.platformDispatcher.platformBrightnessTestValue = Brightness.light;
@@ -172,15 +195,29 @@ void main() {
           .read(themeControllerProvider.notifier)
           .setThemeMode(ThemeMode.system);
       await tester.pumpAndSettle();
+      if (platform == TargetPlatform.android) {
+        await _openPalettePicker(tester);
+      }
       expect(_swatch(tester, AppThemePalette.sky), const Color(0xFFDCE6F7));
+      if (platform == TargetPlatform.android) {
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+      }
       tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
       await tester.pumpAndSettle();
+      if (platform == TargetPlatform.android) {
+        await _openPalettePicker(tester);
+      }
       expect(_swatch(tester, AppThemePalette.sky), const Color(0xFF2E3242));
       expect(
         container.read(themeControllerProvider).palette,
         AppThemePalette.slate,
       );
       expect(tester.takeException(), isNull);
+      if (platform == TargetPlatform.android) {
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+      }
       await disposeApp();
     });
   }
@@ -255,6 +292,16 @@ void main() {
     );
     expect(text.text.style?.color, theme.colorScheme.onError);
   });
+}
+
+/// 点击真实安卓入口打开配色弹窗，关闭后仍停留在外观设置。
+Future<void> _openPalettePicker(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey<String>('theme-palette-entry')));
+  await tester.pumpAndSettle();
+  expect(
+    find.byKey(const ValueKey<String>('theme-palette-picker')),
+    findsOneWidget,
+  );
 }
 
 /// 根据稳定标识定位主题选项。

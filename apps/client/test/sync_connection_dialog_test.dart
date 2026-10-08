@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -5,6 +7,7 @@ import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/core/sync/sync_connection_coordinator.dart';
 import 'package:omni_butler/core/sync/sync_connection_providers.dart';
 import 'package:omni_butler/features/settings/presentation/sync_connection_dialog.dart';
+import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 只记录用户意图的协调器替身，不修改任何会话或数据库。
 class _DialogCoordinator implements SyncConnectionCoordinator {
@@ -20,6 +23,12 @@ class _DialogCoordinator implements SyncConnectionCoordinator {
   /// 同 owner 续连次数。
   int reconnects = 0;
 
+  /// 延迟预检，用于验证提交期间禁止返回与重复请求。
+  Completer<void>? previewGate;
+
+  /// 延迟最终确认，用于验证迁移期间禁止退出。
+  Completer<void>? confirmGate;
+
   /// 创建独立表单测试协调器。
   _DialogCoordinator(this.result);
 
@@ -30,6 +39,7 @@ class _DialogCoordinator implements SyncConnectionCoordinator {
     required String syncKey,
   }) async {
     checkedAddresses.add(serverAddress);
+    await previewGate?.future;
     return result;
   }
 
@@ -41,6 +51,7 @@ class _DialogCoordinator implements SyncConnectionCoordinator {
     required SyncConnectionStrategy strategy,
   }) async {
     strategies.add(strategy);
+    await confirmGate?.future;
   }
 
   /// 捕获用户明确确认的同 owner 续连。
@@ -78,15 +89,23 @@ SyncConnectionPreview _preview({
 /// 展示真实设置表单，仅替换统一连接协调器。
 Future<void> _showDialog(
   WidgetTester tester,
-  _DialogCoordinator? coordinator,
-) async {
+  _DialogCoordinator? coordinator, {
+  TargetPlatform platform = TargetPlatform.windows,
+  double textScale = 1,
+}) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         syncConnectionCoordinatorProvider.overrideWithValue(coordinator),
       ],
       child: MaterialApp(
-        theme: AppTheme.build(brightness: Brightness.light),
+        theme: AppTheme.build(brightness: Brightness.light)
+            .copyWith(platform: platform),
+        builder: (BuildContext context, Widget? child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: TextScaler.linear(textScale)),
+          child: child!,
+        ),
         home: Scaffold(
           body: Builder(
             builder: (BuildContext context) => TextButton(
@@ -117,6 +136,116 @@ Future<void> _checkServer(WidgetTester tester) async {
 
 /// 验证两步确认、三种策略、取消无副作用以及紧凑布局。
 void main() {
+  // 普通手机与窄屏大字号均覆盖键盘避让和草稿恢复。
+  for (final (double width, double scale) in <(double, double)>[
+    (390, 1),
+    (320, 2),
+  ]) {
+    testWidgets('安卓全屏连接保持顶部操作、键盘避让与草稿 $width/$scale', (
+      WidgetTester tester,
+    ) async {
+      tester.view.physicalSize = Size(width, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetViewInsets);
+      // 不同来源场景需要明确确认替换方向。
+      final _DialogCoordinator coordinator = _DialogCoordinator(_preview());
+      await _showDialog(
+        tester,
+        coordinator,
+        platform: TargetPlatform.android,
+        textScale: scale,
+      );
+      expect(find.byType(OmniSideSheetScaffold), findsNothing);
+      expect(
+        find.byKey(const ValueKey<String>('android-sync-connection-editor')),
+        findsOneWidget,
+      );
+      expect(find.text('连接服务器'), findsOneWidget);
+      // 键盘弹起与滚动不会带走取消或检查操作。
+      final Offset submitPosition = tester.getTopLeft(
+        find.byKey(const ValueKey<String>('sync-connection-submit')),
+      );
+      tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byType(TextFormField).at(2));
+      expect(
+        tester.getTopLeft(
+          find.byKey(const ValueKey<String>('sync-connection-submit')),
+        ),
+        submitPosition,
+      );
+      expect(
+        tester.getBottomLeft(find.byType(TextFormField).at(2)).dy,
+        lessThanOrEqualTo(844 - 280),
+      );
+      expect(tester.takeException(), isNull);
+      tester.view.resetViewInsets();
+      await tester.pumpAndSettle();
+      await _checkServer(tester);
+      expect(find.text('确认连接'), findsOneWidget);
+      expect(coordinator.strategies, isEmpty);
+      await tester.tap(find.text('返回修改'));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextFormField>(find.byType(TextFormField).at(0))
+            .controller!
+            .text,
+        '192.168.1.10',
+      );
+      expect(
+        tester
+            .widget<TextFormField>(find.byType(TextFormField).at(2))
+            .controller!
+            .text,
+        'valid-deployment-secret',
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('android-sync-connection-editor')),
+        findsNothing,
+      );
+      expect(coordinator.strategies, isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('安卓预检和确认执行期间禁止退出与重复提交', (WidgetTester tester) async {
+    // 两个异步阶段各有独立闸门。
+    final _DialogCoordinator coordinator =
+        _DialogCoordinator(_preview(localOwnerId: null))
+          ..previewGate = Completer<void>()
+          ..confirmGate = Completer<void>();
+    await _showDialog(tester, coordinator, platform: TargetPlatform.android);
+    await tester.enterText(
+      find.byType(TextFormField).at(2),
+      'valid-deployment-secret',
+    );
+    await tester.tap(find.text('检查服务器'));
+    await tester.pump();
+    await tester.binding.handlePopRoute();
+    await tester.tap(find.text('取消'));
+    await tester.tap(find.text('检查服务器'));
+    expect(coordinator.checkedAddresses.length, 1);
+    expect(find.text('连接服务器'), findsOneWidget);
+    coordinator.previewGate!.complete();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('合并本机与服务器数据'));
+    await tester.pump();
+    await tester.binding.handlePopRoute();
+    await tester.tap(find.text('取消'));
+    await tester.tap(find.text('合并本机与服务器数据'));
+    expect(coordinator.strategies.length, 1);
+    expect(find.text('确认连接'), findsOneWidget);
+    coordinator.confirmGate!.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('确认连接'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('协调器未就绪时显示错误，不绕过迁移流程直接连接', (WidgetTester tester) async {
     await _showDialog(tester, null);
     await _checkServer(tester);
@@ -136,12 +265,18 @@ void main() {
       final _DialogCoordinator coordinator = _DialogCoordinator(
         _preview(localOwnerId: null),
       );
-      await _showDialog(tester, coordinator);
+      // 手机明确覆盖安卓全屏结构，桌面覆盖原有侧栏结构。
+      final bool android = size.width < 500;
+      await _showDialog(
+        tester,
+        coordinator,
+        platform: android ? TargetPlatform.android : TargetPlatform.windows,
+      );
       expect(find.byType(TextFormField), findsNWidgets(3));
       await _checkServer(tester);
       expect(coordinator.checkedAddresses, <String>['192.168.1.10:9000']);
       expect(coordinator.strategies, isEmpty);
-      expect(find.text('确认数据处理方式'), findsOneWidget);
+      expect(find.text(android ? '确认连接' : '确认数据处理方式'), findsOneWidget);
       expect(find.text('本机：3 条记录 · 回收站 1 条'), findsOneWidget);
       expect(find.text('服务器：7 条记录 · 回收站 2 条'), findsOneWidget);
       expect(find.text('本机尚未上传：4 项操作'), findsOneWidget);
@@ -151,7 +286,7 @@ void main() {
       expect(coordinator.strategies, <SyncConnectionStrategy>[
         SyncConnectionStrategy.mergeInitial,
       ]);
-      expect(find.text('确认数据处理方式'), findsNothing);
+      expect(find.text(android ? '确认连接' : '确认数据处理方式'), findsNothing);
       expect(tester.takeException(), isNull);
     });
   }

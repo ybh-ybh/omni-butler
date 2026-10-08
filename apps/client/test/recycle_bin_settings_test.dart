@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
@@ -57,6 +58,63 @@ void main() {
       );
     await icons.load();
     await Directory(previewDirectory).create(recursive: true);
+  });
+
+  testWidgets('安卓窄屏双倍字号说明分行且记录操作靠右', (WidgetTester tester) async {
+    // 测试宿主挂载完整回收站数据与正式页面。
+    final _SettingsFixture fixture = await _openSettings(
+      tester,
+      TargetPlatform.android,
+      const Size(320, 900),
+      Brightness.dark,
+      textScale: 2,
+    );
+    try {
+      // 第一条记录及两项操作的真实布局。
+      final Finder row = find.byKey(
+        const ValueKey<String>('recycle-item-todo-todo'),
+      );
+      final Finder remove = find.byKey(
+        const ValueKey<String>('recycle-delete-todo-todo'),
+      );
+      final Finder restore = find.byKey(
+        const ValueKey<String>('recycle-restore-todo-todo'),
+      );
+      final Finder notice = find.byKey(
+        const ValueKey<String>('recycle-retention-notice'),
+      );
+      final Finder clear = find.byKey(const ValueKey<String>('recycle-empty'));
+      expect(
+        tester.getTopRight(remove).dx,
+        closeTo(tester.getTopRight(row).dx - OmniSpacing.md, 0.1),
+      );
+      expect(
+        tester.getTopRight(restore).dx,
+        lessThan(tester.getTopLeft(remove).dx),
+      );
+      expect(
+        tester.getBottomLeft(notice).dy,
+        lessThan(tester.getTopLeft(clear).dy),
+      );
+      await tester.ensureVisible(restore);
+      expect(tester.takeException(), isNull);
+      if (previewDirectory != null) {
+        await _capture(
+          tester,
+          fixture.captureKey,
+          '$previewDirectory/android-320-dark-2x.png',
+        );
+      }
+      await tester.tap(restore);
+      await tester.pumpAndSettle();
+      expect(
+        await fixture.container.read(recycleBinRepositoryProvider).loadItems(),
+        hasLength(5),
+      );
+      expect(tester.takeException(), isNull);
+    } finally {
+      await fixture.dispose(tester);
+    }
   });
 
   // 桌面、常见手机和320px窄屏均覆盖浅深主题。
@@ -116,6 +174,49 @@ void main() {
             expect(tester.getSize(paintedButton).height, 28);
             if (platform == TargetPlatform.android) {
               expect(tester.getSize(delete).height, greaterThanOrEqualTo(48));
+              // 保留期说明独立占一行，清空操作贴合内容区右边缘。
+              final Finder notice = find.byKey(
+                const ValueKey<String>('recycle-retention-notice'),
+              );
+              final Finder clear = find.byKey(
+                const ValueKey<String>('recycle-empty'),
+              );
+              final Finder firstGroup = find.byKey(
+                const ValueKey<String>('recycle-group-todo'),
+              );
+              expect(
+                tester.getBottomLeft(notice).dy,
+                lessThan(tester.getTopLeft(clear).dy),
+              );
+              expect(
+                tester.getTopRight(clear).dx,
+                closeTo(tester.getTopRight(firstGroup).dx, 0.1),
+              );
+              // 每一类记录的两项操作均在右下角，顺序保持恢复、永久删除。
+              for (final RecycleEntityType type in RecycleEntityType.values) {
+                // 对应本轮种子的行、恢复和永久删除操作。
+                final Finder row = find.byKey(
+                  ValueKey<String>('recycle-item-${type.name}-${type.name}'),
+                );
+                final Finder restore = find.byKey(
+                  ValueKey<String>('recycle-restore-${type.name}-${type.name}'),
+                );
+                final Finder remove = find.byKey(
+                  ValueKey<String>('recycle-delete-${type.name}-${type.name}'),
+                );
+                expect(
+                  tester.getTopRight(remove).dx,
+                  closeTo(tester.getTopRight(row).dx - OmniSpacing.md, 0.1),
+                );
+                expect(
+                  tester.getCenter(restore).dy,
+                  closeTo(tester.getCenter(remove).dy, 0.1),
+                );
+                expect(
+                  tester.getTopRight(restore).dx,
+                  lessThan(tester.getTopLeft(remove).dx),
+                );
+              }
             }
             expect(tester.getSize(paintedButton).width, lessThanOrEqualTo(80));
             expect(tester.takeException(), isNull);
@@ -380,6 +481,7 @@ Future<_SettingsFixture> _openSettings(
   Size viewport,
   Brightness brightness, {
   Completer<void>? clearGate,
+  double textScale = 1,
 }) async {
   tester.view.physicalSize = viewport;
   tester.view.devicePixelRatio = 1;
@@ -430,6 +532,11 @@ Future<_SettingsFixture> _openSettings(
           debugShowCheckedModeBanner: false,
           theme: AppTheme.build(brightness: brightness)
               .copyWith(platform: platform),
+          builder: (BuildContext context, Widget? child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: TextScaler.linear(textScale)),
+            child: child!,
+          ),
           home: const Scaffold(body: SettingsPage()),
         ),
       ),

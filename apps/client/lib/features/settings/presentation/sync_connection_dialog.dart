@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/sync/sync_connection_coordinator.dart';
 import 'package:omni_butler/core/sync/sync_connection_providers.dart';
@@ -7,6 +8,18 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 显示自托管同步服务连接对话框。
 Future<bool> showSyncConnectionDialog(BuildContext context) async {
+  // 安卓沿用补记的根导航全屏弹窗与内容安全区。
+  final bool fullscreen = Theme.of(context).platform == TargetPlatform.android;
+  if (fullscreen) {
+    return await showOmniDialog<bool>(
+          context: context,
+          useSafeArea: false,
+          fullscreenDialog: true,
+          barrierDismissible: false,
+          builder: (BuildContext context) => const _SyncConnectionDialog(),
+        ) ??
+        false;
+  }
   return await showOmniSideSheet<bool>(
         context,
         builder: (BuildContext context) => const _SyncConnectionDialog(),
@@ -155,117 +168,231 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
     final bool isLoading = _isLoading;
     // 当前两步流程所处的确认阶段。
     final SyncConnectionPreview? preview = _preview;
-
-    return PopScope<bool>(
-      canPop: !isLoading,
-      child: OmniSideSheetScaffold(
-        title: preview == null ? '连接自托管同步服务' : '确认数据处理方式',
-        canClose: !isLoading,
-        actions: <Widget>[
-          OmniButton(
-            label: '取消',
-            variant: OmniButtonVariant.secondary,
-            onPressed: isLoading ? null : () => Navigator.pop(context, false),
-          ),
-          if (preview != null)
-            OmniButton(
-              label: '返回修改',
-              variant: OmniButtonVariant.text,
-              onPressed: isLoading
-                  ? null
-                  : () => setState(() {
-                      _preview = null;
-                      _error = null;
-                    }),
-            ),
-          OmniButton(
-            label: preview == null ? '检查服务器' : _confirmationLabel(preview),
-            variant:
-                preview != null &&
-                    !preview.isReconnect &&
-                    _strategy != SyncConnectionStrategy.mergeInitial
-                ? OmniButtonVariant.danger
-                : OmniButtonVariant.primary,
-            loading: isLoading,
+    // 安卓与桌面共用提交状态和明确的数据处理文案。
+    final Widget submitButton = OmniButton(
+      key: const ValueKey<String>('sync-connection-submit'),
+      visualHeight: OmniSize.control,
+      label: preview == null ? '检查服务器' : _confirmationLabel(preview),
+      variant:
+          preview != null &&
+              !preview.isReconnect &&
+              _strategy != SyncConnectionStrategy.mergeInitial
+          ? OmniButtonVariant.danger
+          : OmniButtonVariant.primary,
+      loading: isLoading,
+      onPressed: isLoading ? null : (preview == null ? _submit : _confirm),
+    );
+    // 确认前允许返回修改，保留填写内容且不执行数据操作。
+    final Widget? editButton = preview == null
+        ? null
+        : OmniButton(
+            label: '返回修改',
+            visualHeight: OmniSize.control,
+            variant: OmniButtonVariant.text,
             onPressed: isLoading
                 ? null
-                : (preview == null ? _submit : _confirm),
-          ),
-        ],
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(OmniSpacing.xl),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                if (preview != null) ..._buildConfirmation(preview),
-                if (preview == null) ...<Widget>[
-                  Text(
-                    '填写服务器地址、端口和同步密钥。',
-                    style: Theme.of(context).textTheme.bodySmall,
+                : () => setState(() {
+                    _preview = null;
+                    _error = null;
+                  }),
+          );
+    // 独立滚动的表单正文，两端沿用同一份草稿与校验。
+    final Widget body = SingleChildScrollView(
+      padding: const EdgeInsets.all(OmniSpacing.md),
+      child: Form(
+        key: _formKey,
+        child: OmniPanel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              if (preview != null) ..._buildConfirmation(preview),
+              if (preview == null) ...<Widget>[
+                Text(
+                  '填写服务器地址、端口和同步密钥。',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: OmniSpacing.lg),
+                OmniTextFormField(
+                  controller: _serverController,
+                  enabled: !isLoading,
+                  decoration: const InputDecoration(
+                    labelText: '服务器地址',
+                    hintText: '192.168.1.10 或 api.example.com',
+                    helperText: '局域网 IP 默认使用 HTTP，公网地址默认使用 HTTPS',
+                    helperMaxLines: 3,
+                    hintMaxLines: 2,
                   ),
-                  const SizedBox(height: OmniSpacing.lg),
-                  OmniTextFormField(
-                    controller: _serverController,
-                    enabled: !isLoading,
-                    decoration: const InputDecoration(
-                      labelText: '服务器地址',
-                      hintText: '192.168.1.10 或 api.example.com',
-                      helperText: '局域网 IP 默认使用 HTTP，公网地址默认使用 HTTPS',
-                    ),
-                    keyboardType: TextInputType.url,
-                    validator: _validateServerAddress,
+                  keyboardType: TextInputType.url,
+                  validator: _validateServerAddress,
+                ),
+                const SizedBox(height: OmniSpacing.md),
+                OmniTextFormField(
+                  controller: _portController,
+                  enabled: !isLoading,
+                  decoration: const InputDecoration(
+                    labelText: '端口',
+                    hintText: '3000',
                   ),
-                  const SizedBox(height: OmniSpacing.md),
-                  OmniTextFormField(
-                    controller: _portController,
-                    enabled: !isLoading,
-                    decoration: const InputDecoration(
-                      labelText: '端口',
-                      hintText: '3000',
-                    ),
-                    keyboardType: TextInputType.number,
-                    validator: _validatePort,
-                  ),
-                  const SizedBox(height: OmniSpacing.md),
-                  OmniTextFormField(
-                    controller: _syncKeyController,
-                    enabled: !isLoading,
-                    obscureText: _obscureSyncKey,
-                    decoration: InputDecoration(
-                      labelText: '同步密钥',
-                      helperText: '与服务器 SYNC_SECRET 配置保持一致，至少 16 个字符',
-                      suffixIcon: OmniIconButton(
-                        onPressed: isLoading
-                            ? null
-                            : () => setState(
-                                () => _obscureSyncKey = !_obscureSyncKey,
-                              ),
-                        icon: Icon(
-                          _obscureSyncKey
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                        ),
+                  keyboardType: TextInputType.number,
+                  validator: _validatePort,
+                ),
+                const SizedBox(height: OmniSpacing.md),
+                OmniTextFormField(
+                  controller: _syncKeyController,
+                  enabled: !isLoading,
+                  obscureText: _obscureSyncKey,
+                  decoration: InputDecoration(
+                    labelText: '同步密钥',
+                    helperText: '与服务器 SYNC_SECRET 配置保持一致，至少 16 个字符',
+                    helperMaxLines: 3,
+                    suffixIcon: OmniIconButton(
+                      onPressed: isLoading
+                          ? null
+                          : () => setState(
+                              () => _obscureSyncKey = !_obscureSyncKey,
+                            ),
+                      icon: Icon(
+                        _obscureSyncKey
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
                       ),
                     ),
-                    autofillHints: const <String>[AutofillHints.password],
-                    onFieldSubmitted: isLoading ? null : (_) => _submit(),
-                    validator: _validateSyncKey,
                   ),
-                ],
-                if (_error != null) ...<Widget>[
-                  const SizedBox(height: OmniSpacing.md),
-                  Text(
-                    _error!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
+                  autofillHints: const <String>[AutofillHints.password],
+                  onFieldSubmitted: isLoading ? null : (_) => _submit(),
+                  validator: _validateSyncKey,
+                ),
+              ],
+              if (_error != null) ...<Widget>[
+                const SizedBox(height: OmniSpacing.md),
+                Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+    // 是否呈现与安卓补记一致的全屏编辑结构。
+    final bool fullscreen =
+        Theme.of(context).platform == TargetPlatform.android;
+    return PopScope<bool>(
+      canPop: !isLoading,
+      child: fullscreen
+          ? _buildAndroidEditor(body, submitButton, editButton)
+          : OmniSideSheetScaffold(
+              title: preview == null ? '连接自托管同步服务' : '确认数据处理方式',
+              canClose: !isLoading,
+              actions: <Widget>[
+                OmniButton(
+                  label: '取消',
+                  visualHeight: OmniSize.control,
+                  variant: OmniButtonVariant.secondary,
+                  onPressed: isLoading
+                      ? null
+                      : () => Navigator.pop(context, false),
+                ),
+                ?editButton,
+                submitButton,
+              ],
+              child: body,
+            ),
+    );
+  }
+
+  /// 安卓顶部固定取消与阶段操作，正文避让键盘并独立滚动。
+  Widget _buildAndroidEditor(
+    Widget body,
+    Widget submitButton,
+    Widget? editButton,
+  ) {
+    // 当前语义色保证全屏背景与设置页一致。
+    final OmniColors colors = OmniColors.of(context);
+    // 窄屏或大字号时将阶段操作放在标题下方，保留完整文案。
+    final bool stackedActions =
+        MediaQuery.sizeOf(context).width < 380 ||
+        MediaQuery.textScalerOf(context).scale(14) > 20;
+    // 按实际字号测量较宽的顶部操作，两侧等宽以保持标题精确居中。
+    final TextPainter actionText = TextPainter(
+      text: TextSpan(
+        text: stackedActions
+            ? '取消'
+            : _preview == null
+            ? '检查服务器'
+            : '返回修改',
+        style: Theme.of(context).textTheme.labelLarge
+            ?.copyWith(fontSize: 14, fontWeight: FontWeight.w500),
+      ),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    // 操作文字之外保留按钮的标准水平内边距。
+    final double actionWidth = actionText.width + OmniSpacing.xxl;
+    actionText.dispose();
+    return Dialog.fullscreen(
+      key: const ValueKey<String>('android-sync-connection-editor'),
+      backgroundColor: colors.canvas,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+              child: Row(
+                children: <Widget>[
+                  SizedBox(
+                    width: actionWidth,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: OmniButton(
+                        label: '取消',
+                        visualHeight: OmniSize.control,
+                        variant: OmniButtonVariant.text,
+                        onPressed: _isLoading
+                            ? null
+                            : () => Navigator.pop(context, false),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Semantics(
+                      namesRoute: true,
+                      header: true,
+                      child: Text(
+                        _preview == null ? '连接服务器' : '确认连接',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: actionWidth,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: stackedActions
+                          ? const SizedBox.shrink()
+                          : _preview == null
+                          ? submitButton
+                          : editButton,
                     ),
                   ),
                 ],
-              ],
+              ),
             ),
-          ),
+            if (stackedActions)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
+                child: _preview == null ? submitButton : editButton,
+              ),
+            Expanded(child: body),
+            if (_preview != null)
+              Padding(
+                padding: const EdgeInsets.all(OmniSpacing.md),
+                child: submitButton,
+              ),
+          ],
         ),
       ),
     );
@@ -323,6 +450,8 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
     if (_isLoading || _formKey.currentState?.validate() != true) {
       return;
     }
+    // 进入预检与确认时关闭键盘，固定操作区始终完整可见。
+    FocusScope.of(context).unfocus();
     setState(() {
       _isLoading = true;
       _error = null;

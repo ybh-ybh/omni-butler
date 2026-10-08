@@ -88,6 +88,16 @@ extension _SettingsCategoryPresentation on _SettingsCategory {
     _SettingsCategory.sync => Icons.cloud_sync_outlined,
     _SettingsCategory.storage => Icons.delete_outline_rounded,
   };
+
+  /// 使用随明暗模式适配的语义色区分六个设置入口。
+  Color iconColor(OmniColors colors) => switch (this) {
+    _SettingsCategory.home => colors.time,
+    _SettingsCategory.features => colors.item,
+    _SettingsCategory.appearance => colors.todo,
+    _SettingsCategory.notifications => colors.warning,
+    _SettingsCategory.sync => colors.success,
+    _SettingsCategory.storage => colors.event,
+  };
 }
 
 /// 设置页面。
@@ -571,7 +581,7 @@ class _AndroidSettingsCategoryRow extends StatelessWidget {
     required this.onTap,
   });
 
-  /// 构建文字与右箭头入口，回收站额外展示用户要求的图标。
+  /// 构建彩色图标、分类文字与右箭头入口。
   @override
   Widget build(BuildContext context) {
     // 当前主题语义色。
@@ -589,10 +599,12 @@ class _AndroidSettingsCategoryRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.lg),
           child: Row(
             children: <Widget>[
-              if (category == _SettingsCategory.storage) ...<Widget>[
-                Icon(category.icon, size: OmniSize.icon, color: colors.brand),
-                const SizedBox(width: OmniSpacing.xs),
-              ],
+              Icon(
+                category.icon,
+                size: OmniSize.navigationIcon,
+                color: category.iconColor(colors),
+              ),
+              const SizedBox(width: OmniSpacing.sm),
               Expanded(
                 child: Text(
                   category.label,
@@ -1297,22 +1309,31 @@ class _AppearanceCard extends ConsumerWidget {
   /// 构建当前设备的主题配色与明暗模式设置。
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // 安卓将主题列表收进弹窗，桌面保留原有直接选择方式。
+    final bool android = Theme.of(context).platform == TargetPlatform.android;
     return _SettingsSection(
       title: '外观与主题',
       description: '选择喜欢的主题色与明暗模式，仅影响当前设备。',
       icon: Icons.palette_outlined,
       children: <Widget>[
         OmniListRow(
+          key: const ValueKey<String>('theme-palette-entry'),
           title: const Text('主题色'),
-          subtitle: Padding(
-            padding: const EdgeInsets.only(top: OmniSpacing.sm),
-            child: ThemePaletteSelector(
-              value: preference.palette,
-              onChanged: (AppThemePalette palette) => ref
-                  .read(themeControllerProvider.notifier)
-                  .setThemePalette(palette),
-            ),
-          ),
+          onTap: android ? () => _pickPalette(context, ref) : null,
+          trailing: android
+              ? const Icon(Icons.chevron_right_rounded, size: OmniSize.icon)
+              : null,
+          subtitle: android
+              ? Text(preference.palette.label)
+              : Padding(
+                  padding: const EdgeInsets.only(top: OmniSpacing.sm),
+                  child: ThemePaletteSelector(
+                    value: preference.palette,
+                    onChanged: (AppThemePalette palette) => ref
+                        .read(themeControllerProvider.notifier)
+                        .setThemePalette(palette),
+                  ),
+                ),
         ),
         OmniListRow(
           title: const Text('明暗模式'),
@@ -1343,6 +1364,18 @@ class _AppearanceCard extends ConsumerWidget {
         ),
       ],
     );
+  }
+
+  /// 选定后立即保存本机配色，取消或返回保持原值。
+  Future<void> _pickPalette(BuildContext context, WidgetRef ref) async {
+    // 弹窗仅返回选择结果，不直接修改设备偏好。
+    final AppThemePalette? palette = await showThemePalettePicker(
+      context,
+      value: preference.palette,
+    );
+    if (palette != null && context.mounted) {
+      await ref.read(themeControllerProvider.notifier).setThemePalette(palette);
+    }
   }
 }
 
@@ -1410,119 +1443,170 @@ class _SyncSettingsCard extends ConsumerWidget {
         : session.isOffline
         ? '当前离线，业务编辑仍会正常保存；联网后会继续同步。'
         : '服务器：${session.serverAddress}';
-    // 当前同步状态可用操作。
+    // 当前服务器连接操作，首要操作始终排在前面。
     final List<Widget> syncActions = <Widget>[
-      if (ref.watch(syncConnectionCoordinatorProvider) != null)
-        OmniButton(
-          label: '迁移备份',
-          variant: OmniButtonVariant.text,
-          onPressed: () => showSyncBackupDialog(context),
-        ),
       if (syncEnabled && session == null)
         OmniButton(
           label: '连接服务器',
+          visualHeight: OmniSize.control,
           icon: Icons.dns_outlined,
           loading: sessionState.isLoading,
           onPressed: () => _openConnection(context, ref),
         )
       else if (syncEnabled && session != null) ...<Widget>[
+        if (session.isOffline)
+          OmniButton(
+            label: '重试连接',
+            visualHeight: OmniSize.control,
+            icon: Icons.refresh_rounded,
+            loading: sessionState.isLoading,
+            onPressed: () =>
+                ref.read(authControllerProvider.notifier).refreshSession(),
+          ),
         OmniButton(
           label: '更换服务器',
+          visualHeight: OmniSize.control,
           icon: Icons.dns_outlined,
           variant: OmniButtonVariant.secondary,
           onPressed: sessionState.isLoading
               ? null
               : () => _openConnection(context, ref),
         ),
-        if (session.isOffline)
-          OmniButton(
-            label: '重试连接',
-            icon: Icons.refresh_rounded,
-            variant: OmniButtonVariant.secondary,
-            loading: sessionState.isLoading,
-            onPressed: () =>
-                ref.read(authControllerProvider.notifier).refreshSession(),
-          ),
-        OmniButton(
-          label: '断开服务器',
-          variant: OmniButtonVariant.text,
-          onPressed: sessionState.isLoading
-              ? null
-              : () => _confirmDisconnect(context, ref),
-        ),
       ],
     ];
 
-    return _SettingsSection(
-      title: '数据同步',
-      description: '控制当前设备是否连接自托管服务器。',
-      icon: Icons.cloud_sync_outlined,
-      tag: OmniTag(label: syncLabel, color: syncStatusColor),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        OmniListRow(
-          title: const Text('开启多端数据同步'),
-          subtitle: const Text('默认关闭；关闭时不会连接服务器，全部业务数据只保存在本机'),
-          trailing: OmniSwitch(
-            value: syncEnabled,
-            onChanged: sessionState.isLoading
-                ? null
-                : (bool value) => _setSyncEnabled(context, ref, value),
-          ),
-        ),
-        OmniListRow(
-          leading: Container(
-            width: OmniSize.touch,
-            height: OmniSize.touch,
-            decoration: BoxDecoration(
-              color: colors.paperSubtle,
-              borderRadius: BorderRadius.circular(OmniRadius.control),
+        _SettingsSection(
+          title: '数据同步',
+          description: '控制当前设备是否连接自托管服务器。',
+          icon: Icons.cloud_sync_outlined,
+          tag: OmniTag(label: syncLabel, color: syncStatusColor),
+          children: <Widget>[
+            OmniListRow(
+              title: const Text('开启多端数据同步'),
+              subtitle: const Text('默认关闭；关闭时不会连接服务器，全部业务数据只保存在本机'),
+              trailing: OmniSwitch(
+                value: syncEnabled,
+                onChanged: sessionState.isLoading
+                    ? null
+                    : (bool value) => _setSyncEnabled(context, ref, value),
+              ),
             ),
-            child: Icon(
-              syncEnabled ? Icons.cloud_sync_outlined : Icons.computer_rounded,
-              color: colors.brand,
-              size: OmniSize.navigationIcon,
+            OmniListRow(
+              leading: Container(
+                width: OmniSize.touch,
+                height: OmniSize.touch,
+                decoration: BoxDecoration(
+                  color: colors.paperSubtle,
+                  borderRadius: BorderRadius.circular(OmniRadius.control),
+                ),
+                child: Icon(
+                  syncEnabled
+                      ? Icons.cloud_sync_outlined
+                      : Icons.computer_rounded,
+                  color: colors.brand,
+                  size: OmniSize.navigationIcon,
+                ),
+              ),
+              title: Text(syncTitle),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(syncDescription),
+                  const SizedBox(height: OmniSpacing.xxs),
+                  Text(_imageSyncLabel(syncEnabled, session, images)),
+                  if (missingImages.isNotEmpty) ...<Widget>[
+                    const SizedBox(height: OmniSpacing.xxs),
+                    Text(
+                      '上次迁移有 ${missingImages.length} 张图片未在本机找到：'
+                      '${missingImages.join('、')}。业务数据迁移不受影响。',
+                      style: TextStyle(color: colors.muted),
+                    ),
+                  ],
+                  if (sessionState.hasError) ...<Widget>[
+                    const SizedBox(height: OmniSpacing.xxs),
+                    Text(
+                      sessionState.error.toString(),
+                      style: TextStyle(color: colors.danger),
+                    ),
+                  ],
+                  if (syncController.hasError) ...<Widget>[
+                    const SizedBox(height: OmniSpacing.xxs),
+                    Text(
+                      syncController.error.toString(),
+                      style: TextStyle(color: colors.danger),
+                    ),
+                  ],
+                ],
+              ),
             ),
-          ),
-          title: Text(syncTitle),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(syncDescription),
-              const SizedBox(height: OmniSpacing.xxs),
-              Text(_imageSyncLabel(syncEnabled, session, images)),
-              if (missingImages.isNotEmpty) ...<Widget>[
-                const SizedBox(height: OmniSpacing.xxs),
-                Text(
-                  '上次迁移有 ${missingImages.length} 张图片未在本机找到：'
-                  '${missingImages.join('、')}。业务数据迁移不受影响。',
-                  style: TextStyle(color: colors.muted),
-                ),
-              ],
-              if (sessionState.hasError) ...<Widget>[
-                const SizedBox(height: OmniSpacing.xxs),
-                Text(
-                  sessionState.error.toString(),
-                  style: TextStyle(color: colors.danger),
-                ),
-              ],
-              if (syncController.hasError) ...<Widget>[
-                const SizedBox(height: OmniSpacing.xxs),
-                Text(
-                  syncController.error.toString(),
-                  style: TextStyle(color: colors.danger),
-                ),
-              ],
-              if (syncActions.isNotEmpty) ...<Widget>[
-                const SizedBox(height: OmniSpacing.sm),
-                Wrap(
-                  spacing: OmniSpacing.xs,
-                  runSpacing: OmniSpacing.xs,
+            if (syncActions.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.all(OmniSpacing.md),
+                child: _SyncActionLayout(
+                  key: const ValueKey<String>('sync-connection-actions'),
                   children: syncActions,
                 ),
-              ],
+              ),
+          ],
+        ),
+        if (ref.watch(syncConnectionCoordinatorProvider) != null) ...<Widget>[
+          const SizedBox(height: OmniSpacing.lg),
+          _SettingsSection(
+            title: '迁移备份',
+            description: '管理更换服务器时保留的本机数据备份。',
+            icon: Icons.backup_outlined,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.all(OmniSpacing.md),
+                child: _SyncActionLayout(
+                  key: const ValueKey<String>('sync-backup-actions'),
+                  children: <Widget>[
+                    OmniButton(
+                      label: '查看迁移备份',
+                      visualHeight: OmniSize.control,
+                      icon: Icons.folder_open_outlined,
+                      variant: OmniButtonVariant.secondary,
+                      onPressed: sessionState.isLoading
+                          ? null
+                          : () => showSyncBackupDialog(context),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
-        ),
+        ],
+        if (syncEnabled && session != null) ...<Widget>[
+          const SizedBox(height: OmniSpacing.lg),
+          OmniListPanel(
+            key: const ValueKey<String>('sync-disconnect-panel'),
+            children: <Widget>[
+              const OmniListRow(
+                title: Text('断开当前服务器'),
+                subtitle: Text('断开前可选择保留或删除本机数据。'),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(OmniSpacing.md),
+                child: _SyncActionLayout(
+                  children: <Widget>[
+                    OmniButton(
+                      label: '断开服务器',
+                      visualHeight: OmniSize.control,
+                      icon: Icons.link_off_rounded,
+                      variant: OmniButtonVariant.secondary,
+                      onPressed: sessionState.isLoading
+                          ? null
+                          : () => _confirmDisconnect(context, ref),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -1699,6 +1783,52 @@ class _SyncSettingsCard extends ConsumerWidget {
         ? '已断开服务器并删除本机数据'
         : '已断开服务器，本机数据仍然保留';
     showOmniMessage(context, message: message, tone: OmniMessageTone.success);
+  }
+}
+
+/// 同步操作在窄屏整行排列，桌面横排并按可用空间换行。
+class _SyncActionLayout extends StatelessWidget {
+  /// 按优先级排列的操作。
+  final List<Widget> children;
+
+  /// 创建同步操作布局。
+  const _SyncActionLayout({required this.children, super.key});
+
+  /// 大字号与窄屏均使用完整宽度，避免按钮混排或挤压说明。
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          // 按实际可用空间和系统字号判断是否纵向排列。
+          final bool stacked =
+              constraints.maxWidth < 480 ||
+              MediaQuery.textScalerOf(context).scale(14) > 20;
+          if (stacked) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                // 保持各操作之间固定间距。
+                for (
+                  int index = 0;
+                  index < children.length;
+                  index += 1
+                ) ...<Widget>[
+                  if (index > 0) const SizedBox(height: OmniSpacing.xs),
+                  children[index],
+                ],
+              ],
+            );
+          }
+          return Wrap(
+            spacing: OmniSpacing.sm,
+            runSpacing: OmniSpacing.xs,
+            children: children,
+          );
+        },
+      ),
+    );
   }
 }
 

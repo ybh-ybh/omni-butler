@@ -1,4 +1,8 @@
 {
+  "lib/features/settings/presentation/sync_connection_dialog.dart :: Dialog": {
+    "count": 1,
+    "reason": "安卓连接服务器按用户要求使用补记同款 Dialog.fullscreen 容器；入口仍由 showOmniDialog 统一管理，背景及操作复用 Omni 语义色和控件。"
+  },
   "lib/features/events/presentation/events_page.dart :: SegmentedButton": {
     "count": 1,
     "reason": "使用统一 Theme 的筛选选择控件，保留原有键盘与选择语义。"

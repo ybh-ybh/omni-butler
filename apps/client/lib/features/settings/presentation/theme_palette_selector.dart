@@ -2,6 +2,59 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_theme_palette.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/shared/ui/omni_ui.dart';
+
+/// 弹窗中选择设备主题色，取消不改变当前偏好。
+Future<AppThemePalette?> showThemePalettePicker(
+  BuildContext context, {
+  required AppThemePalette value,
+}) => showOmniDialog<AppThemePalette>(
+  context: context,
+  builder: (BuildContext dialogContext) => OmniDialogScaffold(
+    key: const ValueKey<String>('theme-palette-picker'),
+    title: '选择主题色',
+    width: 360,
+    child: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          // 各主题保留完整名称、明暗预览与单选语义。
+          for (final AppThemePalette palette in AppThemePalette.values)
+            Semantics(
+              key: ValueKey<String>('theme-palette-${palette.id}'),
+              selected: palette == value,
+              inMutuallyExclusiveGroup: true,
+              child: OmniListRow(
+                onTap: () => Navigator.pop(dialogContext, palette),
+                borderRadius: BorderRadius.circular(OmniRadius.control),
+                title: Text(palette.label),
+                trailing: palette == value
+                    ? Icon(
+                        Icons.check_rounded,
+                        color: OmniColors.of(dialogContext).brand,
+                        size: OmniSize.icon,
+                      )
+                    : null,
+                leading: Container(
+                  width: OmniSize.navigationIcon,
+                  height: OmniSize.navigationIcon,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: palette.previewColorFor(
+                      Theme.of(dialogContext).brightness,
+                    ),
+                    border: Border.all(
+                      color: OmniColors.of(dialogContext).line,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    ),
+  ),
+);
 
 /// 设置页中可换行、支持键盘与读屏的主题色选择器。
 class ThemePaletteSelector extends StatelessWidget {

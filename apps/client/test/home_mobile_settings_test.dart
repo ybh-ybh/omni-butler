@@ -18,6 +18,8 @@ void main() {
     expect(find.text('管理卡片'), findsNothing);
     expect(find.text('顶部横幅'), findsOneWidget);
     expect(find.text('已添加模块'), findsOneWidget);
+    expect(find.textContaining(RegExp(r'^\d+$')), findsNothing);
+    expect(find.textContaining('修改会立即保存到当前设备'), findsNothing);
     expect(find.byType(ReorderableDragStartListener), findsNWidgets(3));
     expect(find.byTooltip('移除每日名言'), findsNothing);
     expect(find.byTooltip('添加每日名言'), findsNothing);
@@ -196,9 +198,21 @@ void main() {
     expect(find.text('管理卡片'), findsOneWidget);
     expect(find.text('首页设置'), findsNothing);
     expect(find.text('顶部横幅'), findsNothing);
+    expect(find.textContaining(RegExp(r'^\d+$')), findsNothing);
     expect(find.byType(OmniSwitch), findsNothing);
     expect(find.byType(ReorderableDragStartListener), findsNWidgets(4));
     expect(find.byTooltip('移除每日名言'), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: find.byKey(const ValueKey<String>('home-card-manager-quote')),
+        matching: find.byType(OmniPanel),
+      ),
+      findsWidgets,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('home-settings-available-panel')),
+      findsOneWidget,
+    );
     // 桌面拖拽索引依然包含名言。
     final SliverReorderableList reorderable = tester
         .widget<SliverReorderableList>(find.byType(SliverReorderableList));

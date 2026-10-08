@@ -77,7 +77,7 @@ class HomeCardManagerContent extends ConsumerWidget {
         ? ref.read(homeCardPreferenceProvider.notifier).reorderContentCards
         : ref.read(homeCardPreferenceProvider.notifier).reorder;
 
-    /// 构建已添加卡片，移动列表在行间插入同通知设置一致的分隔线。
+    /// 构建已添加卡片，两端分组均使用连续列表分隔线。
     Widget buildAddedCard(BuildContext context, int index) {
       // 当前已添加卡片。
       final HomeCardId card = addedCards[index];
@@ -90,7 +90,7 @@ class HomeCardManagerContent extends ConsumerWidget {
         key: ValueKey<String>('home-card-manager-${card.name}'),
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          if (mobileLayout && index > 0) Divider(color: colors.line),
+          if (index > 0) Divider(color: colors.line),
           _CardManagerRow(
             card: card,
             subtitle: unavailableReason ?? card.description,
@@ -179,15 +179,8 @@ class HomeCardManagerContent extends ConsumerWidget {
                       ),
                       const SizedBox(height: OmniSpacing.xxs),
                     ],
-                    Text(
-                      mobileLayout
-                          ? '名言固定在顶部，内容模块可拖动排序。修改会立即保存到当前设备。'
-                          : '拖动调整顺序，修改会立即保存到当前设备。',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    const SizedBox(height: OmniSpacing.xs),
                     if (mobileLayout) ...<Widget>[
-                      const _SectionLabel(label: '顶部横幅', count: 1),
+                      const _SectionLabel(label: '顶部横幅'),
                       const SizedBox(height: OmniSpacing.xs),
                       OmniListPanel(
                         key: const ValueKey<String>(
@@ -219,24 +212,21 @@ class HomeCardManagerContent extends ConsumerWidget {
                       ),
                       const SizedBox(height: OmniSpacing.lg),
                     ],
-                    _SectionLabel(
-                      label: mobileLayout ? '已添加模块' : '已添加',
-                      count: addedCards.length,
-                    ),
+                    _SectionLabel(label: mobileLayout ? '已添加模块' : '已添加'),
                     const SizedBox(height: OmniSpacing.xs),
                   ],
                 ),
               ),
               if (addedCards.isEmpty)
                 SliverToBoxAdapter(
-                  child: Padding(
+                  child: OmniPanel(
                     padding: const EdgeInsets.all(OmniSpacing.md),
                     child: Text(
                       mobileLayout ? '还没有添加内容模块，可以从下方选择。' : '还没有添加卡片，可以从下方选择。',
                     ),
                   ),
                 )
-              else if (mobileLayout)
+              else
                 SliverToBoxAdapter(
                   child: OmniPanel(
                     key: const ValueKey<String>('home-settings-added-panel'),
@@ -251,12 +241,6 @@ class HomeCardManagerContent extends ConsumerWidget {
                       itemBuilder: buildAddedCard,
                     ),
                   ),
-                )
-              else
-                SliverReorderableList(
-                  itemCount: addedCards.length,
-                  onReorderItem: reorderCards,
-                  itemBuilder: buildAddedCard,
                 ),
               SliverToBoxAdapter(
                 child: Padding(
@@ -264,20 +248,17 @@ class HomeCardManagerContent extends ConsumerWidget {
                     top: OmniSpacing.lg,
                     bottom: OmniSpacing.xs,
                   ),
-                  child: _SectionLabel(
-                    label: mobileLayout ? '可添加模块' : '可添加',
-                    count: availableCards.length,
-                  ),
+                  child: _SectionLabel(label: mobileLayout ? '可添加模块' : '可添加'),
                 ),
               ),
               if (availableCards.isEmpty)
                 SliverToBoxAdapter(
-                  child: Padding(
+                  child: OmniPanel(
                     padding: const EdgeInsets.all(OmniSpacing.md),
                     child: Text(mobileLayout ? '所有内容模块都已添加。' : '所有卡片都已添加。'),
                   ),
                 )
-              else if (mobileLayout)
+              else
                 SliverToBoxAdapter(
                   child: OmniListPanel(
                     key: const ValueKey<String>(
@@ -293,11 +274,6 @@ class HomeCardManagerContent extends ConsumerWidget {
                         buildAvailableCard(context, index),
                     ],
                   ),
-                )
-              else
-                SliverList.builder(
-                  itemCount: availableCards.length,
-                  itemBuilder: buildAvailableCard,
                 ),
               SliverToBoxAdapter(
                 child: Padding(
@@ -449,25 +425,15 @@ class _SectionLabel extends StatelessWidget {
   /// 区域名称。
   final String label;
 
-  /// 当前区域数量。
-  final int count;
-
   /// 创建卡片管理区域标题。
-  const _SectionLabel({required this.label, required this.count});
+  const _SectionLabel({required this.label});
 
-  /// 构建名称与数量。
+  /// 仅展示区域名称，不再显示右侧数量。
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: OmniSpacing.xs),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: Text(label, style: Theme.of(context).textTheme.titleSmall),
-          ),
-          Text('$count', style: Theme.of(context).textTheme.bodySmall),
-        ],
-      ),
+      child: Text(label, style: Theme.of(context).textTheme.titleSmall),
     );
   }
 }

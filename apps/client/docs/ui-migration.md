@@ -23,7 +23,7 @@
 | `/events`；`lib/features/events/presentation/events_page.dart` | 事件列表/卡片、状态筛选、归档、周期提醒；记录完成、历史、撤销 | Windows 宽/窄窗、Android 管理聚合 | 页面与编辑器接共享主题、表单、按钮、菜单、开关、日期时间；保留事件业务状态色 | `events_layout_test.dart`、`management_compact_cards_test.dart`、`business_repositories_test.dart` | 自动化通过；人工矩阵待验 |
 | `/inventory`；`lib/features/inventory/presentation/inventory_page.dart` | 物品卡片、搜索/分类/位置/状态筛选、统计、详情、配套物品、批量迁移；继承位置、附件状态 | Windows 宽/窄窗、Android 管理聚合 | 通用控件接 Omni；详情卡和统计图保留专用布局；详情翻转及新增拆分菜单列为专用浮层 | `inventory_layout_test.dart`、`inventory_move_dialog_test.dart`、`management_compact_cards_test.dart` | 自动化通过；人工矩阵待验 |
 | `/memberships`；`lib/features/memberships/presentation/memberships_page.dart` | 会员卡片、搜索/类别/状态筛选、支出统计、到期时间轴、缴费历史；永久/到期/续费/提醒状态 | Windows 宽/窄窗、Android 管理聚合 | 共享面板、表单、日期、开关、菜单和消息；会员状态信息/图表维持业务语义 | `memberships_layout_test.dart`、`management_compact_cards_test.dart`、`business_repositories_test.dart` | 自动化通过；人工矩阵待验 |
-| `/settings`；`lib/features/settings/presentation/settings_page.dart` | 功能管理、外观与主题、通知提醒、数据同步、数据与存储；Android 概览→详情→返回；断开/重连/清空/恢复状态 | Windows 宽/窄窗、Android | 共享开关/下拉/单选/表单/按钮/弹窗；保留既有设置导航与危险操作边界 | `theme_settings_test.dart`、`feature_preferences_test.dart`、`android_settings_transition_test.dart`、`sync_connection_dialog_test.dart` | 自动化通过；人工矩阵待验 |
+| `/settings`；`lib/features/settings/presentation/settings_page.dart` | 首页设置、功能管理、外观与主题、通知提醒、数据同步、回收站；Android 概览→详情→返回；断开/重连/清空/恢复状态 | Windows 宽/窄窗、Android | Android 六色入口图标，首页设置两端实底分组；同步连接、备份、断开操作独立分组，窄屏整行排列；保留既有设置导航与危险操作边界 | `settings_layout_test.dart`、`home_mobile_settings_test.dart`、`theme_settings_test.dart`、`feature_preferences_test.dart`、`android_settings_transition_test.dart`、`sync_connection_dialog_test.dart` | 自动化与中文明暗预览通过；人工矩阵待验 |
 | `FloatingWindowPage`；`lib/features/floating/presentation/floating_window_page.dart` | 待办象限/子任务、快速新增、开始记录/补记、进行中、撤销；拖动、缩放、唤起主窗口 | Windows 独立悬浮窗 | 共享语义色、输入、下拉、按钮和消息；紧凑行高、宿主窗口拖拽/缩放及浮层材质为受控差异 | `floating_window_page_test.dart`、`floating_resize_scheduler_test.dart`、`windows_floating_resize_service_test.dart`、`support/windows_floating_host_smoke.dart` | 自动化通过；人工矩阵待验 |
 | `ResponsiveShell`、管理聚合器；`lib/shared/layout/responsive_shell.dart`、`lib/features/management/presentation/` | 侧栏/导航轨、桌面管理切换、底部导航、Android 主页面/管理分区横滑、同步状态入口 | Windows、Android | 共享主题、图标操作与菜单；导航关系、预加载和手势协调保持既有契约 | `desktop_management_navigation_test.dart`、`android_management_navigation_test.dart`、`android_primary_navigation_swipe_test.dart`、`responsive_shell_sync_status_test.dart` | 自动化通过；人工矩阵待验 |
 
@@ -54,7 +54,7 @@
 | D19 | `_MembershipEditorDialog`；`lib/features/memberships/presentation/memberships_page.dart` | 新增/编辑、计费周期、永久/到期、自动续费、提醒与分类 | 已接统一侧栏、表单、日期、下拉、开关 | `memberships_layout_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | D20 | `_PaymentHistoryDialog`；同上 | 缴费历史、空态、添加/编辑/删除、汇总 | 已接统一居中弹窗与确认/消息；列表沿用主题 | `memberships_layout_test.dart`、`business_repositories_test.dart` | 自动化通过；人工矩阵待验 |
 | D21 | `_PaymentEditorDialog`；同上 | 缴费金额/日期、周期、有效期、保存失败 | 已接统一居中弹窗、输入、下拉、日期和按钮 | `windows_dialog_enter_save_test.dart`、`memberships_layout_test.dart` | 自动化通过；人工矩阵待验 |
-| D22 | `_SyncConnectionDialog`；`lib/features/settings/presentation/sync_connection_dialog.dart` | 连接表单→数据处理预览、保留/替换策略、返回、提交中不可关闭、失败 | 已接统一侧栏、表单、单选、图标和按钮；保留两阶段确认与 `PopScope` | `sync_connection_dialog_test.dart`、`sync_connection_coordinator_test.dart` | 自动化通过；人工矩阵待验 |
+| D22 | `_SyncConnectionDialog`；`lib/features/settings/presentation/sync_connection_dialog.dart` | 连接表单→数据处理预览、保留/替换策略、返回、提交中不可关闭、失败 | Windows 统一侧栏，Android 补记同款根导航全屏容器；统一表单、单选、图标和按钮，顶部固定操作、正文键盘避让、确认文案完整呈现；保留两阶段确认与 `PopScope` | `sync_connection_dialog_test.dart`、`settings_layout_test.dart`、`sync_connection_coordinator_test.dart` | 自动化与中文明暗预览通过；人工矩阵待验 |
 | D23 | `_SyncBackupDialog`；`lib/features/settings/presentation/sync_backup_dialog.dart` | 备份列表、加载/失败、删除确认/执行中 | 已接统一居中弹窗和按钮；旧库/快照删除范围不变 | `sync_maintenance_boundary_test.dart`；备份界面专项需手工验收 | 共享/仓储回归通过；界面专项待验 |
 | D24 | `TodoProgressPanel`；`lib/features/todos/presentation/todo_progress_panel.dart` | 跳序记录、批量预览、即时保存/失败重试、六秒撤销、满进度待确认、历史只读与重开；首页/待办/悬浮窗共用 | 统一侧栏、按钮、输入、消息与语义主题；顶部下一个步骤与完成操作同排，批量短输入框及外置标签，空间不足按字号分行，错误整行展示；只读分段条为业务图形，无拖动手势 | `todo_progress_ui_test.dart`、`todo_progress_entrypoints_test.dart`、`todo_progress_panel_layout_test.dart`、`test/support/todo_progress_runtime_smoke.dart` | 六配色×明暗像素、键盘、读屏语义与宽窄屏通过；Windows/Android模拟器真实引擎点击闭环通过；本轮顶部布局验收记录见进度面板专项测试；实体设备读屏/输入法体验待人工验收 |
 
@@ -204,6 +204,22 @@
 - 37项相关回归通过：6文件27项最终运行、追加1项320dp双倍字号长金额与续费、9项管理导航；覆盖320/360/390dp、短屏、自然增高、旧操作流程与桌面布局。9张管理Golden最终匹配，审查后仅更新会员/物品6张基线，事件3张内容保持相同。证据：output/management-row-layout-{final-tests,long-price-tests,navigation,golden-update}.log。
 - 全量静态分析无问题、样式检查通过（43项既有受控例外）、定向格式和diff检查通过。真实中文明暗预览2项通过，已查看两页明暗常态；图片位于output/ui-pages-preview/android-{light,dark}-390-{memberships,inventory}.png。证据：output/management-row-layout-{analyze,style,preview}.log。本轮未重新打包安装，实体设备与实际TalkBack未复验。
 - 扩展运行还发现设置页的既有“Android 更多页展示分组设置并支持二级返回”测试查找旧group-features标识；HEAD设置页已在首页设置迁移后改为group-home，源码与本轮无关。记录至agent_memory/bugs.md，未修改设置页或其旧测试；其余9项管理导航定向运行通过。
+
+## 2026-10-08 设置界面与同步操作布局
+
+- Android 六个一级入口补齐图标，分别使用蓝、青、紫、橙、绿、红语义色并适配明暗主题。删除首页设置排序和立即保存的常驻提示，Windows 已添加、可添加及空态补上实底圆角分组，保留完整卡片顺序和持久化键。
+- Android 连接服务器沿用补记的根导航全屏弹窗、安全区与固定顶部操作；两侧按文字实测宽度保持标题居中，窄屏及大字号操作换行。正文避让键盘，返回修改保留草稿；预检和提交期间禁止返回、取消与重复提交，数据处理策略和实际连接仍由原协调器负责。
+- 数据同步将连接操作、迁移备份、断开分组，桌面左对齐横排，窄屏及大字号整行纵排；按钮32px视觉高度、Android48px热区有实际尺寸断言。
+- 9个相关测试文件共 **87项通过**，覆盖两端首页卡片真实拖动、增删与键盘排序、Windows1200/512与Android390/320双倍字号的同步四状态、全屏连接键盘避让/草稿/预检/确认/防重、主题和回收站回归。证据：`output/settings-final-tests.log`。24张中文明暗预览生成，主要入口、卡片、表单及同步常态/离线布局已审图；图片位于`output/settings-preview/`，生成记录`output/settings-preview-final.log`。
+- 样式检查通过，新增一项有明确理由的Android全屏容器例外；源码颜色、尺寸和控件继续复用Omni。未构建安装包，实体设备输入法、TalkBack与交互手感仍待人工复验。
+
+## 2026-10-08 首页设置、Android 主题选择与回收站细化
+
+- 两端首页设置移除顶部横幅、已添加和可添加标题右侧的数量；卡片开关、增删与排序逻辑沿用原实现。
+- Android 外观页将主题色收为可点击的当前配色入口；复用 Omni 弹窗展示六种主题的完整名称、色块与选中标记，选择即时保存，关闭或系统返回不改偏好。Windows 页面内选择器保持原有呈现。
+- Android 回收站保留期说明独立一行，一键清空靠右；每条记录的恢复和永久删除均靠右，窄屏大字号允许自然换行。仓储、保留期、确认与操作防重逻辑保持原规则。
+- 4个相关测试文件共 **55项回归通过**，覆盖两端数量移除及原卡片排序、六款主题即时保存与取消、实际全局主题切换、回收站布局和真实恢复/清空。证据：`output/settings-refinement-tests.log`。中文预览生成另有8项设置与10项回收站通过，21张明暗PNG位于`output/settings-refinement-preview/`；已检查两端首页、Android主题入口/弹窗、回收站及320dp双倍字号主要界面。生成记录：`output/settings-refinement-preview.log`、`output/settings-refinement-recycle-preview.log`。
+- 全量静态分析无问题，UI样式检查通过（42项受控例外，无新增），定向格式与diff检查通过。证据：`output/settings-refinement-analyze.log`、`output/settings-refinement-style.log`。本轮未打包安装，实体设备触控与TalkBack尚未复验。
 
 ## 2026-10-08 Windows / Android 时间管理界面重整
 
