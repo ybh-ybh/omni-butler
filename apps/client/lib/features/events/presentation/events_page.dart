@@ -90,6 +90,16 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
   /// 打开事件编辑器。
   Future<void> _openEditor([EventRecord? event]) async {
+    if (event == null && Theme.of(context).platform == TargetPlatform.android) {
+      await showOmniDialog<void>(
+        context: context,
+        useSafeArea: false,
+        fullscreenDialog: true,
+        barrierDismissible: false,
+        builder: (BuildContext context) => const _EventEditorDialog(),
+      );
+      return;
+    }
     await showOmniSideSheet<void>(
       context,
       builder: (BuildContext context) => _EventEditorDialog(event: event),
@@ -2078,6 +2088,20 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
   /// 是否正在保存。
   bool _saving = false;
 
+  /// 保存成功后等待当前帧解除返回保护。
+  bool _closing = false;
+
+  /// 补充信息是否展开。
+  bool _supplementExpanded = false;
+
+  /// 新增表单在正文显示保存错误，避免消息浮层遮挡顶部重试操作。
+  String? _saveError;
+
+  /// 仅安卓新增事件使用全屏表单。
+  bool get _usesAndroidCreate =>
+      widget.event == null &&
+      Theme.of(context).platform == TargetPlatform.android;
+
   /// 初始化编辑表单。
   @override
   void initState() {
@@ -2118,10 +2142,28 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
 
   /// 保存事件。
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) {
+    if (_saving) {
       return;
     }
-    setState(() => _saving = true);
+    // 保存开始时固定界面类型，避免异步返回后读取已销毁的上下文。
+    final bool androidCreate = _usesAndroidCreate;
+    if (androidCreate) {
+      // 本次完整表单校验失败的字段。
+      final Set<FormFieldState<Object?>> errors = omniValidateForm(_formKey);
+      if (errors.isNotEmpty) {
+        omniRevealFirstError(errors);
+        return;
+      }
+    } else if (!_formKey.currentState!.validate()) {
+      return;
+    }
+    if (androidCreate) {
+      FocusScope.of(context).unfocus();
+    }
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
     try {
       await ref
           .read(eventRepositoryProvider)
@@ -2143,18 +2185,30 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
             ),
           );
       if (mounted) {
-        Navigator.of(context).pop();
+        if (androidCreate) {
+          setState(() => _closing = true);
+          WidgetsBinding.instance.addPostFrameCallback((Duration timestamp) {
+            if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+              Navigator.of(context).pop();
+            }
+          });
+        } else {
+          Navigator.of(context).pop();
+        }
       }
     } on FormatException catch (error) {
       if (mounted) {
-        showOmniMessage(
-          context,
-          message: error.message,
-          tone: OmniMessageTone.error,
-        );
+        _showSaveFailure(error.message, androidCreate);
+      }
+    } on Object catch (error) {
+      if (!androidCreate) {
+        rethrow;
+      }
+      if (mounted) {
+        _showSaveFailure('事件保存失败，请重试：$error', androidCreate);
       }
     } finally {
-      if (mounted) {
+      if (mounted && !_closing) {
         setState(() => _saving = false);
       }
     }
@@ -2163,6 +2217,9 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
   /// 构建周期事件编辑表单。
   @override
   Widget build(BuildContext context) {
+    if (_usesAndroidCreate) {
+      return _buildAndroidCreate(context);
+    }
     return OmniSideSheetScaffold(
       title: widget.event == null ? '新建周期事件' : '编辑周期事件',
       canClose: !_saving,
@@ -2302,6 +2359,227 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
           ),
         ),
       ),
+    );
+  }
+
+  /// 构建安卓新增事件的分组表单。
+  Widget _buildAndroidCreate(BuildContext context) {
+    return PopScope(
+      canPop: !_saving || _closing,
+      child: OmniFullscreenFormScaffold(
+        key: const ValueKey<String>('event-create-fullscreen'),
+        title: '新增事件',
+        primaryKey: const ValueKey<String>('event-create-save'),
+        loading: _saving,
+        onPrimary: _saving ? null : _save,
+        onCancel: _saving ? null : () => Navigator.of(context).pop(),
+        child: _withSaveError(
+          Form(
+            key: _formKey,
+            child: SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: const EdgeInsets.all(OmniSpacing.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  OmniFormGroup(
+                    children: <Widget>[
+                      OmniFormRow(
+                        label: '事件名称 *',
+                        child: OmniTextFormField(
+                          key: const ValueKey<String>('event-create-name'),
+                          controller: _nameController,
+                          decoration: omniGroupedInputDecoration.copyWith(
+                            hintText: '请输入事件名称',
+                          ),
+                          validator: (String? value) =>
+                              value == null || value.trim().isEmpty
+                              ? '请输入事件名称'
+                              : null,
+                        ),
+                      ),
+                      OmniFormRow(
+                        label: '分类',
+                        child: OmniTextField(
+                          controller: _categoryController,
+                          decoration: omniGroupedInputDecoration.copyWith(
+                            hintText: '选填',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: OmniSpacing.md),
+                  OmniFormGroup(
+                    children: <Widget>[
+                      OmniFormRow(
+                        label: '每隔 *',
+                        child: OmniTextFormField(
+                          key: const ValueKey<String>('event-create-interval'),
+                          controller: _intervalController,
+                          keyboardType: TextInputType.number,
+                          decoration: omniGroupedInputDecoration,
+                          validator: (String? value) {
+                            // 解析后的周期间隔。
+                            final int? parsed = int.tryParse(value ?? '');
+                            return parsed == null || parsed <= 0
+                                ? '请输入正整数'
+                                : null;
+                          },
+                        ),
+                      ),
+                      OmniFormRow(
+                        label: '周期单位',
+                        child: OmniDropdownButtonFormField<EventIntervalUnit>(
+                          initialValue: _unit,
+                          decoration: omniGroupedInputDecoration,
+                          items: EventIntervalUnit.values
+                              .map(
+                                (EventIntervalUnit unit) =>
+                                    DropdownMenuItem<EventIntervalUnit>(
+                                      value: unit,
+                                      child: Text(_unitLabel(unit)),
+                                    ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (EventIntervalUnit? value) {
+                            if (value != null) {
+                              setState(() => _unit = value);
+                            }
+                          },
+                        ),
+                      ),
+                      OmniFormRow(
+                        label: '到期提醒',
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: OmniSwitch(
+                            value: _reminderEnabled,
+                            onChanged: (bool value) =>
+                                setState(() => _reminderEnabled = value),
+                          ),
+                        ),
+                      ),
+                      if (_reminderEnabled) ...<Widget>[
+                        OmniFormRow(
+                          label: '提前天数',
+                          child: OmniTextFormField(
+                            key: const ValueKey<String>(
+                              'event-create-reminder',
+                            ),
+                            controller: _reminderController,
+                            keyboardType: TextInputType.number,
+                            decoration: omniGroupedInputDecoration,
+                            validator: (String? value) {
+                              // 解析后的提醒提前天数。
+                              final int? parsed = int.tryParse(value ?? '');
+                              return parsed == null || parsed < 0
+                                  ? '请输入不小于 0 的整数'
+                                  : null;
+                            },
+                          ),
+                        ),
+                        OmniFormRow(
+                          label: '提醒时刻',
+                          child: OmniDropdownButtonFormField<int>(
+                            initialValue: _reminderTimeMinutes,
+                            decoration: omniGroupedInputDecoration,
+                            items:
+                                List<int>.generate(
+                                      48,
+                                      (int index) => index * 30,
+                                    )
+                                    .map(
+                                      (int minute) => DropdownMenuItem<int>(
+                                        value: minute,
+                                        child: Text(_minuteLabel(minute)),
+                                      ),
+                                    )
+                                    .toList(growable: false),
+                            onChanged: (int? value) {
+                              if (value != null) {
+                                setState(() => _reminderTimeMinutes = value);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: OmniSpacing.md),
+                  OmniFormSupplement(
+                    key: const ValueKey<String>('event-create-supplement'),
+                    expanded: _supplementExpanded,
+                    onToggle: () => setState(
+                      () => _supplementExpanded = !_supplementExpanded,
+                    ),
+                    child: OmniFormGroup(
+                      children: <Widget>[
+                        OmniFormRow(
+                          label: '事件说明',
+                          child: OmniTextField(
+                            key: const ValueKey<String>(
+                              'event-create-description',
+                            ),
+                            controller: _descriptionController,
+                            maxLines: 2,
+                            decoration: omniGroupedInputDecoration.copyWith(
+                              hintText: '选填',
+                            ),
+                          ),
+                        ),
+                        OmniFormRow(
+                          label: '备注',
+                          child: OmniTextField(
+                            key: const ValueKey<String>('event-create-notes'),
+                            controller: _notesController,
+                            maxLines: 3,
+                            decoration: omniGroupedInputDecoration.copyWith(
+                              hintText: '选填',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 按界面类型呈现保存失败，旧编辑表单仍使用原消息提示。
+  void _showSaveFailure(String message, bool androidCreate) {
+    if (androidCreate) {
+      setState(() => _saveError = message);
+      return;
+    }
+    showOmniMessage(context, message: message, tone: OmniMessageTone.error);
+  }
+
+  /// 在滚动正文上方展示可读屏播报的错误，保持顶部保存可立即重试。
+  Widget _withSaveError(Widget child) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        if (_saveError != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                _saveError!,
+                key: const ValueKey<String>('event-create-save-error'),
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: OmniColors.of(context).danger),
+              ),
+            ),
+          ),
+        Expanded(child: child),
+      ],
     );
   }
 

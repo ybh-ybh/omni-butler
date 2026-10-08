@@ -15,9 +15,13 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 Future<InventoryMoveResult?> showInventoryMoveDialog(
   BuildContext context,
 ) async {
+  // 安卓工作台由自身安全区承载完整窗口。
+  final bool android = Theme.of(context).platform == TargetPlatform.android;
   return showOmniDialog<InventoryMoveResult>(
     context: context,
     barrierDismissible: false,
+    useSafeArea: !android,
+    fullscreenDialog: android,
     builder: (BuildContext dialogContext) => const InventoryMoveDialog(),
   );
 }
@@ -52,6 +56,15 @@ class _InventoryMoveDialogState extends ConsumerState<InventoryMoveDialog> {
 
   /// 当前是否正在迁移。
   bool _moving = false;
+
+  /// 安卓页面关闭前仅放行内部退出，避免重新启用提交。
+  bool _closing = false;
+
+  /// 安卓迁移错误留在正文顶部，避免浮层遮挡立即重试。
+  String? _moveError;
+
+  /// 数据重试期间保留上次已加载的选择摘要。
+  _InventoryMoveData? _lastAndroidData;
 
   /// 释放搜索控制器。
   @override
@@ -132,9 +145,18 @@ class _InventoryMoveDialogState extends ConsumerState<InventoryMoveDialog> {
 
   /// 执行批量迁移并返回页面。
   Future<void> _move(_InventoryMoveData data) async {
+    // 安卓在提交前校验实时目标，其他平台保留仓储校验反馈。
+    final bool android = Theme.of(context).platform == TargetPlatform.android;
     // 当前选择的目标位置标识。
     final String? destinationLocationId = _destinationLocationId;
-    if (destinationLocationId == null || _moving) {
+    if (destinationLocationId == null ||
+        _moving ||
+        _closing ||
+        (android &&
+            !data.locations.any(
+              (TaxonomyEntry location) =>
+                  location.isEnabled && location.id == destinationLocationId,
+            ))) {
       return;
     }
     // 当前仍然有效的直接选择物品标识。
@@ -146,7 +168,14 @@ class _InventoryMoveDialogState extends ConsumerState<InventoryMoveDialog> {
     if (migrationIds.isEmpty) {
       return;
     }
-    setState(() => _moving = true);
+    // 提交前收起键盘，冻结当前选择和目标。
+    if (android) {
+      FocusManager.instance.primaryFocus?.unfocus();
+    }
+    setState(() {
+      _moving = true;
+      _moveError = null;
+    });
     try {
       // 仓储返回的批量迁移结果。
       final InventoryMoveResult result = await ref
@@ -156,29 +185,85 @@ class _InventoryMoveDialogState extends ConsumerState<InventoryMoveDialog> {
             destinationLocationId: destinationLocationId,
           );
       if (mounted) {
-        Navigator.of(context).pop(result);
+        if (android) {
+          _closeAndroid(result);
+        } else {
+          Navigator.of(context).pop(result);
+        }
       }
     } on FormatException catch (error) {
       if (mounted) {
-        showOmniMessage(
-          context,
-          message: error.message,
-          tone: OmniMessageTone.error,
-        );
+        _showMoveFailure(error.message, android: android);
       }
     } catch (error) {
       if (mounted) {
-        showOmniMessage(
-          context,
-          message: '物品迁移失败：$error',
-          tone: OmniMessageTone.error,
-        );
+        _showMoveFailure('物品迁移失败：$error', android: android);
       }
     } finally {
-      if (mounted) {
+      if (mounted && !_closing) {
         setState(() => _moving = false);
       }
     }
+  }
+
+  /// 安卓使用行内错误，其他平台保留原有浮动消息。
+  void _showMoveFailure(String message, {required bool android}) {
+    if (android) {
+      setState(() => _moveError = message);
+      return;
+    }
+    showOmniMessage(context, message: message, tone: OmniMessageTone.error);
+  }
+
+  /// 在滚动内容之外显示错误，保持顶栏主操作可立即点击。
+  Widget _withMoveError(Widget child) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        if (_moveError != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                _moveError!,
+                key: const ValueKey<String>('inventory-move-error'),
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: OmniColors.of(context).danger),
+              ),
+            ),
+          ),
+        Expanded(child: child),
+      ],
+    );
+  }
+
+  /// 在返回保护更新后关闭安卓工作台，并保持提交锁直到离场。
+  void _closeAndroid([InventoryMoveResult? result]) {
+    if (_closing) {
+      return;
+    }
+    // 只允许关闭发起操作的当前路由。
+    final ModalRoute<dynamic>? route = ModalRoute.of(context);
+    setState(() => _closing = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && route?.isCurrent == true) {
+        Navigator.of(context).pop(result);
+      }
+    });
+  }
+
+  /// 重新读取工作台数据，同时保留当前步骤、搜索和选择。
+  void _retryAndroid() {
+    ref.invalidate(inventoryItemsProvider(''));
+    ref.invalidate(inventoryAllAccessoriesProvider);
+    ref.invalidate(
+      taxonomyEntriesProvider((
+        TaxonomyModule.inventory,
+        TaxonomyKind.location,
+      )),
+    );
+    ref.invalidate(inventoryTaxonomyLinksProvider);
   }
 
   /// 构建物品搬家工作台。
@@ -222,6 +307,19 @@ class _InventoryMoveDialogState extends ConsumerState<InventoryMoveDialog> {
         accessories.isLoading ||
         locations.isLoading ||
         taxonomyLinks.isLoading;
+    if (Theme.of(context).platform == TargetPlatform.android) {
+      if (!loading && error == null) {
+        _lastAndroidData = _InventoryMoveData(
+          records: <InventoryRecord>[
+            ...parentItems.value ?? const <InventoryRecord>[],
+            ...accessories.value ?? const <InventoryRecord>[],
+          ],
+          locations: locations.value ?? const <TaxonomyEntry>[],
+          taxonomyLinks: taxonomyLinks.value ?? const <String, Set<String>>{},
+        );
+      }
+      return _buildAndroid(loading: loading, error: error);
+    }
     // 弹窗目标宽度。
     final double dialogWidth = compact
         ? viewport.width
@@ -251,6 +349,280 @@ class _InventoryMoveDialogState extends ConsumerState<InventoryMoveDialog> {
                     taxonomyLinks.value ?? const <String, Set<String>>{},
               ),
       ),
+    );
+  }
+
+  /// 构建安卓固定顶栏与可滚动的两步搬家表单。
+  Widget _buildAndroid({required bool loading, required Object? error}) {
+    // 最近成功读取的数据支持在重试时保留摘要。
+    final _InventoryMoveData? data = _lastAndroidData;
+    // 当前有效的直接选择。
+    final Set<String> validSelectedIds = data == null
+        ? <String>{}
+        : _selectedIds.where(data.recordsById.containsKey).toSet();
+    // 计入自动跟随配件的最终迁移集合。
+    final Set<String> migrationIds =
+        data?.migrationIds(validSelectedIds) ?? <String>{};
+    // 当前数据已就绪且允许操作。
+    final bool ready = !loading && error == null && data != null;
+    // 目标位置被停用或删除后不允许继续提交。
+    final String? destinationId =
+        data?.locations.any(
+              (TaxonomyEntry location) =>
+                  location.isEnabled && location.id == _destinationLocationId,
+            ) ==
+            true
+        ? _destinationLocationId
+        : null;
+    // 固定顶栏主操作跟随步骤和实时选择状态。
+    final VoidCallback? onPrimary =
+        !ready || _moving || _closing || migrationIds.isEmpty
+        ? null
+        : _mobileStep == 0
+        ? () {
+            FocusManager.instance.primaryFocus?.unfocus();
+            setState(() => _mobileStep = 1);
+          }
+        : destinationId == null
+        ? null
+        : () => _move(data);
+    return PopScope<InventoryMoveResult>(
+      canPop: _closing || (!_moving && _mobileStep == 0),
+      onPopInvokedWithResult: (bool didPop, InventoryMoveResult? result) {
+        if (didPop || _moving || _closing) {
+          return;
+        }
+        setState(() => _mobileStep = 0);
+      },
+      child: OmniFullscreenFormScaffold(
+        key: const ValueKey<String>('inventory-move-dialog'),
+        title: '一键搬家',
+        subtitle:
+            '已选 ${migrationIds.length} 条记录，共 ${data?.quantityOf(migrationIds) ?? 0} 件',
+        primaryLabel: _mobileStep == 0 ? '下一步' : '迁移',
+        primaryKey: ValueKey<String>(
+          _mobileStep == 0 ? 'inventory-move-next' : 'inventory-move-submit',
+        ),
+        onPrimary: onPrimary,
+        onCancel: _moving || _closing ? null : _closeAndroid,
+        loading: _moving || _closing,
+        child: _withMoveError(
+          error != null
+              ? SingleChildScrollView(
+                  padding: const EdgeInsets.all(OmniSpacing.md),
+                  child: OmniFormGroup(
+                    children: <Widget>[
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: OmniSpacing.md,
+                        ),
+                        child: Text('物品读取失败：$error'),
+                      ),
+                      OmniButton(
+                        key: const ValueKey<String>('inventory-move-retry'),
+                        label: '重试',
+                        onPressed: _retryAndroid,
+                      ),
+                    ],
+                  ),
+                )
+              : loading || data == null
+              ? const Center(child: CircularProgressIndicator())
+              : _buildAndroidContent(
+                  data: data,
+                  validSelectedIds: validSelectedIds,
+                  migrationIds: migrationIds,
+                  destinationId: destinationId,
+                ),
+        ),
+      ),
+    );
+  }
+
+  /// 构建按步骤组织的安卓卡片正文，允许短屏和键盘下整体滚动。
+  Widget _buildAndroidContent({
+    required _InventoryMoveData data,
+    required Set<String> validSelectedIds,
+    required Set<String> migrationIds,
+    required String? destinationId,
+  }) {
+    // 自动迁移的配件保持只读选择状态。
+    final Set<String> autoIncludedIds = data.autoIncludedIds(validSelectedIds);
+    // 搜索结果保留位置分组与主物品上下文。
+    final List<_InventoryMoveGroup> groups = data.groups(_query);
+    // 停用位置仅从目标候选排除，保留源位置解析和配件继承规则。
+    final List<TaxonomyEntry> destinations = data.locations
+        .where((TaxonomyEntry location) => location.isEnabled)
+        .toList(growable: false);
+    // 确认页按名称显示待迁移物品。
+    final List<InventoryRecord> selectedRecords =
+        data.records
+            .where((InventoryRecord record) => migrationIds.contains(record.id))
+            .toList()
+          ..sort(
+            (InventoryRecord left, InventoryRecord right) =>
+                left.name.compareTo(right.name),
+          );
+    return ListView(
+      key: ValueKey<String>(
+        _mobileStep == 0
+            ? 'inventory-move-source-panel'
+            : 'inventory-move-target-panel',
+      ),
+      padding: const EdgeInsets.all(OmniSpacing.md),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      children: <Widget>[
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: OmniSpacing.sm,
+          children: <Widget>[
+            Text(
+              '${_mobileStep + 1}/2 · ${_mobileStep == 0 ? '选择物品' : '确认迁移'}',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            if (_mobileStep == 1)
+              OmniButton(
+                key: const ValueKey<String>('inventory-move-back'),
+                variant: OmniButtonVariant.text,
+                onPressed: () => setState(() => _mobileStep = 0),
+                icon: Icons.arrow_back_rounded,
+                label: '上一步',
+              ),
+          ],
+        ),
+        const SizedBox(height: OmniSpacing.sm),
+        if (_mobileStep == 0) ...<Widget>[
+          OmniFormGroup(
+            children: <Widget>[
+              OmniTextField(
+                key: const ValueKey<String>('inventory-move-search'),
+                controller: _searchController,
+                onChanged: (String value) => setState(() => _query = value),
+                decoration: omniGroupedInputDecoration.copyWith(
+                  hintText: '搜索物品或位置',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _query.isEmpty
+                      ? null
+                      : OmniIconButton(
+                          tooltip: '清空搜索',
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _query = '');
+                          },
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: OmniSpacing.md),
+          if (groups.isEmpty)
+            OmniFormGroup(
+              children: <Widget>[
+                _InventoryMoveEmpty(
+                  icon: data.records.isEmpty
+                      ? Icons.inventory_2_outlined
+                      : Icons.search_off_rounded,
+                  message: data.records.isEmpty ? '还没有可迁移的物品' : '没有找到匹配的物品或位置',
+                ),
+              ],
+            ),
+          // 每个现有位置独立成卡，沿用整组与配件选择规则。
+          for (final _InventoryMoveGroup group in groups) ...<Widget>[
+            _InventoryMoveLocationGroup(
+              group: group,
+              data: data,
+              selectedIds: migrationIds,
+              autoIncludedIds: autoIncludedIds,
+              onToggleItem: (InventoryRecord record) =>
+                  _toggleItem(record, data),
+              onToggleGroup: () => _toggleGroup(group, data),
+            ),
+            const SizedBox(height: OmniSpacing.sm),
+          ],
+        ] else ...<Widget>[
+          OmniFormGroup(
+            children: <Widget>[
+              OmniFormRow(
+                label: '搬到',
+                child: KeyedSubtree(
+                  key: const ValueKey<String>('inventory-move-destination'),
+                  child: OmniDropdownButtonFormField<String>(
+                    key: ValueKey<String>(
+                      'inventory-move-destination-${destinationId ?? 'empty'}',
+                    ),
+                    initialValue: destinationId,
+                    hint: const Text('选择目标位置'),
+                    decoration: omniGroupedInputDecoration,
+                    items: <DropdownMenuItem<String>>[
+                      // 目标选项始终来自当前有效位置。
+                      for (final TaxonomyEntry location in destinations)
+                        DropdownMenuItem<String>(
+                          value: location.id,
+                          child: Text(location.name),
+                        ),
+                    ],
+                    onChanged: destinations.isEmpty
+                        ? null
+                        : (String? value) =>
+                              setState(() => _destinationLocationId = value),
+                  ),
+                ),
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OmniButton(
+                  key: const ValueKey<String>('inventory-move-manage-location'),
+                  variant: OmniButtonVariant.text,
+                  onPressed: () => TaxonomyManagerDialog.show(
+                    context,
+                    module: TaxonomyModule.inventory,
+                    kind: TaxonomyKind.location,
+                  ),
+                  icon: Icons.settings_outlined,
+                  label: '管理位置',
+                ),
+              ),
+              if (destinations.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: OmniSpacing.sm),
+                  child: Text('还没有可用位置，请先在管理位置中添加'),
+                ),
+            ],
+          ),
+          const SizedBox(height: OmniSpacing.md),
+          Text(
+            '待迁移物品 ${migrationIds.length} 项',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: OmniSpacing.sm),
+          if (selectedRecords.isEmpty)
+            const OmniFormGroup(
+              children: <Widget>[
+                _InventoryMoveEmpty(
+                  icon: Icons.move_to_inbox_outlined,
+                  message: '暂无待迁移物品，请返回上一步选择',
+                ),
+              ],
+            ),
+          // 继承位置的配件只允许随主物品一起移除。
+          for (final InventoryRecord record in selectedRecords) ...<Widget>[
+            _InventoryMoveTargetRow(
+              record: record,
+              data: data,
+              autoIncluded: autoIncludedIds.contains(record.id),
+              onRemove: validSelectedIds.contains(record.id)
+                  ? () => setState(() {
+                      _selectedIds.remove(record.id);
+                      _normalizeSelection(data);
+                    })
+                  : null,
+            ),
+            const SizedBox(height: OmniSpacing.xs),
+          ],
+        ],
+      ],
     );
   }
 

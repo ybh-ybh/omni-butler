@@ -375,16 +375,48 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     return width;
   }
 
-  /// 构建开始／结束、补记及分类菜单组成的直接操作组。
+  /// 构建桌面直接操作组或安卓原有的悬浮拆分按钮。
   Widget _buildRecordActions(
     BuildContext context,
     List<TimeEntryRecord> ongoingEntries, {
     required bool mobile,
   }) {
-    // 保留移动端已有主操作标识，方便焦点和交互回归。
-    final String prefix = mobile ? 'timeline-mobile' : 'timeline-desktop';
-    // 手机操作组使用统一实底承托，避免更多入口混入滚动内容。
-    final Widget actions = Wrap(
+    if (mobile) {
+      return OmniSplitActionButton<String>(
+        keyPrefix: 'timeline-mobile',
+        label: ongoingEntries.isEmpty ? '开始' : '结束记录',
+        primaryIcon: ongoingEntries.isEmpty
+            ? Icons.play_arrow_rounded
+            : Icons.stop_rounded,
+        primarySemanticsLabel: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
+        menuTooltip: '更多时间操作',
+        onPressed: ongoingEntries.isEmpty
+            ? _openStartEditor
+            : () => _openFinishEditor(ongoingEntries.first),
+        actions: const <OmniSplitAction<String>>[
+          OmniSplitAction<String>(
+            value: 'backfill',
+            label: '补记时间',
+            icon: Icons.edit_calendar_outlined,
+          ),
+          OmniSplitAction<String>(
+            value: 'categories',
+            label: '分类',
+            icon: Icons.category_outlined,
+          ),
+        ],
+        onSelected: (String action) {
+          if (action == 'backfill') {
+            _openEditor();
+          } else {
+            _openTimelineCategories();
+          }
+        },
+      );
+    }
+    // 桌面操作标识保持稳定，窗口缩放不改变业务回调。
+    const String prefix = 'timeline-desktop';
+    return Wrap(
       key: ValueKey<String>('$prefix-actions'),
       spacing: OmniSpacing.xs,
       runSpacing: OmniSpacing.xxs,
@@ -396,7 +428,6 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
           label: '补记时间',
           icon: Icons.edit_calendar_outlined,
           variant: OmniButtonVariant.secondary,
-          visualHeight: mobile ? OmniSize.control : null,
           onPressed: () => _openEditor(),
         ),
         OmniButton(
@@ -406,7 +437,6 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
               ? Icons.play_arrow_rounded
               : Icons.stop_rounded,
           variant: OmniButtonVariant.pagePrimary,
-          visualHeight: mobile ? OmniSize.control : null,
           onPressed: ongoingEntries.isEmpty
               ? _openStartEditor
               : () => _openFinishEditor(ongoingEntries.first),
@@ -426,12 +456,6 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
         ),
       ],
     );
-    return mobile
-        ? OmniPanel(
-            padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xxs),
-            child: actions,
-          )
-        : actions;
   }
 
   /// 构建独立的页面模式导航，并按文字大小提高高度。
@@ -714,9 +738,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
                         TimelineStatsPeriod.week => '周',
                         TimelineStatsPeriod.month => '月',
                       },
-                      icon: _statsPeriod == value
-                          ? Icons.check_rounded
-                          : Icons.calendar_view_week_outlined,
+                      icon: _statsPeriod == value ? Icons.check_rounded : null,
                     ),
                 ],
             child: Container(

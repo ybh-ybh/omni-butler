@@ -162,6 +162,17 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
 
   /// 打开物品编辑器。
   Future<void> _openEditor([InventoryRecord? item]) async {
+    // 仅安卓新增主物品改为根导航全屏，编辑及配套入口沿用原结构。
+    if (item == null && Theme.of(context).platform == TargetPlatform.android) {
+      await showOmniDialog<void>(
+        context: context,
+        useSafeArea: false,
+        fullscreenDialog: true,
+        barrierDismissible: false,
+        builder: (BuildContext context) => const _InventoryEditorDialog(),
+      );
+      return;
+    }
     await showOmniSideSheet<void>(
       context,
       builder: (BuildContext context) => _InventoryEditorDialog(item: item),
@@ -3792,6 +3803,21 @@ class _InventoryEditorDialog extends ConsumerStatefulWidget {
 /// 物品编辑弹窗状态。
 class _InventoryEditorDialogState
     extends ConsumerState<_InventoryEditorDialog> {
+  /// 仅安卓新增主物品使用全屏分组布局。
+  bool get _isAndroidCreate =>
+      widget.item == null &&
+      widget.parentItemId == null &&
+      Theme.of(context).platform == TargetPlatform.android;
+
+  /// 可选补充信息的展开状态。
+  bool _supplementExpanded = false;
+
+  /// 成功关闭期间保持提交锁，只解除当前路由的返回保护。
+  bool _closing = false;
+
+  /// 保存错误显示在正文，失败后保留完整草稿。
+  String? _saveError;
+
   /// 表单键。
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
@@ -3889,15 +3915,33 @@ class _InventoryEditorDialogState
 
   /// 保存物品。
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) {
+    if (_saving || _closing) return;
+    // 异步期间固定入口类型，不再读取已销毁上下文的主题。
+    final bool androidCreate = _isAndroidCreate;
+    if (androidCreate) {
+      // 折叠区域仍注册在 Form 中，全部输入必须通过原有规则。
+      final Set<FormFieldState<Object?>> errors = omniValidateForm(_formKey);
+      if (errors.isNotEmpty) {
+        // 购买链接错误需要先展开补充信息，随后才能准确定位。
+        if (_purchaseUrlError(_urlController.text) != null) {
+          setState(() => _supplementExpanded = true);
+        }
+        omniRevealFirstError(errors);
+        return;
+      }
+    } else if (!_formKey.currentState!.validate()) {
       return;
     }
-    // 元格式金额。
-    final double? priceYuan = _priceController.text.trim().isEmpty
-        ? null
-        : double.parse(_priceController.text);
-    setState(() => _saving = true);
+    if (androidCreate) FocusScope.of(context).unfocus();
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
     try {
+      // 元格式金额在完整校验后解析，异常也归入保留草稿的错误路径。
+      final double? priceYuan = _priceController.text.trim().isEmpty
+          ? null
+          : double.parse(_priceController.text);
       await ref
           .read(inventoryRepositoryProvider)
           .save(
@@ -3934,18 +3978,30 @@ class _InventoryEditorDialogState
             ),
           );
       if (mounted) {
+        if (androidCreate) {
+          setState(() => _closing = true);
+          await WidgetsBinding.instance.endOfFrame;
+          if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+        }
         Navigator.of(context).pop();
       }
     } on FormatException catch (error) {
       if (mounted) {
-        showOmniMessage(
-          context,
-          message: error.message,
-          tone: OmniMessageTone.error,
-        );
+        if (androidCreate) {
+          setState(() => _saveError = error.message);
+        } else {
+          showOmniMessage(
+            context,
+            message: error.message,
+            tone: OmniMessageTone.error,
+          );
+        }
       }
+    } catch (error) {
+      if (!androidCreate) rethrow;
+      if (mounted) setState(() => _saveError = '保存失败，请重试');
     } finally {
-      if (mounted) {
+      if (mounted && !_closing) {
         setState(() => _saving = false);
       }
     }
@@ -4023,6 +4079,9 @@ class _InventoryEditorDialogState
         _locationController.text.trim(),
       ...locations.map((TaxonomyEntry entry) => entry.name),
     }.toList(growable: false);
+    if (_isAndroidCreate) {
+      return _buildAndroidCreate(categoryNames, locationNames);
+    }
     return OmniSideSheetScaffold(
       onWindowsEnter: _saving ? null : _save,
       title: widget.item != null
@@ -4251,6 +4310,289 @@ class _InventoryEditorDialogState
         ),
       ),
     );
+  }
+
+  /// 安卓新增主物品采用独立滚动的分组表单。
+  Widget _buildAndroidCreate(
+    List<String> categoryNames,
+    List<String> locationNames,
+  ) {
+    return PopScope(
+      canPop: !_saving || _closing,
+      child: OmniFullscreenFormScaffold(
+        key: const ValueKey<String>('inventory-android-create'),
+        title: '新增物品',
+        primaryKey: const ValueKey<String>('inventory-create-submit'),
+        loading: _saving,
+        onPrimary: _save,
+        onCancel: () => Navigator.of(context).pop(),
+        child: _withSaveError(
+          SingleChildScrollView(
+            key: const ValueKey<String>('inventory-create-body'),
+            padding: const EdgeInsets.all(OmniSpacing.md),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  OmniFormGroup(
+                    children: <Widget>[
+                      OmniFormRow(
+                        label: '物品名称 *',
+                        child: OmniTextFormField(
+                          key: const ValueKey<String>('inventory-create-name'),
+                          controller: _nameController,
+                          decoration: omniGroupedInputDecoration.copyWith(
+                            hintText: '物品名称',
+                          ),
+                          validator: (String? value) =>
+                              value == null || value.trim().isEmpty
+                              ? '请输入物品名称'
+                              : null,
+                        ),
+                      ),
+                      OmniFormRow(
+                        label: '数量 *',
+                        child: OmniTextFormField(
+                          key: const ValueKey<String>(
+                            'inventory-create-quantity',
+                          ),
+                          controller: _quantityController,
+                          keyboardType: TextInputType.number,
+                          decoration: omniGroupedInputDecoration,
+                          validator: (String? value) {
+                            // 正整数数量沿用既有业务校验。
+                            final int? parsed = int.tryParse(value ?? '');
+                            return parsed == null || parsed <= 0
+                                ? '请输入正整数'
+                                : null;
+                          },
+                        ),
+                      ),
+                      OmniFormRow(
+                        label: '物品状态',
+                        child: OmniDropdownButtonFormField<InventoryStatus>(
+                          initialValue: _status,
+                          decoration: omniGroupedInputDecoration,
+                          items:
+                              <InventoryStatus>[
+                                    InventoryStatus.inUse,
+                                    InventoryStatus.idle,
+                                    InventoryStatus.lent,
+                                  ]
+                                  .map(
+                                    (InventoryStatus value) =>
+                                        DropdownMenuItem<InventoryStatus>(
+                                          value: value,
+                                          child: Text(_statusLabel(value)),
+                                        ),
+                                  )
+                                  .toList(growable: false),
+                          onChanged: (InventoryStatus? value) {
+                            if (value != null) setState(() => _status = value);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: OmniSpacing.lg),
+                  OmniFormGroup(
+                    children: <Widget>[
+                      _androidTaxonomyRow(
+                        '分类',
+                        _categoryController,
+                        categoryNames,
+                      ),
+                      _androidTaxonomyRow(
+                        '存放位置',
+                        _locationController,
+                        locationNames,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: OmniSpacing.lg),
+                  OmniFormGroup(
+                    children: <Widget>[
+                      OmniFormRow(
+                        label: '购买金额（元）',
+                        child: OmniTextFormField(
+                          key: const ValueKey<String>('inventory-create-price'),
+                          controller: _priceController,
+                          decoration: omniGroupedInputDecoration.copyWith(
+                            hintText: '选填',
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          validator: (String? value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return null;
+                            }
+                            // 金额允许留空，非空时沿用非负数规则。
+                            final double? parsed = double.tryParse(value);
+                            return parsed == null ||
+                                    !parsed.isFinite ||
+                                    parsed < 0
+                                ? '请输入有效金额'
+                                : null;
+                          },
+                        ),
+                      ),
+                      OmniFormRow(
+                        label: '购买日期',
+                        child: OmniDatePickerButton(
+                          value: _purchaseDate,
+                          initialDate: _purchaseDate ?? DateTime.now(),
+                          firstDate: DateTime(1970),
+                          lastDate: DateTime(2100),
+                          label: _purchaseDate == null
+                              ? '选择购买日期'
+                              : DateFormat('yyyy-MM-dd').format(_purchaseDate!),
+                          onChanged: (DateTime selected) =>
+                              setState(() => _purchaseDate = selected),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: OmniSpacing.lg),
+                  OmniFormSupplement(
+                    key: const ValueKey<String>('inventory-create-supplement'),
+                    expanded: _supplementExpanded,
+                    onToggle: () => setState(
+                      () => _supplementExpanded = !_supplementExpanded,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        OmniFormRow(
+                          label: '购买平台',
+                          child: OmniTextField(
+                            key: const ValueKey<String>(
+                              'inventory-create-platform',
+                            ),
+                            controller: _platformController,
+                            decoration: omniGroupedInputDecoration.copyWith(
+                              hintText: '选填',
+                            ),
+                          ),
+                        ),
+                        const Divider(height: 1),
+                        OmniFormRow(
+                          label: '购买链接',
+                          child: OmniTextFormField(
+                            key: const ValueKey<String>('inventory-create-url'),
+                            controller: _urlController,
+                            decoration: omniGroupedInputDecoration.copyWith(
+                              hintText: 'https://',
+                            ),
+                            keyboardType: TextInputType.url,
+                            validator: _purchaseUrlError,
+                          ),
+                        ),
+                        const Divider(height: 1),
+                        OmniFormRow(
+                          label: '保修到期',
+                          child: OmniDatePickerButton(
+                            value: _warrantyExpiration,
+                            initialDate: _warrantyExpiration ?? DateTime.now(),
+                            firstDate: DateTime(1970),
+                            lastDate: DateTime(2100),
+                            label: _warrantyExpiration == null
+                                ? '选择保修到期日'
+                                : DateFormat('yyyy-MM-dd')
+                                      .format(_warrantyExpiration!),
+                            icon: Icons.verified_user_outlined,
+                            onChanged: (DateTime selected) =>
+                                setState(() => _warrantyExpiration = selected),
+                          ),
+                        ),
+                        const Divider(height: 1),
+                        OmniFormRow(
+                          label: '备注',
+                          child: OmniTextField(
+                            key: const ValueKey<String>(
+                              'inventory-create-notes',
+                            ),
+                            controller: _notesController,
+                            maxLines: 3,
+                            decoration: omniGroupedInputDecoration.copyWith(
+                              hintText: '补充物品信息',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 保存错误固定在正文上方，短屏或滚动到末尾时仍立即可见。
+  Widget _withSaveError(Widget child) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        if (_saveError != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                _saveError!,
+                key: const ValueKey<String>('inventory-create-error'),
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: OmniColors.of(context).danger),
+              ),
+            ),
+          ),
+        Expanded(child: child),
+      ],
+    );
+  }
+
+  /// 分类及位置继续按原名称选择并建立既有 taxonomy 关联。
+  Widget _androidTaxonomyRow(
+    String label,
+    TextEditingController controller,
+    List<String> names,
+  ) {
+    return OmniFormRow(
+      label: label,
+      child: OmniDropdownButtonFormField<String>(
+        initialValue: controller.text.trim().isEmpty
+            ? null
+            : controller.text.trim(),
+        decoration: omniGroupedInputDecoration,
+        hint: Text('选择$label'),
+        items: names
+            .map(
+              (String value) =>
+                  DropdownMenuItem<String>(value: value, child: Text(value)),
+            )
+            .toList(growable: false),
+        onChanged: (String? value) =>
+            setState(() => controller.text = value ?? ''),
+      ),
+    );
+  }
+
+  /// 与仓储保持相同的可选购买链接校验，折叠后仍参与验证。
+  String? _purchaseUrlError(String? value) {
+    // 空白内容按未填写处理。
+    final String url = value?.trim() ?? '';
+    if (url.isEmpty) return null;
+    // 非空链接必须采用可打开的 HTTP 或 HTTPS 地址。
+    final Uri? uri = Uri.tryParse(url);
+    return uri == null ||
+            !<String>{'http', 'https'}.contains(uri.scheme) ||
+            uri.host.isEmpty
+        ? '购买链接必须使用 http 或 https'
+        : null;
   }
 
   /// 返回物品状态文案。

@@ -14,13 +14,14 @@ import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
 import 'package:omni_butler/features/timeline/presentation/timeline_review.dart';
 import 'package:omni_butler/features/timeline/presentation/timeline_page.dart';
 import 'package:omni_butler/shared/ui/omni_date_time_picker.dart';
+import 'package:omni_butler/shared/ui/omni_dropdown.dart';
 import 'package:omni_butler/shared/ui/omni_page_header.dart';
 import 'package:omni_butler/shared/ui/omni_sliding_segmented_control.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 验证 Android 紧凑时间页的滑块与悬浮直接操作组。
+/// 验证 Android 紧凑时间页的滑块与悬浮拆分按钮。
 void main() {
-  testWidgets('Android 时间页使用顶部滑块和底部直接操作组', (WidgetTester tester) async {
+  testWidgets('Android 时间页使用顶部滑块和原有悬浮拆分按钮', (WidgetTester tester) async {
     // 测试使用的时间页上下文。
     final _TimelineAndroidTestContext testContext = await _pumpAndroidTimeline(
       tester,
@@ -29,15 +30,15 @@ void main() {
     final Finder viewControl = find.byKey(
       const ValueKey<String>('timeline-view-mode'),
     );
-    // Android 时间页悬浮直接操作组。
+    // Android 时间页原有悬浮拆分按钮。
     final Finder actionGroup = find.byKey(
-      const ValueKey<String>('timeline-mobile-actions'),
+      const ValueKey<String>('timeline-mobile-create-split'),
     );
     // 直接开始或结束记录的主操作。
     final Finder primaryButton = find.byKey(
       const ValueKey<String>('timeline-mobile-create'),
     );
-    // 仅管理分类的更多入口。
+    // 补记与分类共用原有更多入口。
     final Finder moreActionsButton = find.byKey(
       const ValueKey<String>('timeline-mobile-more-actions'),
     );
@@ -73,7 +74,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.descendant(of: primaryButton, matching: find.text('开始记录')),
+      find.descendant(of: primaryButton, matching: find.text('开始')),
       findsOneWidget,
     );
     // 底部导航栏的实际位置。
@@ -127,9 +128,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 
-    // 补记直接可达，不需要先展开更多菜单。
+    // 原有菜单第一项补记，第二项分类。
+    await tester.tap(moreActionsButton);
+    await tester.pumpAndSettle();
+    expect(find.text('补记时间'), findsOneWidget);
+    expect(find.text('分类'), findsOneWidget);
     await tester.tap(
-      find.byKey(const ValueKey<String>('timeline-mobile-backfill')),
+      find.byKey(const ValueKey<String>('timeline-mobile-action-0')),
     );
     await tester.pumpAndSettle();
     expect(find.text('补记'), findsOneWidget);
@@ -152,7 +157,7 @@ void main() {
     expect(find.text('分类'), findsOneWidget);
     expect(find.text('补记时间'), findsOneWidget);
     await tester.tap(
-      find.byKey(const ValueKey<String>('timeline-mobile-categories')),
+      find.byKey(const ValueKey<String>('timeline-mobile-action-1')),
     );
     await tester.pumpAndSettle();
     expect(find.text('时间分类'), findsOneWidget);
@@ -212,7 +217,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.descendant(of: primaryButton, matching: find.text('开始记录')),
+      find.descendant(of: primaryButton, matching: find.text('开始')),
       findsOneWidget,
     );
     expect(
@@ -324,6 +329,55 @@ void main() {
     await testContext.dispose(tester);
   });
 
+  testWidgets('周期菜单仅选中项显示勾，空位对齐并随选择更新', (WidgetTester tester) async {
+    // 使用生产页面验证三项选择标记及文字对齐。
+    final _TimelineAndroidTestContext testContext = await _pumpAndroidTimeline(
+      tester,
+    );
+    for (final String selected in <String>['周', '日']) {
+      await tester.tap(
+        find.byKey(const ValueKey<String>('timeline-period-menu')),
+      );
+      await tester.pumpAndSettle();
+      // 菜单中的三个周期项独立验证，不受底部导航文字影响。
+      final List<OmniPopupMenuItem<TimelineStatsPeriod>> items = tester
+          .widgetList<OmniPopupMenuItem<TimelineStatsPeriod>>(
+            find.byType(OmniPopupMenuItem<TimelineStatsPeriod>),
+          )
+          .toList();
+      expect(items.length, 3);
+      // 三个标签的实际横坐标应相同。
+      final List<double> labelOffsets = <double>[];
+      for (final String label in <String>['日', '周', '月']) {
+        // 定位当前周期的菜单项及其子文字。
+        final Finder item = find.ancestor(
+          of: find.text(label).last,
+          matching: find.byType(OmniPopupMenuItem<TimelineStatsPeriod>),
+        );
+        expect(
+          find.descendant(of: item, matching: find.byType(Icon)),
+          label == selected ? findsOneWidget : findsNothing,
+        );
+        if (label == selected) {
+          expect(
+            find.descendant(
+              of: item,
+              matching: find.byIcon(Icons.check_rounded),
+            ),
+            findsOneWidget,
+          );
+        }
+        labelOffsets.add(tester.getTopLeft(find.text(label).last).dx);
+      }
+      expect(labelOffsets[0], labelOffsets[1]);
+      expect(labelOffsets[1], labelOffsets[2]);
+      await tester.tap(find.text('日').last);
+      await tester.pumpAndSettle();
+    }
+    expect(tester.takeException(), isNull);
+    await testContext.dispose(tester);
+  });
+
   testWidgets('Android周期菜单与日期导航保留选择，明细保留时长摘要', (WidgetTester tester) async {
     // 使用生产路由验证周期、日期和模式的联动。
     final _TimelineAndroidTestContext testContext = await _pumpAndroidTimeline(
@@ -412,10 +466,28 @@ void main() {
             scenario.$1 == TargetPlatform.android && scenario.$2.width < 720
             ? 'timeline-mobile'
             : 'timeline-desktop';
-        expect(
-          find.byKey(ValueKey<String>('$prefix-backfill')).hitTestable(),
-          findsOneWidget,
-        );
+        if (prefix == 'timeline-desktop') {
+          expect(
+            find.byKey(ValueKey<String>('$prefix-backfill')).hitTestable(),
+            findsOneWidget,
+          );
+        } else {
+          // 窄屏与大字号仍能展开补记和分类菜单。
+          await tester.tap(
+            find.byKey(ValueKey<String>('$prefix-more-actions')),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(ValueKey<String>('$prefix-action-0')).hitTestable(),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(ValueKey<String>('$prefix-action-1')).hitTestable(),
+            findsOneWidget,
+          );
+          await tester.tapAt(const Offset(8, 8));
+          await tester.pumpAndSettle();
+        }
         expect(
           find.byKey(ValueKey<String>('$prefix-create')).hitTestable(),
           findsOneWidget,
@@ -446,9 +518,9 @@ void main() {
         );
         expect(tester.takeException(), isNull);
         if (prefix == 'timeline-mobile') {
-          // 大字号下实测操作组可以换行，滚动末尾仍能越过悬浮操作。
+          // 恢复拆分样式后保留实测高度避让，末项可越过悬浮操作。
           final Rect actionRect = tester.getRect(
-            find.byKey(ValueKey<String>('$prefix-actions')),
+            find.byKey(ValueKey<String>('$prefix-create-split')),
           );
           final Finder scrollView = find.byKey(
             const ValueKey<String>('timeline-review-content'),

@@ -286,7 +286,7 @@ void main() {
           .hitTestable(),
     );
     await tester.pumpAndSettle();
-    expect(find.text('添加物品'), findsOneWidget);
+    expect(find.text('新增物品').hitTestable(), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     // 末页横滑不会进入设置，浮动操作区也不泄漏一级手势。
@@ -314,7 +314,7 @@ void main() {
       find.byKey(const ValueKey<String>('event-mobile-create')).hitTestable(),
     );
     await tester.pumpAndSettle();
-    expect(find.text('新建周期事件'), findsOneWidget);
+    expect(find.text('新增事件').hitTestable(), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
 
@@ -369,7 +369,7 @@ void main() {
           .hitTestable(),
     );
     await tester.pumpAndSettle();
-    expect(find.text('添加会员'), findsOneWidget);
+    expect(find.text('新增会员').hitTestable(), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     await _dragManagementPage(tester, -260);
@@ -935,7 +935,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<Transform>(thirdLine).transform.entry(0, 0), 1);
     expect(find.text('管理标签'), findsNothing);
-    expect(find.text('添加物品'), findsNothing);
+    expect(find.text('新增物品'), findsNothing);
     await tester.tap(moreActionsButton);
     await tester.pumpAndSettle();
 
@@ -959,7 +959,7 @@ void main() {
     await tester.tap(find.text('一键搬家'));
     await tester.pumpAndSettle();
     expect(find.text('1/2 · 选择物品'), findsOneWidget);
-    await tester.tap(find.byTooltip('关闭'));
+    await tester.tap(find.text('取消').hitTestable());
     await tester.pumpAndSettle();
 
     await tester.tap(filterToggle);

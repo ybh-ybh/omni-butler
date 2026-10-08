@@ -167,6 +167,15 @@ void main() {
             findsOneWidget,
           );
           await _capture(tester, captureKey, '$prefix-week');
+          if (platform == TargetPlatform.android) {
+            await tester.tap(
+              find.byKey(const ValueKey<String>('timeline-period-menu')),
+            );
+            await tester.pumpAndSettle();
+            await _capture(tester, captureKey, '$prefix-period-menu');
+            await tester.tapAt(const Offset(8, 8));
+            await tester.pumpAndSettle();
+          }
           for (final (String, String) period in <(String, String)>[
             ('月', 'month'),
             ('日', 'day'),

@@ -80,6 +80,17 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
     BuildContext context, [
     MembershipRecord? membership,
   ]) async {
+    if (membership == null &&
+        Theme.of(context).platform == TargetPlatform.android) {
+      await showOmniDialog<void>(
+        context: context,
+        useSafeArea: false,
+        fullscreenDialog: true,
+        barrierDismissible: false,
+        builder: (BuildContext context) => const _MembershipEditorDialog(),
+      );
+      return;
+    }
     await showOmniSideSheet<void>(
       context,
       builder: (BuildContext context) =>
@@ -2614,6 +2625,20 @@ class _MembershipEditorDialogState
   /// 是否正在保存。
   bool _saving = false;
 
+  /// 保存成功后等待当前帧解除返回保护。
+  bool _closing = false;
+
+  /// 补充信息是否展开。
+  bool _supplementExpanded = false;
+
+  /// 新增表单在正文显示保存错误，避免消息浮层遮挡顶部重试操作。
+  String? _saveError;
+
+  /// 仅安卓新增会员使用全屏表单。
+  bool get _usesAndroidCreate =>
+      widget.membership == null &&
+      Theme.of(context).platform == TargetPlatform.android;
+
   /// 初始化会员表单。
   @override
   void initState() {
@@ -2738,10 +2763,31 @@ class _MembershipEditorDialogState
 
   /// 保存会员。
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) {
+    if (_saving) {
       return;
     }
-    setState(() => _saving = true);
+    // 保存开始时固定界面类型，避免异步返回后读取已销毁的上下文。
+    final bool androidCreate = _usesAndroidCreate;
+    if (androidCreate) {
+      // 本次完整草稿校验失败的字段。
+      final Set<FormFieldState<Object?>> errors = omniValidateForm(_formKey);
+      if (errors.isNotEmpty) {
+        if (_websiteValidator(_websiteController.text) != null) {
+          setState(() => _supplementExpanded = true);
+        }
+        omniRevealFirstError(errors);
+        return;
+      }
+    } else if (!_formKey.currentState!.validate()) {
+      return;
+    }
+    if (androidCreate) {
+      FocusScope.of(context).unfocus();
+    }
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
     try {
       // 当前分类名称对应的 taxonomy 标识。
       final List<TaxonomyEntry> categoryEntries =
@@ -2785,9 +2831,13 @@ class _MembershipEditorDialogState
               needsRenewal: _needsRenewal,
               expirationReminderEnabled:
                   !_isPermanent && _expirationReminderEnabled,
-              expirationReminderDays: int.parse(
-                _expirationReminderDaysController.text,
-              ),
+              expirationReminderDays:
+                  androidCreate && (_isPermanent || !_expirationReminderEnabled)
+                  ? _inactiveReminderDays(
+                      _expirationReminderDaysController.text,
+                      3,
+                    )
+                  : int.parse(_expirationReminderDaysController.text),
               renewalReminderEnabled:
                   !_isPermanent && _autoRenew && _renewalReminderEnabled,
               renewalReminderDays: int.parse(
@@ -2801,18 +2851,30 @@ class _MembershipEditorDialogState
             ),
           );
       if (mounted) {
-        Navigator.of(context).pop();
+        if (androidCreate) {
+          setState(() => _closing = true);
+          WidgetsBinding.instance.addPostFrameCallback((Duration timestamp) {
+            if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+              Navigator.of(context).pop();
+            }
+          });
+        } else {
+          Navigator.of(context).pop();
+        }
       }
     } on FormatException catch (error) {
       if (mounted) {
-        showOmniMessage(
-          context,
-          message: error.message,
-          tone: OmniMessageTone.error,
-        );
+        _showSaveFailure(error.message, androidCreate);
+      }
+    } on Object catch (error) {
+      if (!androidCreate) {
+        rethrow;
+      }
+      if (mounted) {
+        _showSaveFailure('会员保存失败，请重试：$error', androidCreate);
       }
     } finally {
-      if (mounted) {
+      if (mounted && !_closing) {
         setState(() => _saving = false);
       }
     }
@@ -2841,6 +2903,9 @@ class _MembershipEditorDialogState
       if (currentCategory.isNotEmpty) currentCategory,
       ...categories.map((TaxonomyEntry entry) => entry.name),
     }.toList(growable: false);
+    if (_usesAndroidCreate) {
+      return _buildAndroidCreate(context, categoryNames, currentCategory);
+    }
     return OmniSideSheetScaffold(
       onWindowsEnter: _saving ? null : _save,
       title: widget.membership == null ? '添加会员' : '编辑会员',
@@ -3088,6 +3153,376 @@ class _MembershipEditorDialogState
         ),
       ),
     );
+  }
+
+  /// 构建安卓新增会员的分组表单。
+  Widget _buildAndroidCreate(
+    BuildContext context,
+    List<String> categoryNames,
+    String currentCategory,
+  ) {
+    return PopScope(
+      canPop: !_saving || _closing,
+      child: OmniFullscreenFormScaffold(
+        key: const ValueKey<String>('membership-create-fullscreen'),
+        title: '新增会员',
+        primaryKey: const ValueKey<String>('membership-create-save'),
+        loading: _saving,
+        onPrimary: _saving ? null : _save,
+        onCancel: _saving ? null : () => Navigator.of(context).pop(),
+        child: _withSaveError(
+          Form(
+            key: _formKey,
+            child: SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: const EdgeInsets.all(OmniSpacing.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  OmniFormGroup(
+                    children: <Widget>[
+                      OmniFormRow(
+                        label: '会员名称 *',
+                        child: OmniTextFormField(
+                          key: const ValueKey<String>('membership-create-name'),
+                          controller: _nameController,
+                          decoration: omniGroupedInputDecoration.copyWith(
+                            hintText: '请输入会员名称',
+                          ),
+                          validator: (String? value) =>
+                              value == null || value.trim().isEmpty
+                              ? '请输入会员名称'
+                              : null,
+                        ),
+                      ),
+                      OmniFormRow(
+                        label: '分类',
+                        child: OmniDropdownButtonFormField<String>(
+                          initialValue: currentCategory.isEmpty
+                              ? null
+                              : currentCategory,
+                          decoration: omniGroupedInputDecoration.copyWith(
+                            hintText: '选填',
+                          ),
+                          items: categoryNames
+                              .map(
+                                (String value) => DropdownMenuItem<String>(
+                                  value: value,
+                                  child: Text(value),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (String? value) =>
+                              _categoryController.text = value ?? '',
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: OmniSpacing.md),
+                  OmniFormGroup(
+                    children: <Widget>[
+                      OmniFormRow(
+                        label: '本次价格（元）*',
+                        child: OmniTextFormField(
+                          key: const ValueKey<String>(
+                            'membership-create-price',
+                          ),
+                          controller: _priceController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: omniGroupedInputDecoration.copyWith(
+                            hintText: '0.00',
+                          ),
+                          validator: (String? value) {
+                            // 解析后的购买价格。
+                            final double? parsed = double.tryParse(value ?? '');
+                            return parsed == null ||
+                                    !parsed.isFinite ||
+                                    parsed < 0
+                                ? '请输入有效金额'
+                                : null;
+                          },
+                        ),
+                      ),
+                      OmniFormRow(
+                        label: '计费周期',
+                        child: OmniDropdownButtonFormField<BillingCycle>(
+                          initialValue: _billingCycle,
+                          decoration: omniGroupedInputDecoration,
+                          items: BillingCycle.values
+                              .where(
+                                (BillingCycle value) =>
+                                    value != BillingCycle.permanent,
+                              )
+                              .map(
+                                (BillingCycle value) =>
+                                    DropdownMenuItem<BillingCycle>(
+                                      value: value,
+                                      child: Text(_billingCycleLabel(value)),
+                                    ),
+                              )
+                              .toList(growable: false),
+                          onChanged: _isPermanent
+                              ? null
+                              : (BillingCycle? value) {
+                                  if (value != null) {
+                                    setState(() {
+                                      _billingCycle = value;
+                                      if (value != BillingCycle.custom) {
+                                        _expirationDate = _purchaseDate.add(
+                                          Duration(
+                                            days: _billingCycleDays(value),
+                                          ),
+                                        );
+                                      }
+                                    });
+                                  }
+                                },
+                        ),
+                      ),
+                      OmniFormRow(
+                        label: '永久会员 / 一次买断',
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: OmniSwitch(
+                            key: const ValueKey<String>(
+                              'membership-create-permanent',
+                            ),
+                            value: _isPermanent,
+                            onChanged: (bool value) =>
+                                setState(() => _isPermanent = value),
+                          ),
+                        ),
+                      ),
+                      if (!_isPermanent)
+                        OmniFormRow(
+                          label: '自动续费',
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: OmniSwitch(
+                              value: _autoRenew,
+                              onChanged: (bool value) =>
+                                  setState(() => _autoRenew = value),
+                            ),
+                          ),
+                        ),
+                      OmniFormRow(
+                        label: '购买日期',
+                        child: OmniDatePickerButton(
+                          value: _purchaseDate,
+                          initialDate: _purchaseDate,
+                          firstDate: DateTime(1970),
+                          lastDate: DateTime(2100),
+                          label: DateFormat('yyyy-MM-dd').format(_purchaseDate),
+                          icon: Icons.shopping_bag_outlined,
+                          onChanged: (DateTime selected) {
+                            setState(() {
+                              _purchaseDate = selected;
+                              if (!_isPermanent &&
+                                  _billingCycle != BillingCycle.custom) {
+                                _expirationDate = selected.add(
+                                  Duration(
+                                    days: _billingCycleDays(_billingCycle),
+                                  ),
+                                );
+                              }
+                            });
+                          },
+                        ),
+                      ),
+                      if (!_isPermanent && _billingCycle == BillingCycle.custom)
+                        OmniFormRow(
+                          label: '到期日期',
+                          child: OmniDatePickerButton(
+                            value: _expirationDate,
+                            initialDate: _expirationDate ?? DateTime.now(),
+                            firstDate: DateTime(1970),
+                            lastDate: DateTime(2100),
+                            label: _expirationDate == null
+                                ? '选择到期日期'
+                                : DateFormat('yyyy-MM-dd')
+                                      .format(_expirationDate!),
+                            icon: Icons.event_busy_outlined,
+                            onChanged: (DateTime selected) =>
+                                setState(() => _expirationDate = selected),
+                          ),
+                        ),
+                    ],
+                  ),
+                  if (!_isPermanent) ...<Widget>[
+                    const SizedBox(height: OmniSpacing.md),
+                    OmniFormGroup(
+                      children: <Widget>[
+                        OmniFormRow(
+                          label: '到期提醒',
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: OmniSwitch(
+                              key: const ValueKey<String>(
+                                'membership-create-reminder-toggle',
+                              ),
+                              value: _expirationReminderEnabled,
+                              onChanged: (bool value) => setState(
+                                () => _expirationReminderEnabled = value,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (_expirationReminderEnabled) ...<Widget>[
+                          OmniFormRow(
+                            label: '提前天数',
+                            child: OmniTextFormField(
+                              key: const ValueKey<String>(
+                                'membership-create-reminder',
+                              ),
+                              controller: _expirationReminderDaysController,
+                              keyboardType: TextInputType.number,
+                              decoration: omniGroupedInputDecoration,
+                              validator: _positiveIntegerValidator,
+                            ),
+                          ),
+                          OmniFormRow(
+                            label: '提醒时刻',
+                            child: OmniDropdownButtonFormField<int>(
+                              initialValue: _reminderTimeMinutes,
+                              decoration: omniGroupedInputDecoration,
+                              items:
+                                  List<int>.generate(
+                                        48,
+                                        (int index) => index * 30,
+                                      )
+                                      .map(
+                                        (int minute) => DropdownMenuItem<int>(
+                                          value: minute,
+                                          child: Text(_minuteLabel(minute)),
+                                        ),
+                                      )
+                                      .toList(growable: false),
+                              onChanged: (int? value) {
+                                if (value != null) {
+                                  setState(() => _reminderTimeMinutes = value);
+                                }
+                              },
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: OmniSpacing.md),
+                  OmniFormSupplement(
+                    key: const ValueKey<String>('membership-create-supplement'),
+                    expanded: _supplementExpanded,
+                    onToggle: () => setState(
+                      () => _supplementExpanded = !_supplementExpanded,
+                    ),
+                    child: OmniFormGroup(
+                      children: <Widget>[
+                        OmniFormRow(
+                          label: '描述',
+                          child: OmniTextField(
+                            key: const ValueKey<String>(
+                              'membership-create-description',
+                            ),
+                            controller: _descriptionController,
+                            maxLines: 2,
+                            decoration: omniGroupedInputDecoration.copyWith(
+                              hintText: '选填',
+                            ),
+                          ),
+                        ),
+                        OmniFormRow(
+                          label: '购买平台',
+                          child: OmniTextField(
+                            key: const ValueKey<String>(
+                              'membership-create-platform',
+                            ),
+                            controller: _platformController,
+                            decoration: omniGroupedInputDecoration.copyWith(
+                              hintText: '选填',
+                            ),
+                          ),
+                        ),
+                        OmniFormRow(
+                          label: '官方网站',
+                          child: OmniTextFormField(
+                            key: const ValueKey<String>(
+                              'membership-create-website',
+                            ),
+                            controller: _websiteController,
+                            keyboardType: TextInputType.url,
+                            decoration: omniGroupedInputDecoration.copyWith(
+                              hintText: 'https://',
+                            ),
+                            validator: _websiteValidator,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 按界面类型呈现保存失败，旧编辑表单仍使用原消息提示。
+  void _showSaveFailure(String message, bool androidCreate) {
+    if (androidCreate) {
+      setState(() => _saveError = message);
+      return;
+    }
+    showOmniMessage(context, message: message, tone: OmniMessageTone.error);
+  }
+
+  /// 在滚动正文上方展示可读屏播报的错误，保持顶部保存可立即重试。
+  Widget _withSaveError(Widget child) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        if (_saveError != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                _saveError!,
+                key: const ValueKey<String>('membership-create-save-error'),
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: OmniColors.of(context).danger),
+              ),
+            ),
+          ),
+        Expanded(child: child),
+      ],
+    );
+  }
+
+  /// 使用与仓储一致的规则校验折叠区官方网站。
+  String? _websiteValidator(String? value) {
+    // 去除空格后的可选链接。
+    final String normalized = (value ?? '').trim();
+    if (normalized.isEmpty) {
+      return null;
+    }
+    // 解析后的官方网站链接。
+    final Uri? uri = Uri.tryParse(normalized);
+    return uri == null ||
+            !<String>{'http', 'https'}.contains(uri.scheme) ||
+            uri.host.isEmpty
+        ? '官方网站 必须使用 http 或 https'
+        : null;
+  }
+
+  /// 关闭提醒时保留有效草稿，仅将不适用的无效隐藏值恢复为原默认值。
+  int _inactiveReminderDays(String value, int fallback) {
+    // 已输入的合法提醒天数仍会随草稿保存。
+    final int? parsed = int.tryParse(value);
+    return parsed != null && parsed > 0 ? parsed : fallback;
   }
 
   /// 校验正整数表单值。

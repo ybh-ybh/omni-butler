@@ -334,7 +334,7 @@ class OmniPopupMenuItem<T> extends PopupMenuItem<T> {
   OmniPopupMenuItem({
     required T value,
     required String label,
-    required IconData icon,
+    required IconData? icon,
     bool danger = false,
     super.enabled = true,
     super.onTap,
@@ -794,8 +794,8 @@ class _OmniPopupMenuItemContent extends StatelessWidget {
   /// 菜单文字。
   final String label;
 
-  /// 菜单图标。
-  final IconData icon;
+  /// 菜单图标；为空时保留对齐位置但不绘制图形。
+  final IconData? icon;
 
   /// 是否使用危险操作配色。
   final bool danger;
@@ -834,7 +834,10 @@ class _OmniPopupMenuItemContent extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
-          Icon(icon, size: 16, color: foreground),
+          if (icon == null)
+            const SizedBox.square(dimension: 16)
+          else
+            Icon(icon, size: 16, color: foreground),
           const SizedBox(width: OmniSpacing.xs),
           Expanded(
             child: Text(
