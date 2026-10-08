@@ -68,7 +68,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.byKey(const ValueKey<String>('android-settings-group-features')),
+      find.byKey(const ValueKey<String>('android-settings-group-home')),
       findsOneWidget,
     );
     expect(
@@ -80,8 +80,9 @@ void main() {
       findsOneWidget,
     );
 
-    // 五个分类入口的视觉顺序。
+    // 六个分类入口的视觉顺序。
     final List<Finder> categoryRows = <Finder>[
+      find.byKey(const ValueKey<String>('android-settings-home')),
       find.byKey(const ValueKey<String>('android-settings-category-features')),
       find.byKey(
         const ValueKey<String>('android-settings-category-appearance'),
@@ -98,7 +99,7 @@ void main() {
         .toList(growable: false);
     expect(categoryTops, orderedEquals(categoryTops.toList()..sort()));
 
-    await tester.tap(categoryRows.first);
+    await tester.tap(categoryRows[1]);
     await tester.pump();
     expect(_settingsCardOffset(tester, 'overview'), 0);
     expect(_settingsCardOffset(tester, 'detail'), 1);
@@ -172,7 +173,7 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.tap(categoryRows[1]);
+    await tester.tap(categoryRows[2]);
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('android-settings-detail-appearance')),
