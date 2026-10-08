@@ -4,6 +4,23 @@ import 'package:omni_butler/app/theme/app_chrome_colors.dart';
 import 'package:omni_butler/app/theme/app_theme_palette.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
+/// 安卓条目按下反馈共用的中性灰，独立于业务和品牌色。
+abstract final class OmniPressColors {
+  /// 扩散层的固定中性灰色。
+  static const Color gray = Color(0xFF808080);
+
+  /// 随扩散进度增加灰色强度，并照顾深色表面的可见性。
+  static Color tintOf(BuildContext context, double progress) {
+    // 当前主题是否为深色。
+    final bool dark = Theme.of(context).brightness == Brightness.dark;
+    // 手指刚落下时的透明度。
+    final double start = dark ? 0.06 : 0.04;
+    // 扩散完成后的透明度。
+    final double end = dark ? 0.18 : 0.12;
+    return gray.withValues(alpha: start + (end - start) * progress.clamp(0, 1));
+  }
+}
+
 /// Omni Butler 扩展语义色。
 @immutable
 class OmniColors extends ThemeExtension<OmniColors> {

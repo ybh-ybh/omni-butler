@@ -2312,6 +2312,9 @@ class _TodoTaskRow extends StatelessWidget {
           onMove: onMove,
           onDelete: onDelete,
           child: OmniListRow(
+            highlightColor: Theme.of(context).platform == TargetPlatform.android
+                ? Colors.transparent
+                : null,
             // 无子任务时保持整行悬停和焦点能力，单击不执行业务操作。
             onTap: onTap ?? () {},
             borderRadius: BorderRadius.circular(OmniRadius.control),

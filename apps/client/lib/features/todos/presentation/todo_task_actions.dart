@@ -147,8 +147,9 @@ class _TodoTaskContextMenuState extends State<TodoTaskContextMenu> {
             },
           ),
         },
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
+        child: OmniPressSurface(
+          enabled: widget.enabled,
+          borderRadius: BorderRadius.circular(OmniRadius.control),
           onSecondaryTapUp: widget.enabled
               ? (details) => unawaited(_showContextMenu(details.globalPosition))
               : null,

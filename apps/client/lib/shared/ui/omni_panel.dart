@@ -373,6 +373,9 @@ class OmniListPanel extends StatelessWidget {
 
 /// 统一的紧凑列表行。
 class OmniListRow extends StatelessWidget {
+  /// 可选按下高亮覆盖值，统一扩散反馈的条目使用透明色。
+  final Color? highlightColor;
+
   /// 可选前置区域。
   final Widget? leading;
 
@@ -400,6 +403,7 @@ class OmniListRow extends StatelessWidget {
   /// 创建紧凑列表行。
   const OmniListRow({
     required this.title,
+    this.highlightColor,
     this.leading,
     this.subtitle,
     this.trailing,
@@ -464,7 +468,7 @@ class OmniListRow extends StatelessWidget {
         onTap: onTap,
         borderRadius: borderRadius,
         hoverColor: colors.ink.withValues(alpha: 0.04),
-        highlightColor: colors.ink.withValues(alpha: 0.08),
+        highlightColor: highlightColor ?? colors.ink.withValues(alpha: 0.08),
         focusColor: colors.brand.withValues(alpha: 0.12),
         child: ConstrainedBox(
           constraints: BoxConstraints(

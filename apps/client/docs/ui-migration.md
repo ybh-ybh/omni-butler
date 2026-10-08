@@ -43,7 +43,7 @@
 | D08 | `_QuoteEditorDialog`；同上 | 新增/编辑、正文多行、作者、必填/保存状态 | 已接统一侧栏、表单字段和按钮 | `quote_library_dialog_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | D09 | `TodoEditorDialog`；`lib/features/todos/presentation/todo_editor_dialog.dart` | 新建/编辑/子任务、日期时间、提醒、重复规则、进度结构、重复系列范围、保存失败 | 统一侧栏和控件；时间设置外置标签、空值入口等宽与折叠摘要；进度设置基础字段并排、步骤行内操作/窄屏菜单、短列表完整展示、添加定位聚焦，均适配大字号 | `todo_editor_time_settings_test.dart`、`todo_progress_editor_layout_test.dart`、`todo_progress_ui_test.dart`、`todo_quadrant_ui_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化与中文宽窄屏预览通过；真机手感及完整人工矩阵待验 |
 | D10 | `_TimeEntryEditorDialog`；`lib/features/timeline/presentation/timeline_page.dart` | 区间编辑、日期/分类、备注、多段占用冲突、拖动范围、保存失败 | 共享侧栏/输入/选择；业务范围滑块与冲突图形保留 | `timeline_editor_test.dart`、`timeline_layout_test.dart` | 自动化通过；人工矩阵待验 |
-| D11 | `_AbsoluteTimeEntryDialog`；同上；`time_entry_time_picker.dart` | 半屏/全屏开始记录、完整补记/编辑、结束进行中、逐分钟/跨日日期、时间冲突、类别逐项颜色、备注折叠 | Android 开始记录使用 Omni 可展开底部面板，横线独立拖拽/点击，顶部固定取消/开始；半屏只显示活动和类别，全屏才增加开始时间与描述，收起保留输入，键盘避让不改变展开状态；提交期间锁定关闭/拖拽。Android 新增补记改为根导航全屏弹窗，顶部固定取消/补记/保存和灰色小时摘要，正文以时间卡片及活动/类别/备注分组呈现，保存期间保护返回、失败保留草稿；补记/已完成编辑保留 Android 双列时分滚轮与 Windows 精确输入/双手柄、连续跨日扩展、占用边界阻挡回弹和默认最近空闲段；共享日期/表单/下拉保留类别左侧色点；结束流程保留原遮罩关闭限制 | `start_time_entry_sheet_test.dart`、`time_entry_dialog_test.dart`、`time_entry_interval_test.dart`、`timeline_android_ui_test.dart`、`timeline_editor_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化、真实中文截图及 API 36 独立包交互通过；实体设备手感/读屏待验 |
+| D11 | `_AbsoluteTimeEntryDialog`；同上；`time_entry_time_picker.dart` | 半屏/全屏开始记录、完整补记/编辑、结束进行中、逐分钟/跨日日期、时间冲突、类别逐项颜色、备注折叠 | Android 开始记录使用 Omni 可展开底部面板，横线独立拖拽/点击，顶部固定取消/开始；半屏只显示活动和类别，全屏才增加开始时间与描述，收起保留输入，键盘避让不改变展开状态；提交期间锁定关闭/拖拽。Android 新增补记与已完成记录编辑共用 OmniFullscreenFormScaffold 根导航全屏弹窗，顶部固定取消/居中业务标题/保存和灰色小时摘要，正文以时间卡片及活动/类别/备注分组呈现，保存期间保护返回、失败保留草稿；补记/已完成编辑保留 Android 双列时分滚轮与 Windows 精确输入/双手柄、连续跨日扩展、占用边界阻挡回弹和默认最近空闲段；共享日期/表单/下拉保留类别左侧色点；结束流程保留原遮罩关闭限制 | `start_time_entry_sheet_test.dart`、`time_entry_dialog_test.dart`、`time_entry_interval_test.dart`、`timeline_android_ui_test.dart`、`timeline_editor_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化、真实中文截图及 API 36 独立包交互通过；实体设备手感/读屏待验 |
 | D12 | `_EventEditorDialog`；`lib/features/events/presentation/events_page.dart` | 新增/编辑、周期单位/间隔、提醒开关/时间、必填和保存失败 | 已接共享侧栏、表单、下拉、开关和按钮 | `events_layout_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | D13 | `_EventHistoryDialog`；同上 | 历史列表、分组、空态、编辑/删除记录 | 已接统一居中弹窗、操作菜单和确认/消息 | `events_layout_test.dart` | 自动化通过；人工矩阵待验 |
 | D14 | `_EventHistoryEditorDialog`；同上 | 历史时间、备注、保存/取消 | 已接统一居中弹窗、日期时间和文本字段 | `events_layout_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
@@ -245,3 +245,19 @@
 - 4个专项文件 **33项通过**，桌面/Windows Enter/业务仓储3文件 **20项通过**，真实Android导航入口定向 **3项通过**，合计56项不同回归；安全区断言追加后共享3项复测通过。覆盖根导航遮盖、固定顶栏、取消/返回、折叠保值、完整校验定位、实际落库、错误立即重试、防重、搬家两步往返/自动配套/数量/失效目标/加载重试，以及旧编辑和配套入口。证据：`output/android-four-forms-{focused,compat,navigation,safearea}-tests.log`。未运行与本次无关且有已记录旧设置断言的整份管理导航测试。
 - 预览工具 `tool/android_four_forms_preview_test.dart` 使用生产页面与隔离内存数据，8项生成通过，共24张中文PNG；已审查四弹窗明暗默认、补充展开/搬家确认，以及320dp双倍字号键盘场景。390和Android宽屏另有布局测试；六款主题明暗主操作普通/悬停/按下的白字对比度通过。图片在 `output/android-four-forms-preview/`，生成证据 `output/android-four-forms-preview.log`；未刷新任何Golden。
 - `flutter analyze --no-pub`、UI样式检查（42项既有例外，无新增绕过）、定向格式及差异检查通过，保留开始前已有时间页/下拉/文档改动。本轮不构建或安装APK，实体设备中文输入法、TalkBack及键盘动画尚未验证。320dp双倍字号采用独立生产页面验证，本次不扩大修复隐藏预载首页的既有溢出，不据此宣称整应用该尺寸通过。
+
+## 2026-10-09 安卓条目按下动画统一
+
+- 范围为4个界面、8类已有长按条目：待办普通父任务、子任务、进度任务，首页相同三类，紧凑管理的物品行、会员行。3套手势封装接入共享OmniPressSurface；首页与待办覆盖Android宽屏，物品/会员只覆盖原有紧凑长按入口。
+- 从实际触点开始280ms固定圆心扩散，中性灰#808080浅色4%至12%、深色6%至18%；120ms缩至98%。视觉变换不改变占位和子控件命中。释放/滚动取消/菜单打开后180ms恢复，保留当前扩散半径淡出，重复释放幂等；禁用和卸载清理动画，减少动画只有即时静态灰色。
+- 原点击、长按菜单、语义与行内完成/续费/配套操作保持。旧按下highlight只在接入条目的Android分支关闭；OmniListRow新增可选highlightColor且保留原默认值。全局NoSplash和桌面悬停/右键/键盘菜单继续沿用原行为。新增代码遵循中文注释要求。
+- 10个测试文件共94项不同回归通过：共享22项、真实页面紧凑/宽屏与明暗4项、原业务及桌面兼容8文件68项。共享像素回归覆盖偏心扩散、逐渐加深、释放不倒放、圆角、缩放后原区域命中；真实手势覆盖短按、菜单、双向滚动取消、连续按下、多指、禁用/卸载、减少动画与辅助服务导航。恢复重复计时回归先红后绿。
+- 中文预览另运行相同4组页面检查，生成112张完整页面采样，4张对照拼图已人工审查，位于output/android-press-preview/。紧凑布局8类、宽屏6类均含未按下、60ms、280ms、恢复后；保留原始PNG和条目坐标JSON，不修改Golden。图标和中文字体仅预览模式加载本机资源。
+- flutter analyze --no-pub无问题；UI样式检查42项既有例外无新增，定向格式与diff检查通过。证据：output/android-press-{component,entrypoints,existing}-tests.log、android-press-{preview,analyze,style}.log。本轮未构建或安装APK，Android实体设备手感与TalkBack仍待人工验收。
+
+## 2026-10-09 安卓编辑时间记录与补记统一
+
+- Android已完成记录编辑复用补记的根导航全屏路由、灰色小时摘要和时间/活动/类别/备注分组，标题保留“编辑时间记录”，保存仍为主题底白字。
+- 两种入口复用OmniFullscreenFormScaffold固定顶栏，长标题在窄屏大字号下与操作分行；原始分钟、类别、已有备注和按原ID保存保持一致。Windows与进行中编辑沿用原流程。
+- 4个相关测试文件 **57项通过**；定向分析与样式检查通过，删除时间页不再使用的Dialog例外，现为41项。中文普通编辑与双倍字号键盘预览已审查，未更新Golden。
+- 证据：`output/time-entry-edit-tests.log`、`output/time-entry-edit-entrypoints-tests.log`、`output/time-entry-edit-preview/`。本轮未构建安装APK，实体设备验收待进行。

@@ -2923,6 +2923,9 @@ class _InventoryCard extends ConsumerWidget {
       child: InkWell(
         key: ValueKey<String>('inventory-card-${item.id}'),
         onTap: onOpen,
+        highlightColor: Theme.of(context).platform == TargetPlatform.android
+            ? Colors.transparent
+            : null,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: OmniSpacing.sm),
           child: Row(

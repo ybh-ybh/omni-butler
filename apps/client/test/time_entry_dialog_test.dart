@@ -334,7 +334,9 @@ void main() {
       final _DialogFixture fixture = await _pumpDialog(
         tester,
         platform: platform,
-        size: const Size(1440, 900),
+        size: platform == TargetPlatform.android
+            ? const Size(390, 844)
+            : const Size(1440, 900),
         editing: true,
         seed: TimeEntryDraft(
           startedAt: DateTime(2026, 10, 7, 9, 1),
@@ -346,6 +348,17 @@ void main() {
       );
       try {
         expect(find.text('编辑时间记录'), findsOneWidget);
+        if (platform == TargetPlatform.android) {
+          expect(tester.getSize(find.byType(Dialog)), const Size(390, 844));
+          expect(
+            find.byKey(const ValueKey<String>('time-entry-details-group')),
+            findsOneWidget,
+          );
+          expect(find.text('保存'), findsOneWidget);
+          expect(find.text('保存记录'), findsNothing);
+          expect(tester.getCenter(find.text('编辑时间记录')).dx, closeTo(195, 0.1));
+          expect(find.text('共 0.03 小时'), findsOneWidget);
+        }
         expect(_saveButton(tester).onPressed, isNotNull);
         expect(_dateButton(tester, 'start').value, DateTime(2026, 10, 7, 9, 1));
         expect(_dateButton(tester, 'end').value, DateTime(2026, 10, 7, 9, 3));
@@ -366,6 +379,26 @@ void main() {
           find.byKey(const ValueKey<String>('time-category-color-学习')),
           findsOneWidget,
         );
+        await _capture(tester, '${platform.name}-completed-edit');
+        if (platform == TargetPlatform.android) {
+          // 长标题在大字号和键盘缩小窗口后仍完整显示，已有输入保持不变。
+          tester.view.physicalSize = const Size(360, 800);
+          fixture.media.value = const MediaQueryData(
+            size: Size(360, 800),
+            textScaler: TextScaler.linear(2),
+            viewInsets: EdgeInsets.only(bottom: 260),
+          );
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+          expect(tester.getCenter(find.text('编辑时间记录')).dx, closeTo(180, 0.1));
+          expect(tester.getRect(_saveControl()).bottom, lessThanOrEqualTo(540));
+          await tester.ensureVisible(
+            find.byKey(const ValueKey<String>('time-entry-activity')),
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('原有记录'), findsWidgets);
+          await _capture(tester, 'android-completed-edit-large-text-keyboard');
+        }
         await tester.tap(_saveControl());
         await tester.pumpAndSettle();
         // 不调整时间时不会取整两端，也不会新建重复记录。

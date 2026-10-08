@@ -415,7 +415,9 @@ class _TodoProgressTaskTileState extends ConsumerState<TodoProgressTaskTile> {
           onTap: busy ? null : openProgress,
           borderRadius: BorderRadius.circular(OmniRadius.control),
           hoverColor: colors.ink.withValues(alpha: 0.04),
-          highlightColor: colors.ink.withValues(alpha: 0.08),
+          highlightColor: Theme.of(context).platform == TargetPlatform.android
+              ? Colors.transparent
+              : colors.ink.withValues(alpha: 0.08),
           focusColor: colors.brand.withValues(alpha: 0.12),
           child: Padding(
             padding: EdgeInsets.symmetric(

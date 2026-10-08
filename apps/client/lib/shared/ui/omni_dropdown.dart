@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/shared/ui/omni_press_surface.dart';
 
 /// 统一下拉菜单的尺寸。
 abstract final class OmniDropdownMetrics {
@@ -318,8 +319,7 @@ class _OmniContextMenuState<T> extends State<OmniContextMenu<T>> {
   @override
   Widget build(BuildContext context) => Semantics(
     onLongPress: _showCenteredMenu,
-    child: GestureDetector(
-      behavior: HitTestBehavior.opaque,
+    child: OmniPressSurface(
       excludeFromSemantics: true,
       onLongPressStart: (LongPressStartDetails details) =>
           unawaited(_showContextMenu(details.globalPosition)),

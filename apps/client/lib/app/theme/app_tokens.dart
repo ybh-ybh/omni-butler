@@ -108,6 +108,12 @@ abstract final class OmniMotion {
   /// 常规状态切换时长。
   static const Duration normal = Duration(milliseconds: 180);
 
+  /// 安卓条目按下时，从触点扩散至全部轮廓的时长。
+  static const Duration pressSpread = Duration(milliseconds: 280);
+
+  /// 安卓条目按下时的轻微缩放比例。
+  static const double pressScale = 0.98;
+
   /// 面板进入与退出时长。
   static const Duration panel = Duration(milliseconds: 220);
 

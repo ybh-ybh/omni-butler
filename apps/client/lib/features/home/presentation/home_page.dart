@@ -2060,8 +2060,9 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                 child: MouseRegion(
                   onEnter: (_) => _setHovered(true),
                   onExit: (_) => _setHovered(false),
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
+                  child: OmniPressSurface(
+                    enabled: !_submitting,
+                    borderRadius: BorderRadius.circular(OmniRadius.control),
                     onTap: onTitleTap,
                     onSecondaryTapUp: (TapUpDetails details) =>
                         unawaited(_showContextMenu(details.globalPosition)),
@@ -2137,6 +2138,11 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                                   ),
                                   hoverColor: Colors.transparent,
                                   focusColor: colors.brandSoft,
+                                  highlightColor:
+                                      Theme.of(context).platform ==
+                                          TargetPlatform.android
+                                      ? Colors.transparent
+                                      : null,
                                   child: SizedBox(
                                     height: 32,
                                     child: Align(

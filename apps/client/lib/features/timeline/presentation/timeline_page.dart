@@ -138,9 +138,10 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     final DateTime editorDay = DateUtils.dateOnly(
       record?.startedAt ?? day ?? _selectedDay,
     );
-    // 时间页菜单及空白时间轴补记也使用相同的安卓全屏路由。
+    // 安卓补记和已完成记录编辑共用全屏路由。
     final bool fullscreen =
-        record == null && Theme.of(context).platform == TargetPlatform.android;
+        (record == null || record.endedAt != null) &&
+        Theme.of(context).platform == TargetPlatform.android;
     await showOmniDialog<void>(
       context: context,
       useSafeArea: !fullscreen,
@@ -2253,10 +2254,9 @@ class _AbsoluteTimeEntryDialog extends ConsumerStatefulWidget {
 /// 使用绝对时间的居中时间记录弹窗状态。
 class _AbsoluteTimeEntryDialogState
     extends ConsumerState<_AbsoluteTimeEntryDialog> {
-  /// 仅安卓新增补记使用全屏分组表单。
-  bool get _usesFullscreenBackfill =>
+  /// 安卓补记与已完成时间记录编辑共用全屏分组表单。
+  bool get _usesFullscreenCompletedEditor =>
       widget.mode == _TimeEntryEditorMode.completed &&
-      widget.record == null &&
       Theme.of(context).platform == TargetPlatform.android;
 
   /// 仅安卓开始记录使用可展开底部面板。
@@ -2452,7 +2452,8 @@ class _AbsoluteTimeEntryDialogState
       _saveError = null;
     });
     // 受关闭保护的安卓编辑器须在提交成功后先解除返回拦截。
-    final bool guardedEditor = _usesExpandableSheet || _usesFullscreenBackfill;
+    final bool guardedEditor =
+        _usesExpandableSheet || _usesFullscreenCompletedEditor;
     try {
       await ref
           .read(timeEntryRepositoryProvider)
@@ -2486,7 +2487,7 @@ class _AbsoluteTimeEntryDialogState
       _showError(error.message);
     } catch (error) {
       if (!guardedEditor) rethrow;
-      _showError(_usesFullscreenBackfill ? '保存失败，请重试' : '开始记录失败，请重试');
+      _showError(_usesFullscreenCompletedEditor ? '保存失败，请重试' : '开始记录失败，请重试');
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -2775,7 +2776,7 @@ class _AbsoluteTimeEntryDialogState
       key: const ValueKey<String>('time-entry-activity'),
       controller: _activityController,
       autofocus: !completed && widget.mode != _TimeEntryEditorMode.startOnly,
-      decoration: _usesFullscreenBackfill
+      decoration: _usesFullscreenCompletedEditor
           ? _groupedInputDecoration.copyWith(hintText: '做了什么')
           : InputDecoration(
               labelText: completed
@@ -2794,7 +2795,7 @@ class _AbsoluteTimeEntryDialogState
     final Widget categoryField = OmniDropdownButtonFormField<String>(
       key: const ValueKey<String>('time-entry-category'),
       initialValue: currentCategory.isEmpty ? null : currentCategory,
-      decoration: _usesFullscreenBackfill
+      decoration: _usesFullscreenCompletedEditor
           ? _groupedInputDecoration
           : InputDecoration(
               labelText: completed || _usesExpandableSheet ? null : '类别',
@@ -2912,7 +2913,7 @@ class _AbsoluteTimeEntryDialogState
             ),
           )
         : SingleChildScrollView(
-            padding: _usesFullscreenBackfill
+            padding: _usesFullscreenCompletedEditor
                 ? const EdgeInsets.all(OmniSpacing.md)
                 : EdgeInsets.zero,
             child: Column(
@@ -2946,7 +2947,7 @@ class _AbsoluteTimeEntryDialogState
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: <Widget>[
-                        if (_usesFullscreenBackfill) ...<Widget>[
+                        if (_usesFullscreenCompletedEditor) ...<Widget>[
                           _backfillGroup(
                             child: _buildCompletedTimeSection(
                               usesWheel: usesWheel,
@@ -3150,8 +3151,8 @@ class _AbsoluteTimeEntryDialogState
             invalidTime
         ? null
         : _save;
-    if (_usesFullscreenBackfill) {
-      return _buildFullscreenBackfill(
+    if (_usesFullscreenCompletedEditor) {
+      return _buildFullscreenCompletedEditor(
         child: editorBody,
         onSave: onSave,
         invalidTime: invalidTime,
@@ -3269,90 +3270,44 @@ class _AbsoluteTimeEntryDialogState
   }
 
   /// 固定全屏弹窗顶部操作和居中时长，正文随键盘避让并独立滚动。
-  Widget _buildFullscreenBackfill({
+  Widget _buildFullscreenCompletedEditor({
     required Widget child,
     required VoidCallback? onSave,
     required bool invalidTime,
   }) {
-    // 当前主题的背景及辅助文字颜色。
+    // 当前主题的辅助文字颜色。
     final OmniColors colors = OmniColors.of(context);
     // 非整小时保留最多两位小数，整数不显示多余零。
     final String hours = NumberFormat('0.##')
         .format(_endedAt.difference(_startedAt).inMinutes / 60);
     return PopScope(
       canPop: !_saving,
-      child: Dialog.fullscreen(
+      child: OmniFullscreenFormScaffold(
         key: const ValueKey<String>('time-entry-editor'),
-        backgroundColor: colors.canvas,
-        child: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
-                child: Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: OmniButton(
-                          label: '取消',
-                          variant: OmniButtonVariant.text,
-                          onPressed: _saving
-                              ? null
-                              : () => Navigator.of(context).pop(),
-                        ),
-                      ),
-                    ),
-                    Semantics(
-                      namesRoute: true,
-                      header: true,
-                      child: Text(
-                        '补记',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerRight,
-                        child: Theme(
-                          data: Theme.of(context).copyWith(
-                            colorScheme: Theme.of(context).colorScheme
-                                .copyWith(onPrimary: Colors.white),
-                          ),
-                          child: OmniButton(
-                            key: const ValueKey<String>(
-                              'time-entry-backfill-submit',
-                            ),
-                            label: '保存',
-                            variant: OmniButtonVariant.primary,
-                            visualHeight: OmniSize.control,
-                            loading: _saving,
-                            onPressed: onSave,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+        title: widget.record == null ? '补记' : '编辑时间记录',
+        primaryKey: const ValueKey<String>('time-entry-backfill-submit'),
+        onPrimary: onSave,
+        onCancel: _saving ? null : () => Navigator.of(context).pop(),
+        loading: _saving,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
+              child: Text(
+                !_defaultRangeReady
+                    ? (_loadingDefaultRange ? '正在计算时长…' : '时长待计算')
+                    : invalidTime
+                    ? '时间待调整'
+                    : '共 $hours 小时',
+                key: const ValueKey<String>('time-range-duration'),
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: colors.muted),
               ),
-              Padding(
-                padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
-                child: Text(
-                  !_defaultRangeReady
-                      ? (_loadingDefaultRange ? '正在计算时长…' : '时长待计算')
-                      : invalidTime
-                      ? '时间待调整'
-                      : '共 $hours 小时',
-                  key: const ValueKey<String>('time-range-duration'),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall
-                      ?.copyWith(color: colors.muted),
-                ),
-              ),
-              Expanded(child: child),
-            ],
-          ),
+            ),
+            Expanded(child: child),
+          ],
         ),
       ),
     );
@@ -3433,7 +3388,7 @@ class _AbsoluteTimeEntryDialogState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        if (!_usesFullscreenBackfill)
+        if (!_usesFullscreenCompletedEditor)
           Wrap(
             alignment: WrapAlignment.spaceBetween,
             crossAxisAlignment: WrapCrossAlignment.center,
