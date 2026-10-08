@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -74,15 +76,6 @@ Future<void> showFinishTimeEntryDialog(
   );
 }
 
-/// Android 时间页拆分按钮中的次要操作。
-enum _TimelineMobileAction {
-  /// 补记完整时间记录。
-  backfill,
-
-  /// 管理时间分类。
-  categories,
-}
-
 /// 24 小时时间记录页面。
 class TimelinePage extends ConsumerStatefulWidget {
   /// 创建时间记录页面。
@@ -95,8 +88,8 @@ class TimelinePage extends ConsumerStatefulWidget {
 
 /// 24 小时时间记录页面状态。
 class _TimelinePageState extends ConsumerState<TimelinePage> {
-  /// Android 悬浮拆分按钮需要避让的滚动内容高度。
-  static const double _mobileActionClearance = 88;
+  /// Android 悬浮操作组的实际布局高度。
+  double _mobileActionHeight = OmniSize.touch;
 
   /// 当前查看日期。
   late DateTime _selectedDay;
@@ -183,18 +176,6 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     );
   }
 
-  /// 执行 Android 拆分按钮中的次要操作。
-  Future<void> _handleMobileAction(_TimelineMobileAction action) async {
-    switch (action) {
-      case _TimelineMobileAction.backfill:
-        await _openEditor();
-        return;
-      case _TimelineMobileAction.categories:
-        await _openTimelineCategories();
-        return;
-    }
-  }
-
   /// 打开指定日期的记录明细。
   void _openDayDetails(DateTime day) {
     setState(() {
@@ -255,7 +236,13 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     // 当前是否使用 Android 紧凑时间页布局。
     final bool androidCompact =
         compact && Theme.of(context).platform == TargetPlatform.android;
-    // 保持桌面结构不变的时间页主体。
+    // 为悬浮操作组保留完整高度、底部间距及安全区。
+    final double mobileActionClearance =
+        _mobileActionHeight +
+        OmniSpacing.md +
+        OmniSpacing.xs +
+        MediaQuery.paddingOf(context).bottom;
+    // 按导航、时间范围和内容组织的时间页主体。
     final Widget pageContent = Padding(
       padding: compact
           ? EdgeInsets.fromLTRB(
@@ -271,37 +258,11 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          if (!androidCompact) ...<Widget>[
-            OmniPageHeader(
-              title: '时间管理',
-              actions: <Widget>[
-                OmniButton(
-                  label: '分类',
-                  icon: Icons.category_outlined,
-                  variant: OmniButtonVariant.secondary,
-                  onPressed: _openTimelineCategories,
-                ),
-                OmniButton(
-                  label: '补记时间',
-                  icon: Icons.edit_calendar_outlined,
-                  variant: OmniButtonVariant.secondary,
-                  onPressed: () => _openEditor(),
-                ),
-                OmniButton(
-                  label: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
-                  icon: ongoingEntries.isEmpty
-                      ? Icons.play_arrow_rounded
-                      : Icons.stop_rounded,
-                  variant: OmniButtonVariant.pagePrimary,
-                  onPressed: ongoingEntries.isEmpty
-                      ? _openStartEditor
-                      : () => _openFinishEditor(ongoingEntries.first),
-                ),
-              ],
-            ),
-            const SizedBox(height: OmniSpacing.xs),
-          ],
-          _buildToolbar(context, androidCompact: androidCompact),
+          _buildToolbar(
+            context,
+            androidCompact: androidCompact,
+            ongoingEntries: ongoingEntries,
+          ),
           if (ongoingEntries.isNotEmpty) ...<Widget>[
             const SizedBox(height: OmniSpacing.xs),
             _OngoingTimeEntryBanner(
@@ -334,7 +295,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
                           rangeEnd: statsRange.$2,
                           period: _statsPeriod,
                           safeBottomPadding: androidCompact
-                              ? _mobileActionClearance
+                              ? mobileActionClearance
                               : 0,
                           onOpenDay: _openDayDetails,
                           onEdit: (TimeEntryRecord record) =>
@@ -350,7 +311,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
                         TimelineDetailsContent(
                           day: _selectedDay,
                           safeBottomPadding: androidCompact
-                              ? _mobileActionClearance
+                              ? mobileActionClearance
                               : 0,
                           records: splitTimeEntriesForRange(
                             records: records,
@@ -379,240 +340,467 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
       return pageContent;
     }
     return Scaffold(
-      floatingActionButton: OmniSplitActionButton<_TimelineMobileAction>(
-        keyPrefix: 'timeline-mobile',
-        label: ongoingEntries.isEmpty ? '开始' : '结束记录',
-        primaryIcon: ongoingEntries.isEmpty
-            ? Icons.play_arrow_rounded
-            : Icons.stop_rounded,
-        primarySemanticsLabel: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
-        menuTooltip: '更多时间操作',
-        onPressed: ongoingEntries.isEmpty
-            ? _openStartEditor
-            : () => _openFinishEditor(ongoingEntries.first),
-        actions: const <OmniSplitAction<_TimelineMobileAction>>[
-          OmniSplitAction<_TimelineMobileAction>(
-            value: _TimelineMobileAction.backfill,
-            label: '补记时间',
-            icon: Icons.edit_calendar_outlined,
+      floatingActionButton: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: math.max(
+            0,
+            MediaQuery.sizeOf(context).width - OmniSpacing.md * 2,
           ),
-          OmniSplitAction<_TimelineMobileAction>(
-            value: _TimelineMobileAction.categories,
-            label: '分类',
-            icon: Icons.category_outlined,
-          ),
-        ],
-        onSelected: _handleMobileAction,
+        ),
+        child: _TimelineActionMeasure(
+          onSize: (Size size) {
+            if (mounted && (_mobileActionHeight - size.height).abs() > 0.5) {
+              setState(() => _mobileActionHeight = size.height);
+            }
+          },
+          child: _buildRecordActions(context, ongoingEntries, mobile: true),
+        ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: pageContent,
     );
   }
 
-  /// 构建可在紧凑宽度换行的日期与统计工具栏。
-  Widget _buildToolbar(BuildContext context, {required bool androidCompact}) {
-    // 桌面与其他平台使用的页面模式切换。
-    final Widget legacyViewControl = SegmentedButton<TimelineViewMode>(
-      key: const ValueKey<String>('timeline-view-mode'),
-      showSelectedIcon: false,
-      segments: const <ButtonSegment<TimelineViewMode>>[
-        ButtonSegment<TimelineViewMode>(
-          value: TimelineViewMode.review,
-          icon: Icon(Icons.insights_outlined),
-          label: Text('时间复盘'),
+  /// 测量当前字号下的控件文字宽度，避免窄屏仅依赖固定断点。
+  double _textWidth(BuildContext context, String text, TextStyle? style) {
+    // 采用真实字体和系统缩放的文字测量器。
+    final TextPainter painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    // 释放测量器之前保存排版宽度。
+    final double width = painter.width;
+    painter.dispose();
+    return width;
+  }
+
+  /// 构建开始／结束、补记及分类菜单组成的直接操作组。
+  Widget _buildRecordActions(
+    BuildContext context,
+    List<TimeEntryRecord> ongoingEntries, {
+    required bool mobile,
+  }) {
+    // 保留移动端已有主操作标识，方便焦点和交互回归。
+    final String prefix = mobile ? 'timeline-mobile' : 'timeline-desktop';
+    // 手机操作组使用统一实底承托，避免更多入口混入滚动内容。
+    final Widget actions = Wrap(
+      key: ValueKey<String>('$prefix-actions'),
+      spacing: OmniSpacing.xs,
+      runSpacing: OmniSpacing.xxs,
+      alignment: WrapAlignment.end,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: <Widget>[
+        OmniButton(
+          key: ValueKey<String>('$prefix-backfill'),
+          label: '补记时间',
+          icon: Icons.edit_calendar_outlined,
+          variant: OmniButtonVariant.secondary,
+          visualHeight: mobile ? OmniSize.control : null,
+          onPressed: () => _openEditor(),
         ),
-        ButtonSegment<TimelineViewMode>(
-          value: TimelineViewMode.details,
-          icon: Icon(Icons.view_timeline_outlined),
-          label: Text('记录明细'),
+        OmniButton(
+          key: ValueKey<String>('$prefix-create'),
+          label: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
+          icon: ongoingEntries.isEmpty
+              ? Icons.play_arrow_rounded
+              : Icons.stop_rounded,
+          variant: OmniButtonVariant.pagePrimary,
+          visualHeight: mobile ? OmniSize.control : null,
+          onPressed: ongoingEntries.isEmpty
+              ? _openStartEditor
+              : () => _openFinishEditor(ongoingEntries.first),
+        ),
+        OmniPopupMenuButton<String>(
+          key: ValueKey<String>('$prefix-more-actions'),
+          tooltip: '更多时间操作',
+          onSelected: (String _) => _openTimelineCategories(),
+          itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+            OmniPopupMenuItem<String>(
+              key: ValueKey<String>('$prefix-categories'),
+              value: 'categories',
+              label: '分类',
+              icon: Icons.category_outlined,
+            ),
+          ],
         ),
       ],
-      selected: <TimelineViewMode>{_viewMode},
-      onSelectionChanged: (Set<TimelineViewMode> selection) {
-        setState(() => _viewMode = selection.first);
+    );
+    return mobile
+        ? OmniPanel(
+            padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xxs),
+            child: actions,
+          )
+        : actions;
+  }
+
+  /// 构建独立的页面模式导航，并按文字大小提高高度。
+  Widget _buildViewControl(BuildContext context, double width) {
+    // 模式控件的文字样式。
+    final TextStyle? style = Theme.of(context).textTheme.labelMedium;
+    // 系统文字缩放后的单行高度。
+    final double textHeight =
+        MediaQuery.textScalerOf(context).scale(style?.fontSize ?? 12) *
+        (style?.height ?? 1.3);
+    return OmniSlidingSegmentedControl<TimelineViewMode>(
+      key: const ValueKey<String>('timeline-view-mode'),
+      options: TimelineViewMode.values,
+      selected: _viewMode,
+      width: width,
+      height: math.max(
+        OmniDensity.controlHeight(context, large: true),
+        textHeight + OmniSpacing.md,
+      ),
+      embedded: true,
+      labelBuilder: (TimelineViewMode mode) =>
+          mode == TimelineViewMode.review ? '时间复盘' : '记录明细',
+      itemKeyBuilder: (TimelineViewMode mode) =>
+          ValueKey<String>('timeline-view-mode-${mode.name}'),
+      itemBuilder:
+          (BuildContext context, TimelineViewMode mode, bool selected) {
+            // 当前选项图文采用共享主题语义色。
+            final ColorScheme scheme = Theme.of(context).colorScheme;
+            // 当前选项的前景色。
+            final Color foreground = selected
+                ? scheme.onPrimaryContainer
+                : scheme.onSurfaceVariant;
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(
+                  mode == TimelineViewMode.review
+                      ? Icons.insights_outlined
+                      : Icons.view_timeline_outlined,
+                  size: OmniSize.icon,
+                  color: foreground,
+                ),
+                const SizedBox(width: OmniSpacing.xxs),
+                Flexible(
+                  child: Text(
+                    mode == TimelineViewMode.review ? '时间复盘' : '记录明细',
+                    style: style?.copyWith(
+                      color: foreground,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+      onChanged: (TimelineViewMode mode) => setState(() => _viewMode = mode),
+    );
+  }
+
+  /// 按平台组织导航和记录操作，不因窄窗口隐藏入口。
+  Widget _buildToolbar(
+    BuildContext context, {
+    required bool androidCompact,
+    required List<TimeEntryRecord> ongoingEntries,
+  }) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 当前可供工具栏使用的真实宽度。
+        final double width = constraints.maxWidth;
+        // 模式图标、文字及内部留白共同需要的宽度。
+        final double modeWidth = math.min(
+          width,
+          math.max(
+            248,
+            (_textWidth(
+                      context,
+                      '时间复盘',
+                      Theme.of(context).textTheme.labelMedium,
+                    ) +
+                    50) *
+                2,
+          ),
+        );
+        // 记录操作组的保守自然宽度，空间不足时让整个组换行。
+        final double actionWidth =
+            (_textWidth(
+                      context,
+                      '开始记录',
+                      Theme.of(context).textTheme.labelLarge
+                          ?.copyWith(fontSize: 14),
+                    ) +
+                    58) *
+                2 +
+            OmniDensity.controlHeight(context) +
+            OmniSpacing.xs * 2;
+        // Android 紧凑页将操作放在底部，其余平台与模式分列。
+        final Widget header = androidCompact
+            ? _buildViewControl(context, width)
+            : width >= modeWidth + actionWidth + OmniSpacing.md
+            ? Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: <Widget>[
+                  _buildViewControl(context, modeWidth),
+                  _buildRecordActions(context, ongoingEntries, mobile: false),
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: _buildViewControl(context, modeWidth),
+                  ),
+                  const SizedBox(height: OmniSpacing.xs),
+                  _buildRecordActions(context, ongoingEntries, mobile: false),
+                ],
+              );
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            header,
+            const SizedBox(height: OmniSpacing.xs),
+            _buildRangeControls(
+              context,
+              width: width,
+              androidCompact: androidCompact,
+            ),
+          ],
+        );
       },
     );
-    // 当前日期选择按钮。
-    final Widget datePicker = OmniDatePickerButton(
-      value: _selectedDay,
-      initialDate: _selectedDay,
-      firstDate: DateTime(1970),
-      lastDate: DateTime(2100),
-      label: _selectionLabel(),
-      onChanged: (DateTime selected) {
-        setState(() => _selectedDay = selected);
-      },
+  }
+
+  /// 返回短日期；极窄或大字号时按自然边界分行并保留完整语义。
+  String _shortSelectionLabel({bool multiline = false}) {
+    // 明细与日复盘使用单日。
+    final bool daily =
+        _viewMode == TimelineViewMode.details ||
+        _statsPeriod == TimelineStatsPeriod.day;
+    // 跨年查询保留年份，避免短日期歧义。
+    final bool showYear = _selectedDay.year != ref.read(nowProvider).year;
+    // 大字号日期按年份与月日分行。
+    final String separator = multiline ? '\n' : '/';
+    if (daily) {
+      return '${showYear ? '${_selectedDay.year}$separator' : ''}${DateFormat('M/d').format(_selectedDay)}';
+    }
+    if (_statsPeriod == TimelineStatsPeriod.month) {
+      return '${_selectedDay.year}${multiline ? '\n' : '年'}${_selectedDay.month}月';
+    }
+    // 周范围的自然日起止。
+    final (DateTime, DateTime) range = _rangeFor(_selectedDay, _statsPeriod);
+    // 当前周的最后一天。
+    final DateTime last = range.$2.subtract(const Duration(days: 1));
+    // 是否需要明确表示跨年周的年份。
+    final bool weekYear = showYear || range.$1.year != last.year;
+    // 起点的完整短格式。
+    final String start =
+        '${weekYear ? '${range.$1.year}$separator' : ''}${DateFormat('M/d').format(range.$1)}';
+    // 终点的完整短格式。
+    final String end =
+        '${weekYear ? '${last.year}$separator' : ''}${DateFormat('M/d').format(last)}';
+    return '$start${multiline ? '\n–' : '–'}$end';
+  }
+
+  /// 构建箭头和日期组成的完整导航组。
+  Widget _buildDateNavigation(
+    BuildContext context, {
+    required double width,
+    required bool shortLabel,
+  }) {
+    // 平台箭头热区的标准尺寸。
+    final double extent = OmniDensity.controlHeight(context);
+    // 日期文字实际可用的宽度。
+    final double labelWidth = math.max(
+      0,
+      width - extent * 2 - OmniSpacing.xs * 2,
     );
-    // 回到当前周期按钮。
-    final Widget currentShortcut = OmniButton(
+    // 首先尝试当前平台的日期格式。
+    String label = shortLabel ? _shortSelectionLabel() : _selectionLabel();
+    if (_textWidth(context, label, Theme.of(context).textTheme.labelLarge) >
+        labelWidth) {
+      label = _shortSelectionLabel(multiline: true);
+    }
+    return SizedBox(
+      key: const ValueKey<String>('timeline-date-navigation'),
+      width: width,
+      child: Row(
+        children: <Widget>[
+          OmniIconButton(
+            tooltip: '上一周期',
+            onPressed: () => _moveSelection(-1),
+            icon: const Icon(Icons.chevron_left_rounded),
+          ),
+          Expanded(
+            child: Tooltip(
+              message: _selectionLabel(),
+              child: OmniDatePickerButton(
+                key: const ValueKey<String>('timeline-date-picker'),
+                value: _selectedDay,
+                initialDate: _selectedDay,
+                currentDate: ref.read(nowProvider),
+                firstDate: DateTime(1970),
+                lastDate: DateTime(2100),
+                icon: null,
+                label: label,
+                style: ButtonStyle(
+                  side: const WidgetStatePropertyAll<BorderSide>(
+                    BorderSide.none,
+                  ),
+                  padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+                    EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+                  ),
+                  minimumSize: WidgetStatePropertyAll<Size>(Size(0, extent)),
+                  backgroundColor: const WidgetStatePropertyAll<Color>(
+                    Colors.transparent,
+                  ),
+                ),
+                onChanged: (DateTime selected) =>
+                    setState(() => _selectedDay = selected),
+              ),
+            ),
+          ),
+          OmniIconButton(
+            tooltip: '下一周期',
+            onPressed: () => _moveSelection(1),
+            icon: const Icon(Icons.chevron_right_rounded),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 将统计周期、日期巡航和回当前组合为独立的范围带。
+  Widget _buildRangeControls(
+    BuildContext context, {
+    required double width,
+    required bool androidCompact,
+  }) {
+    // 当前文字样式用于自然宽度测量。
+    final TextStyle? style = Theme.of(context).textTheme.labelLarge;
+    // 当前平台的完整点击高度。
+    final double extent = OmniDensity.controlHeight(context);
+    // 回当前周期的直接入口。
+    final Widget shortcut = OmniButton(
+      key: const ValueKey<String>('timeline-current-shortcut'),
       label: _currentShortcutLabel(),
       variant: OmniButtonVariant.text,
+      visualHeight: OmniDensity.isTouch(context) ? OmniSize.control : null,
       onPressed: () => setState(
         () => _selectedDay = DateUtils.dateOnly(ref.read(nowProvider)),
       ),
     );
-    // 桌面日期导航控件。
-    final Widget dateControls = OmniToolbar(
+    // 桌面周期滑块随字体大小扩展，移动端使用单个周期菜单。
+    final double periodWidth = androidCompact
+        ? _textWidth(context, '周', style) + extent
+        : math.max(
+            132,
+            (_textWidth(context, '周', Theme.of(context).textTheme.labelMedium) +
+                    OmniSpacing.lg * 2) *
+                3,
+          );
+    // 只有复盘模式提供统计周期切换。
+    final Widget? period = _viewMode == TimelineViewMode.details
+        ? null
+        : androidCompact
+        ? OmniPopupMenuButton<TimelineStatsPeriod>(
+            key: const ValueKey<String>('timeline-period-menu'),
+            tooltip: '选择统计周期',
+            initialValue: _statsPeriod,
+            onSelected: (TimelineStatsPeriod value) =>
+                setState(() => _statsPeriod = value),
+            itemBuilder: (BuildContext context) =>
+                <PopupMenuEntry<TimelineStatsPeriod>>[
+                  for (final TimelineStatsPeriod value
+                      in TimelineStatsPeriod.values)
+                    OmniPopupMenuItem<TimelineStatsPeriod>(
+                      value: value,
+                      label: switch (value) {
+                        TimelineStatsPeriod.day => '日',
+                        TimelineStatsPeriod.week => '周',
+                        TimelineStatsPeriod.month => '月',
+                      },
+                      icon: _statsPeriod == value
+                          ? Icons.check_rounded
+                          : Icons.calendar_view_week_outlined,
+                    ),
+                ],
+            child: Container(
+              constraints: BoxConstraints(minHeight: extent),
+              padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(switch (_statsPeriod) {
+                    TimelineStatsPeriod.day => '日',
+                    TimelineStatsPeriod.week => '周',
+                    TimelineStatsPeriod.month => '月',
+                  }, style: style),
+                  const SizedBox(width: OmniSpacing.xxs),
+                  const Icon(Icons.expand_more_rounded, size: OmniSize.icon),
+                ],
+              ),
+            ),
+          )
+        : OmniSlidingSegmentedControl<TimelineStatsPeriod>(
+            key: const ValueKey<String>('timeline-period-control'),
+            options: TimelineStatsPeriod.values,
+            selected: _statsPeriod,
+            width: periodWidth,
+            height: math.max(
+              extent,
+              MediaQuery.textScalerOf(context).scale(14) * 1.3 + OmniSpacing.sm,
+            ),
+            embedded: true,
+            labelBuilder: (TimelineStatsPeriod value) => switch (value) {
+              TimelineStatsPeriod.day => '日',
+              TimelineStatsPeriod.week => '周',
+              TimelineStatsPeriod.month => '月',
+            },
+            onChanged: (TimelineStatsPeriod value) =>
+                setState(() => _statsPeriod = value),
+          );
+    // 日期组保留箭头热区和测量后的文字宽度。
+    final double dateWidth =
+        _textWidth(
+          context,
+          androidCompact ? _shortSelectionLabel() : _selectionLabel(),
+          style,
+        ) +
+        extent * 2 +
+        OmniSpacing.md +
+        OmniSpacing.xs;
+    // 回当前按钮的自然占位。
+    final double shortcutWidth =
+        _textWidth(context, _currentShortcutLabel(), style) +
+        OmniSpacing.lg * 2;
+    // 组合在同一行需要的最小宽度。
+    final double totalWidth =
+        dateWidth +
+        shortcutWidth +
+        (period == null ? 0 : periodWidth) +
+        OmniSpacing.xs * (period == null ? 1 : 2);
+    if (androidCompact && totalWidth > width) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[?period, shortcut],
+          ),
+          _buildDateNavigation(context, width: width, shortLabel: true),
+        ],
+      );
+    }
+    return Wrap(
+      key: const ValueKey<String>('timeline-range-controls'),
+      spacing: OmniSpacing.xs,
+      runSpacing: OmniSpacing.xxs,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: <Widget>[
-        OmniIconButton(
-          tooltip: '上一周期',
-          onPressed: () => _moveSelection(-1),
-          icon: const Icon(Icons.chevron_left_rounded),
+        ?period,
+        _buildDateNavigation(
+          context,
+          width: math.min(width, dateWidth),
+          shortLabel: androidCompact,
         ),
-        datePicker,
-        OmniIconButton(
-          tooltip: '下一周期',
-          onPressed: () => _moveSelection(1),
-          icon: const Icon(Icons.chevron_right_rounded),
-        ),
-        currentShortcut,
+        shortcut,
       ],
-    );
-    // 日周月统计切换。
-    final Widget statsControl = SegmentedButton<TimelineStatsPeriod>(
-      showSelectedIcon: false,
-      segments: const <ButtonSegment<TimelineStatsPeriod>>[
-        ButtonSegment<TimelineStatsPeriod>(
-          value: TimelineStatsPeriod.day,
-          label: Text('日'),
-        ),
-        ButtonSegment<TimelineStatsPeriod>(
-          value: TimelineStatsPeriod.week,
-          label: Text('周'),
-        ),
-        ButtonSegment<TimelineStatsPeriod>(
-          value: TimelineStatsPeriod.month,
-          label: Text('月'),
-        ),
-      ],
-      selected: <TimelineStatsPeriod>{_statsPeriod},
-      onSelectionChanged: (Set<TimelineStatsPeriod> selection) =>
-          setState(() => _statsPeriod = selection.first),
-    );
-
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        // 当前布局实际使用的页面模式切换。
-        final Widget viewControl = androidCompact
-            ? OmniSlidingSegmentedControl<TimelineViewMode>(
-                key: const ValueKey<String>('timeline-view-mode'),
-                options: TimelineViewMode.values,
-                selected: _viewMode,
-                width: constraints.maxWidth,
-                height: OmniSize.touch,
-                labelBuilder: (TimelineViewMode mode) => switch (mode) {
-                  TimelineViewMode.review => '时间复盘',
-                  TimelineViewMode.details => '记录明细',
-                },
-                itemKeyBuilder: (TimelineViewMode mode) =>
-                    ValueKey<String>('timeline-view-mode-${mode.name}'),
-                itemBuilder:
-                    (
-                      BuildContext itemContext,
-                      TimelineViewMode mode,
-                      bool selected,
-                    ) {
-                      // 当前分段选项使用的主题色。
-                      final ColorScheme scheme = Theme.of(itemContext)
-                          .colorScheme;
-                      // 当前分段选项的图文颜色。
-                      final Color foreground = selected
-                          ? scheme.onPrimaryContainer
-                          : scheme.onSurfaceVariant;
-                      // 当前分段选项文案。
-                      final String label = switch (mode) {
-                        TimelineViewMode.review => '时间复盘',
-                        TimelineViewMode.details => '记录明细',
-                      };
-                      // 当前分段选项图标。
-                      final IconData icon = switch (mode) {
-                        TimelineViewMode.review => Icons.insights_outlined,
-                        TimelineViewMode.details =>
-                          Icons.view_timeline_outlined,
-                      };
-                      return Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          Icon(icon, size: 18, color: foreground),
-                          const SizedBox(width: 6),
-                          Flexible(
-                            child: Text(
-                              label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(itemContext).textTheme.labelMedium
-                                  ?.copyWith(
-                                    color: foreground,
-                                    fontWeight: selected
-                                        ? FontWeight.w600
-                                        : FontWeight.w400,
-                                  ),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                onChanged: (TimelineViewMode mode) {
-                  setState(() => _viewMode = mode);
-                },
-              )
-            : legacyViewControl;
-        // 当前是否运行在桌面端。
-        final bool isDesktopPlatform = OmniBreakpoint.isDesktopPlatform(
-          Theme.of(context).platform,
-        );
-        // 当前工具栏是否需要纵向排列。
-        final bool compact =
-            !isDesktopPlatform &&
-            OmniBreakpoint.isCompact(constraints.maxWidth);
-        if (compact) {
-          // 移动端单行日期导航，避免 Wrap 将四个控件拆成多行。
-          final Widget compactDateControls = Row(
-            children: <Widget>[
-              OmniIconButton(
-                tooltip: '上一周期',
-                onPressed: () => _moveSelection(-1),
-                icon: const Icon(Icons.chevron_left_rounded),
-              ),
-              Expanded(child: datePicker),
-              OmniIconButton(
-                tooltip: '下一周期',
-                onPressed: () => _moveSelection(1),
-                icon: const Icon(Icons.chevron_right_rounded),
-              ),
-              currentShortcut,
-            ],
-          );
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              viewControl,
-              const SizedBox(height: OmniSpacing.xs),
-              compactDateControls,
-              if (_viewMode == TimelineViewMode.review) ...<Widget>[
-                const SizedBox(height: OmniSpacing.xs),
-                statsControl,
-              ],
-            ],
-          );
-        }
-        // 桌面窄窗口下是否保留周期切换。
-        final bool showStatsControl =
-            _viewMode == TimelineViewMode.review &&
-            (!isDesktopPlatform ||
-                constraints.maxWidth >= OmniBreakpoint.compact);
-        return Row(
-          children: <Widget>[
-            viewControl,
-            const SizedBox(width: OmniSpacing.sm),
-            Expanded(child: dateControls),
-            if (showStatsControl) ...<Widget>[
-              const SizedBox(width: OmniSpacing.xs),
-              statsControl,
-            ],
-          ],
-        );
-      },
     );
   }
 
@@ -682,6 +870,54 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
       return '今天';
     }
     return _statsPeriod == TimelineStatsPeriod.week ? '本周' : '本月';
+  }
+}
+
+/// 在悬浮操作组完成布局后通知实际尺寸。
+class _TimelineActionMeasure extends SingleChildRenderObjectWidget {
+  /// 当前尺寸变化的通知回调。
+  final ValueChanged<Size> onSize;
+
+  /// 创建不改变子组件布局的测量节点。
+  const _TimelineActionMeasure({required this.onSize, required super.child});
+
+  /// 创建布局测量代理。
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _TimelineActionMeasureBox(onSize);
+
+  /// 保持渲染节点身份并同步最新回调。
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _TimelineActionMeasureBox renderObject,
+  ) {
+    renderObject.onSize = onSize;
+  }
+}
+
+/// 仅在真实布局尺寸变化后于帧末发布尺寸。
+class _TimelineActionMeasureBox extends RenderProxyBox {
+  /// 当前测量结果的接收回调。
+  ValueChanged<Size> onSize;
+
+  /// 上一帧已通知的尺寸。
+  Size? _previousSize;
+
+  /// 创建透明的测量渲染对象。
+  _TimelineActionMeasureBox(this.onSize);
+
+  /// 按自然尺寸布局并避免构建阶段更新页面状态。
+  @override
+  void performLayout() {
+    super.performLayout();
+    if (_previousSize == size) return;
+    _previousSize = size;
+    // 捕获本次结果，帧末不读取过期布局。
+    final Size measured = size;
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (attached) onSize(measured);
+    });
   }
 }
 
@@ -3472,37 +3708,69 @@ class _OngoingTimeEntryBannerState extends State<_OngoingTimeEntryBanner> {
         ),
         borderRadius: BorderRadius.circular(OmniRadius.panel),
       ),
-      child: Row(
-        children: <Widget>[
-          Icon(
-            hasConflict
-                ? Icons.warning_amber_rounded
-                : Icons.radio_button_checked,
-            size: 18,
-            color: hasConflict ? colors.warning : colors.brand,
-          ),
-          const SizedBox(width: OmniSpacing.sm),
-          Expanded(
-            child: Text(
-              hasConflict
-                  ? '检测到 ${widget.records.length} 条进行中记录，请逐条结束以解决同步冲突'
-                  : '${timeEntryDisplayActivity(record)} · 已进行 ${_formatElapsed(elapsedMinutes)} · ${DateFormat('M月d日 HH:mm').format(record.startedAt)} 开始',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          OmniButton(
-            label: '编辑',
-            variant: OmniButtonVariant.text,
-            onPressed: () => widget.onEdit(record),
-          ),
-          const SizedBox(width: OmniSpacing.xs),
-          OmniButton(
-            label: '结束记录',
-            variant: OmniButtonVariant.secondary,
-            onPressed: () => widget.onFinish(record),
-          ),
-        ],
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          // 冲突说明完整换行，普通记录保留可读的活动和持续时间。
+          final String description = hasConflict
+              ? '检测到 ${widget.records.length} 条进行中记录，请逐条结束以解决同步冲突'
+              : '${timeEntryDisplayActivity(record)} · 已进行 ${_formatElapsed(elapsedMinutes)} · ${DateFormat('M月d日 HH:mm').format(record.startedAt)} 开始';
+          // 状态图标与文字作为同一信息组。
+          final Widget status = Row(
+            children: <Widget>[
+              Icon(
+                hasConflict
+                    ? Icons.warning_amber_rounded
+                    : Icons.radio_button_checked,
+                size: OmniSize.icon,
+                color: hasConflict ? colors.warning : colors.brand,
+              ),
+              const SizedBox(width: OmniSpacing.xs),
+              Expanded(
+                child: Tooltip(
+                  message: description,
+                  child: Text(
+                    description,
+                    maxLines: hasConflict ? null : 2,
+                    overflow: hasConflict ? null : TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            ],
+          );
+          // 普通记录统一使用主结束入口，冲突记录保留逐条处理能力。
+          final Widget actions = Wrap(
+            alignment: WrapAlignment.end,
+            spacing: OmniSpacing.xs,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[
+              OmniButton(
+                label: '编辑',
+                variant: OmniButtonVariant.text,
+                onPressed: () => widget.onEdit(record),
+              ),
+              if (hasConflict)
+                OmniButton(
+                  label: '结束记录',
+                  variant: OmniButtonVariant.secondary,
+                  onPressed: () => widget.onFinish(record),
+                ),
+            ],
+          );
+          if ((hasConflict && constraints.maxWidth < 600) ||
+              MediaQuery.textScalerOf(context).scale(14) > 20) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[status, actions],
+            );
+          }
+          return Row(
+            children: <Widget>[
+              Expanded(child: status),
+              const SizedBox(width: OmniSpacing.xs),
+              actions,
+            ],
+          );
+        },
       ),
     );
   }

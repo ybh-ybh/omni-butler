@@ -19,7 +19,7 @@
 |---|---|---|---|---|---|
 | `/home`；`lib/features/home/presentation/home_page.dart`、`home_mobile_dashboard.dart` | 今日待办、事件关注、时间图例、名言/背景；模块隐藏/排序、完成/撤销、窗口缩放 | Windows 宽/窄窗、Android | Windows 保留卡片网格；Android 紧凑首页使用顶部名言、下划线导航、横向平铺分页与独立正文滚动，首尾不接力一级导航；短屏头部可收起，首页设置独立管理名言与内容顺序；业务控件与图表保留 | `home_mobile_dashboard_test.dart`、`home_mobile_viewport_test.dart`、`home_mobile_settings_test.dart`、`home_dashboard_test.dart`、`home_golden_test.dart`、`home_context_card_test.dart`、`home_window_resize_test.dart`、`home_todo_scroll_test.dart` | 本轮最终验收见文末；实体设备手感待验 |
 | `/todos`；`lib/features/todos/presentation/todos_page.dart`、`todo_mobile_dashboard.dart` | 进行中四象限、单象限聚焦、父子任务树、完成历史；移动端状态恢复、完成/撤销、进度操作；桌面拖拽/移动 | Windows 宽/窄窗、Android 紧凑/宽屏 | Android 紧凑使用完整文字下划线导航、父任务数量角标、平铺分组和独立分类分页；首尾/顶部/FAB不接力一级页；历史为保活进行中的本地二级页，顶部/系统返回恢复原位置。任务行、进度、历史与仓储复用原实现，其他布局保持 | `todo_mobile_dashboard_test.dart`、`todo_quadrant_ui_test.dart`、`android_primary_navigation_swipe_test.dart`、`todo_progress_entrypoints_test.dart`、`todo_quadrant_golden_test.dart` | 本轮最终证据见文末；既有无关桌面Golden滞后不在更新范围 |
-| `/timeline`；`lib/features/timeline/presentation/timeline_page.dart`、`timeline_review.dart` | 复盘/明细、日/周/月指纹、分类结构/趋势、日时间轴、进行中记录；冲突提示、补记/结束、跨日记录 | Windows 宽/窄窗、Android | 共享分段、日期时间、下拉、表单和消息；时间轴、占用区间滑块保留业务图形 | `timeline_layout_test.dart`、`timeline_editor_test.dart`、`timeline_android_ui_test.dart`、`time_entry_interval_test.dart` | 自动化通过；人工矩阵待验 |
+| `/timeline`；`lib/features/timeline/presentation/timeline_page.dart`、`timeline_review.dart` | 复盘/明细、日/周/月指纹、分类结构/趋势、日时间轴、进行中记录；冲突提示、补记/结束、跨日记录 | Windows 宽/窄窗、Android | 共享模式/周期滑块及日期导航；Android周期菜单和底部直接操作；指纹轻量化与明细浅色块，保留统计和表单业务 | `timeline_layout_test.dart`、`timeline_fingerprint_test.dart`、`timeline_editor_test.dart`、`timeline_android_ui_test.dart`、`time_entry_interval_test.dart` | 自动化通过；人工矩阵待验 |
 | `/events`；`lib/features/events/presentation/events_page.dart` | 事件列表/卡片、状态筛选、归档、周期提醒；记录完成、历史、撤销 | Windows 宽/窄窗、Android 管理聚合 | 页面与编辑器接共享主题、表单、按钮、菜单、开关、日期时间；保留事件业务状态色 | `events_layout_test.dart`、`management_compact_cards_test.dart`、`business_repositories_test.dart` | 自动化通过；人工矩阵待验 |
 | `/inventory`；`lib/features/inventory/presentation/inventory_page.dart` | 物品卡片、搜索/分类/位置/状态筛选、统计、详情、配套物品、批量迁移；继承位置、附件状态 | Windows 宽/窄窗、Android 管理聚合 | 通用控件接 Omni；详情卡和统计图保留专用布局；详情翻转及新增拆分菜单列为专用浮层 | `inventory_layout_test.dart`、`inventory_move_dialog_test.dart`、`management_compact_cards_test.dart` | 自动化通过；人工矩阵待验 |
 | `/memberships`；`lib/features/memberships/presentation/memberships_page.dart` | 会员卡片、搜索/类别/状态筛选、支出统计、到期时间轴、缴费历史；永久/到期/续费/提醒状态 | Windows 宽/窄窗、Android 管理聚合 | 共享面板、表单、日期、开关、菜单和消息；会员状态信息/图表维持业务语义 | `memberships_layout_test.dart`、`management_compact_cards_test.dart`、`business_repositories_test.dart` | 自动化通过；人工矩阵待验 |
@@ -72,7 +72,7 @@
 | 分类颜色选择 | Omni 菜单入口；一个底层 `PopupMenuItem` 承载自定义颜色网格，颜色格增加语义与触控区域 | 颜色名称、已选标记、键盘/触控选择、取消 | `taxonomy_manager_dialog_test.dart` | 自动化通过；人工矩阵待验 |
 | 首页待办右键/长按菜单 | 指针定位 `showMenu` + `OmniPopupMenuItem`，保留调用位置定位能力；主题统一 | 右键/长按、不重复开启、编辑/子任务/删除、菜单关闭 | `home_todo_context_menu_test.dart` | 自动化通过；人工矩阵待验 |
 | 每日待办普通/进度任务菜单及首页进度快捷操作 | `TodoTaskContextMenu` 指针定位 `showMenu` + `OmniPopupMenuItem`，移除更多按钮；添加子任务与完成下一个共用按钮尺寸；进度快捷按钮使用“+1”直接完成首个未完成步骤，正文仍打开面板 | Windows 单击展开/收起、右键；Android 单击、长按、横滑；编辑/移动/回收站、键盘菜单键/Shift+F10；进度提交防重、失败恢复、精确撤销、满进度仍需确认 | `todo_progress_entrypoints_test.dart`、`todo_progress_quick_action_test.dart`、`todo_quadrant_ui_test.dart` | 自动化通过；人工矩阵待验 |
-| 移动新增拆分菜单 | 时间/事件等使用 `OmniSplitActionButton`；物品仍有专用新增拆分菜单，均保留按钮上方锚定/展开语义 | 点主按钮与菜单互不混淆、取消、菜单方向键、减少动效、屏边 | `timeline_android_ui_test.dart`、`events_layout_test.dart`、`inventory_layout_test.dart` | 自动化通过；人工矩阵待验 |
+| 移动新增拆分菜单 | 事件等使用 `OmniSplitActionButton`；时间页改为直接补记、开始/结束与分类更多菜单；物品仍有专用新增拆分菜单 | 点主按钮与菜单互不混淆、取消、菜单方向键、减少动效、屏边 | `timeline_android_ui_test.dart`、`events_layout_test.dart`、`inventory_layout_test.dart` | 自动化通过；人工矩阵待验 |
 | 页面顶部操作反馈/完成撤销 | `showOmniMessage`；成功/警告/错误/信息共用结构；内容相对弹窗垂直居中，撤销保持同行；鼠标、键盘或读屏焦点停留暂停，辅助服务开启本身不永久暂停 | 替换/关闭、倒计时、操作只执行一次、撤销时限、辅助服务开启时仍自动关闭、正文及按钮读屏焦点暂停/继续、宽窄窗口与两倍字号对齐、长文案换行、减少动效 | `omni_message_test.dart`、`omni_overlay_accessibility_test.dart`、业务撤销测试 | 自动化通过；真实中文宽窄窗、长文案和删除提示预览通过；人工矩阵待验 |
 | 文本输入/表单校验 | `OmniTextField` / `OmniTextFormField` 保留 Flutter 文本编辑、输入法、焦点及验证能力；业务拥有校验规则 | 中文输入法组合态、复制粘贴、多行 Enter、错误/只读/禁用/提交中、焦点顺序 | `omni_form_controls_test.dart`、`omni_windows_enter_submit_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | 分段切换、统计轮播与手势 | `OmniSlidingSegmentedControl`、共享分段主题、`OmniStatisticsCarousel`；Android 页面/象限横滑继续既有手势协调 | 连续快速切换、中途反向、跟手索引、减少动效、返回 | `omni_sliding_segmented_control_test.dart`、`omni_statistics_carousel_test.dart`、`android_primary_navigation_swipe_test.dart` | 自动化通过；人工矩阵待验 |
@@ -87,7 +87,7 @@
 - 基线只在逐张查看候选图、确认差异来源之后更新；测试失败必须先区分预期视觉变化与业务/焦点/布局回归。
 - 没有对应专项自动化的搜索、附件裁剪、备份清理界面需要显式保留手工验收项。实机验证还包括中文输入法、屏幕阅读器、字体放大、滚动/拖拽流畅度与 Android 返回。
 - 自定义绘制的图表、象限树线、裁剪遮罩及系统窗口属于有明确目的的差异，不因出现 `CustomPaint`、`Material` 或底层 Flutter 控件而机械替换。新增普通控件应优先经 Omni 入口和共享参数，新增例外须补充本清单及规范说明。
-- 周时间指纹的类别标签在业务分类色块上保留固定浅灰 `Color(0xFFD6D6D6)` 和 0.85 透明度，属于专用图表标注；仅在 `timeline_review.dart` 登记一处受控例外，不扩展至普通文字或品牌控件。首页时间卡片移除“查看全部”后，仅保留空态“开始记录”的一处 `TextButton` 例外。
+- 时间指纹标签按类别背景亮度选择黑/白前景并以真实像素空间控制显示，已移除固定浅灰颜色例外；时间页的两个原生分段按钮改为Omni共享滑块，对应例外一并移除。首页时间卡片仅保留空态“开始记录”的一处 `TextButton` 例外。
 
 ### 最终集成结果
 
@@ -204,3 +204,12 @@
 - 37项相关回归通过：6文件27项最终运行、追加1项320dp双倍字号长金额与续费、9项管理导航；覆盖320/360/390dp、短屏、自然增高、旧操作流程与桌面布局。9张管理Golden最终匹配，审查后仅更新会员/物品6张基线，事件3张内容保持相同。证据：output/management-row-layout-{final-tests,long-price-tests,navigation,golden-update}.log。
 - 全量静态分析无问题、样式检查通过（43项既有受控例外）、定向格式和diff检查通过。真实中文明暗预览2项通过，已查看两页明暗常态；图片位于output/ui-pages-preview/android-{light,dark}-390-{memberships,inventory}.png。证据：output/management-row-layout-{analyze,style,preview}.log。本轮未重新打包安装，实体设备与实际TalkBack未复验。
 - 扩展运行还发现设置页的既有“Android 更多页展示分组设置并支持二级返回”测试查找旧group-features标识；HEAD设置页已在首页设置迁移后改为group-home，源码与本轮无关。记录至agent_memory/bugs.md，未修改设置页或其旧测试；其余9项管理导航定向运行通过。
+
+## 2026-10-08 Windows / Android 时间管理界面重整
+
+- 默认周复盘和原统计口径保持；移除重复大标题与四列统计面板，只将完整自然周期覆盖率放在指纹标题旁。宽屏导航/直接记录操作和周期/日期分层，窄Windows窗口整组换行不隐藏；Android紧凑顶部使用模式滑块和周期选择器，底栏上方直接提供补记、开始/结束及分类菜单，正文按操作组实际高度动态避让。
+- 指纹保留类别原色、真实横向坐标、短段最小宽度及原点击范围，弱化底轨/刻度，垂直内缩2px并使用共享小圆角，标签按真实字体空间和类别背景对比度显示；月历保留结构且大字号允许日期格自然增高。类别结构/比较/趋势内容与宽屏布局沿用。明细保持24小时真实比例与记录清单，浅类别底色/原色侧线/主题文字、紧凑摘要保留已记录和空白时长；短块完整信息由提示和清单提供。记录表单、仓储和公开业务接口未改。
+- 9个相关测试文件共 **92项回归通过**，包含开始/补记/结束/分类、普通和冲突进行中、模式/周期/日期导航、缩放状态、末项避让、短段点击/连续区间/跨午夜/空数据、六套主题明暗标签对比度，以及原趋势、时间区间与表单回归。Windows覆盖1440/1024/640/512；Android覆盖390/320双倍字号/719/720。证据：`output/timeline-redesign-final-tests.log`。
+- 仅审查更新时间页3张Golden并在最终回归中复测通过。真实中文明暗预览4项生成通过，16张Windows/Android日/周/月/明细PNG已人工审图，预览脚本显式断言各周期，避免误点月历星期标签。图片：`output/timeline-redesign-preview/`；证据：`output/timeline-redesign-final-preview.log`、`output/timeline-redesign-final-visual.log`。
+- 全量`flutter analyze --no-pub`、UI样式检查、定向格式检查及`git diff --check`通过；移除时间页原生分段按钮和指纹固定灰色两项许可，当前41项受控例外。证据：`output/timeline-redesign-final-{analyze,style}.log`。已同步`style.md`和任务记忆；未运行全仓自动修复lint。
+- 本轮未重新打包安装或复验实体设备触控/TalkBack。320dp双倍字号完整应用暴露隐藏预载首页的既有溢出（`home_page.dart:1160`），未扩大修改；该尺寸时间页通过独立生产页面验证日/周/月、明细和动态避让，其余尺寸使用真实应用路由。该隔离结果不代表320dp双倍字号全应用无溢出。

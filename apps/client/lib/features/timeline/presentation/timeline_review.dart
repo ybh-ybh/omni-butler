@@ -100,8 +100,6 @@ class TimelineReviewContent extends ConsumerWidget {
     };
     // 当前周期记录分钟数。
     final int trackedMinutes = _sumMinutes(records);
-    // 上一周期记录分钟数。
-    final int previousTrackedMinutes = _sumMinutes(previousRecords);
     // 当前周期包含的自然日数量。
     final int dayCount = rangeEnd.difference(rangeStart).inDays;
     // 当前周期完整自然时间容量。
@@ -110,46 +108,6 @@ class TimelineReviewContent extends ConsumerWidget {
     final int coveragePercent = capacityMinutes == 0
         ? 0
         : (trackedMinutes / capacityMinutes * 100).round().clamp(0, 100);
-    // 当前周期耗时最多的类别。
-    final MapEntry<String, int>? dominantCategory = _dominantEntry(summary);
-    // 当前周期平均每段记录分钟数。
-    final int averageMinutes = records.isEmpty
-        ? 0
-        : (trackedMinutes / records.length).round();
-    // 当前周期相对上一周期的总时长变化。
-    final int totalDelta = trackedMinutes - previousTrackedMinutes;
-    // 指标条数据。
-    final List<_TimelineMetricData> metrics = <_TimelineMetricData>[
-      _TimelineMetricData(
-        label: '已记录',
-        value: _formatDuration(trackedMinutes),
-        detail: previousRecords.isEmpty
-            ? '上一周期暂无记录'
-            : '${_comparisonLabel(period)} ${_formatSignedDuration(totalDelta)}',
-        icon: Icons.schedule_rounded,
-      ),
-      _TimelineMetricData(
-        label: '记录覆盖率',
-        value: '$coveragePercent%',
-        detail: '按完整自然时间计算',
-        icon: Icons.donut_large_rounded,
-      ),
-      _TimelineMetricData(
-        label: '主要投入',
-        value: dominantCategory?.key ?? '暂无',
-        detail: dominantCategory == null || trackedMinutes == 0
-            ? '记录后显示类别分布'
-            : '${_formatDuration(dominantCategory.value)} · ${(dominantCategory.value / trackedMinutes * 100).round()}%',
-        icon: Icons.flag_outlined,
-      ),
-      _TimelineMetricData(
-        label: '平均每段',
-        value: records.isEmpty ? '暂无' : _formatDuration(averageMinutes),
-        detail: '${records.length} 段记录',
-        icon: Icons.segment_rounded,
-      ),
-    ];
-
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // 当前内容区是否足以并排展示统计面板。
@@ -176,9 +134,8 @@ class TimelineReviewContent extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  _TimelineMetricsPanel(metrics: metrics),
-                  const SizedBox(height: OmniSpacing.xs),
                   _TimeFingerprintPanel(
+                    coveragePercent: coveragePercent,
                     records: records,
                     rangeStart: rangeStart,
                     rangeEnd: rangeEnd,
@@ -233,139 +190,11 @@ class TimelineReviewContent extends ConsumerWidget {
   }
 }
 
-/// 单个摘要指标的数据。
-class _TimelineMetricData {
-  /// 指标名称。
-  final String label;
-
-  /// 指标值。
-  final String value;
-
-  /// 指标补充说明。
-  final String detail;
-
-  /// 指标图标。
-  final IconData icon;
-
-  /// 创建摘要指标数据。
-  const _TimelineMetricData({
-    required this.label,
-    required this.value,
-    required this.detail,
-    required this.icon,
-  });
-}
-
-/// 周期摘要指标条。
-class _TimelineMetricsPanel extends StatelessWidget {
-  /// 待展示指标。
-  final List<_TimelineMetricData> metrics;
-
-  /// 创建周期摘要指标条。
-  const _TimelineMetricsPanel({required this.metrics});
-
-  /// 构建两列或四列摘要指标。
-  @override
-  Widget build(BuildContext context) {
-    return OmniPanel(
-      key: const ValueKey<String>('timeline-metrics'),
-      padding: const EdgeInsets.symmetric(
-        horizontal: OmniSpacing.xs,
-        vertical: OmniSpacing.sm,
-      ),
-      child: LayoutBuilder(
-        builder: (BuildContext context, BoxConstraints constraints) {
-          // 当前行展示的指标列数。
-          final int columnCount = constraints.maxWidth >= 720 ? 4 : 2;
-          // 单个指标可用宽度。
-          final double itemWidth = constraints.maxWidth / columnCount;
-          return Wrap(
-            children: <Widget>[
-              for (int index = 0; index < metrics.length; index += 1)
-                SizedBox(
-                  width: itemWidth,
-                  child: _TimelineMetricCell(
-                    metric: metrics[index],
-                    showLeftBorder: index % columnCount != 0,
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-/// 单个周期摘要指标。
-class _TimelineMetricCell extends StatelessWidget {
-  /// 当前指标数据。
-  final _TimelineMetricData metric;
-
-  /// 是否展示左侧分隔线。
-  final bool showLeftBorder;
-
-  /// 创建单个周期摘要指标。
-  const _TimelineMetricCell({
-    required this.metric,
-    required this.showLeftBorder,
-  });
-
-  /// 构建紧凑指标内容。
-  @override
-  Widget build(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
-    return Container(
-      constraints: const BoxConstraints(minHeight: 76),
-      padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
-      decoration: BoxDecoration(
-        border: showLeftBorder
-            ? Border(left: BorderSide(color: colors.line))
-            : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Icon(metric.icon, size: 14, color: colors.muted),
-              const SizedBox(width: OmniSpacing.xxs),
-              Expanded(
-                child: Text(
-                  metric.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: OmniSpacing.xxs),
-          Text(
-            metric.value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.w700,
-              fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
-            ),
-          ),
-          Text(
-            metric.detail,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelSmall,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// 时间指纹面板。
 class _TimeFingerprintPanel extends StatelessWidget {
+  /// 按完整自然周期计算的记录覆盖率。
+  final int coveragePercent;
+
   /// 当前统计周期记录。
   final List<TimeEntryRecord> records;
 
@@ -389,6 +218,7 @@ class _TimeFingerprintPanel extends StatelessWidget {
 
   /// 创建时间指纹面板。
   const _TimeFingerprintPanel({
+    required this.coveragePercent,
     required this.records,
     required this.rangeStart,
     required this.rangeEnd,
@@ -412,7 +242,25 @@ class _TimeFingerprintPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          _PanelHeading(title: '时间指纹', description: description),
+          Wrap(
+            spacing: OmniSpacing.md,
+            runSpacing: OmniSpacing.xxs,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[
+              Text('时间指纹', style: Theme.of(context).textTheme.titleMedium),
+              Tooltip(
+                message: '按完整自然周期计算',
+                child: Text(
+                  '覆盖率 $coveragePercent%',
+                  key: const ValueKey<String>('timeline-coverage'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: OmniSpacing.xxs),
+          Text(description, style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: OmniSpacing.md),
           if (period == TimelineStatsPeriod.month)
             _MonthFingerprint(
@@ -515,18 +363,34 @@ class _FingerprintScale extends StatelessWidget {
       children: <Widget>[
         const SizedBox(width: 72),
         Expanded(
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: <Widget>[
-              for (final String label in const <String>[
-                '00',
-                '06',
-                '12',
-                '18',
-                '24',
-              ])
-                Text(label, style: Theme.of(context).textTheme.labelSmall),
-            ],
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              // 按真实字号测量刻度，窄屏降低标注密度而非缩小文字。
+              final TextPainter painter = TextPainter(
+                text: TextSpan(
+                  text: '00',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+                textDirection: Directionality.of(context),
+                textScaler: MediaQuery.textScalerOf(context),
+              )..layout();
+              // 每个刻度之间保留基础留白，必要时只显示首尾。
+              final double labelSpace = painter.width + OmniSpacing.xs;
+              painter.dispose();
+              // 视觉刻度数量不改变实际时间坐标。
+              final List<String> labels = constraints.maxWidth >= labelSpace * 5
+                  ? const <String>['00', '06', '12', '18', '24']
+                  : constraints.maxWidth >= labelSpace * 3
+                  ? const <String>['00', '12', '24']
+                  : const <String>['00', '24'];
+              return Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: <Widget>[
+                  for (final String label in labels)
+                    Text(label, style: Theme.of(context).textTheme.labelSmall),
+                ],
+              );
+            },
           ),
         ),
       ],
@@ -597,7 +461,7 @@ class _FingerprintDayRow extends StatelessWidget {
               return SizedBox(
                 height: trackHeight,
                 child: Material(
-                  color: colors.mist,
+                  color: colors.paperSubtle,
                   borderRadius: BorderRadius.circular(OmniRadius.control),
                   clipBehavior: Clip.antiAlias,
                   child: InkWell(
@@ -614,7 +478,7 @@ class _FingerprintDayRow extends StatelessWidget {
                             top: 0,
                             bottom: 0,
                             child: ColoredBox(
-                              color: colors.line.withValues(alpha: 0.65),
+                              color: colors.line.withValues(alpha: 0.32),
                               child: const SizedBox(width: 1),
                             ),
                           ),
@@ -629,46 +493,16 @@ class _FingerprintDayRow extends StatelessWidget {
                             ),
                             top: 0,
                             bottom: 0,
-                            child: Tooltip(
-                              message:
-                                  '${_formatClock(record.startMinute)}–${_formatClock(record.endMinute)}\n${record.activity}${record.category == null ? '' : ' · ${record.category}'}',
-                              child: Material(
-                                color:
-                                    categoryColors[record.category] ??
-                                    colors.time,
-                                child: InkWell(
-                                  onTap: () => onEdit(record),
-                                  child: !tall
-                                      ? _FingerprintCategoryLabel(
-                                          category: record.category ?? '未分类',
-                                        )
-                                      : tall &&
-                                            record.endMinute -
-                                                    record.startMinute >=
-                                                90
-                                      ? Align(
-                                          alignment: Alignment.centerLeft,
-                                          child: Padding(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: OmniSpacing.xs,
-                                            ),
-                                            child: Text(
-                                              record.activity ?? '未命名记录',
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .labelSmall
-                                                  ?.copyWith(
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.w600,
-                                                  ),
-                                            ),
-                                          ),
-                                        )
-                                      : const SizedBox.shrink(),
-                                ),
-                              ),
+                            key: ValueKey<String>(
+                              'fingerprint-record-${record.id}',
+                            ),
+                            child: _FingerprintRecordSegment(
+                              record: record,
+                              color:
+                                  categoryColors[record.category] ??
+                                  colors.time,
+                              tall: tall,
+                              onTap: () => onEdit(record),
                             ),
                           ),
                       ],
@@ -684,40 +518,124 @@ class _FingerprintDayRow extends StatelessWidget {
   }
 }
 
-/// 周时间指纹中仅在空间充足时显示的低对比类别标签。
-class _FingerprintCategoryLabel extends StatelessWidget {
-  /// 当前时间段所属类别。
-  final String category;
+/// 保留完整时间命中区域，只在垂直方向内缩视觉色段。
+class _FingerprintRecordSegment extends StatelessWidget {
+  /// 当前自然日切片记录。
+  final TimeEntryRecord record;
 
-  /// 创建周视图类别标签。
-  const _FingerprintCategoryLabel({required this.category});
+  /// 用户设置的类别原色。
+  final Color color;
 
-  /// 测量完整类别名称，并以浅灰文字居中显示。
+  /// 是否展示日视图的活动名称。
+  final bool tall;
+
+  /// 当前记录的编辑入口。
+  final VoidCallback onTap;
+
+  /// 创建与真实时间区间等宽的指纹色段。
+  const _FingerprintRecordSegment({
+    required this.record,
+    required this.color,
+    required this.tall,
+    required this.onTap,
+  });
+
+  /// 构建轻圆角视觉与完整点击区域。
   @override
   Widget build(BuildContext context) {
-    // 跟随主题字体的低对比标签样式。
+    // 提示与无障碍使用相同的完整记录说明。
+    final String description =
+        '${_formatClock(record.startMinute)}–${_formatClock(record.endMinute)} · ${record.activity ?? '未命名记录'} · ${record.category ?? '未分类'}';
+    return Semantics(
+      button: true,
+      label: description,
+      onTap: onTap,
+      excludeSemantics: true,
+      child: Tooltip(
+        message: description,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(OmniRadius.tiny),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Ink(
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(OmniRadius.tiny),
+                ),
+                child: _FingerprintCategoryLabel(
+                  category: tall
+                      ? record.activity ?? '未命名记录'
+                      : record.category ?? '未分类',
+                  background: color,
+                  emphasized: tall,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 根据背景亮度选择对比度更高的中性标签色。
+Color _fingerprintForeground(Color background) {
+  // 类别原色的相对亮度。
+  final double luminance = background.computeLuminance();
+  // 黑色标签与背景的对比度。
+  final double darkContrast = (luminance + 0.05) / 0.05;
+  // 白色标签与背景的对比度。
+  final double lightContrast = 1.05 / (luminance + 0.05);
+  return darkContrast >= lightContrast ? Colors.black : Colors.white;
+}
+
+/// 仅在真实像素空间充足时显示完整指纹标签。
+class _FingerprintCategoryLabel extends StatelessWidget {
+  /// 当前时间段的类别或活动名称。
+  final String category;
+
+  /// 标签所在类别背景。
+  final Color background;
+
+  /// 日视图活动名称使用稍高字重。
+  final bool emphasized;
+
+  /// 创建空间自适应的指纹标签。
+  const _FingerprintCategoryLabel({
+    required this.category,
+    required this.background,
+    required this.emphasized,
+  });
+
+  /// 测量完整名称，在窄段和大字号时隐藏视觉标签。
+  @override
+  Widget build(BuildContext context) {
+    // 文字继承系统字体，前景色根据实际类别背景确定。
     final TextStyle style =
         (Theme.of(context).textTheme.labelSmall ??
                 const TextStyle(fontSize: 11))
             .copyWith(
-              color: const Color(0xFFD6D6D6).withValues(alpha: 0.85),
-              fontWeight: FontWeight.w400,
+              color: _fingerprintForeground(background),
+              fontWeight: emphasized ? FontWeight.w600 : FontWeight.w400,
             );
-    // 跟随系统设置的文字缩放比例。
+    // 使用当前系统的真实文字缩放。
     final TextScaler textScaler = MediaQuery.textScalerOf(context);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        // 测量完整文本，避免用时长阈值误判窄屏或长类别名称。
+        // 文字测量器避免时长阈值误判实际可用空间。
         final TextPainter painter = TextPainter(
           text: TextSpan(text: category, style: style),
           textDirection: Directionality.of(context),
           textScaler: textScaler,
           maxLines: 1,
         )..layout();
-        // 两侧保留留白，高度不足时也隐藏标签。
+        // 视觉留白只作用于文字，时间几何和命中区域保持完整。
         final bool fits =
             painter.width + OmniSpacing.xs * 2 <= constraints.maxWidth &&
-            painter.height + 2 <= constraints.maxHeight;
+            painter.height <= constraints.maxHeight;
         painter.dispose();
         if (!fits) return const SizedBox.shrink();
         return Center(
@@ -796,6 +714,38 @@ class _MonthFingerprint extends StatelessWidget {
             final double cellWidth = (constraints.maxWidth - spacing * 6) / 7;
             // 是否显示完整时长文字。
             final bool showDuration = cellWidth >= 58;
+            // 按单元格实际宽度测量双位日期，文字放大后允许自然增高。
+            final TextPainter datePainter =
+                TextPainter(
+                  text: TextSpan(
+                    text: '28',
+                    style: Theme.of(context).textTheme.labelMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  textDirection: Directionality.of(context),
+                  textScaler: MediaQuery.textScalerOf(context),
+                )..layout(
+                  maxWidth: math.max(
+                    1,
+                    cellWidth -
+                        (showDuration ? OmniSpacing.xs : OmniSpacing.xxs) * 2,
+                  ),
+                );
+            // 日期、微缩条和上下留白共同需要的最小高度。
+            final double contentHeight =
+                datePainter.height +
+                (showDuration
+                    ? MediaQuery.textScalerOf(context).scale(14) +
+                          OmniSpacing.xxs
+                    : 0) +
+                5 +
+                (showDuration ? OmniSpacing.xs : OmniSpacing.xxs) * 2;
+            datePainter.dispose();
+            // 常规字号沿用原比例，大字号只增加纵向阅读空间。
+            final double cellHeight = math.max(
+              cellWidth / (showDuration ? 1.2 : 0.78),
+              contentHeight,
+            );
             return GridView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -804,7 +754,7 @@ class _MonthFingerprint extends StatelessWidget {
                 crossAxisCount: 7,
                 crossAxisSpacing: spacing,
                 mainAxisSpacing: spacing,
-                childAspectRatio: showDuration ? 1.2 : 0.78,
+                mainAxisExtent: cellHeight,
               ),
               itemBuilder: (BuildContext context, int index) {
                 // 当前格对应的月内下标。
@@ -932,10 +882,15 @@ class _MonthFingerprintCell extends StatelessWidget {
                             ),
                             top: 0,
                             bottom: 0,
-                            child: ColoredBox(
-                              color:
-                                  categoryColors[record.category] ??
-                                  colors.time,
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color:
+                                    categoryColors[record.category] ??
+                                    colors.time,
+                                borderRadius: BorderRadius.circular(
+                                  OmniRadius.tiny,
+                                ),
+                              ),
                             ),
                           ),
                       ],
@@ -1376,6 +1331,11 @@ class _DayDetailSummary extends StatelessWidget {
     // 当天空白分钟数。
     final int blankMinutes = math.max(0, 1440 - trackedMinutes);
     return OmniPanel(
+      key: const ValueKey<String>('timeline-day-summary'),
+      padding: const EdgeInsets.symmetric(
+        horizontal: OmniSpacing.sm,
+        vertical: OmniSpacing.xs,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -1384,7 +1344,7 @@ class _DayDetailSummary extends StatelessWidget {
               Expanded(
                 child: Text(
                   '${DateFormat('M 月 d 日').format(day)} · ${_weekdayLabel(day)}',
-                  style: Theme.of(context).textTheme.titleMedium,
+                  style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),
               Text(
@@ -1393,7 +1353,7 @@ class _DayDetailSummary extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: OmniSpacing.sm),
+          const SizedBox(height: OmniSpacing.xs),
           Row(
             children: <Widget>[
               Expanded(
@@ -1403,7 +1363,7 @@ class _DayDetailSummary extends StatelessWidget {
                   color: colors.time,
                 ),
               ),
-              Container(width: 1, height: 36, color: colors.line),
+              const SizedBox(width: OmniSpacing.sm),
               Expanded(
                 child: _DetailSummaryValue(
                   label: '空白时间',
@@ -1508,13 +1468,35 @@ class _DayTimelineBoard extends StatelessWidget {
           Expanded(
             child: LayoutBuilder(
               builder: (BuildContext context, BoxConstraints constraints) {
+                // 时间轴字号决定刻度栏宽度，保留系统缩放。
+                final TextPainter hourPainter = TextPainter(
+                  text: TextSpan(
+                    text: '24',
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                  textDirection: Directionality.of(context),
+                  textScaler: MediaQuery.textScalerOf(context),
+                )..layout();
+                // 小时文字的实际高度。
+                final double labelHeight = hourPainter.height;
+                // 文字放大时刻度栏同步变宽。
+                final double gutter = math.max(
+                  48,
+                  hourPainter.width + OmniSpacing.xs,
+                );
+                hourPainter.dispose();
                 // 时间轴实际绘制高度。
                 final double trackHeight = constraints.maxHeight;
+                // 大字号仅降低小时标注密度，整点网格和时间投影保持完整。
+                final int labelInterval = math.max(
+                  1,
+                  (labelHeight / math.max(1, trackHeight / 24)).ceil(),
+                );
                 return Stack(
                   clipBehavior: Clip.none,
                   children: <Widget>[
                     Positioned(
-                      left: 48,
+                      left: gutter,
                       right: 0,
                       top: 0,
                       bottom: 0,
@@ -1540,18 +1522,19 @@ class _DayTimelineBoard extends StatelessWidget {
                       ),
                     ),
                     for (int hour = 0; hour <= 24; hour += 1) ...<Widget>[
-                      Positioned(
-                        left: 0,
-                        top: _hourTop(hour, trackHeight),
-                        width: 40,
-                        child: Text(
-                          hour == 24 ? '24' : hour.toString().padLeft(2, '0'),
-                          textAlign: TextAlign.right,
-                          style: Theme.of(context).textTheme.labelSmall,
+                      if (hour % labelInterval == 0 || hour == 24)
+                        Positioned(
+                          left: 0,
+                          top: _hourTop(hour, trackHeight, labelHeight),
+                          width: gutter - OmniSpacing.xs,
+                          child: Text(
+                            hour == 24 ? '24' : hour.toString().padLeft(2, '0'),
+                            textAlign: TextAlign.right,
+                            style: Theme.of(context).textTheme.labelSmall,
+                          ),
                         ),
-                      ),
                       Positioned(
-                        left: 48,
+                        left: gutter,
                         right: 0,
                         top: hour / 24 * trackHeight,
                         child: ColoredBox(
@@ -1564,7 +1547,7 @@ class _DayTimelineBoard extends StatelessWidget {
                     ],
                     for (final TimeEntryRecord record in records)
                       Positioned(
-                        left: 56,
+                        left: gutter + OmniSpacing.xs,
                         right: 8,
                         top: record.startMinute / 1440 * trackHeight,
                         height: math.max(
@@ -1590,77 +1573,145 @@ class _DayTimelineBoard extends StatelessWidget {
   }
 
   /// 返回整点标签在轨道内的安全位置。
-  double _hourTop(int hour, double trackHeight) {
+  double _hourTop(int hour, double trackHeight, double labelHeight) {
     // 未修正的整点标签位置。
-    final double rawTop = hour / 24 * trackHeight - 7;
-    return rawTop.clamp(0, math.max(0, trackHeight - 14));
+    final double rawTop = hour / 24 * trackHeight - labelHeight / 2;
+    return rawTop.clamp(0, math.max(0, trackHeight - labelHeight));
   }
 }
 
 /// 单日时间轴中的记录块。
 class _DayTimelineBlock extends StatelessWidget {
-  /// 当前时间记录。
+  /// 当前记录的自然日切片。
   final TimeEntryRecord record;
 
-  /// 当前类别颜色。
+  /// 当前类别的原色。
   final Color color;
 
-  /// 点击回调。
+  /// 编辑当前记录的回调。
   final VoidCallback onTap;
 
-  /// 创建单日时间轴中的记录块。
+  /// 创建浅色时间轴记录块。
   const _DayTimelineBlock({
     required this.record,
     required this.color,
     required this.onTap,
   });
 
-  /// 构建可点击的记录块。
+  /// 构建原色侧边线、浅底和按实际空间显示的记录文字。
   @override
   Widget build(BuildContext context) {
-    // 当前记录分钟数。
-    final int duration = record.endMinute - record.startMinute;
-    return Tooltip(
-      message:
-          '${_formatClock(record.startMinute)}–${_formatClock(record.endMinute)}\n${record.activity}',
-      child: Material(
-        color: color,
-        borderRadius: BorderRadius.circular(OmniRadius.tiny),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: duration >= 40
-              ? Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: OmniSpacing.xs,
-                    vertical: 2,
-                  ),
-                  child: Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: Text(
-                          record.activity ?? '未命名记录',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
+    // 当前主题的实底和文字语义。
+    final OmniColors colors = OmniColors.of(context);
+    // 时间块只降低背景色的视觉分量，保留类别原色侧边线。
+    final Color background = Color.alphaBlend(
+      color.withValues(alpha: 0.12),
+      colors.paper,
+    );
+    // 当前自然日切片的时段与时长。
+    final String range =
+        '${_formatClock(record.startMinute)}–${_formatClock(record.endMinute)} · ${_formatDuration(record.endMinute - record.startMinute)}';
+    // 短记录同样保留完整提示和可操作语义。
+    final String description =
+        '${record.activity ?? '未命名记录'} · $range · ${record.category ?? '未分类'}';
+    return Semantics(
+      label: description,
+      button: true,
+      onTap: onTap,
+      excludeSemantics: true,
+      child: Tooltip(
+        message: description,
+        child: Material(
+          color: background,
+          borderRadius: BorderRadius.circular(OmniRadius.tiny),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                SizedBox(width: 3, child: ColoredBox(color: color)),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: OmniSpacing.xs,
+                      vertical: 2,
+                    ),
+                    child: LayoutBuilder(
+                      builder:
+                          (BuildContext context, BoxConstraints constraints) {
+                            // 活动名称继承主题字体与主文字颜色。
+                            final TextStyle? titleStyle = Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(
+                                  color: colors.ink,
+                                  fontWeight: FontWeight.w600,
+                                );
+                            // 时段是次级信息，采用中性主题色。
+                            final TextStyle? timeStyle = Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(color: colors.muted);
+                            // 活动单行高度决定短记录是否显示文字。
+                            final TextPainter titlePainter = TextPainter(
+                              text: TextSpan(
+                                text: record.activity ?? '未命名记录',
+                                style: titleStyle,
                               ),
-                        ),
-                      ),
-                      if (duration >= 90) ...<Widget>[
-                        const SizedBox(width: OmniSpacing.xs),
-                        Text(
-                          '${_formatClock(record.startMinute)}–${_formatClock(record.endMinute)}',
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(color: Colors.white),
-                        ),
-                      ],
-                    ],
+                              textDirection: Directionality.of(context),
+                              textScaler: MediaQuery.textScalerOf(context),
+                              maxLines: 1,
+                            )..layout();
+                            // 完整时段必须同时满足宽度和剩余高度。
+                            final TextPainter timePainter = TextPainter(
+                              text: TextSpan(text: range, style: timeStyle),
+                              textDirection: Directionality.of(context),
+                              textScaler: MediaQuery.textScalerOf(context),
+                              maxLines: 1,
+                            )..layout();
+                            // 仅在可用像素空间内显示，避免按分钟数误判。
+                            final bool showTitle =
+                                constraints.maxHeight >= titlePainter.height &&
+                                constraints.maxWidth >= OmniSize.icon;
+                            // 时段放在活动名称之后，不挤压主要信息。
+                            final bool showTime =
+                                showTitle &&
+                                constraints.maxHeight >=
+                                    titlePainter.height +
+                                        timePainter.height +
+                                        OmniSpacing.xxs &&
+                                constraints.maxWidth >= timePainter.width;
+                            titlePainter.dispose();
+                            timePainter.dispose();
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                if (showTitle)
+                                  Text(
+                                    record.activity ?? '未命名记录',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: titleStyle,
+                                  ),
+                                if (showTime) ...<Widget>[
+                                  const SizedBox(height: OmniSpacing.xxs),
+                                  Text(
+                                    range,
+                                    maxLines: 1,
+                                    softWrap: false,
+                                    style: timeStyle,
+                                  ),
+                                ],
+                              ],
+                            );
+                          },
+                    ),
                   ),
-                )
-              : const SizedBox.shrink(),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1964,20 +2015,6 @@ int _sumMinutes(List<TimeEntryRecord> records) {
     (int total, TimeEntryRecord record) =>
         total + record.endMinute - record.startMinute,
   );
-}
-
-/// 返回耗时最多的类别。
-MapEntry<String, int>? _dominantEntry(Map<String, int> summary) {
-  if (summary.isEmpty) {
-    return null;
-  }
-  // 按耗时降序排列的类别。
-  final List<MapEntry<String, int>> entries = summary.entries.toList()
-    ..sort(
-      (MapEntry<String, int> first, MapEntry<String, int> second) =>
-          second.value.compareTo(first.value),
-    );
-  return entries.first;
 }
 
 /// 将分钟数格式化为紧凑时长。

@@ -56,7 +56,18 @@ void main() {
     container.read(appRouterProvider).go('/timeline');
     await tester.pumpAndSettle();
 
-    expect(find.text('时间管理'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey<String>('timeline-desktop-backfill')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('timeline-desktop-create')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('timeline-metrics')),
+      findsNothing,
+    );
     expect(find.text('看清时间去了哪里，也看见它如何变化'), findsNothing);
     expect(
       find.byKey(const ValueKey<String>('timeline-review-content')),

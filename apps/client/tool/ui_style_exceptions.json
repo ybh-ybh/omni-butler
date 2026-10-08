@@ -99,14 +99,6 @@
     "count": 1,
     "reason": "时间区间选择带业务占用段绘制，主题统一颜色，保留范围拖动逻辑。"
   },
-  "lib/features/timeline/presentation/timeline_page.dart :: SegmentedButton": {
-    "count": 2,
-    "reason": "使用统一 Theme 的筛选选择控件，保留原有键盘与选择语义。"
-  },
-  "lib/features/timeline/presentation/timeline_review.dart :: Color(0xFFD6D6D6)": {
-    "count": 1,
-    "reason": "周时间指纹类别标签叠加在业务分类色块上，保留固定浅灰低对比图表标注；不用于普通文字或品牌控件。"
-  },
   "lib/features/todos/presentation/todo_task_actions.dart :: showMenu": {
     "count": 1,
     "reason": "每日待办移除更多按钮后按右键、长按或键盘菜单键定位浮层；复用 OmniPopupMenuItem、主题尺寸和减少动效，不增加独立菜单外观。"
