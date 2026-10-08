@@ -17,7 +17,7 @@
 
 | 入口与源码 | 必验界面/状态 | 平台 | 当前统一路径与迁移状态 | 验证入口 | 验证状态 |
 |---|---|---|---|---|---|
-| `/home`；`lib/features/home/presentation/home_page.dart` | 仪表盘卡片、今日待办、事件关注、时间图例、名言/背景、情境卡；卡片隐藏/排序、完成/撤销、窗口缩放 | Windows 宽/窄窗、Android | 卡片使用语义主题/共享面板；业务控件接 Omni；数据图形和任务完成反馈保留专用呈现 | `home_dashboard_test.dart`、`home_golden_test.dart`、`home_context_card_test.dart`、`home_window_resize_test.dart`、`home_todo_scroll_test.dart` | 自动化通过；人工矩阵待验 |
+| `/home`；`lib/features/home/presentation/home_page.dart`、`home_mobile_dashboard.dart` | 今日待办、事件关注、时间图例、名言/背景；模块隐藏/排序、完成/撤销、窗口缩放 | Windows 宽/窄窗、Android | Windows 保留卡片网格；Android 紧凑首页使用顶部名言、下划线导航、横向平铺分页与独立正文滚动，首尾不接力一级导航；短屏头部可收起，首页设置独立管理名言与内容顺序；业务控件与图表保留 | `home_mobile_dashboard_test.dart`、`home_mobile_viewport_test.dart`、`home_mobile_settings_test.dart`、`home_dashboard_test.dart`、`home_golden_test.dart`、`home_context_card_test.dart`、`home_window_resize_test.dart`、`home_todo_scroll_test.dart` | 本轮最终验收见文末；实体设备手感待验 |
 | `/todos`；`lib/features/todos/presentation/todos_page.dart` | 进行中四象限、单象限聚焦、父子任务树、完成历史；拖拽/移动、展开收起、完成/撤销、重复系列影响范围 | Windows 宽/窄窗、Android 横滑 | 共享按钮/输入/菜单/日期/消息；分段导航接共享主题或 Omni 控件；树线、象限拖拽为专用交互；回收站确认改为统一语义按钮 | `todo_quadrant_ui_test.dart`、`todo_quadrant_golden_test.dart`、`todo_repository_test.dart` | 自动化通过；人工矩阵待验 |
 | `/timeline`；`lib/features/timeline/presentation/timeline_page.dart`、`timeline_review.dart` | 复盘/明细、日/周/月指纹、分类结构/趋势、日时间轴、进行中记录；冲突提示、补记/结束、跨日记录 | Windows 宽/窄窗、Android | 共享分段、日期时间、下拉、表单和消息；时间轴、占用区间滑块保留业务图形 | `timeline_layout_test.dart`、`timeline_editor_test.dart`、`timeline_android_ui_test.dart`、`time_entry_interval_test.dart` | 自动化通过；人工矩阵待验 |
 | `/events`；`lib/features/events/presentation/events_page.dart` | 事件列表/卡片、状态筛选、归档、周期提醒；记录完成、历史、撤销 | Windows 宽/窄窗、Android 管理聚合 | 页面与编辑器接共享主题、表单、按钮、菜单、开关、日期时间；保留事件业务状态色 | `events_layout_test.dart`、`management_compact_cards_test.dart`、`business_repositories_test.dart` | 自动化通过；人工矩阵待验 |
@@ -138,3 +138,24 @@
 - 7 个相关测试文件共 **72 项通过**，补记专项中文预览 **36 项通过**；浅色、深色、安全区、类别菜单和双倍字号键盘截图已查看。未更新既有 Golden。
 - 全量 `flutter analyze --no-pub` 和 UI 样式检查通过。新增一处精确限定的 `Dialog.fullscreen` 例外（共 42 项），原因是顶部固定操作与总时长的专用全屏结构；仍经 `showOmniDialog` 路由并复用 Omni 控件/主题。
 - 证据：`output/backfill-fullscreen-tests.log`、`output/backfill-fullscreen-preview.log`、`output/backfill-fullscreen-analyze.log`、`output/backfill-fullscreen-style.log`、`output/backfill-fullscreen-preview/`。本轮未构建安装 APK，实体设备输入法/读屏/手感待验。
+
+## 2026-10-08 安卓首页平铺分页
+
+- 仅 Android 紧凑首页改为顶部名言、文字下划线标签和独立 `PageView`。待办、时间、脉络及重新启用后的刻度平铺显示；沿用完整业务内容、计时弹窗、悬浮操作与五个底栏入口。
+- 模块按 `HomeCardId` 保留身份、纵向位置与交互状态；会话内记住当前模块，冷启动从已有偏好的首个可用模块开始。横滑首尾不接力一级导航，顶部和空态也隔离一级横滑。
+- 首页设置将名言独立为顶部开关，内容增删排序继续使用 `home.cards.order`，不迁移或重置隐藏状态。标准视口顶部固定；短屏/大字号下顶部可以滚出，标签停在正文上方，名言保持自然尺寸。
+- 19 个相关测试文件共覆盖 **139 项**：集成首轮 137 项通过；另两项分别是旧测试对固定标题按钮调用 `ensureVisible` 引发横向偏移，以及预期的 Android 首页视觉变化。修正定位方式并审查候选图后，失败业务项与全部 3 项首页 Golden 定向复测通过。未变更其他业务断言，未刷新桌面基线。证据：`output/home-mobile-regression.log`、`output/home-mobile-fixed-test.log`、`output/home-mobile-golden-verified.log`。
+- 专项覆盖真实横滑/连续反向/斜向拖动、首尾/单页/空态、隐藏/新增末页/重排、底栏返回、展开和图例保留、末项避让、360px 深色、短屏/双倍字号、视口模式往返以及 Windows 原布局。共享组件和原导航、时间记录、进度待办回归包含在上述集合中。
+- 最终审查另补充 2 项悬浮按钮起手横拖回归：主按钮与菜单区域原先都会误切一级页，已将安卓首页整个 `Scaffold` 纳入水平手势边界；修后两个区域横拖均留在首页，正常点按仍打开原面板/菜单。纯手势消费层设置 `excludeFromSemantics`，避免“开始记录”读屏节点扩大到整个首页；新增真实语义节点尺寸检查，修前宽度 390 超过 FAB 的 129.2，修后恢复正常。首页分页整文件 14 项通过，合计涉及 141 项不同回归；证据：`output/home-fab-swipe-before.log`、`output/home-fab-swipe-after.log`、`output/home-fab-semantics-before.log`、`output/home-mobile-dashboard-semantics-final.log`。
+- `flutter analyze --no-pub`、UI 样式检查（42 项既有受控例外，无新增绕过）及 `git diff --check` 通过。日志：`output/home-mobile-analyze.log`、`output/home-mobile-style.log`。
+- 中文业务预览 4 组生成测试通过，共 44 张；本轮逐图审查 Android 待办/时间/脉络/首页设置的明暗两套，以及 Windows 首页明暗两图。其余页面仅复用原预览生成，不扩大人工验收结论。入口：`tool/ui_pages_preview_test.dart`；图片：`output/ui-pages-preview/`。
+- Android API36 模拟器采用独立 `com.omnibutler.homepreview` 内存测试包，复用生产首页、路由与业务仓储；构建和操作证据位于 `output/home-mobile-runtime/`，操作明细见该目录 `verification.md`。此包只用于验收，不是正式升级包。
+- 本轮未连接 Android 实体设备；实体设备连续拖动手感、中文输入法与读屏体验仍待人工验收。
+
+## 2026-10-08 安卓首页工具栏与设置入口调整
+
+- 删除 Android 紧凑首页最上方“今日工作台／首页设置”整行，名言直接位于顶部并保留原有尺寸及操作。首页空态仍保留恢复模块的设置入口。
+- 底栏“更多”改为“设置”，未选中与选中状态均使用齿轮图标；“首页设置”位于设置页第一组，沿用现有模块管理器和本机偏好。其余平台及宽屏布局保持原有行为。
+- 8 个相关文件共 50 项测试通过，覆盖入口完整路径、修改偏好、返回首页保留当前分页、导航手势、短屏/双倍字号及桌面首页；仅更新 Android 首页受影响的视觉基线。日志：`output/home-header-settings-verified.log`。
+- 全量静态分析及样式检查通过，中文预览 4 组生成通过，共 44 张，审查 Android 首页、设置主页及首页设置浮层的明暗外观。证据：`output/home-header-settings-analyze-final.log`、`output/home-header-settings-style-final.log`、`output/home-header-settings-preview.log`；图片：`output/ui-pages-preview/`。
+- 额外每日待办 Golden 检查有 4 张基线不匹配（桌面浅/深色四象限、移动四象限、完成提示），差异位于本次未改动的待办行和提示内部，未刷新这些基线；日志：`output/home-header-settings-final-tests.log`。本次入口调整未重做 Android 模拟器包验收，上一节运行包和截图仅对应调整前版本。

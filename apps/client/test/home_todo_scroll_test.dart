@@ -15,7 +15,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证真实首页中待办的默认折叠、固定标题与独立滚动行为。
 void main() {
-  // 分别覆盖桌面正常高度、矮窗口与手机整页滚动。
+  // 分别覆盖桌面正常高度、矮窗口与手机独立模块滚动。
   for (final (TargetPlatform, Size) scenario in <(TargetPlatform, Size)>[
     (TargetPlatform.windows, const Size(1440, 900)),
     (TargetPlatform.windows, const Size(1440, 440)),
@@ -56,6 +56,13 @@ void main() {
         platform: scenario.$1,
         useDefaultCards: true,
       );
+      if (scenario.$1 == TargetPlatform.android) {
+        // 默认首页首模块为刻度，待办内容通过标签进入。
+        await tester.tap(
+          find.byKey(const ValueKey<String>('home-mobile-tab-todos')),
+        );
+        await tester.pumpAndSettle();
+      }
       // 三个象限均保留全部十二条任务，并沿用仓储排序。
       for (final TodoPriorityQuadrant quadrant in quadrants) {
         // 当前逐项检查的任务顺序。
@@ -198,7 +205,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('移动端展开较长待办后仍由整页滚动', (WidgetTester tester) async {
+  testWidgets('移动端展开较长待办后仅正文滚动且模块标题固定', (WidgetTester tester) async {
     // 移动端也使用真实待办树与完整首页。
     final AppDatabase database = AppDatabase.forTesting(
       NativeDatabase.memory(),
@@ -216,13 +223,17 @@ void main() {
       find.byKey(ValueKey<String>('home-todo-tree-toggle-${roots.first.id}')),
     );
     await tester.pumpAndSettle();
-    // 移动端待办内部不增加第二个滚动容器。
+    // 待办模块内部只使用一个正文滚动容器。
     final Finder card = find.byKey(const ValueKey<String>('home-todo-card'));
     expect(
       find.descendant(of: card, matching: find.byType(Scrollbar)),
-      findsNothing,
+      findsOneWidget,
     );
-    // 页面滚动应让卡片标题与任务内容一起移动。
+    expect(
+      find.descendant(of: card, matching: find.byType(Scrollable)),
+      findsOneWidget,
+    );
+    // 固定模块标题不随任务正文滚动。
     final Finder header = find.byKey(
       const ValueKey<String>('home-todo-header'),
     );
@@ -234,13 +245,8 @@ void main() {
     final double childBefore = tester.getTopLeft(firstChild).dy;
     await tester.dragFrom(tester.getCenter(firstChild), const Offset(0, -160));
     await tester.pumpAndSettle();
-    // 页面滚动产生的实际位移。
-    final double headerDelta = tester.getTopLeft(header).dy - headerBefore;
-    expect(headerDelta, lessThan(-30));
-    expect(
-      tester.getTopLeft(firstChild).dy - childBefore,
-      closeTo(headerDelta, 0.1),
-    );
+    expect(tester.getTopLeft(header).dy, closeTo(headerBefore, 0.1));
+    expect(tester.getTopLeft(firstChild).dy - childBefore, lessThan(-30));
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });

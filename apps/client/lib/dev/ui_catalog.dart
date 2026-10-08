@@ -433,6 +433,26 @@ class _CatalogExamplesState extends State<_CatalogExamples> {
                     ),
               ),
             ]),
+            SizedBox(
+              width: width,
+              child: ColoredBox(
+                color: OmniColors.of(context).paper,
+                child: const OmniPanel(
+                  key: ValueKey<String>('catalog-flat-panel'),
+                  flat: true,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      Text('移动端平铺内容'),
+                      SizedBox(height: OmniSpacing.md),
+                      Text('分组内沿用原有内容与操作'),
+                      Divider(),
+                      Text('细分隔线区分条目，外层没有卡片边框'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ],
         );
       },

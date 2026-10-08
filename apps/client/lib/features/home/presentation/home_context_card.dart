@@ -20,8 +20,11 @@ class HomeTodayContextCard extends ConsumerWidget {
   /// 当前时间。
   final DateTime now;
 
+  /// 是否使用移动端无圆角边框的平铺外观。
+  final bool flat;
+
   /// 创建今日脉络卡片。
-  const HomeTodayContextCard({required this.now, super.key});
+  const HomeTodayContextCard({required this.now, this.flat = false, super.key});
 
   /// 按功能开关构建日期清单。
   @override
@@ -36,6 +39,7 @@ class HomeTodayContextCard extends ConsumerWidget {
     final bool showMemberships = preference.isEnabled(AppFeature.memberships);
     return OmniPanel(
       key: const ValueKey<String>('home-context-card'),
+      flat: flat,
       padding: const EdgeInsets.all(OmniSpacing.md),
       child: Column(
         mainAxisSize: MainAxisSize.min,

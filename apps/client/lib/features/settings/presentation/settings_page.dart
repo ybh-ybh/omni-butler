@@ -18,6 +18,7 @@ import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/core/sync/image_sync_providers.dart';
 import 'package:omni_butler/core/attachments/image_sync_service.dart';
 import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
+import 'package:omni_butler/features/home/presentation/home_card_manager.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/presentation/recycle_bin_section.dart';
 import 'package:omni_butler/features/settings/presentation/sync_connection_dialog.dart';
@@ -403,6 +404,31 @@ class _AndroidSettingsOverview extends StatelessWidget {
                     _AndroidSettingsGroupCard(
                       categories: categoryGroups[index],
                       onSelected: onSelected,
+                      extraEntry: index == 0
+                          ? ConstrainedBox(
+                              constraints: const BoxConstraints(minHeight: 64),
+                              child: OmniListRow(
+                                key: const ValueKey<String>(
+                                  'android-settings-home',
+                                ),
+                                title: Text(
+                                  '首页设置',
+                                  style: Theme.of(context).textTheme.bodyLarge
+                                      ?.copyWith(fontWeight: FontWeight.w500),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: OmniSpacing.lg,
+                                  vertical: OmniSpacing.sm,
+                                ),
+                                trailing: Icon(
+                                  Icons.chevron_right_rounded,
+                                  size: 24,
+                                  color: colors.muted,
+                                ),
+                                onTap: () => showHomeCardManager(context),
+                              ),
+                            )
+                          : null,
                     ),
                     if (index < categoryGroups.length - 1)
                       const SizedBox(height: OmniSpacing.md),
@@ -499,6 +525,9 @@ class _AndroidSettingsHeader extends StatelessWidget {
 
 /// Android 设置分类分组卡片。
 class _AndroidSettingsGroupCard extends StatelessWidget {
+  /// 与现有分类同行呈现的额外设置入口。
+  final Widget? extraEntry;
+
   /// 当前分组分类。
   final List<_SettingsCategory> categories;
 
@@ -509,6 +538,7 @@ class _AndroidSettingsGroupCard extends StatelessWidget {
   const _AndroidSettingsGroupCard({
     required this.categories,
     required this.onSelected,
+    this.extraEntry,
   });
 
   /// 构建无边框圆角卡片与组内分隔线。
@@ -524,6 +554,14 @@ class _AndroidSettingsGroupCard extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
+          if (extraEntry != null) ...<Widget>[
+            extraEntry!,
+            Divider(
+              indent: OmniSpacing.lg,
+              endIndent: OmniSpacing.lg,
+              color: colors.line,
+            ),
+          ],
           for (
             int index = 0;
             index < categories.length;

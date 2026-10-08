@@ -11,17 +11,25 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 显示首页卡片管理侧滑面板。
 Future<void> showHomeCardManager(BuildContext context) {
+  // 以首页视口判定移动模式，避免桌面侧栏宽度影响布局选择。
+  final bool mobileLayout =
+      Theme.of(context).platform == TargetPlatform.android &&
+      OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
   return showOmniSideSheet<void>(
     context,
     desktopWidth: 360,
-    builder: (BuildContext sheetContext) => const _HomeCardManagerSheet(),
+    builder: (BuildContext sheetContext) =>
+        _HomeCardManagerSheet(mobileLayout: mobileLayout),
   );
 }
 
 /// 首页卡片管理侧滑面板。
 class _HomeCardManagerSheet extends ConsumerWidget {
+  /// 是否使用安卓紧凑首页的横幅与内容模块设置。
+  final bool mobileLayout;
+
   /// 创建首页卡片管理侧滑面板。
-  const _HomeCardManagerSheet();
+  const _HomeCardManagerSheet({required this.mobileLayout});
 
   /// 构建已添加卡片、可添加卡片和功能提示。
   @override
@@ -36,13 +44,26 @@ class _HomeCardManagerSheet extends ConsumerWidget {
     final FeaturePreference featurePreference = ref.watch(
       featurePreferenceProvider,
     );
+    // 当前界面参与增删排序的卡片，移动端名言独立管理。
+    final List<HomeCardId> managedCards = HomeCardId.values
+        .where((HomeCardId card) => !mobileLayout || card != HomeCardId.quote)
+        .toList(growable: false);
+    // 保留完整偏好顺序的已添加内容，功能关闭时仍可管理。
+    final List<HomeCardId> addedCards = cardPreference.orderedCards
+        .where((HomeCardId card) => managedCards.contains(card))
+        .toList(growable: false);
     // 尚未添加到首页的卡片。
-    final List<HomeCardId> availableCards = HomeCardId.values
+    final List<HomeCardId> availableCards = managedCards
         .where((HomeCardId card) => !cardPreference.contains(card))
         .toList(growable: false);
+    // 当前界面索引对应的持久化排序入口。
+    final Future<void> Function(int oldIndex, int newIndex) reorderCards =
+        mobileLayout
+        ? ref.read(homeCardPreferenceProvider.notifier).reorderContentCards
+        : ref.read(homeCardPreferenceProvider.notifier).reorder;
 
     return OmniSideSheetScaffold(
-      title: '管理卡片',
+      title: mobileLayout ? '首页设置' : '管理卡片',
       child: CustomScrollView(
         slivers: <Widget>[
           SliverPadding(
@@ -54,34 +75,64 @@ class _HomeCardManagerSheet extends ConsumerWidget {
             ),
             sliver: SliverToBoxAdapter(
               child: Text(
-                '拖动调整顺序，修改会立即保存到当前设备。',
+                mobileLayout
+                    ? '名言固定在顶部，内容模块可拖动排序。修改会立即保存到当前设备。'
+                    : '拖动调整顺序，修改会立即保存到当前设备。',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
           ),
+          if (mobileLayout) ...<Widget>[
+            const SliverPadding(
+              padding: EdgeInsets.symmetric(horizontal: OmniSpacing.md),
+              sliver: SliverToBoxAdapter(
+                child: _SectionLabel(label: '顶部横幅', count: 1),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: _CardManagerRow(
+                key: const ValueKey<String>('home-settings-quote'),
+                card: HomeCardId.quote,
+                subtitle: '固定显示在内容模块上方',
+                enabled: true,
+                trailing: Semantics(
+                  label: '显示每日名言',
+                  child: OmniSwitch(
+                    key: const ValueKey<String>('home-settings-quote-switch'),
+                    value: cardPreference.contains(HomeCardId.quote),
+                    onChanged: (bool visible) => ref
+                        .read(homeCardPreferenceProvider.notifier)
+                        .setVisible(HomeCardId.quote, visible),
+                  ),
+                ),
+              ),
+            ),
+          ],
           SliverPadding(
             padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
             sliver: SliverToBoxAdapter(
               child: _SectionLabel(
-                label: '已添加',
-                count: cardPreference.orderedCards.length,
+                label: mobileLayout ? '已添加模块' : '已添加',
+                count: addedCards.length,
               ),
             ),
           ),
-          if (cardPreference.orderedCards.isEmpty)
-            const SliverPadding(
-              padding: EdgeInsets.all(OmniSpacing.md),
-              sliver: SliverToBoxAdapter(child: Text('还没有添加卡片，可以从下方选择。')),
+          if (addedCards.isEmpty)
+            SliverPadding(
+              padding: const EdgeInsets.all(OmniSpacing.md),
+              sliver: SliverToBoxAdapter(
+                child: Text(
+                  mobileLayout ? '还没有添加内容模块，可以从下方选择。' : '还没有添加卡片，可以从下方选择。',
+                ),
+              ),
             )
           else
             SliverReorderableList(
-              itemCount: cardPreference.orderedCards.length,
-              onReorderItem: (int oldIndex, int newIndex) => ref
-                  .read(homeCardPreferenceProvider.notifier)
-                  .reorder(oldIndex, newIndex),
+              itemCount: addedCards.length,
+              onReorderItem: reorderCards,
               itemBuilder: (BuildContext context, int index) {
                 // 当前已添加卡片。
-                final HomeCardId card = cardPreference.orderedCards[index];
+                final HomeCardId card = addedCards[index];
                 // 当前卡片不可用的原因。
                 final String? unavailableReason = homeCardUnavailableReason(
                   card,
@@ -104,12 +155,10 @@ class _HomeCardManagerSheet extends ConsumerWidget {
                       ),
                       _KeyboardReorderHandle(
                         index: index,
-                        itemCount: cardPreference.orderedCards.length,
+                        itemCount: addedCards.length,
                         label: card.label,
                         color: colors.muted,
-                        onReorder: ref
-                            .read(homeCardPreferenceProvider.notifier)
-                            .reorder,
+                        onReorder: reorderCards,
                       ),
                     ],
                   ),
@@ -124,13 +173,18 @@ class _HomeCardManagerSheet extends ConsumerWidget {
               0,
             ),
             sliver: SliverToBoxAdapter(
-              child: _SectionLabel(label: '可添加', count: availableCards.length),
+              child: _SectionLabel(
+                label: mobileLayout ? '可添加模块' : '可添加',
+                count: availableCards.length,
+              ),
             ),
           ),
           if (availableCards.isEmpty)
-            const SliverPadding(
-              padding: EdgeInsets.all(OmniSpacing.md),
-              sliver: SliverToBoxAdapter(child: Text('所有卡片都已添加。')),
+            SliverPadding(
+              padding: const EdgeInsets.all(OmniSpacing.md),
+              sliver: SliverToBoxAdapter(
+                child: Text(mobileLayout ? '所有内容模块都已添加。' : '所有卡片都已添加。'),
+              ),
             )
           else
             SliverList.builder(
@@ -186,7 +240,11 @@ class _HomeCardManagerSheet extends ConsumerWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
-                          const Text('功能关闭后，相关卡片会暂时隐藏。'),
+                          Text(
+                            mobileLayout
+                                ? '功能关闭后，相关内容模块会暂时隐藏，原有顺序会保留。'
+                                : '功能关闭后，相关卡片会暂时隐藏。',
+                          ),
                           TextButton(
                             onPressed: () {
                               Navigator.of(context).pop();
@@ -296,6 +354,10 @@ class _KeyboardReorderHandleState extends State<_KeyboardReorderHandle> {
             child: Container(
               key: ValueKey<String>(
                 'home-card-reorder-${widget.label}-${widget.index}',
+              ),
+              constraints: BoxConstraints(
+                minWidth: OmniDensity.controlHeight(context, large: true),
+                minHeight: OmniDensity.controlHeight(context, large: true),
               ),
               padding: const EdgeInsets.all(OmniSpacing.xs),
               decoration: BoxDecoration(

@@ -105,6 +105,34 @@ class HomeCardPreferenceController extends Notifier<HomeCardPreference> {
     await _save(updatedCards);
   }
 
+  /// 调整移动首页内容顺序，保留名言原有的持久化位置。
+  Future<void> reorderContentCards(int oldIndex, int newIndex) async {
+    // 移动首页参与分页和排序的全部已添加模块。
+    final List<HomeCardId> contentCards = state.orderedCards
+        .where((HomeCardId card) => card != HomeCardId.quote)
+        .toList();
+    if (oldIndex < 0 ||
+        oldIndex >= contentCards.length ||
+        newIndex < 0 ||
+        newIndex >= contentCards.length ||
+        oldIndex == newIndex) {
+      return;
+    }
+    // 本次移动的内容模块。
+    final HomeCardId movedCard = contentCards.removeAt(oldIndex);
+    contentCards.insert(newIndex, movedCard);
+    // 下一个需要回填到完整偏好列表的内容模块索引。
+    int contentIndex = 0;
+    // 只替换内容槽位，让名言和已有隐藏状态保持原样。
+    final List<HomeCardId> updatedCards = state.orderedCards
+        .map(
+          (HomeCardId card) =>
+              card == HomeCardId.quote ? card : contentCards[contentIndex++],
+        )
+        .toList(growable: false);
+    await _save(updatedCards);
+  }
+
   /// 保存完整顺序并发布最新状态。
   Future<void> _save(List<HomeCardId> cards) async {
     state = HomeCardPreference(orderedCards: cards);

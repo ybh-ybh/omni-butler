@@ -15,6 +15,7 @@ import 'package:omni_butler/features/home/data/home_card_preferences.dart';
 import 'package:omni_butler/features/home/presentation/home_card_catalog.dart';
 import 'package:omni_butler/features/home/presentation/home_card_manager.dart';
 import 'package:omni_butler/features/home/presentation/home_context_card.dart';
+import 'package:omni_butler/features/home/presentation/home_mobile_dashboard.dart';
 import 'package:omni_butler/features/home/presentation/home_time_status_card.dart';
 import 'package:omni_butler/features/home/presentation/quote_library_dialog.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
@@ -56,6 +57,9 @@ class HomePage extends ConsumerWidget {
   /// 创建今日工作台页面。
   const HomePage({super.key});
 
+  /// 消费首页浮层起始的横向拖动，避免接力到外层一级导航。
+  void _consumeMobileHorizontalDrag(DragStartDetails details) {}
+
   /// 构建可配置卡片式今日工作台。
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -71,7 +75,7 @@ class HomePage extends ConsumerWidget {
     final AsyncValue<List<TodoTreeNode>> todoTreesAsync = ref.watch(
       activeTodoTreesProvider(today),
     );
-    // 与每日待办共用跨日期活动集合及仓储排序，首页仅限制象限和展示条数。
+    // 与每日待办共用跨日期活动集合及仓储排序，首页仅限制重点象限。
     final List<TodoTreeNode> pendingTodoTrees =
         todoTreesAsync.asData?.value ?? <TodoTreeNode>[];
     // 捕获页面生命周期之外仍可用的仓储，完成动画中切页也能提交。
@@ -167,9 +171,10 @@ class HomePage extends ConsumerWidget {
       },
     );
     // 今日时间刻度卡。
-    final Widget dayRuler = _DayRuler(now: now);
+    final Widget dayRuler = _DayRuler(now: now, flat: androidCompact);
     // 今日重点待办卡。
     final Widget todoCard = _TodayTodoCard(
+      flat: androidCompact,
       todoTreesAsync: todoTreesAsync,
       pendingTodoTrees: pendingTodoTrees,
       onCreate: openTodoEditor,
@@ -182,8 +187,11 @@ class HomePage extends ConsumerWidget {
       HomeCardId.quote: quoteCard,
       HomeCardId.dayRuler: dayRuler,
       HomeCardId.todos: todoCard,
-      HomeCardId.todayContext: HomeTodayContextCard(now: now),
-      HomeCardId.timeStatus: HomeTimeStatusCard(now: now),
+      HomeCardId.todayContext: HomeTodayContextCard(
+        now: now,
+        flat: androidCompact,
+      ),
+      HomeCardId.timeStatus: HomeTimeStatusCard(now: now, flat: androidCompact),
     };
     // 同时满足用户选择和功能依赖的有序卡片。
     final List<HomeCardId> visibleCards = cardPreference.orderedCards
@@ -193,13 +201,22 @@ class HomePage extends ConsumerWidget {
         .toList(growable: false);
 
     // 首页卡片与工具栏的完整内容。
-    final Widget dashboard = _HomeDashboard(
-      visibleCards: visibleCards,
-      cards: cards,
-      onManageCards: () => showHomeCardManager(context),
-      safeBottomPadding: androidCompact ? _mobileActionClearance : 0,
-    );
-    if (!androidCompact || !featurePreference.isEnabled(AppFeature.timeline)) {
+    final Widget dashboard = androidCompact
+        ? HomeMobileDashboard(
+            visibleCards: visibleCards,
+            cards: cards,
+            onManageCards: () => showHomeCardManager(context),
+            bottomPadding: featurePreference.isEnabled(AppFeature.timeline)
+                ? _mobileActionClearance
+                : OmniSpacing.xl,
+          )
+        : _HomeDashboard(
+            visibleCards: visibleCards,
+            cards: cards,
+            onManageCards: () => showHomeCardManager(context),
+            safeBottomPadding: androidCompact ? _mobileActionClearance : 0,
+          );
+    if (!androidCompact) {
       return dashboard;
     }
     // 当前全部进行中记录，用于同步 Android 首页与时间页的主操作状态。
@@ -221,35 +238,46 @@ class HomePage extends ConsumerWidget {
               icon: Icons.add_task_rounded,
             ),
         ];
-    return Scaffold(
-      floatingActionButton: OmniSplitActionButton<_HomeMobileAction>(
-        keyPrefix: 'home-mobile',
-        label: ongoingEntries.isEmpty ? '开始' : '结束记录',
-        primaryIcon: ongoingEntries.isEmpty
-            ? Icons.play_arrow_rounded
-            : Icons.stop_rounded,
-        primarySemanticsLabel: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
-        menuTooltip: '更多首页操作',
-        onPressed: ongoingEntries.isEmpty
-            ? () => showStartTimeEntryDialog(context, day: now)
-            : () => showFinishTimeEntryDialog(
-                context,
-                record: ongoingEntries.first,
-              ),
-        actions: mobileActions,
-        onSelected: (_HomeMobileAction action) {
-          switch (action) {
-            case _HomeMobileAction.backfill:
-              showBackfillTimeEntryDialog(context, day: now);
-              return;
-            case _HomeMobileAction.todo:
-              openTodoEditor();
-              return;
-          }
-        },
-      ),
+    // 将悬浮按钮与正文一起纳入首页的一级横滑隔离范围。
+    final Widget mobileScaffold = Scaffold(
+      floatingActionButton: featurePreference.isEnabled(AppFeature.timeline)
+          ? OmniSplitActionButton<_HomeMobileAction>(
+              keyPrefix: 'home-mobile',
+              label: ongoingEntries.isEmpty ? '开始' : '结束记录',
+              primaryIcon: ongoingEntries.isEmpty
+                  ? Icons.play_arrow_rounded
+                  : Icons.stop_rounded,
+              primarySemanticsLabel: ongoingEntries.isEmpty ? '开始记录' : '结束记录',
+              menuTooltip: '更多首页操作',
+              onPressed: ongoingEntries.isEmpty
+                  ? () => showStartTimeEntryDialog(context, day: now)
+                  : () => showFinishTimeEntryDialog(
+                      context,
+                      record: ongoingEntries.first,
+                    ),
+              actions: mobileActions,
+              onSelected: (_HomeMobileAction action) {
+                switch (action) {
+                  case _HomeMobileAction.backfill:
+                    showBackfillTimeEntryDialog(context, day: now);
+                    return;
+                  case _HomeMobileAction.todo:
+                    openTodoEditor();
+                    return;
+                }
+              },
+            )
+          : null,
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: dashboard,
+    );
+    return GestureDetector(
+      key: const ValueKey<String>('home-mobile-page-gesture-boundary'),
+      behavior: HitTestBehavior.opaque,
+      // 只隔离手势，不让无操作的横滑语义合并并扩大业务按钮边界。
+      excludeFromSemantics: true,
+      onHorizontalDragStart: _consumeMobileHorizontalDrag,
+      child: mobileScaffold,
     );
   }
 }
@@ -1049,11 +1077,14 @@ class _QuoteHero extends ConsumerWidget {
 
 /// 当日真实时间刻度。
 class _DayRuler extends StatelessWidget {
+  /// 安卓分页使用连续平铺表面。
+  final bool flat;
+
   /// 当前时间。
   final DateTime now;
 
   /// 创建当日时间刻度。
-  const _DayRuler({required this.now});
+  const _DayRuler({required this.now, this.flat = false});
 
   /// 构建日期、大号当前时刻和当天已过去比例。
   @override
@@ -1082,6 +1113,7 @@ class _DayRuler extends StatelessWidget {
 
     return OmniPanel(
       key: const ValueKey<String>('home-day-ruler'),
+      flat: flat,
       padding: const EdgeInsets.all(OmniSpacing.md),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1170,6 +1202,9 @@ class _DayRuler extends StatelessWidget {
 
 /// 今日待办摘要卡。
 class _TodayTodoCard extends StatefulWidget {
+  /// 安卓分页取消业务内容的外框。
+  final bool flat;
+
   /// 今日待办树异步状态。
   final AsyncValue<List<TodoTreeNode>> todoTreesAsync;
 
@@ -1187,6 +1222,7 @@ class _TodayTodoCard extends StatefulWidget {
 
   /// 创建今日待办摘要卡。
   const _TodayTodoCard({
+    this.flat = false,
     required this.todoTreesAsync,
     required this.pendingTodoTrees,
     required this.onCreate,
@@ -1317,6 +1353,7 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
     final Widget todoContent = _buildTodoContent(context, colors);
     return OmniPanel(
       key: const ValueKey<String>('home-todo-card'),
+      flat: widget.flat,
       padding: const EdgeInsets.fromLTRB(
         OmniSpacing.md,
         0,

@@ -20,8 +20,11 @@ class HomeTimeStatusCard extends ConsumerStatefulWidget {
   /// 当前时间。
   final DateTime now;
 
+  /// 是否使用移动端无圆角边框的平铺外观。
+  final bool flat;
+
   /// 创建首页时间状态卡片。
-  const HomeTimeStatusCard({required this.now, super.key});
+  const HomeTimeStatusCard({required this.now, this.flat = false, super.key});
 
   /// 创建仅用于当前卡片的类别筛选状态。
   @override
@@ -140,21 +143,26 @@ class _HomeTimeStatusCardState extends ConsumerState<HomeTimeStatusCard> {
     final List<TimeEntryRecord> sortedTodaySegments = List<TimeEntryRecord>.of(
       todaySegments,
     )..sort(_compareHomeEntries);
-    // 优先复用桌面网格为当前卡片提供的滚动控制器。
-    final ScrollController? gridController = OmniPanelScrollScope.maybeOf(
+    // 优先复用外部卡片视口提供的完整滚动契约。
+    final OmniPanelScrollScope? scrollScope = OmniPanelScrollScope.maybeOf(
       context,
-    )?.controller;
+    );
 
     return ConstrainedBox(
       constraints: BoxConstraints(
-        maxHeight: gridController == null
+        maxHeight: scrollScope == null
             ? math.max(420, MediaQuery.sizeOf(context).height - 160)
             : double.infinity,
       ),
       child: OmniPanelScrollScope(
-        controller: gridController ?? _entriesController,
+        controller: scrollScope?.controller ?? _entriesController,
+        bottomPadding: scrollScope?.bottomPadding ?? 0,
+        usePrimaryScrollController:
+            scrollScope?.usePrimaryScrollController ?? false,
+        preserveScrollState: scrollScope?.preserveScrollState ?? false,
         child: OmniPanel(
           key: const ValueKey<String>('home-time-status-card'),
+          flat: widget.flat,
           padding: const EdgeInsets.fromLTRB(
             OmniSpacing.md,
             0,

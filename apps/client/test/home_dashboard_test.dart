@@ -305,6 +305,11 @@ void main() {
       platform: TargetPlatform.android,
       physicalSize: const Size(412, 915),
     );
+    // 默认保留刻度为首模块，通过首页标签进入真实待办页面。
+    await tester.tap(
+      find.byKey(const ValueKey<String>('home-mobile-tab-todos')),
+    );
+    await tester.pumpAndSettle();
 
     expect(
       find.byKey(const ValueKey<String>('home-mobile-create-split')),
@@ -357,14 +362,33 @@ void main() {
     final Finder toggleAll = find.byKey(
       const ValueKey<String>('home-todo-toggle-all'),
     );
-    await tester.ensureVisible(toggleAll);
+    // 固定标题按钮已经可见，不让 ensureVisible 沿祖先横向分页强制对齐。
+    expect(toggleAll.hitTestable(), findsOneWidget);
     expect(find.byTooltip('收起全部子任务'), findsOneWidget);
     await tester.tap(toggleAll);
     await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<PageView>(
+            find.byKey(const ValueKey<String>('home-mobile-pager')),
+          )
+          .controller!
+          .page,
+      closeTo(1, 0.001),
+    );
     expect(find.text('Android 子任务'), findsNothing);
     expect(find.byTooltip('展开全部子任务'), findsOneWidget);
     await tester.tap(toggleAll);
     await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<PageView>(
+            find.byKey(const ValueKey<String>('home-mobile-pager')),
+          )
+          .controller!
+          .page,
+      closeTo(1, 0.001),
+    );
     expect(find.text('Android 子任务'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey<String>('home-mobile-create')));

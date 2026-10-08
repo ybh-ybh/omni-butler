@@ -59,50 +59,51 @@ void main() {
     );
     expect(_currentPath(app.container), '/home');
 
-    // 首页上实际参与手势竞争的全局横滑表面。
-    final Finder swipeSurface = find.byKey(
-      const ValueKey<String>('primary-navigation-swipe-surface'),
+    // 首页正文只切换模块，先通过底栏进入仍支持一级横滑的待办页。
+    await tester.tap(find.byKey(const ValueKey<String>('navigation-/todos')));
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/todos');
+
+    // 从待办顶部导航发起手势，避免命中正文内部的象限分页器。
+    final Finder todoHeader = find.byKey(
+      const ValueKey<String>('todo-mobile-view-navigation'),
     );
     // 当前用于检查跟手中间态的真实触摸手势。
     final TestGesture gesture = await tester.startGesture(
-      tester.getTopLeft(swipeSurface) + const Offset(24, 96),
+      tester.getTopRight(todoHeader) + const Offset(-24, 24),
     );
     await gesture.moveBy(const Offset(-24, 0));
     await tester.pump();
     await gesture.moveBy(const Offset(-72, 0));
     await tester.pump();
 
-    // 当前首页卡片的缩放变换。
+    // 当前待办卡片的缩放变换。
     final Transform currentScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-0')),
-    );
-    // 正在进入的待办卡片缩放变换。
-    final Transform targetScale = tester.widget<Transform>(
       find.byKey(const ValueKey<String>('primary-navigation-scale-1')),
     );
-    // 当前首页卡片的物理外观。
+    // 正在进入的时间卡片缩放变换。
+    final Transform targetScale = tester.widget<Transform>(
+      find.byKey(const ValueKey<String>('primary-navigation-scale-2')),
+    );
+    // 当前待办卡片的物理外观。
     final PhysicalModel currentCard = tester.widget<PhysicalModel>(
-      find.byKey(const ValueKey<String>('primary-navigation-card-0')),
+      find.byKey(const ValueKey<String>('primary-navigation-card-1')),
     );
     expect(currentScale.transform.storage[0], lessThan(1));
     expect(currentScale.transform.storage[0], greaterThan(0.985));
     expect(targetScale.transform.storage[0], greaterThan(0.985));
     expect(currentCard.elevation, greaterThan(0));
     expect(currentCard.borderRadius, isNot(BorderRadius.zero));
-    expect(_currentPath(app.container), '/home');
+    expect(_currentPath(app.container), '/todos');
 
     await gesture.moveBy(const Offset(-160, 0));
     await tester.pump();
     await gesture.up();
     await tester.pumpAndSettle();
-    expect(_currentPath(app.container), '/todos');
+    expect(_currentPath(app.container), '/timeline');
 
     // 通过协调器继续验证完整的正向一级页面顺序。
-    for (final String expectedPath in <String>[
-      '/timeline',
-      '/inventory',
-      '/settings',
-    ]) {
+    for (final String expectedPath in <String>['/inventory', '/settings']) {
       await _swipePrimary(tester, -220);
       expect(_currentPath(app.container), expectedPath);
     }
@@ -250,14 +251,20 @@ void main() {
         const FakeAccessibilityFeatures(accessibleNavigation: true);
     addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
     await tester.pump();
+    // 首页隔离一级横滑后，从待办页继续验证真实触摸的连续接手。
+    app.container.read(appRouterProvider).go('/todos');
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/todos');
+    // 固定在标题区发起快滑，首轮不触发待办正文的象限分页。
+    final Offset flingStart =
+        tester.getTopRight(
+          find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
+        ) +
+        const Offset(-52, 24);
     // 连续甩动过程中始终不等待旧弹簧完成。
-    for (final int targetIndex in <int>[1, 2, 3, 4]) {
+    for (final int targetIndex in <int>[2, 3, 4]) {
       // 真实带时间戳和离手速度的触摸，吸附中的卡片不能吞掉后续手势。
-      await tester.flingFrom(
-        const Offset(330, 260),
-        const Offset(-230, 0),
-        900,
-      );
+      await tester.flingFrom(flingStart, const Offset(-230, 0), 900);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
       expect(tester.hasRunningAnimations, isTrue);

@@ -180,9 +180,9 @@ const List<_AppDestination> _androidCompactDestinations = <_AppDestination>[
   ),
   _AppDestination(
     path: '/settings',
-    label: '更多',
-    icon: Icons.apps_outlined,
-    selectedIcon: Icons.apps_rounded,
+    label: '设置',
+    icon: Icons.settings_outlined,
+    selectedIcon: Icons.settings_rounded,
     primaryDestination: PrimaryNavigationDestination.more,
   ),
 ];

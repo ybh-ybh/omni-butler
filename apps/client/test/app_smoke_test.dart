@@ -80,11 +80,24 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(NavigationBar), findsNothing);
-    expect(find.text('首页'), findsOneWidget);
-    expect(find.text('待办'), findsOneWidget);
-    expect(find.text('时间'), findsOneWidget);
-    expect(find.text('管理'), findsOneWidget);
-    expect(find.text('更多'), findsOneWidget);
+    // 仅检查一级导航标签，首页模块也有同名的待办和时间标签。
+    for (final (String, String) destination in <(String, String)>[
+      ('/home', '首页'),
+      ('/todos', '待办'),
+      ('/timeline', '时间'),
+      ('/inventory', '管理'),
+      ('/settings', '设置'),
+    ]) {
+      expect(
+        find.descendant(
+          of: find.byKey(ValueKey<String>('navigation-${destination.$1}')),
+          matching: find.text(destination.$2),
+        ),
+        findsOneWidget,
+      );
+    }
+    expect(find.text('更多'), findsNothing);
+    expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
