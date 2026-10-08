@@ -559,14 +559,19 @@ void main() {
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
         await tester.fling(
-          find.byKey(const ValueKey<String>('todo-mobile-swipe-surface')),
+          find.byKey(const ValueKey<String>('todo-mobile-pager')),
           const Offset(-180, 0),
           800,
         );
         await tester.pumpAndSettle();
         expect(
-          find.byKey(const ValueKey<String>('todo-mobile-section-3-focused')),
-          findsOneWidget,
+          tester
+              .widget<PageView>(
+                find.byKey(const ValueKey<String>('todo-mobile-pager')),
+              )
+              .controller!
+              .page,
+          1,
         );
         expect(
           (await fixture.readSteps()).where((step) => step.isCompleted).length,

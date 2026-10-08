@@ -186,7 +186,11 @@ Future<void> _verifyTodoGolden(
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 600));
   if (showHistory) {
-    await tester.tap(find.text('完成历史'));
+    await tester.tap(
+      platform == TargetPlatform.android
+          ? find.byKey(const ValueKey<String>('todo-mobile-history-open'))
+          : find.text('完成历史'),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
   }

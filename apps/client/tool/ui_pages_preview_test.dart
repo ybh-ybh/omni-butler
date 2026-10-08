@@ -43,7 +43,7 @@ final DateTime _previewNow = DateTime(2026, 10, 6, 10, 30);
 ///
 /// 在 apps/client 运行 flutter test tool/ui_pages_preview_test.dart。
 /// OMNI_UI_FONT 和 OMNI_UI_ICONS 可覆盖本机中文字体及 Material 图标路径。
-/// 四组平台与明暗模式共输出 44 张图片到仓库 output/ui-pages-preview。
+/// 四组平台与明暗模式共输出 48 张图片到仓库 output/ui-pages-preview。
 /// 所有业务数据仅保存在内存，不启动应用入口的同步、通知或悬浮窗服务。
 void main() {
   setUpAll(() async {
@@ -177,6 +177,23 @@ Future<void> _captureBusinessPages(
         expect(find.text('预览 · 整理本周计划'), findsOneWidget);
       }
       await _capture(tester, captureKey, '$prefix-${route.substring(1)}');
+      if (route == '/todos' && platform == TargetPlatform.android) {
+        // 历史与进行中使用相同平铺表面，分别捕获真实二级页与分类页。
+        await tester.tap(
+          find.byKey(const ValueKey<String>('todo-mobile-history-open')),
+        );
+        await tester.pumpAndSettle();
+        await _capture(tester, captureKey, '$prefix-todos-history');
+        await tester.tap(
+          find.byKey(const ValueKey<String>('todo-mobile-history-back')),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey<String>('todo-mobile-quadrant-3')),
+        );
+        await tester.pumpAndSettle();
+        await _capture(tester, captureKey, '$prefix-todos-focused');
+      }
       if (route == '/home' && platform == TargetPlatform.android) {
         // 对首页各个平铺内容页和独立设置面板分别进行真实中文审查。
         for (final String module in <String>[

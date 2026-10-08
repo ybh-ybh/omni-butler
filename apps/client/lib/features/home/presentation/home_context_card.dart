@@ -265,6 +265,11 @@ class _EventContextRowState extends ConsumerState<_EventContextRow> {
                     key: ValueKey<String>('home-context-record-${event.id}'),
                     label: '记录',
                     variant: OmniButtonVariant.secondary,
+                    // 安卓仅缩小视觉高度，保留字号、水平内边距和 48px 点击区域。
+                    visualHeight:
+                        Theme.of(context).platform == TargetPlatform.android
+                        ? 32
+                        : null,
                     loading: _recordingIds.contains(event.id),
                     onPressed: () => unawaited(_recordNow(event)),
                   ),

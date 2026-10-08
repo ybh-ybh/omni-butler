@@ -18,7 +18,7 @@
 | 入口与源码 | 必验界面/状态 | 平台 | 当前统一路径与迁移状态 | 验证入口 | 验证状态 |
 |---|---|---|---|---|---|
 | `/home`；`lib/features/home/presentation/home_page.dart`、`home_mobile_dashboard.dart` | 今日待办、事件关注、时间图例、名言/背景；模块隐藏/排序、完成/撤销、窗口缩放 | Windows 宽/窄窗、Android | Windows 保留卡片网格；Android 紧凑首页使用顶部名言、下划线导航、横向平铺分页与独立正文滚动，首尾不接力一级导航；短屏头部可收起，首页设置独立管理名言与内容顺序；业务控件与图表保留 | `home_mobile_dashboard_test.dart`、`home_mobile_viewport_test.dart`、`home_mobile_settings_test.dart`、`home_dashboard_test.dart`、`home_golden_test.dart`、`home_context_card_test.dart`、`home_window_resize_test.dart`、`home_todo_scroll_test.dart` | 本轮最终验收见文末；实体设备手感待验 |
-| `/todos`；`lib/features/todos/presentation/todos_page.dart` | 进行中四象限、单象限聚焦、父子任务树、完成历史；拖拽/移动、展开收起、完成/撤销、重复系列影响范围 | Windows 宽/窄窗、Android 横滑 | 共享按钮/输入/菜单/日期/消息；分段导航接共享主题或 Omni 控件；树线、象限拖拽为专用交互；回收站确认改为统一语义按钮 | `todo_quadrant_ui_test.dart`、`todo_quadrant_golden_test.dart`、`todo_repository_test.dart` | 自动化通过；人工矩阵待验 |
+| `/todos`；`lib/features/todos/presentation/todos_page.dart`、`todo_mobile_dashboard.dart` | 进行中四象限、单象限聚焦、父子任务树、完成历史；移动端状态恢复、完成/撤销、进度操作；桌面拖拽/移动 | Windows 宽/窄窗、Android 紧凑/宽屏 | Android 紧凑使用完整文字下划线导航、父任务数量角标、平铺分组和独立分类分页；首尾/顶部/FAB不接力一级页；历史为保活进行中的本地二级页，顶部/系统返回恢复原位置。任务行、进度、历史与仓储复用原实现，其他布局保持 | `todo_mobile_dashboard_test.dart`、`todo_quadrant_ui_test.dart`、`android_primary_navigation_swipe_test.dart`、`todo_progress_entrypoints_test.dart`、`todo_quadrant_golden_test.dart` | 本轮最终证据见文末；既有无关桌面Golden滞后不在更新范围 |
 | `/timeline`；`lib/features/timeline/presentation/timeline_page.dart`、`timeline_review.dart` | 复盘/明细、日/周/月指纹、分类结构/趋势、日时间轴、进行中记录；冲突提示、补记/结束、跨日记录 | Windows 宽/窄窗、Android | 共享分段、日期时间、下拉、表单和消息；时间轴、占用区间滑块保留业务图形 | `timeline_layout_test.dart`、`timeline_editor_test.dart`、`timeline_android_ui_test.dart`、`time_entry_interval_test.dart` | 自动化通过；人工矩阵待验 |
 | `/events`；`lib/features/events/presentation/events_page.dart` | 事件列表/卡片、状态筛选、归档、周期提醒；记录完成、历史、撤销 | Windows 宽/窄窗、Android 管理聚合 | 页面与编辑器接共享主题、表单、按钮、菜单、开关、日期时间；保留事件业务状态色 | `events_layout_test.dart`、`management_compact_cards_test.dart`、`business_repositories_test.dart` | 自动化通过；人工矩阵待验 |
 | `/inventory`；`lib/features/inventory/presentation/inventory_page.dart` | 物品卡片、搜索/分类/位置/状态筛选、统计、详情、配套物品、批量迁移；继承位置、附件状态 | Windows 宽/窄窗、Android 管理聚合 | 通用控件接 Omni；详情卡和统计图保留专用布局；详情翻转及新增拆分菜单列为专用浮层 | `inventory_layout_test.dart`、`inventory_move_dialog_test.dart`、`management_compact_cards_test.dart` | 自动化通过；人工矩阵待验 |
@@ -159,3 +159,14 @@
 - 8 个相关文件共 50 项测试通过，覆盖入口完整路径、修改偏好、返回首页保留当前分页、导航手势、短屏/双倍字号及桌面首页；仅更新 Android 首页受影响的视觉基线。日志：`output/home-header-settings-verified.log`。
 - 全量静态分析及样式检查通过，中文预览 4 组生成通过，共 44 张，审查 Android 首页、设置主页及首页设置浮层的明暗外观。证据：`output/home-header-settings-analyze-final.log`、`output/home-header-settings-style-final.log`、`output/home-header-settings-preview.log`；图片：`output/ui-pages-preview/`。
 - 额外每日待办 Golden 检查有 4 张基线不匹配（桌面浅/深色四象限、移动四象限、完成提示），差异位于本次未改动的待办行和提示内部，未刷新这些基线；日志：`output/home-header-settings-final-tests.log`。本次入口调整未重做 Android 模拟器包验收，上一节运行包和截图仅对应调整前版本。
+
+## 2026-10-08 安卓待办平铺分页与数量角标
+
+- 仅 Android 宽度小于720改为分类文字下划线导航、连续背景和无卡片分组。完整标签可横滚，四分类右上角按进行中根任务树计数（只显示非零数量），子任务和完成历史不计入；全部不加角标。空组在全部页压缩为一行，单分类仍有空态与添加入口。
+- 独立PageView只平移，首尾、顶部、空白和悬浮按钮隔离一级横滑；五分类各自保留纵向位置，父任务展开状态共享。历史为待办内二级页，保活进行中子树，顶部与系统返回恢复原分类和位置，日期在同一会话保留；窄屏大字号改完整短日期或分两行。任务树、进度、编辑器、完成反馈和历史操作沿用业务实现。
+- 四个相关测试文件共 **38项通过**，覆盖320/360/390、短屏、双倍字号、明暗、连续反向/快滑/连续点按、边界隔离、分类/树/历史状态、路由分类、减少动画、根计数实时更新及读屏点击。另两项Android目标Golden定向复测通过，合计40项；只更新两张AndroidPNG。原有桌面浅/深色四象限与完成提示3张基线仍有既知差异，未刷新桌面PNG。证据：`output/todo-mobile-final-tests.log`、`output/todo-mobile-final-golden.log`、`output/todo-mobile-golden-before.log`。
+- 全量`flutter analyze --no-pub`、UI样式检查（42项既有受控例外，无新增绕过）、定向格式检查和`git diff --check`通过。明暗Android中文预览生成通过，已审查全部、单分类及历史；图片在`output/ui-pages-preview/`。日志：`output/todo-mobile-final-analyze.log`、`output/todo-mobile-final-style.log`、`output/todo-mobile-final-preview.log`。
+- API36模拟器使用独立`com.omnibutler.todopreview`内存包，复用真实生产页面、路由与仓储；已验证分类点击/正文双向和边界、顶部/FAB隔离、共享折叠、进度推进、父子完成与历史重新打开、日期保留/返回、底栏滚动恢复、新增编辑器与末项避让。新增角标复测确认子任务完成数量不变、父任务完成减1、历史重开恢复；320dp短屏双倍字号日期完整显示并可系统返回。
+- 模拟器额外发现启动零宽视口的标签滚动会被隐藏Ticker冻结，首次进入后恢复旧动画并隐藏全部标签。已跳过零宽、废弃过期回调，并在目标已可见时取消旧动画；新增回归修前复现52.2px偏移，修后通过，真实引擎冷启动也保持offset=0。证据：`output/todo-mobile-tabs-startup-before.log`、`output/todo-mobile-runtime/badge-scroll-stack-logcat.txt`、`output/todo-mobile-runtime/60-final-cold-todos-all.png`；详细操作/构建与清理记录见`output/todo-mobile-runtime/verification.txt`。
+- 本轮未连接Android实体设备；实际TalkBack、中文输入法与滑动手感仍待人工验收，模拟器证据不涵盖正式认证/同步、通知或发布签名。
+- 同日按追加反馈隐藏数量为0的顶部分类角标，同时移除其宽度预留；数量从0变为1、完成最后一项变为0、重新打开变为1的真实订阅回归通过。两文件24项相关回归、2项AndroidGolden、静态分析及样式检查通过；明暗中文预览已重新生成并审图，只再次更新进行中Android基线。证据为`output/todo-zero-badge-*.log`；本次小幅调整未重新构建或运行模拟器，前述模拟器APK/截图对应隐藏零角标之前的版本。

@@ -983,7 +983,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('每日待办移动端可从纵向四象限聚焦单个象限', (WidgetTester tester) async {
+  testWidgets('Android待办平铺四象限并保留任务操作与历史返回', (WidgetTester tester) async {
     // 移动端测试视口。
     const Size viewport = Size(390, 844);
     tester.view.physicalSize = viewport;
@@ -1000,11 +1000,11 @@ void main() {
     final AppDatabase database = AppDatabase.forTesting(
       NativeDatabase.memory(),
     );
-    // 移动端导航数量角标使用的测试仓储。
+    // 移动端任务操作使用的测试仓储。
     final TodoRepository repository = TodoRepository(database);
     await repository.save(
       TodoDraft(
-        title: '移动端角标任务',
+        title: '移动端主任务',
         scheduledDate: DateTime(2026, 9, 6),
         priorityQuadrant: TodoPriorityQuadrant.urgentImportant,
       ),
@@ -1045,17 +1045,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
 
     expect(
-      find.byKey(const ValueKey<String>('todo-mobile-filter-all')),
+      find.byKey(const ValueKey<String>('todo-mobile-quadrant-all')),
       findsOneWidget,
     );
     expect(find.text('每日待办'), findsNothing);
     expect(find.byType(ChoiceChip), findsNothing);
     expect(
       find.byType(OmniSlidingSegmentedControl<TodoPriorityQuadrant?>),
-      findsOneWidget,
+      findsNothing,
     );
     expect(
-      find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
+      find.byKey(const ValueKey<String>('todo-mobile-history-open')),
       findsOneWidget,
     );
     expect(
@@ -1103,24 +1103,6 @@ void main() {
     expect(find.byType(TodoEditorDialog), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
-    // 待办象限轨道中的滑块动画。
-    final AnimatedAlign quadrantIndicator = tester.widget<AnimatedAlign>(
-      find.descendant(
-        of: find.byKey(const ValueKey<String>('todo-mobile-quadrant-filters')),
-        matching: find.byType(AnimatedAlign),
-      ),
-    );
-    expect(quadrantIndicator.duration, OmniMotion.normal);
-    expect(quadrantIndicator.curve, OmniMotion.standardCurve);
-    // 一级视图轨道中的滑块动画。
-    final AnimatedAlign viewIndicator = tester.widget<AnimatedAlign>(
-      find.descendant(
-        of: find.byKey(const ValueKey<String>('todo-mobile-view-filters')),
-        matching: find.byType(AnimatedAlign),
-      ),
-    );
-    expect(viewIndicator.duration, OmniMotion.normal);
-    expect(viewIndicator.curve, OmniMotion.standardCurve);
     expect(
       find.byKey(const ValueKey<String>('todo-mobile-create')),
       findsOneWidget,
@@ -1150,10 +1132,15 @@ void main() {
         ValueKey<String>('todo-quadrant-create-${quadrant.value}'),
       );
       expect(tester.getSize(mobileHeading).height, OmniSize.touch);
-      expect(
-        tester.getSize(mobileToggleAll),
-        const Size.square(OmniSize.touch),
-      );
+      if (quadrant == TodoPriorityQuadrant.urgentImportant) {
+        expect(
+          tester.getSize(mobileToggleAll),
+          const Size.square(OmniSize.touch),
+        );
+      } else {
+        // 空分类没有可展开子项，只保留新增操作。
+        expect(mobileToggleAll, findsNothing);
+      }
       expect(tester.getSize(mobileCreate), const Size.square(OmniSize.touch));
       expect(
         find.descendant(
@@ -1208,178 +1195,83 @@ void main() {
     await tester.pump();
     expect(find.text('移动端展开子任务'), findsOneWidget);
 
-    // 移动端整页横滑区域。
-    final Finder swipeSurface = find.byKey(
-      const ValueKey<String>('todo-mobile-swipe-surface'),
+    // Android 正文使用自己的分页器，分类切换不再产生卡片动效。
+    final Finder pager = find.byKey(
+      const ValueKey<String>('todo-mobile-pager'),
     );
-    // 横滑前固定待办导航的边界。
-    final Rect todoNavigationRect = tester.getRect(
-      find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
+    // 历史入口应固定在顶部，不随正文切换移动。
+    final Finder historyOpen = find.byKey(
+      const ValueKey<String>('todo-mobile-history-open'),
     );
-    // 横滑前象限导航滑块的水平位置。
-    final double todoIndicatorStart = quadrantIndicator.alignment
-        .resolve(TextDirection.ltr)
-        .x;
-    // 用于检查待办象限跟手中间态的真实触摸手势。
-    final TestGesture todoGesture = await tester.startGesture(
-      tester.getTopLeft(swipeSurface) + const Offset(330, 240),
-    );
-    await todoGesture.moveBy(const Offset(-24, 0));
-    await tester.pump();
-    await todoGesture.moveBy(const Offset(-72, 0));
-    await tester.pump();
-    // 正在离开的全部象限卡片缩放变换。
-    final Transform todoCurrentScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-0-scale')),
-    );
-    // 正在进入的单象限卡片缩放变换。
-    final Transform todoTargetScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-1-scale')),
-    );
-    // 正在离开的全部象限卡片外观。
-    final PhysicalModel todoCurrentCard = tester.widget<PhysicalModel>(
-      find.byKey(const ValueKey<String>('nested-page-swipe-0-card')),
-    );
-    // 跟手中的象限导航滑块水平位置。
-    final double todoIndicatorDragged = tester
-        .widget<AnimatedAlign>(
-          find.descendant(
-            of: find.byKey(
-              const ValueKey<String>('todo-mobile-quadrant-filters'),
-            ),
-            matching: find.byType(AnimatedAlign),
-          ),
-        )
-        .alignment
-        .resolve(TextDirection.ltr)
-        .x;
-    expect(todoCurrentScale.transform.storage[0], lessThan(1));
-    expect(todoTargetScale.transform.storage[0], greaterThan(0.985));
-    expect(todoCurrentCard.elevation, greaterThan(0));
-    expect(
-      tester.getRect(
-        find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
-      ),
-      todoNavigationRect,
-    );
-    expect(todoIndicatorDragged, greaterThan(todoIndicatorStart));
-    await todoGesture.moveBy(const Offset(72, 0));
-    await todoGesture.up();
-    await tester.pumpAndSettle();
+    // 横滑前历史入口的屏幕位置。
+    final Rect historyOpenRect = tester.getRect(historyOpen);
     // 向左依次切换立即处理、安排时间、快速处理和有空再做。
-    for (final TodoPriorityQuadrant quadrant
-        in todoPriorityQuadrantActionOrder) {
-      await tester.fling(swipeSurface, const Offset(-160, 0), 800);
+    for (final int index in <int>[1, 2, 3, 4]) {
+      await tester.fling(pager, const Offset(-180, 0), 800);
       await tester.pumpAndSettle();
-      expect(
-        find.byKey(
-          ValueKey<String>('todo-mobile-section-${quadrant.value}-focused'),
-        ),
-        findsOneWidget,
-      );
+      expect(tester.widget<PageView>(pager).controller!.page, index);
+      expect(tester.getRect(historyOpen), historyOpenRect);
     }
-    // 最末分类继续左滑时向一级导航接力进入时间页。
-    await tester.fling(swipeSurface, const Offset(-160, 0), 800);
+    // 首末边界由待办认领，不向时间页接力。
+    await tester.fling(pager, const Offset(-180, 0), 800);
     await tester.pumpAndSettle();
+    expect(tester.widget<PageView>(pager).controller!.page, 4);
     expect(
       container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/timeline',
+      '/todos',
     );
-    // 返回待办后保留末项选择，继续验证内部反向相邻切换。
-    container.read(appRouterProvider).go('/todos');
-    await tester.pumpAndSettle();
-    // 向右回到快速处理，验证反向相邻切换。
-    await tester.fling(
-      find.byKey(const ValueKey<String>('todo-mobile-swipe-surface')),
-      const Offset(160, 0),
-      800,
-    );
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey<String>('todo-mobile-section-1-focused')),
-      findsOneWidget,
-    );
-
-    for (final double width in <double>[320, 360, 390]) {
-      tester.view.physicalSize = Size(width, viewport.height);
-      await tester.pumpAndSettle();
-      // 当前宽度下的一体化导航边界。
-      final Rect navigationRect = tester.getRect(
-        find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
-      );
-      for (final TodoPriorityQuadrant? quadrant in <TodoPriorityQuadrant?>[
-        null,
-        ...todoPriorityQuadrantActionOrder,
-      ]) {
-        // 当前象限点击区域边界。
-        final Rect filterRect = tester.getRect(
-          find.byKey(
-            ValueKey<String>(
-              quadrant == null
-                  ? 'todo-mobile-filter-all'
-                  : 'todo-mobile-filter-${quadrant.value}',
-            ),
-          ),
-        );
-        expect(filterRect.left, greaterThanOrEqualTo(navigationRect.left));
-        expect(filterRect.right, lessThanOrEqualTo(navigationRect.right));
-      }
-      // 当前窄屏聚焦象限的标题行。
-      final Finder focusedMobileHeading = find.byKey(
-        const ValueKey<String>('todo-quadrant-heading-1'),
-      );
-      // 聚焦视图与总览视图共用 Android 的完整触控标题操作区。
-      expect(tester.getSize(focusedMobileHeading).height, OmniSize.touch);
-      expect(tester.takeException(), isNull);
-    }
-
+    // 底栏切出后返回应保留最后选择的分类。
     await tester.tap(
-      find.byKey(const ValueKey<String>('todo-mobile-filter-2')),
+      find.byKey(const ValueKey<String>('navigation-/timeline')),
     );
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey<String>('todo-mobile-section-2-focused')),
-      findsOneWidget,
+    await tester.tap(find.byKey(const ValueKey<String>('navigation-/todos')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<PageView>(pager).controller!.page, 4);
+    await tester.fling(pager, const Offset(180, 0), 800);
+    await tester.pumpAndSettle();
+    expect(tester.widget<PageView>(pager).controller!.page, 3);
+
+    // 标签允许横向滚动，先将目标标签滚入可点击区域再切换。
+    final Finder scheduledTab = find.byKey(
+      const ValueKey<String>('todo-mobile-quadrant-2'),
     );
-    expect(
-      find.byKey(const ValueKey<String>('todo-mobile-section-3-all')),
-      findsNothing,
-    );
-    await tester.tap(
-      find.byKey(const ValueKey<String>('todo-mobile-view-history')),
-    );
+    await tester.ensureVisible(scheduledTab);
+    await tester.pumpAndSettle();
+    await tester.tap(scheduledTab);
+    await tester.pumpAndSettle();
+    expect(tester.widget<PageView>(pager).controller!.page, 2);
+    await tester.tap(historyOpen);
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('todo-mobile-history-date-row')),
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey<String>('todo-mobile-quadrant-filters')),
+      find.byKey(const ValueKey<String>('todo-mobile-history-back')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('todo-mobile-create')),
       findsNothing,
     );
     for (final double width in <double>[320, 360, 390]) {
       tester.view.physicalSize = Size(width, viewport.height);
       await tester.pumpAndSettle();
-      // 当前宽度下的历史日期行边界。
+      // 历史日期在各窄屏宽度下都完整位于页面范围内。
       final Rect dateRowRect = tester.getRect(
         find.byKey(const ValueKey<String>('todo-mobile-history-date-row')),
       );
-      // 当前宽度下的一体化导航边界。
-      final Rect navigationRect = tester.getRect(
-        find.byKey(const ValueKey<String>('todo-mobile-view-navigation')),
-      );
-      expect(dateRowRect.left, greaterThanOrEqualTo(navigationRect.left));
-      expect(dateRowRect.right, lessThanOrEqualTo(navigationRect.right));
+      expect(dateRowRect.left, greaterThanOrEqualTo(0));
+      expect(dateRowRect.right, lessThanOrEqualTo(width));
       expect(tester.takeException(), isNull);
     }
     await tester.tap(
-      find.byKey(const ValueKey<String>('todo-mobile-view-active')),
+      find.byKey(const ValueKey<String>('todo-mobile-history-back')),
     );
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey<String>('todo-mobile-section-2-focused')),
-      findsOneWidget,
-    );
+    expect(tester.widget<PageView>(pager).controller!.page, 2);
+    expect(historyOpen, findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 1));

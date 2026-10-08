@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -11,6 +12,7 @@ import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/features/todos/presentation/todo_completion_checkbox.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
+import 'package:omni_butler/features/todos/presentation/todo_mobile_dashboard.dart';
 import 'package:omni_butler/features/todos/presentation/todo_priority_quadrant_style.dart';
 import 'package:omni_butler/features/todos/presentation/todo_progress_panel.dart';
 import 'package:omni_butler/features/todos/presentation/todo_progress_widgets.dart';
@@ -79,6 +81,9 @@ class _TodosPageState extends ConsumerState<TodosPage> {
   /// 当前一级视图。
   _TodoPageView _pageView = _TodoPageView.active;
 
+  /// 只允许最近一次路由或用户分类选择生效。
+  int _quadrantSelectionRevision = 0;
+
   /// 当前跨路由保留的聚焦象限。
   TodoPriorityQuadrant? get _priorityQuadrantFilter =>
       ref.read(_todoQuadrantFocusProvider);
@@ -127,7 +132,22 @@ class _TodosPageState extends ConsumerState<TodosPage> {
 
   /// 更新会话内保留的聚焦象限。
   void _setPriorityQuadrantFilter(TodoPriorityQuadrant? quadrant) {
-    ref.read(_todoQuadrantFocusProvider.notifier).setFocusedQuadrant(quadrant);
+    // 路由更新可能发生在构建阶段，不能同步修改已被监听的provider。
+    final int revision = ++_quadrantSelectionRevision;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((Duration timestamp) {
+        if (mounted && revision == _quadrantSelectionRevision) {
+          ref
+              .read(_todoQuadrantFocusProvider.notifier)
+              .setFocusedQuadrant(quadrant);
+        }
+      });
+    } else {
+      ref
+          .read(_todoQuadrantFocusProvider.notifier)
+          .setFocusedQuadrant(quadrant);
+    }
   }
 
   /// 更新单棵任务树的子任务展开状态。
@@ -205,6 +225,66 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     final bool mobile =
         !desktopPlatform &&
         OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
+    // 安卓紧凑待办使用独立平铺分页，其他平台保留原有布局。
+    final bool androidCompact =
+        mobile && Theme.of(context).platform == TargetPlatform.android;
+    if (androidCompact) {
+      _latestTrees = activeAsync.asData?.value ?? <TodoTreeNode>[];
+      // 以进行中的根任务树计数，与分组标题保持同一口径。
+      final Map<TodoPriorityQuadrant, int> quadrantCounts =
+          <TodoPriorityQuadrant, int>{
+            for (final TodoPriorityQuadrant quadrant
+                in todoPriorityQuadrantActionOrder)
+              quadrant: 0,
+          };
+      for (final TodoTreeNode tree in _latestTrees) {
+        // 子任务不单独计入分类角标。
+        final TodoPriorityQuadrant quadrant = TodoPriorityQuadrant.fromValue(
+          tree.root.priorityQuadrant,
+        );
+        quadrantCounts.update(quadrant, (int count) => count + 1);
+      }
+      return TodoMobileDashboard(
+        selectedQuadrant: _priorityQuadrantFilter,
+        quadrantCounts: quadrantCounts,
+        showingHistory: _pageView == _TodoPageView.history,
+        selectedDay: _selectedDay,
+        today: today,
+        onQuadrantSelected: _setPriorityQuadrantFilter,
+        onHistoryChanged: (bool showing) {
+          _dismissUndo();
+          setState(() {
+            _pageView = showing ? _TodoPageView.history : _TodoPageView.active;
+          });
+        },
+        onDaySelected: (DateTime value) {
+          setState(() => _selectedDay = DateUtils.dateOnly(value));
+        },
+        onCreate: () => TodoEditorDialog.show(context, initialDate: today),
+        activePageBuilder:
+            (BuildContext context, TodoPriorityQuadrant? quadrant) =>
+                _buildPageBody(
+                  context,
+                  activeAsync: activeAsync,
+                  historyAsync: historyAsync,
+                  now: now,
+                  mobile: true,
+                  flat: true,
+                  view: _TodoPageView.active,
+                  priorityQuadrantFilter: quadrant,
+                ),
+        history: _buildPageBody(
+          context,
+          activeAsync: activeAsync,
+          historyAsync: historyAsync,
+          now: now,
+          mobile: true,
+          flat: true,
+          view: _TodoPageView.history,
+          priorityQuadrantFilter: null,
+        ),
+      );
+    }
     if (mobile) {
       // 全部与四个象限的固定滑动顺序。
       final List<TodoPriorityQuadrant?> options = <TodoPriorityQuadrant?>[
@@ -472,14 +552,17 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     required DateTime now,
     required bool mobile,
     required TodoPriorityQuadrant? priorityQuadrantFilter,
+    bool flat = false,
+    _TodoPageView? view,
   }) {
-    if (_pageView == _TodoPageView.active) {
+    if ((view ?? _pageView) == _TodoPageView.active) {
       return activeAsync.when(
         data: (List<TodoTreeNode> records) => _buildActiveContent(
           context,
           records,
           now: now,
           mobile: mobile,
+          flat: flat,
           priorityQuadrantFilter: priorityQuadrantFilter,
         ),
         loading: _buildLoading,
@@ -493,6 +576,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
           'todo-history-${DateUtils.dateOnly(_selectedDay).toIso8601String()}',
         ),
         mobile: mobile,
+        flat: flat,
         entries: records,
         onReopen: (TodoRecord todo) => _setTodoCompleted(todo, false),
         onEdit: (TodoRecord todo) =>
@@ -521,6 +605,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     required DateTime now,
     required bool mobile,
     required TodoPriorityQuadrant? priorityQuadrantFilter,
+    bool flat = false,
   }) {
     // 按象限分组后的任务树。
     final Map<TodoPriorityQuadrant, List<TodoTreeNode>> grouped =
@@ -545,6 +630,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         grouped,
         now: now,
         priorityQuadrantFilter: priorityQuadrantFilter,
+        flat: flat,
       );
     }
     // 当前系统是否要求减少动态效果。
@@ -753,6 +839,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     Map<TodoPriorityQuadrant, List<TodoTreeNode>> grouped, {
     required DateTime now,
     required TodoPriorityQuadrant? priorityQuadrantFilter,
+    bool flat = false,
   }) {
     // 当前需要展示的象限。
     final List<TodoPriorityQuadrant> quadrants = priorityQuadrantFilter == null
@@ -775,6 +862,8 @@ class _TodosPageState extends ConsumerState<TodosPage> {
               allowFocus: false,
               allowDrag: false,
               mobile: true,
+              flat: flat,
+              compactEmpty: flat && priorityQuadrantFilter == null,
             ),
           ),
         ],
@@ -791,6 +880,8 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     required bool allowFocus,
     required bool allowDrag,
     bool mobile = false,
+    bool flat = false,
+    bool compactEmpty = false,
     double? maxHeight,
   }) {
     // 当前象限卡片及其独立滚动内容。
@@ -802,6 +893,8 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       collapsedTreeIds: _collapsedTreeIds,
       allowDrag: allowDrag,
       mobile: mobile,
+      flat: flat,
+      compactEmpty: compactEmpty,
       onFocus: allowFocus
           ? () => _setPriorityQuadrantFilter(
               _priorityQuadrantFilter == quadrant ? null : quadrant,
@@ -1306,6 +1399,12 @@ class _TodoQuadrantDropZone extends StatelessWidget {
   /// 是否使用 Android 紧凑布局交互。
   final bool mobile;
 
+  /// 安卓紧凑页是否使用无卡片的平铺分组。
+  final bool flat;
+
+  /// 全部分类中的空组是否仅保留标题。
+  final bool compactEmpty;
+
   /// 聚焦象限回调。
   final VoidCallback? onFocus;
 
@@ -1347,6 +1446,8 @@ class _TodoQuadrantDropZone extends StatelessWidget {
     required this.collapsedTreeIds,
     required this.allowDrag,
     required this.mobile,
+    this.flat = false,
+    this.compactEmpty = false,
     required this.onFocus,
     required this.onCreate,
     required this.onDrop,
@@ -1376,6 +1477,101 @@ class _TodoQuadrantDropZone extends StatelessWidget {
     final bool allTreesCollapsed =
         expandableTreeIds.isNotEmpty &&
         expandableTreeIds.every(collapsedTreeIds.contains);
+    if (flat) {
+      return Column(
+        key: ValueKey<String>('todo-quadrant-card-${quadrant.value}'),
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Padding(
+            key: ValueKey<String>('todo-quadrant-heading-${quadrant.value}'),
+            padding: const EdgeInsets.only(
+              left: OmniSpacing.md,
+              right: OmniSpacing.xs,
+            ),
+            child: LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints constraints) {
+                // 按真实字号测量计数，标题只限制最大宽度，不占用多余空间。
+                final TextPainter countPainter = TextPainter(
+                  text: TextSpan(
+                    text: '${trees.length}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  textDirection: Directionality.of(context),
+                  textScaler: MediaQuery.textScalerOf(context),
+                )..layout();
+                // 固定操作靠右，横线独占标题之后的剩余宽度。
+                final double titleMaxWidth =
+                    (constraints.maxWidth -
+                            OmniSize.touch *
+                                (expandableTreeIds.isEmpty ? 1 : 2) -
+                            countPainter.width -
+                            OmniSpacing.xxs -
+                            OmniSpacing.xs * 2)
+                        .clamp(0, double.infinity)
+                        .toDouble();
+                countPainter.dispose();
+                return Row(
+                  children: <Widget>[
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: titleMaxWidth),
+                      child: Text(
+                        quadrant.actionLabel,
+                        key: ValueKey<String>(
+                          'todo-quadrant-title-${quadrant.value}',
+                        ),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: accent,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: OmniSpacing.xxs),
+                    Text(
+                      '${trees.length}',
+                      key: ValueKey<String>(
+                        'todo-quadrant-count-${quadrant.value}',
+                      ),
+                      style: Theme.of(context).textTheme.bodySmall
+                          ?.copyWith(color: accent),
+                    ),
+                    const SizedBox(width: OmniSpacing.xs),
+                    Expanded(
+                      child: Divider(color: accent.withValues(alpha: 0.55)),
+                    ),
+                    if (expandableTreeIds.isNotEmpty)
+                      OmniIconButton(
+                        key: ValueKey<String>(
+                          'todo-quadrant-toggle-all-${quadrant.value}',
+                        ),
+                        tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
+                        onPressed: () => onAllTreeExpansionChanged(
+                          expandableTreeIds,
+                          allTreesCollapsed,
+                        ),
+                        icon: Icon(
+                          allTreesCollapsed
+                              ? Icons.unfold_more_rounded
+                              : Icons.unfold_less_rounded,
+                        ),
+                      ),
+                    OmniIconButton(
+                      key: ValueKey<String>(
+                        'todo-quadrant-create-${quadrant.value}',
+                      ),
+                      tooltip: '添加到${quadrant.label}',
+                      onPressed: onCreate,
+                      icon: const Icon(Icons.add_rounded),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+          if (trees.isNotEmpty || !compactEmpty) _buildTasks(),
+        ],
+      );
+    }
     // 移动端标题操作采用统一触摸热区，保证新增与展开按钮易于点击。
     final ButtonStyle? mobileHeadingActionStyle = mobile
         ? IconButton.styleFrom(
@@ -1526,60 +1722,59 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                     ),
                   ),
                   Divider(color: colors.line),
-                  _TodoQuadrantScrollViewport(
-                    quadrant: quadrant,
-                    enabled: allowDrag,
-                    child: trees.isEmpty
-                        ? _QuadrantEmptyState(onCreate: onCreate)
-                        : Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: <Widget>[
-                              for (
-                                int index = 0;
-                                index < trees.length;
-                                index += 1
-                              ) ...<Widget>[
-                                if (index > 0)
-                                  const Divider(indent: OmniSpacing.md),
-                                if (allowDrag)
-                                  _TodoInsertTarget(
-                                    quadrant: quadrant,
-                                    beforeRootId: trees[index].root.id,
-                                    onDrop: onDrop,
-                                  ),
-                                _TodoTreeCard(
-                                  key: ValueKey<String>(
-                                    'todo-tree-card-${trees[index].root.id}',
-                                  ),
-                                  tree: trees[index],
-                                  now: now,
-                                  completingTodoIds: completingTodoIds,
-                                  expanded: !collapsedTreeIds.contains(
-                                    trees[index].root.id,
-                                  ),
-                                  allowDrag: allowDrag,
-                                  mobile: mobile,
-                                  quadrant: quadrant,
-                                  onCompletedChanged: onCompletedChanged,
-                                  onExpansionChanged: (bool expanded) =>
-                                      onTreeExpansionChanged(
-                                        trees[index].root.id,
-                                        expanded,
-                                      ),
-                                  onEdit: onEdit,
-                                  onAddChild: onAddChild,
-                                  onMove: onMove,
-                                  onDelete: onDelete,
-                                ),
-                              ],
-                            ],
-                          ),
-                  ),
+                  _buildTasks(),
                 ],
               ),
             );
           },
+    );
+  }
+
+  /// 卡片和平铺分组共用原有任务行、进度与完成操作。
+  Widget _buildTasks() {
+    return _TodoQuadrantScrollViewport(
+      quadrant: quadrant,
+      enabled: allowDrag,
+      child: trees.isEmpty
+          ? _QuadrantEmptyState(onCreate: onCreate)
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                for (
+                  int index = 0;
+                  index < trees.length;
+                  index += 1
+                ) ...<Widget>[
+                  if (index > 0) const Divider(indent: OmniSpacing.md),
+                  if (allowDrag)
+                    _TodoInsertTarget(
+                      quadrant: quadrant,
+                      beforeRootId: trees[index].root.id,
+                      onDrop: onDrop,
+                    ),
+                  _TodoTreeCard(
+                    key: ValueKey<String>(
+                      'todo-tree-card-${trees[index].root.id}',
+                    ),
+                    tree: trees[index],
+                    now: now,
+                    completingTodoIds: completingTodoIds,
+                    expanded: !collapsedTreeIds.contains(trees[index].root.id),
+                    allowDrag: allowDrag,
+                    mobile: mobile,
+                    quadrant: quadrant,
+                    onCompletedChanged: onCompletedChanged,
+                    onExpansionChanged: (bool expanded) =>
+                        onTreeExpansionChanged(trees[index].root.id, expanded),
+                    onEdit: onEdit,
+                    onAddChild: onAddChild,
+                    onMove: onMove,
+                    onDelete: onDelete,
+                  ),
+                ],
+              ],
+            ),
     );
   }
 }
@@ -2250,6 +2445,9 @@ class _CompletedTodoHistory extends StatefulWidget {
   /// 是否嵌入移动端页面的外层滚动容器。
   final bool mobile;
 
+  /// 安卓紧凑页是否取消历史分组卡片外框。
+  final bool flat;
+
   /// 当前日期完成记录。
   final List<TodoHistoryEntry> entries;
 
@@ -2262,6 +2460,7 @@ class _CompletedTodoHistory extends StatefulWidget {
   /// 创建完成历史列表。
   const _CompletedTodoHistory({
     required this.mobile,
+    this.flat = false,
     required this.entries,
     required this.onReopen,
     required this.onEdit,
@@ -2291,8 +2490,9 @@ class _CompletedTodoHistoryState extends State<_CompletedTodoHistory> {
       shrinkWrap: widget.mobile,
       physics: widget.mobile ? const NeverScrollableScrollPhysics() : null,
       itemCount: groups.length,
-      separatorBuilder: (BuildContext context, int index) =>
-          const SizedBox(height: OmniSpacing.xs),
+      separatorBuilder: (BuildContext context, int index) => widget.flat
+          ? const Divider(indent: OmniSpacing.md)
+          : const SizedBox(height: OmniSpacing.xs),
       itemBuilder: (BuildContext context, int index) {
         // 当前父任务历史分组。
         final _TodoHistoryGroup group = groups[index];
@@ -2329,6 +2529,7 @@ class _CompletedTodoHistoryState extends State<_CompletedTodoHistory> {
         return OmniPanel(
           key: ValueKey<String>('todo-history-group-${group.id}'),
           padding: EdgeInsets.zero,
+          flat: widget.flat,
           child: Column(
             children: <Widget>[
               if (group.rootEntry != null)
