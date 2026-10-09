@@ -490,16 +490,13 @@ void main() {
           .hitTestable(),
     );
     await tester.pumpAndSettle();
-    expect(
-      find
-          .byKey(const ValueKey<String>('management-summary-scrim'))
-          .hitTestable(),
-      findsOneWidget,
-    );
-    await tester.drag(
-      find
-          .byKey(const ValueKey<String>('management-summary-scrim'))
-          .hitTestable(),
+    // 遮罩已铺满内容区，中心被统计面板覆盖；从面板下方真实可触区域横拖。
+    final Finder scrim = find
+        .byKey(const ValueKey<String>('management-summary-scrim'))
+        .hitTestable(at: const Alignment(-0.8, 0.9));
+    expect(scrim, findsOneWidget);
+    await tester.dragFrom(
+      tester.getRect(scrim).bottomLeft + const Offset(32, -32),
       const Offset(260, 0),
     );
     await tester.pumpAndSettle();
@@ -1474,7 +1471,7 @@ void _expectManagementCollapsed(WidgetTester tester) {
   expect(
     find
         .byKey(const ValueKey<String>('management-summary-scrim'))
-        .hitTestable(),
+        .hitTestable(at: const Alignment(-0.8, 0.9)),
     findsNothing,
   );
   // 正文的实际变换在收起状态归零。
