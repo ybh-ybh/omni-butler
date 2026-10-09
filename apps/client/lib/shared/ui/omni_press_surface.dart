@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
@@ -161,9 +163,12 @@ class _OmniPressSurfaceState extends State<OmniPressSurface>
     );
   }
 
-  /// 菜单打开前主动恢复，防止新路由截走抬起事件而残留缩放。
+  /// 菜单打开前恢复视觉并给一次安卓长按触觉反馈。
   void _startLongPress(LongPressStartDetails details) {
     _releasePress();
+    if (_android && widget.enabled && widget.onLongPressStart != null) {
+      unawaited(HapticFeedback.vibrate());
+    }
     widget.onLongPressStart?.call(details);
   }
 

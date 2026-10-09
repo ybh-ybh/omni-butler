@@ -43,7 +43,7 @@
 | D08 | `_QuoteEditorDialog`；同上 | 新增/编辑、正文多行、作者、必填/保存状态 | 已接统一侧栏、表单字段和按钮 | `quote_library_dialog_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | D09 | `TodoEditorDialog`；`lib/features/todos/presentation/todo_editor_dialog.dart` | 新建/编辑/子任务、日期时间、提醒、重复规则、进度结构、重复系列范围、保存失败 | 统一侧栏和控件；时间设置外置标签、空值入口等宽与折叠摘要；进度设置基础字段并排、步骤行内操作/窄屏菜单、短列表完整展示、添加定位聚焦，均适配大字号 | `todo_editor_time_settings_test.dart`、`todo_progress_editor_layout_test.dart`、`todo_progress_ui_test.dart`、`todo_quadrant_ui_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化与中文宽窄屏预览通过；真机手感及完整人工矩阵待验 |
 | D10 | `_TimeEntryEditorDialog`；`lib/features/timeline/presentation/timeline_page.dart` | 区间编辑、日期/分类、备注、多段占用冲突、拖动范围、保存失败 | 共享侧栏/输入/选择；业务范围滑块与冲突图形保留 | `timeline_editor_test.dart`、`timeline_layout_test.dart` | 自动化通过；人工矩阵待验 |
-| D11 | `_AbsoluteTimeEntryDialog`；同上；`time_entry_time_picker.dart` | 半屏/全屏开始记录、完整补记/编辑、结束进行中、逐分钟/跨日日期、时间冲突、类别逐项颜色、备注折叠 | Android 开始记录使用 Omni 可展开底部面板，横线独立拖拽/点击，顶部固定取消/开始；半屏只显示活动和类别，全屏才增加开始时间与描述，收起保留输入，键盘避让不改变展开状态；提交期间锁定关闭/拖拽。Android 新增补记与已完成记录编辑共用 OmniFullscreenFormScaffold 根导航全屏弹窗，顶部固定取消/居中业务标题/保存和灰色小时摘要，正文以时间卡片及活动/类别/备注分组呈现，保存期间保护返回、失败保留草稿；补记/已完成编辑保留 Android 双列时分滚轮与 Windows 精确输入/双手柄、连续跨日扩展、占用边界阻挡回弹和默认最近空闲段；共享日期/表单/下拉保留类别左侧色点；结束流程保留原遮罩关闭限制 | `start_time_entry_sheet_test.dart`、`time_entry_dialog_test.dart`、`time_entry_interval_test.dart`、`timeline_android_ui_test.dart`、`timeline_editor_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化、真实中文截图及 API 36 独立包交互通过；实体设备手感/读屏待验 |
+| D11 | `_AbsoluteTimeEntryDialog`；同上；`time_entry_time_picker.dart` | 半屏/全屏开始记录、完整补记/编辑、结束进行中、Android五分钟滚轮/跨日日期、时间冲突、类别逐项颜色、备注折叠 | Android 开始记录使用 Omni 可展开底部面板，横线独立拖拽/点击，顶部固定取消/开始；半屏只显示活动和类别，全屏才增加开始时间与描述，收起保留输入，键盘避让不改变展开状态；提交期间锁定关闭/拖拽。Android 新增补记与已完成记录编辑共用 OmniFullscreenFormScaffold 根导航全屏弹窗，顶部固定取消/居中业务标题/保存和灰色小时摘要，正文以时间卡片及活动/类别/备注分组呈现，保存期间保护返回、失败保留草稿；补记/已完成编辑保留 Android 双列时分滚轮与 Windows 精确输入/双手柄、连续跨日扩展、占用边界阻挡回弹和默认最近空闲段；共享日期/表单/下拉保留类别左侧色点；结束流程保留原遮罩关闭限制 | `start_time_entry_sheet_test.dart`、`time_entry_dialog_test.dart`、`time_entry_interval_test.dart`、`timeline_android_ui_test.dart`、`timeline_editor_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化、真实中文截图及 API 36 独立包交互通过；实体设备手感/读屏待验 |
 | D12 | `_EventEditorDialog`；`lib/features/events/presentation/events_page.dart` | 新增/编辑、周期单位/间隔、提醒开关/时间、必填和保存失败 | 已接共享侧栏、表单、下拉、开关和按钮 | `events_layout_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | D13 | `_EventHistoryDialog`；同上 | 历史列表、分组、空态、编辑/删除记录 | 已接统一居中弹窗、操作菜单和确认/消息 | `events_layout_test.dart` | 自动化通过；人工矩阵待验 |
 | D14 | `_EventHistoryEditorDialog`；同上 | 历史时间、备注、保存/取消 | 已接统一居中弹窗、日期时间和文本字段 | `events_layout_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
@@ -254,6 +254,7 @@
 - 10个测试文件共94项不同回归通过：共享22项、真实页面紧凑/宽屏与明暗4项、原业务及桌面兼容8文件68项。共享像素回归覆盖偏心扩散、逐渐加深、释放不倒放、圆角、缩放后原区域命中；真实手势覆盖短按、菜单、双向滚动取消、连续按下、多指、禁用/卸载、减少动画与辅助服务导航。恢复重复计时回归先红后绿。
 - 中文预览另运行相同4组页面检查，生成112张完整页面采样，4张对照拼图已人工审查，位于output/android-press-preview/。紧凑布局8类、宽屏6类均含未按下、60ms、280ms、恢复后；保留原始PNG和条目坐标JSON，不修改Golden。图标和中文字体仅预览模式加载本机资源。
 - flutter analyze --no-pub无问题；UI样式检查42项既有例外无新增，定向格式与diff检查通过。证据：output/android-press-{component,entrypoints,existing}-tests.log、android-press-{preview,analyze,style}.log。本轮未构建或安装APK，Android实体设备手感与TalkBack仍待人工验收。
+- 追加长按菜单振动：OmniPressSurface在Android触屏长按触发原菜单前请求一次系统LONG_PRESS触觉反馈，不等待平台返回，保留菜单弹出时机；短按、取消、禁用、松手不振动，减少动画仍保留触觉反馈。共享组件与真实页面2文件30项回归通过，新增4项覆盖Android/Windows与减少动画开关、触发顺序和单次振动。证据：output/android-press-haptic-tests.log；实际振感待Android实体设备验收。
 
 ## 2026-10-09 安卓编辑时间记录与补记统一
 
@@ -261,3 +262,10 @@
 - 两种入口复用OmniFullscreenFormScaffold固定顶栏，长标题在窄屏大字号下与操作分行；原始分钟、类别、已有备注和按原ID保存保持一致。Windows与进行中编辑沿用原流程。
 - 4个相关测试文件 **57项通过**；定向分析与样式检查通过，删除时间页不再使用的Dialog例外，现为41项。中文普通编辑与双倍字号键盘预览已审查，未更新Golden。
 - 证据：`output/time-entry-edit-tests.log`、`output/time-entry-edit-entrypoints-tests.log`、`output/time-entry-edit-preview/`。本轮未构建安装APK，实体设备验收待进行。
+
+## 2026-10-09 上次记录横幅与五分钟滚轮
+
+- Android补记与已完成记录编辑共用常驻灰色横幅，格式为“上一次记录 · MM/dd HH:mm - MM/dd HH:mm · 事件名称”。按结束时间选择最近已结束的有效记录，排除当前编辑项、软删除、未来结束及进行中记录；与横幅记录重叠时只变红，文案不变。其他记录的冲突继续单独说明且禁止保存。
+- 右侧接续按钮将开始日期和时刻设为上条实际结束，保留秒级边界及当前结束时间；接续产生无效区间时继续显示时间错误并禁用保存。无已结束记录常驻空态并禁用按钮。
+- 分钟滚轮改为五分钟刻度，起止端及读屏增减共同采用00、05至55；打开和接续时保留非整五分钟值，用户手动调整分钟后进入固定刻度。Windows及开始/进行中/结束流程沿用原规则。
+- 5个相关测试文件共 **75项通过**，定向分析与样式检查通过；真实中文补记/编辑、灰红状态、明暗及大字号键盘预览已查看。证据：`output/backfill-previous-entry-final-tests.log`、`output/backfill-previous-entry-preview/`。未构建安装APK，实体设备手感与TalkBack仍待验收。

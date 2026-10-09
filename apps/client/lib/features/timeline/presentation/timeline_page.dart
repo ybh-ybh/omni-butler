@@ -2259,6 +2259,9 @@ class _AbsoluteTimeEntryDialogState
       widget.mode == _TimeEntryEditorMode.completed &&
       Theme.of(context).platform == TargetPlatform.android;
 
+  /// 安卓补记与已完成记录编辑共用常驻横幅和五分钟刻度。
+  bool get _usesPreviousEntryBanner => _usesFullscreenCompletedEditor;
+
   /// 仅安卓开始记录使用可展开底部面板。
   bool get _usesExpandableSheet =>
       widget.mode == _TimeEntryEditorMode.startOnly &&
@@ -2676,6 +2679,94 @@ class _AbsoluteTimeEntryDialogState
     return null;
   }
 
+  /// 按结束时间查找最近已结束的有效记录，不随表单起止时间切换。
+  TimeEntryRecord? _lastCompletedRecord(List<TimeEntryRecord> records) {
+    // 当前业务时刻，未来结束与进行中记录不能成为接续目标。
+    final DateTime now = ref.read(nowProvider);
+    // 当前最近的已结束记录。
+    TimeEntryRecord? latest;
+    for (final TimeEntryRecord record in records) {
+      // 当前记录的实际结束时间。
+      final DateTime? end = record.endedAt;
+      if (end == null || end.isAfter(now) || record.id == widget.record?.id) {
+        continue;
+      }
+      if (latest == null || end.isAfter(latest.endedAt!)) latest = record;
+    }
+    return latest;
+  }
+
+  /// 一键接续完整结束时间（含日期和秒），只更新开始端点。
+  void _continueFromPrevious(TimeEntryRecord record) {
+    if (_saving) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() {
+      _startedAt = record.endedAt!;
+      _sliderDay = DateUtils.dateOnly(_startedAt);
+      _editingStart = true;
+      _startInputValid = true;
+      _saveError = null;
+    });
+  }
+
+  /// 常驻上次记录摘要，重叠只改变色彩，长名称自然换行。
+  Widget _buildPreviousEntryBanner(TimeEntryRecord? record) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 只按当前记录与横幅内这条记录的实际交集判断红色状态。
+    final bool overlaps =
+        record != null &&
+        _endedAt.isAfter(_startedAt) &&
+        _startedAt.isBefore(record.endedAt!) &&
+        _endedAt.isAfter(record.startedAt);
+    // 灰色常驻或红色冲突文字。
+    final Color foreground = overlaps ? colors.danger : colors.muted;
+    // 常驻内容在红灰状态之间保持一致。
+    final String label = record == null
+        ? '上一次记录 · 暂无记录'
+        : '上一次记录 · ${DateFormat('MM/dd HH:mm').format(record.startedAt)} - '
+              '${DateFormat('MM/dd HH:mm').format(record.endedAt!)} · '
+              '${timeEntryDisplayActivity(record)}';
+    return Container(
+      key: const ValueKey<String>('time-previous-entry-banner'),
+      padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
+      decoration: BoxDecoration(
+        color: overlaps
+            ? colors.danger.withValues(alpha: 0.08)
+            : colors.paperSubtle,
+        borderRadius: BorderRadius.circular(OmniRadius.control),
+      ),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: OmniSpacing.xs),
+              child: Semantics(
+                label: overlaps ? '$label，与当前记录重叠' : label,
+                excludeSemantics: true,
+                child: Text(
+                  label,
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: foreground),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: OmniSpacing.xs),
+          OmniIconButton(
+            key: const ValueKey<String>('time-continue-previous'),
+            tooltip: '开始时间接续上次结束',
+            icon: const Icon(Icons.skip_next_rounded),
+            color: foreground,
+            onPressed: record == null || _saving
+                ? null
+                : () => _continueFromPrevious(record),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 返回弹窗标题。
   String get _title => switch (widget.mode) {
     _TimeEntryEditorMode.completed =>
@@ -2958,6 +3049,9 @@ class _AbsoluteTimeEntryDialogState
                               maxMinute: sliderMaxMinute,
                               occupiedRecords: occupiedSliderRecords,
                               conflict: sliderConflict,
+                              previousRecord: _lastCompletedRecord(
+                                sliderRecords,
+                              ),
                               invalidTime: invalidTime,
                             ),
                           ),
@@ -3367,6 +3461,7 @@ class _AbsoluteTimeEntryDialogState
     required int maxMinute,
     required List<TimeEntryRecord> occupiedRecords,
     required TimeEntryRecord? conflict,
+    TimeEntryRecord? previousRecord,
     required bool invalidTime,
   }) {
     // 当前主题语义色。
@@ -3465,6 +3560,7 @@ class _AbsoluteTimeEntryDialogState
             ),
             label: _editingStart ? '开始' : '结束',
             enabled: !_saving,
+            minuteInterval: _usesPreviousEntryBanner ? 5 : 1,
             onChanged: (TimeOfDay time) =>
                 _updateEndpointTime(_editingStart, time),
           ),
@@ -3487,6 +3583,10 @@ class _AbsoluteTimeEntryDialogState
             onChanged: _updateSliderRange,
           ),
         ],
+        if (_usesPreviousEntryBanner) ...<Widget>[
+          const SizedBox(height: OmniSpacing.xs),
+          _buildPreviousEntryBanner(previousRecord),
+        ],
         if (!usesWheel && invalidTime) ...<Widget>[
           const SizedBox(height: OmniSpacing.xs),
           Text(
@@ -3495,7 +3595,10 @@ class _AbsoluteTimeEntryDialogState
             style: Theme.of(context).textTheme.bodySmall
                 ?.copyWith(color: colors.danger),
           ),
-        ] else if (!invalidTime && conflict != null) ...<Widget>[
+        ] else if (!invalidTime &&
+            conflict != null &&
+            (!_usesPreviousEntryBanner ||
+                conflict.id != previousRecord?.id)) ...<Widget>[
           const SizedBox(height: OmniSpacing.xs),
           _TimeConflictMessage(record: conflict, absolute: true),
         ],

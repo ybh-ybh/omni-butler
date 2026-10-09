@@ -349,6 +349,13 @@ void main() {
       try {
         expect(find.text('编辑时间记录'), findsOneWidget);
         if (platform == TargetPlatform.android) {
+          expect(find.text('上一次记录 · 暂无记录'), findsOneWidget);
+          expect(
+            tester
+                .widget<TimeEntryWheelPicker>(find.byType(TimeEntryWheelPicker))
+                .minuteInterval,
+            5,
+          );
           expect(tester.getSize(find.byType(Dialog)), const Size(390, 844));
           expect(
             find.byKey(const ValueKey<String>('time-entry-details-group')),
@@ -572,14 +579,14 @@ void main() {
     });
   }
 
-  testWidgets('安卓滚轮逐分钟调整并显式选择跨天日期，起止切换保留值', (WidgetTester tester) async {
+  testWidgets('安卓补记滚轮五分钟调整并显式选择跨天日期，起止切换保留值', (WidgetTester tester) async {
     // 未使用业务导航壳的真实补记弹窗。
     final _DialogFixture fixture = await _pumpDialog(
       tester,
       platform: TargetPlatform.android,
     );
     try {
-      await _wheelTo(tester, hour: 23, minute: 57);
+      await _wheelTo(tester, hour: 23, minute: 55);
       expect(find.text('调整开始时间'), findsNothing);
       expect(find.text('结束时间必须晚于开始时间'), findsOneWidget);
       // 错误位于时间摘要与滚轮之间，替换调整提示且不在滚轮下重复展示。
@@ -610,7 +617,7 @@ void main() {
       await _capture(tester, 'android-invalid-time');
       await tester.tap(find.byKey(const ValueKey<String>('time-end-select')));
       await tester.pumpAndSettle();
-      await _wheelTo(tester, hour: 0, minute: 2);
+      await _wheelTo(tester, hour: 0, minute: 5);
       expect(find.text('结束时间必须晚于开始时间'), findsOneWidget);
       expect(find.text('调整结束时间'), findsNothing);
       expect(_saveButton(tester).onPressed, isNull);
@@ -626,25 +633,25 @@ void main() {
       );
       expect(find.text('调整结束时间'), findsOneWidget);
       expect(find.text('结束 · 次日'), findsOneWidget);
-      expect(find.text('共 0.08 小时'), findsOneWidget);
+      expect(find.text('共 0.17 小时'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey<String>('time-start-select')));
       await tester.pumpAndSettle();
       expect(
         tester
             .widget<TimeEntryWheelPicker>(find.byType(TimeEntryWheelPicker))
             .value,
-        const TimeOfDay(hour: 23, minute: 57),
+        const TimeOfDay(hour: 23, minute: 55),
       );
       await _capture(tester, 'android-cross-day');
       await _enterActivity(tester, '跨天精确补记');
       await tester.tap(_saveControl());
       await tester.pumpAndSettle();
-      // 保存同一条绝对时间记录，不被五分钟步长取整。
+      // 保存两端五分钟刻度及用户显式指定的跨日日期。
       final TimeEntryRecord saved = await fixture.database
           .select(fixture.database.timeEntries)
           .getSingle();
-      expect(saved.startedAt, DateTime(2026, 10, 7, 23, 57));
-      expect(saved.endedAt, DateTime(2026, 10, 8, 0, 2));
+      expect(saved.startedAt, DateTime(2026, 10, 7, 23, 55));
+      expect(saved.endedAt, DateTime(2026, 10, 8, 0, 5));
       expect(tester.takeException(), isNull);
     } finally {
       await fixture.dispose(tester);
@@ -670,7 +677,9 @@ void main() {
       );
       // 不依赖设备速度的实际分钟位置。
       final int minute =
-          (wheel.controller! as FixedExtentScrollController).selectedItem % 60;
+          (wheel.controller! as FixedExtentScrollController).selectedItem %
+          12 *
+          5;
       expect(minute, isNot(20));
       expect(
         tester
@@ -696,6 +705,316 @@ void main() {
             .minute,
         minute,
       );
+      expect(tester.takeException(), isNull);
+    } finally {
+      await fixture.dispose(tester);
+    }
+  });
+
+  testWidgets('安卓编辑排除自身显示上次记录，重叠变红、接续并按原ID保存', (WidgetTester tester) async {
+    // 编辑最新记录时横幅选择另一条已结束记录。
+    final _DialogFixture fixture = await _pumpDialog(
+      tester,
+      platform: TargetPlatform.android,
+      editing: true,
+      seeds: <TimeEntryDraft>[
+        TimeEntryDraft(
+          startedAt: DateTime(2026, 10, 7, 8),
+          endedAt: DateTime(2026, 10, 7, 9, 5),
+          activity: '上一条学习记录',
+        ),
+        TimeEntryDraft(
+          startedAt: DateTime(2026, 10, 7, 9, 17),
+          endedAt: DateTime(2026, 10, 7, 10, 2),
+          activity: '原有记录',
+        ),
+      ],
+    );
+    try {
+      // 原记录标识用于验证修改而非新增。
+      final List<TimeEntryRecord> original = await fixture.database
+          .select(fixture.database.timeEntries)
+          .get();
+      // 正在编辑的记录及原始精确时间。
+      final TimeEntryRecord edited = original.singleWhere(
+        (TimeEntryRecord record) => record.activity == '原有记录',
+      );
+      // 不随重叠状态变化的横幅完整文字。
+      const String label = '上一次记录 · 10/07 08:00 - 10/07 09:05 · 上一条学习记录';
+      // 常驻横幅与当前主题语义色。
+      final Finder banner = find.byKey(
+        const ValueKey<String>('time-previous-entry-banner'),
+      );
+      // 本平台的正常灰色与冲突红色。
+      final OmniColors colors = OmniColors.of(tester.element(banner));
+      expect(find.text(label), findsOneWidget);
+      expect(_dateButton(tester, 'start').value, edited.startedAt);
+      expect(_dateButton(tester, 'end').value, edited.endedAt);
+      expect(
+        tester
+            .widget<TimeEntryWheelPicker>(find.byType(TimeEntryWheelPicker))
+            .minuteInterval,
+        5,
+      );
+      await _wheelTo(tester, hour: 8, minute: 55);
+      expect(find.text(label), findsOneWidget);
+      expect(
+        (tester.widget<Container>(banner).decoration! as BoxDecoration).color,
+        colors.danger.withValues(alpha: 0.08),
+      );
+      expect(_saveButton(tester).onPressed, isNull);
+      await _capture(tester, 'android-edit-previous-red');
+      await tester.tap(
+        find.byKey(const ValueKey<String>('time-continue-previous')),
+      );
+      await tester.pumpAndSettle();
+      expect(_dateButton(tester, 'start').value, DateTime(2026, 10, 7, 9, 5));
+      expect(_dateButton(tester, 'end').value, edited.endedAt);
+      expect(_saveButton(tester).onPressed, isNotNull);
+      await _capture(tester, 'android-edit-previous-grey');
+      await tester.tap(_saveControl());
+      await tester.pumpAndSettle();
+      // 实际落库结果，验证同一ID更新且另一端不变。
+      final List<TimeEntryRecord> saved = await fixture.database
+          .select(fixture.database.timeEntries)
+          .get();
+      expect(saved, hasLength(2));
+      expect(
+        saved
+            .singleWhere((TimeEntryRecord record) => record.id == edited.id)
+            .startedAt,
+        DateTime(2026, 10, 7, 9, 5),
+      );
+      expect(
+        saved
+            .singleWhere((TimeEntryRecord record) => record.id == edited.id)
+            .endedAt,
+        edited.endedAt,
+      );
+      expect(tester.takeException(), isNull);
+    } finally {
+      await fixture.dispose(tester);
+    }
+  });
+
+  // 分别验证浅色和深色下的灰红状态及接续行为。
+  for (final Brightness brightness in Brightness.values) {
+    testWidgets('安卓上次记录横幅灰红切换文案不变且一键接续（${brightness.name}）', (
+      WidgetTester tester,
+    ) async {
+      // 跨日记录及较早记录共同验证按结束时间选择最近一条。
+      final _DialogFixture fixture = await _pumpDialog(
+        tester,
+        platform: TargetPlatform.android,
+        brightness: brightness,
+        seeds: <TimeEntryDraft>[
+          TimeEntryDraft(
+            startedAt: DateTime(2026, 10, 6, 21),
+            endedAt: DateTime(2026, 10, 6, 22),
+            activity: '较早的记录',
+          ),
+          TimeEntryDraft(
+            startedAt: DateTime(2026, 10, 6, 23, 20),
+            endedAt: DateTime(2026, 10, 7, 2, 5),
+            activity: '乐高漫威2',
+          ),
+        ],
+      );
+      try {
+        // 精确格式、横幅容器和主题颜色。
+        const String label = '上一次记录 · 10/06 23:20 - 10/07 02:05 · 乐高漫威2';
+        // 两种状态间保持存在的同一横幅。
+        final Finder banner = find.byKey(
+          const ValueKey<String>('time-previous-entry-banner'),
+        );
+        // 当前明暗主题的灰色和红色。
+        final OmniColors colors = OmniColors.of(tester.element(banner));
+        expect(find.text(label), findsOneWidget);
+        expect(
+          (tester.widget<Container>(banner).decoration! as BoxDecoration).color,
+          colors.paperSubtle,
+        );
+        await _capture(tester, 'android-previous-grey-${brightness.name}');
+        await _wheelTo(tester, hour: 0, minute: 20);
+        expect(find.text(label), findsOneWidget);
+        expect(
+          (tester.widget<Container>(banner).decoration! as BoxDecoration).color,
+          colors.danger.withValues(alpha: 0.08),
+        );
+        expect(
+          find.byKey(const ValueKey<String>('time-conflict-message')),
+          findsNothing,
+        );
+        expect(_saveButton(tester).onPressed, isNull);
+        await _capture(tester, 'android-previous-red-${brightness.name}');
+        await tester.tap(find.byKey(const ValueKey<String>('time-end-select')));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey<String>('time-continue-previous')),
+        );
+        await tester.pumpAndSettle();
+        expect(_dateButton(tester, 'start').value, DateTime(2026, 10, 7, 2, 5));
+        expect(_dateButton(tester, 'end').value, _now);
+        expect(
+          tester
+              .widget<TimeEntryWheelPicker>(find.byType(TimeEntryWheelPicker))
+              .value,
+          const TimeOfDay(hour: 2, minute: 5),
+        );
+        expect(find.text(label), findsOneWidget);
+        expect(
+          (tester.widget<Container>(banner).decoration! as BoxDecoration).color,
+          colors.paperSubtle,
+        );
+        await _enterActivity(tester, '接续记录');
+        await tester.tap(_saveControl());
+        await tester.pumpAndSettle();
+        // 接续保存与上条边界严格相邻，结束端不受操作影响。
+        final List<TimeEntryRecord> saved = await fixture.database
+            .select(fixture.database.timeEntries)
+            .get();
+        expect(
+          saved
+              .singleWhere(
+                (TimeEntryRecord record) => record.activity == '接续记录',
+              )
+              .startedAt,
+          DateTime(2026, 10, 7, 2, 5),
+        );
+        expect(tester.takeException(), isNull);
+      } finally {
+        await fixture.dispose(tester);
+      }
+    });
+  }
+
+  testWidgets('安卓横幅实时排除删除、未来与进行中记录，长名称大字号可接续', (WidgetTester tester) async {
+    // 长事件名验证常驻内容自然换行及双倍字号触控。
+    final _DialogFixture fixture = await _pumpDialog(
+      tester,
+      platform: TargetPlatform.android,
+      seeds: <TimeEntryDraft>[
+        TimeEntryDraft(
+          startedAt: DateTime(2026, 10, 6, 20),
+          endedAt: DateTime(2026, 10, 6, 21),
+          activity: '这是一个需要完整显示时间和事件名称的较长历史记录',
+        ),
+        TimeEntryDraft(
+          startedAt: DateTime(2026, 10, 7, 12),
+          endedAt: DateTime(2026, 10, 7, 13),
+          activity: '未来记录',
+        ),
+        TimeEntryDraft(startedAt: DateTime(2026, 10, 7, 14), activity: '进行中记录'),
+      ],
+    );
+    try {
+      expect(
+        find.textContaining('上一次记录 · 10/06 20:00 - 10/06 21:00'),
+        findsOneWidget,
+      );
+      fixture.media.value = const MediaQueryData(
+        size: Size(390, 844),
+        textScaler: TextScaler.linear(2),
+        viewInsets: EdgeInsets.only(bottom: 240),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const ValueKey<String>('time-continue-previous')),
+      );
+      await tester.pumpAndSettle();
+      await _capture(tester, 'android-previous-large-keyboard');
+      await tester.tap(
+        find.byKey(const ValueKey<String>('time-continue-previous')),
+      );
+      await tester.pumpAndSettle();
+      expect(_dateButton(tester, 'start').value, DateTime(2026, 10, 6, 21));
+      expect(_dateButton(tester, 'end').value, _now);
+      // 删除后流更新，空状态仍保留横幅并禁用接续。
+      final List<TimeEntryRecord> records = await fixture.database
+          .select(fixture.database.timeEntries)
+          .get();
+      await tester.runAsync(
+        () => TimeEntryRepository(fixture.database).delete(
+          records
+              .singleWhere(
+                (TimeEntryRecord record) =>
+                    record.endedAt == DateTime(2026, 10, 6, 21),
+              )
+              .id,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('上一次记录 · 暂无记录'), findsOneWidget);
+      expect(
+        tester
+            .widget<OmniIconButton>(
+              find.byKey(const ValueKey<String>('time-continue-previous')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(tester.takeException(), isNull);
+    } finally {
+      await fixture.dispose(tester);
+    }
+  });
+
+  testWidgets('安卓接续保留非整五分钟和秒级结束边界，分钟调整回到五分钟刻度', (WidgetTester tester) async {
+    // 秒级结束不能向下取整后产生重叠。
+    final _DialogFixture fixture = await _pumpDialog(
+      tester,
+      platform: TargetPlatform.android,
+      seed: TimeEntryDraft(
+        startedAt: DateTime(2026, 10, 7, 8),
+        endedAt: DateTime(2026, 10, 7, 9, 43, 30),
+        activity: '精确边界',
+      ),
+    );
+    try {
+      await tester.tap(
+        find.byKey(const ValueKey<String>('time-continue-previous')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        _dateButton(tester, 'start').value,
+        DateTime(2026, 10, 7, 9, 43, 30),
+      );
+      expect(_saveButton(tester).onPressed, isNotNull);
+      // 滚轮先显示真实分钟，向下一格调整后使用整五分钟。
+      final Finder minuteFinder = find.byKey(
+        const ValueKey<String>('time-wheel-minute'),
+      );
+      // 真实滚轮控制器，验证从精确边界进入固定刻度。
+      final ListWheelScrollView minuteWheel = tester
+          .widget<ListWheelScrollView>(minuteFinder);
+      expect(
+        find.descendant(of: minuteFinder, matching: find.text('43')),
+        findsOneWidget,
+      );
+      (minuteWheel.controller! as FixedExtentScrollController).jumpToItem(9);
+      await tester.pumpAndSettle();
+      expect(_dateButton(tester, 'start').value, DateTime(2026, 10, 7, 9, 45));
+      expect(_saveButton(tester).onPressed, isNotNull);
+      // 读屏增减与五分钟滚动一致，55→00只循环分钟而不更改日期。
+      for (final int minute in <int>[50, 55, 0]) {
+        // 当前分钟列的可操作读屏节点。
+        final Semantics semantics = tester.widget<Semantics>(
+          find.byWidgetPredicate(
+            (Widget widget) =>
+                widget is Semantics && widget.properties.label == '开始分钟',
+          ),
+        );
+        expect(
+          semantics.properties.increasedValue,
+          minute.toString().padLeft(2, '0'),
+        );
+        semantics.properties.onIncrease!();
+        await tester.pumpAndSettle();
+        expect(
+          _dateButton(tester, 'start').value,
+          DateTime(2026, 10, 7, 9, minute),
+        );
+      }
       expect(tester.takeException(), isNull);
     } finally {
       await fixture.dispose(tester);
@@ -1471,6 +1790,7 @@ Future<_DialogFixture> _pumpDialog(
       matching: find.byType(OmniListRow),
     );
     await tester.ensureVisible(row);
+    await tester.pumpAndSettle();
     await tester.tap(row);
   } else {
     await tester.tap(find.text('打开补记'));
@@ -1547,7 +1867,13 @@ Future<void> _wheelTo(
   final ListWheelScrollView minuteWheel = tester.widget<ListWheelScrollView>(
     find.byKey(const ValueKey<String>('time-wheel-minute')),
   );
-  (minuteWheel.controller! as FixedExtentScrollController).jumpToItem(minute);
+  // 依据真实入口的分钟刻度换算滚轮位置。
+  final int interval = tester
+      .widget<TimeEntryWheelPicker>(find.byType(TimeEntryWheelPicker))
+      .minuteInterval;
+  (minuteWheel.controller! as FixedExtentScrollController).jumpToItem(
+    minute ~/ interval,
+  );
   await tester.pumpAndSettle();
 }
 

@@ -225,17 +225,21 @@ class TimeEntryWheelPicker extends StatefulWidget {
   /// 是否允许滚动。
   final bool enabled;
 
+  /// 分钟滚轮的刻度间隔，其他编辑入口仍默认逐分钟。
+  final int minuteInterval;
+
   /// 任一滚轮吸附到新值时的回调。
   final ValueChanged<TimeOfDay> onChanged;
 
-  /// 创建逐分钟的双列滚轮。
+  /// 创建指定分钟间隔的双列滚轮。
   const TimeEntryWheelPicker({
     required this.value,
     required this.label,
     required this.enabled,
     required this.onChanged,
+    this.minuteInterval = 1,
     super.key,
-  });
+  }) : assert(minuteInterval > 0 && 60 % minuteInterval == 0);
 
   /// 创建独立时分滚动控制器。
   @override
@@ -253,6 +257,17 @@ class _TimeEntryWheelPickerState extends State<TimeEntryWheelPicker> {
   /// 同步外部数据时阻止回调覆盖另一列。
   bool _syncing = false;
 
+  /// 分钟列的循环刻度数量。
+  int get _minuteCount => 60 ~/ widget.minuteInterval;
+
+  /// 当前分钟对应的刻度位置，非整刻度边界保留精确值。
+  int get _minuteIndex => widget.value.minute ~/ widget.minuteInterval;
+
+  /// 当前刻度保留外部精确分钟，其余可选刻度均按固定间隔显示。
+  int _minuteAt(int index) => index == _minuteIndex
+      ? widget.value.minute
+      : index * widget.minuteInterval;
+
   /// 按当前精确时刻定位滚轮。
   @override
   void initState() {
@@ -260,9 +275,7 @@ class _TimeEntryWheelPickerState extends State<TimeEntryWheelPicker> {
     _hourController = FixedExtentScrollController(
       initialItem: widget.value.hour,
     );
-    _minuteController = FixedExtentScrollController(
-      initialItem: widget.value.minute,
-    );
+    _minuteController = FixedExtentScrollController(initialItem: _minuteIndex);
   }
 
   /// 保留用户滚动，只有外部值不一致时才同步对应列。
@@ -276,14 +289,14 @@ class _TimeEntryWheelPickerState extends State<TimeEntryWheelPicker> {
     // 判断分钟列是否确有来自外部的变化。
     final bool syncMinute =
         _minuteController.hasClients &&
-        _minuteController.selectedItem % 60 != widget.value.minute;
+        _minuteController.selectedItem % _minuteCount != _minuteIndex;
     if (!syncHour && !syncMinute) return;
     _syncing = true;
     if (syncHour) {
       _hourController.jumpToItem(widget.value.hour);
     }
     if (syncMinute) {
-      _minuteController.jumpToItem(widget.value.minute);
+      _minuteController.jumpToItem(_minuteIndex);
     }
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
       if (mounted) _syncing = false;
@@ -304,7 +317,7 @@ class _TimeEntryWheelPickerState extends State<TimeEntryWheelPicker> {
     // 当前小时与分钟，循环滚动不携带日期进位。
     final TimeOfDay next = TimeOfDay(
       hour: _hourController.selectedItem % 24,
-      minute: _minuteController.selectedItem % 60,
+      minute: _minuteAt(_minuteController.selectedItem % _minuteCount),
     );
     if (next != widget.value) widget.onChanged(next);
   }
@@ -327,15 +340,20 @@ class _TimeEntryWheelPickerState extends State<TimeEntryWheelPicker> {
     required double itemExtent,
     required String unit,
     required String keyName,
+    required int Function(int) valueAt,
   }) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     return Expanded(
       child: Semantics(
         label: '${widget.label}$unit',
-        value: selected.toString().padLeft(2, '0'),
-        increasedValue: ((selected + 1) % count).toString().padLeft(2, '0'),
-        decreasedValue: ((selected - 1) % count).toString().padLeft(2, '0'),
+        value: valueAt(selected).toString().padLeft(2, '0'),
+        increasedValue: valueAt((selected + 1) % count)
+            .toString()
+            .padLeft(2, '0'),
+        decreasedValue: valueAt((selected - 1) % count)
+            .toString()
+            .padLeft(2, '0'),
         onIncrease: widget.enabled ? () => _step(controller, 1) : null,
         onDecrease: widget.enabled ? () => _step(controller, -1) : null,
         child: ExcludeSemantics(
@@ -353,7 +371,7 @@ class _TimeEntryWheelPickerState extends State<TimeEntryWheelPicker> {
               children: List<Widget>.generate(count, (int index) {
                 return Center(
                   child: Text(
-                    index.toString().padLeft(2, '0'),
+                    valueAt(index).toString().padLeft(2, '0'),
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       color: index == selected ? colors.ink : colors.muted,
                       fontWeight: index == selected
@@ -412,15 +430,17 @@ class _TimeEntryWheelPickerState extends State<TimeEntryWheelPicker> {
                   itemExtent: itemExtent,
                   unit: '小时',
                   keyName: 'time-wheel-hour',
+                  valueAt: (int index) => index,
                 ),
                 Text(':', style: Theme.of(context).textTheme.titleLarge),
                 _buildWheel(
                   controller: _minuteController,
-                  count: 60,
-                  selected: widget.value.minute,
+                  count: _minuteCount,
+                  selected: _minuteIndex,
                   itemExtent: itemExtent,
                   unit: '分钟',
                   keyName: 'time-wheel-minute',
+                  valueAt: _minuteAt,
                 ),
               ],
             ),

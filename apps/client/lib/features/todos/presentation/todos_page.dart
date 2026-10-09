@@ -1477,6 +1477,9 @@ class _TodoQuadrantDropZone extends StatelessWidget {
     final bool allTreesCollapsed =
         expandableTreeIds.isNotEmpty &&
         expandableTreeIds.every(collapsedTreeIds.contains);
+    // 安卓象限标题不再提供新增入口，统一使用页面新增操作。
+    final bool showHeadingCreate =
+        Theme.of(context).platform != TargetPlatform.android;
     if (flat) {
       return Column(
         key: ValueKey<String>('todo-quadrant-card-${quadrant.value}'),
@@ -1504,66 +1507,72 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                 final double titleMaxWidth =
                     (constraints.maxWidth -
                             OmniSize.touch *
-                                (expandableTreeIds.isEmpty ? 1 : 2) -
+                                ((expandableTreeIds.isEmpty ? 0 : 1) +
+                                    (showHeadingCreate ? 1 : 0)) -
                             countPainter.width -
                             OmniSpacing.xxs -
                             OmniSpacing.xs * 2)
                         .clamp(0, double.infinity)
                         .toDouble();
                 countPainter.dispose();
-                return Row(
-                  children: <Widget>[
-                    ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: titleMaxWidth),
-                      child: Text(
-                        quadrant.actionLabel,
+                return ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: OmniSize.touch),
+                  child: Row(
+                    children: <Widget>[
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: titleMaxWidth),
+                        child: Text(
+                          quadrant.actionLabel,
+                          key: ValueKey<String>(
+                            'todo-quadrant-title-${quadrant.value}',
+                          ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: accent,
+                                fontWeight: FontWeight.w600,
+                              ),
+                        ),
+                      ),
+                      const SizedBox(width: OmniSpacing.xxs),
+                      Text(
+                        '${trees.length}',
                         key: ValueKey<String>(
-                          'todo-quadrant-title-${quadrant.value}',
+                          'todo-quadrant-count-${quadrant.value}',
                         ),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: accent,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style: Theme.of(context).textTheme.bodySmall
+                            ?.copyWith(color: accent),
                       ),
-                    ),
-                    const SizedBox(width: OmniSpacing.xxs),
-                    Text(
-                      '${trees.length}',
-                      key: ValueKey<String>(
-                        'todo-quadrant-count-${quadrant.value}',
+                      const SizedBox(width: OmniSpacing.xs),
+                      Expanded(
+                        child: Divider(color: accent.withValues(alpha: 0.55)),
                       ),
-                      style: Theme.of(context).textTheme.bodySmall
-                          ?.copyWith(color: accent),
-                    ),
-                    const SizedBox(width: OmniSpacing.xs),
-                    Expanded(
-                      child: Divider(color: accent.withValues(alpha: 0.55)),
-                    ),
-                    if (expandableTreeIds.isNotEmpty)
-                      OmniIconButton(
-                        key: ValueKey<String>(
-                          'todo-quadrant-toggle-all-${quadrant.value}',
+                      if (expandableTreeIds.isNotEmpty)
+                        OmniIconButton(
+                          key: ValueKey<String>(
+                            'todo-quadrant-toggle-all-${quadrant.value}',
+                          ),
+                          tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
+                          onPressed: () => onAllTreeExpansionChanged(
+                            expandableTreeIds,
+                            allTreesCollapsed,
+                          ),
+                          icon: Icon(
+                            allTreesCollapsed
+                                ? Icons.unfold_more_rounded
+                                : Icons.unfold_less_rounded,
+                          ),
                         ),
-                        tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
-                        onPressed: () => onAllTreeExpansionChanged(
-                          expandableTreeIds,
-                          allTreesCollapsed,
+                      if (showHeadingCreate)
+                        OmniIconButton(
+                          key: ValueKey<String>(
+                            'todo-quadrant-create-${quadrant.value}',
+                          ),
+                          tooltip: '添加到${quadrant.label}',
+                          onPressed: onCreate,
+                          icon: const Icon(Icons.add_rounded),
                         ),
-                        icon: Icon(
-                          allTreesCollapsed
-                              ? Icons.unfold_more_rounded
-                              : Icons.unfold_less_rounded,
-                        ),
-                      ),
-                    OmniIconButton(
-                      key: ValueKey<String>(
-                        'todo-quadrant-create-${quadrant.value}',
-                      ),
-                      tooltip: '添加到${quadrant.label}',
-                      onPressed: onCreate,
-                      icon: const Icon(Icons.add_rounded),
-                    ),
-                  ],
+                    ],
+                  ),
                 );
               },
             ),
@@ -1707,15 +1716,16 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                                     : Icons.unfold_less_rounded,
                               ),
                             ),
-                            OmniIconButton(
-                              key: ValueKey<String>(
-                                'todo-quadrant-create-${quadrant.value}',
+                            if (showHeadingCreate)
+                              OmniIconButton(
+                                key: ValueKey<String>(
+                                  'todo-quadrant-create-${quadrant.value}',
+                                ),
+                                tooltip: '添加到${quadrant.label}',
+                                style: mobileHeadingActionStyle,
+                                onPressed: onCreate,
+                                icon: const Icon(Icons.add_rounded),
                               ),
-                              tooltip: '添加到${quadrant.label}',
-                              style: mobileHeadingActionStyle,
-                              onPressed: onCreate,
-                              icon: const Icon(Icons.add_rounded),
-                            ),
                           ],
                         ),
                       ),

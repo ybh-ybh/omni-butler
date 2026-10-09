@@ -11,6 +11,86 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 验证实际扩散画面、手势互斥和取消恢复，不以控制器数值替代像素。
 void main() {
+  // 每个测试独立记录系统长按振动请求，不依赖测试主机的振动硬件。
+  final List<MethodCall> haptics = <MethodCall>[];
+  setUp(() {
+    haptics.clear();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (
+          MethodCall call,
+        ) async {
+          if (call.method == 'HapticFeedback.vibrate') haptics.add(call);
+          return null;
+        });
+  });
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null);
+  });
+
+  // 仅安卓成功长按振动，减少动画偏好不关闭触觉反馈。
+  for (final TargetPlatform platform in <TargetPlatform>[
+    TargetPlatform.android,
+    TargetPlatform.windows,
+  ]) {
+    for (final bool reduced in <bool>[false, true]) {
+      testWidgets('${platform.name}减少动画=$reduced仅成功长按时振动一次', (
+        WidgetTester tester,
+      ) async {
+        // 原点击和长按菜单的独立回调计数。
+        int taps = 0;
+        int menus = 0;
+        // 业务回调执行时已发出的系统触觉请求数量。
+        int hapticsAtMenu = 0;
+        await _mount(
+          tester,
+          Center(
+            child: _surface(
+              onTap: () => taps++,
+              onLongPressStart: (_) {
+                menus++;
+                hapticsAtMenu = haptics.length;
+              },
+            ),
+          ),
+          platform: platform,
+          disableAnimations: reduced,
+        );
+        await tester.tap(find.byType(OmniPressSurface));
+        await tester.pumpAndSettle();
+        expect(taps, 1);
+        expect(haptics, isEmpty);
+        // 尚未达到长按时取消指针，不得产生菜单或振动。
+        final TestGesture cancelled = await tester.startGesture(
+          tester.getCenter(find.byType(OmniPressSurface)),
+        );
+        await tester.pump(const Duration(milliseconds: 80));
+        await cancelled.cancel();
+        await tester.pumpAndSettle();
+        expect(menus, 0);
+        expect(haptics, isEmpty);
+        // 保留原长按阈值，触发时请求一次系统LONG_PRESS反馈。
+        final TestGesture pressed = await tester.startGesture(
+          tester.getCenter(find.byType(OmniPressSurface)),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 120));
+        expect(haptics, isEmpty);
+        await tester.pump(const Duration(milliseconds: 380));
+        expect(menus, 1);
+        expect(hapticsAtMenu, platform == TargetPlatform.android ? 1 : 0);
+        expect(haptics.length, platform == TargetPlatform.android ? 1 : 0);
+        if (platform == TargetPlatform.android) {
+          expect(haptics.single.arguments, isNull);
+        }
+        await pressed.up();
+        await tester.pumpAndSettle();
+        expect(haptics.length, platform == TargetPlatform.android ? 1 : 0);
+        expect(taps, 1);
+      });
+    }
+  }
+
   testWidgets('偏心按下立即扩散并加深，轻缩小不改变占位，短按释放后恢复', (WidgetTester tester) async {
     // 短按与长按的独立业务计数。
     int taps = 0;
@@ -359,6 +439,7 @@ void main() {
     await first.up();
     await tester.longPress(find.byType(OmniPressSurface));
     expect(actions, 0);
+    expect(haptics, isEmpty);
     update(() => enabled = true);
     await tester.pump();
     // 活跃动画中卸载不能留下Ticker或异步异常。

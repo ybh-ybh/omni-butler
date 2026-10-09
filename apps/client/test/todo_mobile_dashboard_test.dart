@@ -156,7 +156,7 @@ void main() {
     }
   });
 
-  _todoTest('新增与象限入口使用全屏待办并保留象限预填', (WidgetTester tester) async {
+  _todoTest('各象限移除标题新增按钮且页面新增仍打开全屏待办', (WidgetTester tester) async {
     // 完整应用和真实仓储提供待办页的业务入口。
     final _TodoFixture fixture = await _startTodos(tester);
     // 两次取消均不应改变现有任务数量。
@@ -178,15 +178,28 @@ void main() {
     );
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
+    // 逐个切换分类，验证有任务和空分类都不再显示标题新增按钮。
+    for (final TodoPriorityQuadrant quadrant
+        in todoPriorityQuadrantActionOrder) {
+      expect(
+        find.byKey(ValueKey<String>('todo-quadrant-create-${quadrant.value}')),
+        findsNothing,
+      );
+      await tester.tap(
+        find.byKey(ValueKey<String>('todo-mobile-quadrant-${quadrant.value}')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(ValueKey<String>('todo-quadrant-create-${quadrant.value}')),
+        findsNothing,
+      );
+    }
     await tester.tap(
       find.byKey(const ValueKey<String>('todo-mobile-quadrant-1')),
     );
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const ValueKey<String>('todo-quadrant-create-1')),
-    );
+    await tester.tap(find.byKey(const ValueKey<String>('todo-mobile-create')));
     await tester.pumpAndSettle();
-    expect(find.text('紧急·不重要'), findsOneWidget);
     expect(
       find.byKey(const ValueKey<String>('todo-priority-dropdown')),
       findsOneWidget,
@@ -438,7 +451,7 @@ void main() {
             find.byKey(const ValueKey<String>('todo-quadrant-toggle-all-3')),
             findsNothing,
           );
-          // 空分组与添加按钮同高，大字号也不出现大块空态。
+          // 移除新增按钮后仍保留单行标题高度，大字号也不出现大块空态。
           expect(
             tester
                 .getSize(
@@ -447,17 +460,16 @@ void main() {
                 .height,
             48,
           );
-          // 分组新增操作贴齐内容右边，不因标题弹性占位而向中间漂移。
-          expect(
-            tester
-                .getRect(
-                  find
-                      .byKey(const ValueKey<String>('todo-quadrant-create-3'))
-                      .hitTestable(),
-                )
-                .right,
-            closeTo(width - 8, 0.5),
-          );
+          // 各空分组均不再显示标题右侧的新增按钮。
+          for (final TodoPriorityQuadrant quadrant
+              in todoPriorityQuadrantActionOrder) {
+            expect(
+              find.byKey(
+                ValueKey<String>('todo-quadrant-create-${quadrant.value}'),
+              ),
+              findsNothing,
+            );
+          }
         }
       }
     }

@@ -1138,10 +1138,10 @@ void main() {
           const Size.square(OmniSize.touch),
         );
       } else {
-        // 空分类没有可展开子项，只保留新增操作。
+        // 空分类没有可展开子项，标题右侧不保留操作。
         expect(mobileToggleAll, findsNothing);
       }
-      expect(tester.getSize(mobileCreate), const Size.square(OmniSize.touch));
+      expect(mobileCreate, findsNothing);
       expect(
         find.descendant(
           of: mobileHeading,
@@ -1166,11 +1166,9 @@ void main() {
     await tester.tap(mobileToggleAll);
     await tester.pump();
     expect(find.text('移动端展开子任务'), findsOneWidget);
-    // 有子任务象限的移动端新增按钮。
+    // 页面新增入口仍可使用，并且不改变任务树展开状态。
     final Finder mobileCreate = find.byKey(
-      ValueKey<String>(
-        'todo-quadrant-create-${TodoPriorityQuadrant.urgentImportant.value}',
-      ),
+      const ValueKey<String>('todo-mobile-create'),
     );
     await tester.tap(mobileCreate);
     await tester.pumpAndSettle();
