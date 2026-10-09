@@ -967,9 +967,6 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         break;
       }
     }
-    // 当前子任务是否为所属主任务的最后一个未完成子任务。
-    final bool completesTree =
-        todo.parentId != null && tree?.pendingChildrenCount == 1;
     // 本次会改变状态并需要播放离场动画的任务标识。
     final List<String> changedIds;
     if (todo.parentId == null && tree != null) {
@@ -978,8 +975,6 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         for (final TodoRecord child in tree.children)
           if (!child.isCompleted) child.id,
       ];
-    } else if (completesTree) {
-      changedIds = <String>[tree!.root.id, todo.id];
     } else {
       changedIds = <String>[todo.id];
     }

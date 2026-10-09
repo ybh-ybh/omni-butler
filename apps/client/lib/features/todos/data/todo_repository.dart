@@ -495,7 +495,7 @@ class TodoRepository {
 
   /// 切换待办完成状态。
   Future<void> setCompleted(String id, bool completed) async {
-    // 读取一次当前目标；进度任务全满才可确认，普通任务沿用原树规则。
+    // 读取一次当前目标；进度任务全满才可确认，普通主任务须手动完成。
     final TodoRecord? target = await _todoById(id);
     if (target?.taskType == TodoTaskType.progress.name) {
       await _database.transaction(() async {
@@ -523,7 +523,7 @@ class TodoRepository {
     final DateTime now = DateTime.now();
     await _database.transaction(() async {
       if (target.parentId == null) {
-        // 主任务完成或重开时对称级联，保持服务器按子任务派生的状态一致。
+        // 手动完成或重开主任务时，对称级联有效子任务。
         final List<TodoRecord> tree = await _treeRecords(target.id);
         for (final TodoRecord record in tree) {
           if (record.isCompleted != completed) {
@@ -533,22 +533,6 @@ class TodoRepository {
         return;
       }
       await _writeCompletion(target.id, completed: completed, now: now);
-      if (completed && target.parentId != null) {
-        // 完成子任务后读取整棵任务树，判断它是否为最后一个未完成子任务。
-        final List<TodoRecord> tree = await _treeRecords(target.parentId!);
-        // 当前主任务。
-        final TodoRecord? root = tree.isEmpty ? null : tree.first;
-        // 当前主任务的全部直属子任务。
-        final List<TodoRecord> children = tree.skip(1).toList(growable: false);
-        // 是否已经完成全部直属子任务。
-        final bool allChildrenCompleted =
-            children.isNotEmpty &&
-            children.every((TodoRecord child) => child.isCompleted);
-        if (root != null && !root.isCompleted && allChildrenCompleted) {
-          // 最后一个子任务完成时同步完成主任务，保持任务树整体状态一致。
-          await _writeCompletion(root.id, completed: true, now: now);
-        }
-      }
       if (!completed && target.parentId != null) {
         // 子任务重新打开时同步重新打开主任务，保持树状态一致。
         await _writeCompletion(target.parentId!, completed: false, now: now);

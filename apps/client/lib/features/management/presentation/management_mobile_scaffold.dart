@@ -397,7 +397,8 @@ class _ManagementMobileScaffoldState extends State<ManagementMobileScaffold>
                       key: const ValueKey<String>('management-scrim-layer'),
                       left: 0,
                       right: 0,
-                      top: height,
+                      // 遮罩铺满内容区，卡片四周与底部统一压暗，卡片仍在其上方。
+                      top: 0,
                       bottom: 0,
                       child: Semantics(
                         button: true,

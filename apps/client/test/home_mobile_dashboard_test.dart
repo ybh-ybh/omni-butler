@@ -18,6 +18,127 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证安卓首页真实业务模块的分页、手势隔离与本次运行状态。
 void main() {
+  testWidgets('各模块删除重复标题且胶囊只展开选中模块文字', (WidgetTester tester) async {
+    // 包含可选刻度页，确保每个分页标题都遵循同一规则。
+    final _HomeTestApp app = await _pumpHome(
+      tester,
+      cards: const <String>[
+        'quote',
+        'todos',
+        'timeStatus',
+        'todayContext',
+        'dayRuler',
+      ],
+    );
+    // 标题及其图标操作不再占用正文空间。
+    expect(_key('home-todo-header'), findsNothing);
+    expect(_key('home-time-header'), findsNothing);
+    expect(_key('home-todo-toggle-all'), findsNothing);
+    // 所有模块切换后仅选中项保留可见文字，背景与真实点击范围对齐。
+    for (final String module in <String>[
+      'todos',
+      'timeStatus',
+      'todayContext',
+      'dayRuler',
+    ]) {
+      await _selectModule(tester, module);
+      expect(find.text('今日待办'), findsNothing);
+      expect(find.text('时间状态'), findsNothing);
+      expect(find.text('今日脉络'), findsNothing);
+      expect(find.text('今日刻度'), findsNothing);
+      // 选中胶囊采用与待办一致的内缩边距。
+      final Rect indicator = tester.getRect(_key('home-mobile-tabs-indicator'));
+      // 选中模块真实热区仍保留完整文字与图标。
+      final Rect selected = tester.getRect(_key('home-mobile-tab-$module'));
+      expect(indicator.left, closeTo(selected.left + 4, 0.01));
+      expect(indicator.right, closeTo(selected.right - 4, 0.01));
+      expect(indicator.center.dy, closeTo(selected.center.dy, 0.01));
+      expect(selected.height, greaterThanOrEqualTo(48));
+      for (final String label in <String>[
+        'todos',
+        'timeStatus',
+        'todayContext',
+        'dayRuler',
+      ]) {
+        expect(
+          _key('home-mobile-label-$label'),
+          label == module ? findsOneWidget : findsNothing,
+        );
+      }
+      expect(tester.takeException(), isNull);
+    }
+    await _disposeHome(tester, app);
+  });
+
+  testWidgets('象限批量操作覆盖第四个父任务且不改变其他象限', (WidgetTester tester) async {
+    // 超过旧三条限制的父子数据用来验证实际显示范围。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 通过生产仓储保持真实父子关系和排序。
+    final TodoRepository repository = TodoRepository(database);
+    // 使用固定日期避免机器时间影响任务口径。
+    final DateTime day = DateTime(2026, 10, 8);
+    for (int index = 0; index < 5; index++) {
+      await repository.save(
+        TodoDraft(
+          title: '象限父项 $index',
+          scheduledDate: day,
+          priorityQuadrant: index < 4
+              ? TodoPriorityQuadrant.urgentImportant
+              : TodoPriorityQuadrant.importantNotUrgent,
+        ),
+      );
+      // 保存后的根项身份用于绑定唯一子项。
+      final TodoRecord parent =
+          (await database.select(database.todoItems).get()).singleWhere(
+            (TodoRecord item) => item.title == '象限父项 $index',
+          );
+      await repository.save(
+        TodoDraft(
+          title: '象限子项 $index',
+          parentId: parent.id,
+          scheduledDate: day,
+        ),
+      );
+    }
+    // 标准手机高度可直接点击前两个象限的标题栏。
+    final _HomeTestApp app = await _pumpHome(tester, database: database);
+    expect(_key('home-todo-quadrant-toggle-all-1'), findsNothing);
+    // 批量按钮确实位于象限标题栏右侧，并满足触控尺寸。
+    final Rect button = tester.getRect(_key('home-todo-quadrant-toggle-all-3'));
+    // 标题栏的完整范围用于验证右对齐和垂直居中。
+    final Rect heading = tester.getRect(_key('home-todo-quadrant-heading-3'));
+    expect(button.right, closeTo(heading.right, 0.01));
+    expect(button.bottom, closeTo(heading.bottom, 0.01));
+    expect(button.height, greaterThanOrEqualTo(48));
+    await tester.tap(_key('home-todo-quadrant-toggle-all-2'));
+    await tester.pumpAndSettle();
+    expect(find.text('象限子项 4'), findsOneWidget);
+    await tester.tap(_key('home-todo-quadrant-toggle-all-3'));
+    await tester.pumpAndSettle();
+    for (int index = 0; index < 5; index++) {
+      expect(find.text('象限子项 $index'), findsOneWidget);
+    }
+    await tester.tap(_key('home-todo-quadrant-toggle-all-3'));
+    await tester.pumpAndSettle();
+    for (int index = 0; index < 4; index++) {
+      expect(find.text('象限子项 $index'), findsNothing);
+    }
+    expect(find.text('象限子项 4'), findsOneWidget);
+    // 数据流变化后不再显示没有可展开内容的批量按钮。
+    await repository.setCompleted(
+      (await database.select(database.todoItems).get())
+          .singleWhere((TodoRecord item) => item.title == '象限子项 4')
+          .id,
+      true,
+    );
+    await tester.pumpAndSettle();
+    expect(_key('home-todo-quadrant-toggle-all-2'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await _disposeHome(tester, app);
+  });
+
   testWidgets('首页点选与横滑只切换平铺模块，名言和悬浮操作固定', (WidgetTester tester) async {
     // 使用已隐藏刻度的真实本机偏好启动应用。
     final _HomeTestApp app = await _pumpHome(tester);
@@ -329,7 +450,8 @@ void main() {
     _expectPage(tester, 0);
     expect(_key('home-mobile-tab-timeStatus'), findsNothing);
     expect(_key('home-mobile-tab-dayRuler'), findsNothing);
-    expect(_key('home-todo-header').hitTestable(), findsOneWidget);
+    expect(_key('home-todo-header'), findsNothing);
+    expect(_key('home-todo-content'), findsOneWidget);
     await preference.setVisible(HomeCardId.dayRuler, true);
     await tester.pumpAndSettle();
     expect(app.preferences.getStringList('home.cards.order'), <String>[
@@ -359,7 +481,8 @@ void main() {
       cards: const <String>['quote', 'timeStatus', 'todos'],
     );
     _expectPage(tester, 0);
-    expect(_key('home-time-header').hitTestable(), findsOneWidget);
+    expect(_key('home-time-header'), findsNothing);
+    expect(_key('home-time-content'), findsOneWidget);
     await _selectModule(tester, 'todos');
     _expectPage(tester, 1);
     await tester.tap(_key('home-todo-tree-toggle-${parent.id}'));

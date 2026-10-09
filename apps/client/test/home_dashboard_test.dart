@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/router/app_router.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/app/theme/app_theme_palette.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
@@ -20,6 +21,60 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证首页重点区间、功能联动和时间状态真实数据。
 void main() {
+  // 桌面与安卓首页共用名言组件，各主题下都保持白色前景。
+  for (final TargetPlatform platform in <TargetPlatform>[
+    TargetPlatform.windows,
+    TargetPlatform.android,
+  ]) {
+    testWidgets('每日名言在所有配色及明暗主题下保持白色：${platform.name}', (
+      WidgetTester tester,
+    ) async {
+      // 名言读取依赖的真实内存数据库。
+      final AppDatabase database = AppDatabase.forTesting(
+        NativeDatabase.memory(),
+      );
+      // 完整首页及可切换的主题容器。
+      final ProviderContainer container = await _pumpApp(
+        tester,
+        database: database,
+        preferences: await _preferences(<String, Object>{}),
+        now: DateTime(2026, 9, 25, 14),
+        platform: platform,
+        physicalSize: platform == TargetPlatform.android
+            ? const Size(390, 844)
+            : const Size(1440, 900),
+      );
+      for (final AppThemePalette palette in AppThemePalette.values) {
+        await container
+            .read(themeControllerProvider.notifier)
+            .setThemePalette(palette);
+        for (final ThemeMode mode in <ThemeMode>[
+          ThemeMode.light,
+          ThemeMode.dark,
+        ]) {
+          await container
+              .read(themeControllerProvider.notifier)
+              .setThemeMode(mode);
+          await tester.pumpAndSettle();
+          // 名言卡中正文与署名的实际文字样式。
+          final List<Text> texts = tester
+              .widgetList<Text>(
+                find.descendant(
+                  of: find.byKey(const ValueKey<String>('home-quote-card')),
+                  matching: find.byType(Text),
+                ),
+              )
+              .toList();
+          expect(texts, hasLength(2));
+          expect(texts.first.style!.color, Colors.white);
+          expect(texts.last.style!.color, Colors.white.withValues(alpha: 0.84));
+          expect(tester.takeException(), isNull);
+        }
+      }
+      await _disposeApp(tester, database, container);
+    });
+  }
+
   testWidgets('首页与每日待办共享跨日期任务及用户排序', (WidgetTester tester) async {
     // 测试当天。
     final DateTime now = DateTime(2026, 9, 25, 14);
@@ -358,11 +413,11 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('编辑待办'), findsNothing);
-    // 待办卡片标题右侧的批量子任务按钮。
+    // 当前象限标题右侧的批量子任务按钮。
     final Finder toggleAll = find.byKey(
-      const ValueKey<String>('home-todo-toggle-all'),
+      const ValueKey<String>('home-todo-quadrant-toggle-all-3'),
     );
-    // 固定标题按钮已经可见，不让 ensureVisible 沿祖先横向分页强制对齐。
+    // 象限按钮已经可见，不让 ensureVisible 沿祖先横向分页强制对齐。
     expect(toggleAll.hitTestable(), findsOneWidget);
     expect(find.byTooltip('收起全部子任务'), findsOneWidget);
     await tester.tap(toggleAll);

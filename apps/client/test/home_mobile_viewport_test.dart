@@ -7,6 +7,66 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 检查顶部滚动边界、极短视口和动态分页的真实布局。
 void main() {
+  testWidgets('正文横拖时胶囊连续移动并由反向手势接管', (WidgetTester tester) async {
+    await _pumpDashboard(tester);
+    // 初始胶囊边界用于比较中间帧。
+    final Rect initial = tester.getRect(_key('home-mobile-tabs-indicator'));
+    // 保持手指按住，确保检查的是真实跟手进度。
+    final TestGesture gesture = await tester.startGesture(
+      tester.getCenter(_key('home-mobile-pager')),
+    );
+    // 先跨过识别阈值，再检查识别后的真实移动帧。
+    await gesture.moveBy(const Offset(-24, 0));
+    await tester.pump();
+    await gesture.moveBy(const Offset(-100, 0));
+    await tester.pump();
+    // 拖动中的背景已经离开初始项，两个相邻标签同时过渡。
+    final Rect middle = tester.getRect(_key('home-mobile-tabs-indicator'));
+    expect(middle.left, greaterThan(initial.left));
+    expect(_key('home-mobile-label-todos'), findsOneWidget);
+    expect(_key('home-mobile-label-timeStatus'), findsOneWidget);
+    await gesture.moveBy(const Offset(60, 0));
+    await tester.pump();
+    expect(
+      tester.getRect(_key('home-mobile-tabs-indicator')).left,
+      lessThan(middle.left),
+    );
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(tester.getRect(_key('home-mobile-tabs-indicator')), initial);
+    expect(_key('home-mobile-label-timeStatus'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('320宽双倍字号下四个模块的标签与胶囊完整可见', (WidgetTester tester) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    // 模拟设置添加第四个刻度模块后的紧凑导航。
+    final ValueNotifier<List<HomeCardId>> order = await _pumpDashboard(
+      tester,
+      size: const Size(320, 844),
+    );
+    order.value = <HomeCardId>[...order.value, HomeCardId.dayRuler];
+    await tester.pumpAndSettle();
+    for (final HomeCardId card in order.value.where(
+      (HomeCardId card) => card != HomeCardId.quote,
+    )) {
+      await tester.tap(_key('home-mobile-tab-${card.name}'));
+      await tester.pumpAndSettle();
+      // 胶囊与完整文字的范围都必须留在导航视口内。
+      final Rect viewport = tester.getRect(_key('home-mobile-tabs-scroll'));
+      // 文字实际边界不依赖截图字体。
+      final Rect label = tester.getRect(_key('home-mobile-label-${card.name}'));
+      expect(label.left, greaterThanOrEqualTo(viewport.left));
+      expect(label.right, lessThanOrEqualTo(viewport.right));
+      expect(
+        _key('home-mobile-tab-${card.name}').hitTestable(),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    }
+  });
+
   testWidgets('标准视口在顶部竖拖不会让模块进入固定头部后方', (WidgetTester tester) async {
     await _pumpDashboard(tester);
     // 拖动前模块标题与标签的边界。

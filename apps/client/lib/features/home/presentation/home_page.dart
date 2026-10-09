@@ -980,7 +980,7 @@ class _QuoteHero extends ConsumerWidget {
             maxLines: dense ? 2 : null,
             overflow: dense ? TextOverflow.ellipsis : TextOverflow.visible,
             style: TextStyle(
-              color: colors.heroInk,
+              color: Colors.white,
               fontSize: dense ? 18 : 20,
               height: dense ? 1.35 : 1.45,
               fontWeight: FontWeight.w600,
@@ -993,18 +993,18 @@ class _QuoteHero extends ConsumerWidget {
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.right,
             style: TextStyle(
-              color: colors.heroInk.withValues(alpha: 0.84),
+              color: Colors.white.withValues(alpha: 0.84),
               fontSize: dense ? 12 : 13,
             ),
           ),
         ],
       ),
       loading: () => LinearProgressIndicator(
-        color: colors.heroInk,
-        backgroundColor: colors.heroInk.withValues(alpha: 0.15),
+        color: Colors.white,
+        backgroundColor: Colors.white.withValues(alpha: 0.15),
       ),
       error: (Object error, StackTrace stackTrace) =>
-          Text('名言暂时无法读取', style: TextStyle(color: colors.heroInk)),
+          const Text('名言暂时无法读取', style: TextStyle(color: Colors.white)),
     );
 
     return Container(
@@ -1045,13 +1045,13 @@ class _QuoteHero extends ConsumerWidget {
                   OmniIconButton(
                     tooltip: '名言库',
                     onPressed: onManage,
-                    color: colors.heroInk,
+                    color: Colors.white,
                     icon: const Icon(Icons.library_books_outlined),
                   ),
                   OmniIconButton(
                     tooltip: '设置横幅背景',
                     onPressed: onBackground,
-                    color: colors.heroInk,
+                    color: Colors.white,
                     constraints: dense
                         ? const BoxConstraints.tightFor(width: 32, height: 32)
                         : null,
@@ -1062,7 +1062,7 @@ class _QuoteHero extends ConsumerWidget {
                   OmniIconButton(
                     tooltip: '换一条',
                     onPressed: onChange,
-                    color: colors.heroInk,
+                    color: Colors.white,
                     constraints: dense
                         ? const BoxConstraints.tightFor(width: 32, height: 32)
                         : null,
@@ -1126,37 +1126,39 @@ class _DayRuler extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: colors.brandSoft,
-                  borderRadius: BorderRadius.circular(OmniRadius.control),
+          if (!flat) ...<Widget>[
+            Row(
+              children: <Widget>[
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: colors.brandSoft,
+                    borderRadius: BorderRadius.circular(OmniRadius.control),
+                  ),
+                  child: Icon(
+                    Icons.schedule_rounded,
+                    color: colors.brand,
+                    size: OmniSize.icon,
+                  ),
                 ),
-                child: Icon(
-                  Icons.schedule_rounded,
-                  color: colors.brand,
-                  size: OmniSize.icon,
+                const SizedBox(width: OmniSpacing.xs),
+                Expanded(
+                  child: Text(
+                    '今日刻度',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
                 ),
-              ),
-              const SizedBox(width: OmniSpacing.xs),
-              Expanded(
-                child: Text(
-                  '今日刻度',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelLarge,
+                Text(
+                  '${(progress * 100).round()}% 已经过',
+                  style: TextStyle(color: colors.muted, fontSize: 12),
                 ),
-              ),
-              Text(
-                '${(progress * 100).round()}% 已经过',
-                style: TextStyle(color: colors.muted, fontSize: 12),
-              ),
-            ],
-          ),
-          const SizedBox(height: OmniSpacing.md),
+              ],
+            ),
+            const SizedBox(height: OmniSpacing.md),
+          ],
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: <Widget>[
@@ -1277,7 +1279,7 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
     });
   }
 
-  /// 根据当前整体状态收起或展开全部可见子任务。
+  /// 根据当前象限状态收起或展开该象限的子任务。
   void _toggleAllTrees(Set<String> expandableTreeIds, bool allCollapsed) {
     setState(() {
       if (allCollapsed) {
@@ -1286,34 +1288,6 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
         _expandedTreeIds.removeAll(expandableTreeIds);
       }
     });
-  }
-
-  /// 返回首页实际展示且包含未完成子任务的父任务标识。
-  Set<String> _visibleExpandableTreeIds() {
-    // 每个重点象限已经选入首页的父任务数量。
-    final Map<TodoPriorityQuadrant, int> visibleCounts =
-        <TodoPriorityQuadrant, int>{
-          for (final TodoPriorityQuadrant quadrant in _focusQuadrants)
-            quadrant: 0,
-        };
-    // 最终可以批量展开或折叠的父任务标识。
-    final Set<String> expandableTreeIds = <String>{};
-    for (final TodoTreeNode tree in widget.pendingTodoTrees) {
-      // 当前待办树所属象限。
-      final TodoPriorityQuadrant quadrant = TodoPriorityQuadrant.fromValue(
-        tree.root.priorityQuadrant,
-      );
-      // 当前象限已经选入的父任务数量。
-      final int? visibleCount = visibleCounts[quadrant];
-      if (visibleCount == null || visibleCount >= 3) {
-        continue;
-      }
-      visibleCounts[quadrant] = visibleCount + 1;
-      if (tree.children.any((TodoRecord child) => !child.isCompleted)) {
-        expandableTreeIds.add(tree.root.id);
-      }
-    }
-    return expandableTreeIds;
   }
 
   /// 完成任务并展示顶部浮动撤销消息。
@@ -1346,16 +1320,6 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    // 当前是否使用 Android 紧凑首页。
-    final bool androidCompact =
-        Theme.of(context).platform == TargetPlatform.android &&
-        OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
-    // 首页可见且含有未完成子任务的父任务标识。
-    final Set<String> expandableTreeIds = _visibleExpandableTreeIds();
-    // 当前是否已收起全部可见子任务。
-    final bool allTreesCollapsed =
-        expandableTreeIds.isNotEmpty &&
-        expandableTreeIds.every((String id) => !_expandedTreeIds.contains(id));
     // 待办列表或状态内容。
     final Widget todoContent = _buildTodoContent(context, colors);
     return OmniPanel(
@@ -1367,74 +1331,50 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
         OmniSpacing.md,
         OmniSpacing.md,
       ),
-      header: Padding(
-        key: const ValueKey<String>('home-todo-header'),
-        padding: const EdgeInsets.fromLTRB(
-          OmniSpacing.md,
-          OmniSpacing.md,
-          OmniSpacing.md,
-          OmniSpacing.xs,
-        ),
-        child: Row(
-          children: <Widget>[
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: colors.todo.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(OmniRadius.control),
+      header: widget.flat
+          ? null
+          : Padding(
+              key: const ValueKey<String>('home-todo-header'),
+              padding: const EdgeInsets.fromLTRB(
+                OmniSpacing.md,
+                OmniSpacing.md,
+                OmniSpacing.md,
+                OmniSpacing.xs,
               ),
-              child: Icon(
-                Icons.check_circle_outline_rounded,
-                color: colors.todo,
-                size: 19,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                '今日待办',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-            if (androidCompact)
-              SizedBox.square(
-                dimension: 30,
-                child: OmniIconButton(
-                  key: const ValueKey<String>('home-todo-toggle-all'),
-                  tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
-                  onPressed: expandableTreeIds.isEmpty
-                      ? null
-                      : () => _toggleAllTrees(
-                          expandableTreeIds,
-                          allTreesCollapsed,
-                        ),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints.tightFor(
-                    width: 30,
+              child: Row(
+                children: <Widget>[
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: colors.todo.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(OmniRadius.control),
+                    ),
+                    child: Icon(
+                      Icons.check_circle_outline_rounded,
+                      color: colors.todo,
+                      size: 19,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '今日待办',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  SizedBox(
+                    key: const ValueKey<String>('home-todo-create-button'),
                     height: 30,
+                    child: OmniButton(
+                      label: '新增',
+                      icon: Icons.add_rounded,
+                      onPressed: widget.onCreate,
+                    ),
                   ),
-                  icon: Icon(
-                    allTreesCollapsed
-                        ? Icons.unfold_more_rounded
-                        : Icons.unfold_less_rounded,
-                    size: 18,
-                  ),
-                ),
-              )
-            else
-              SizedBox(
-                key: const ValueKey<String>('home-todo-create-button'),
-                height: 30,
-                child: OmniButton(
-                  label: '新增',
-                  icon: Icons.add_rounded,
-                  onPressed: widget.onCreate,
-                ),
+                ],
               ),
-          ],
-        ),
-      ),
+            ),
       child: KeyedSubtree(
         key: const ValueKey<String>('home-todo-content'),
         child: todoContent,
@@ -1484,6 +1424,7 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
             todoTrees: groupedTodoTrees[_focusQuadrants[index]]!,
             expandedTreeIds: _expandedTreeIds,
             onToggleTree: _toggleTree,
+            onToggleAllTrees: widget.flat ? _toggleAllTrees : null,
             onAction: _handleAction,
             onToggle: (TodoRecord todo, bool value) =>
                 value ? _completeTodo(todo) : widget.onToggle(todo, false),
@@ -1508,6 +1449,9 @@ class _HomeTodoQuadrant extends StatelessWidget {
   /// 切换指定父任务子任务展开状态的回调。
   final ValueChanged<String> onToggleTree;
 
+  /// 安卓紧凑首页的象限批量展开或收起操作。
+  final void Function(Set<String> ids, bool allCollapsed)? onToggleAllTrees;
+
   /// 执行指定待办的菜单操作。
   final Future<bool> Function(TodoRecord todo, _HomeTodoAction action) onAction;
 
@@ -1520,6 +1464,7 @@ class _HomeTodoQuadrant extends StatelessWidget {
     required this.todoTrees,
     required this.expandedTreeIds,
     required this.onToggleTree,
+    required this.onToggleAllTrees,
     required this.onAction,
     required this.onToggle,
   });
@@ -1531,6 +1476,16 @@ class _HomeTodoQuadrant extends StatelessWidget {
     final OmniColors colors = OmniColors.of(context);
     // 当前象限用于轻量分区的语义色。
     final Color accentColor = quadrant.color(colors);
+    // 仅统计本象限所有包含未完成子任务的父项。
+    final Set<String> expandableTreeIds = <String>{
+      for (final TodoTreeNode tree in todoTrees)
+        if (tree.children.any((TodoRecord child) => !child.isCompleted))
+          tree.root.id,
+    };
+    // 任一父项展开时，批量操作先统一收起。
+    final bool allTreesCollapsed = expandableTreeIds.every(
+      (String id) => !expandedTreeIds.contains(id),
+    );
     // 当前象限任务内容。
     final Widget todoContent = todoTrees.isEmpty
         ? _buildEmptyState(context)
@@ -1542,6 +1497,7 @@ class _HomeTodoQuadrant extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Padding(
+          key: ValueKey<String>('home-todo-quadrant-heading-${quadrant.value}'),
           padding: const EdgeInsets.only(top: OmniSpacing.sm),
           child: Row(
             children: <Widget>[
@@ -1554,6 +1510,20 @@ class _HomeTodoQuadrant extends StatelessWidget {
               ),
               const SizedBox(width: OmniSpacing.xs),
               Expanded(child: Divider(color: accentColor)),
+              if (onToggleAllTrees != null && expandableTreeIds.isNotEmpty)
+                OmniIconButton(
+                  key: ValueKey<String>(
+                    'home-todo-quadrant-toggle-all-${quadrant.value}',
+                  ),
+                  tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
+                  onPressed: () =>
+                      onToggleAllTrees!(expandableTreeIds, allTreesCollapsed),
+                  icon: Icon(
+                    allTreesCollapsed
+                        ? Icons.unfold_more_rounded
+                        : Icons.unfold_less_rounded,
+                  ),
+                ),
             ],
           ),
         ),

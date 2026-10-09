@@ -755,7 +755,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('每日待办按剩余子任务决定单行或整树右滑', (WidgetTester tester) async {
+  testWidgets('每日待办完成最后一个子任务后父任务保持原位并等待手动完成', (WidgetTester tester) async {
     // 桌面测试视口。
     const Size viewport = Size(1440, 900);
     tester.view.physicalSize = viewport;
@@ -868,17 +868,31 @@ void main() {
     final FractionalTranslation lastChildSlide = tester.widget(
       find.byKey(ValueKey<String>('todo-completion-slide-${lastChild.id}')),
     );
-    // 与最后一个子任务同步右滑的父任务动画。
+    // 最后一个子任务完成时父任务仍保持原位。
     final FractionalTranslation rootSlide = tester.widget(
       find.byKey(ValueKey<String>('todo-completion-slide-${root.id}')),
     );
     expect(lastChildSlide.translation.dx, greaterThan(0));
-    expect(rootSlide.translation.dx, greaterThan(0));
+    expect(rootSlide.translation.dx, 0);
     await tester.pump(const Duration(milliseconds: 111));
     await tester.pump();
     expect(find.text(lastChild.title), findsNothing);
+    expect(find.text(root.title), findsOneWidget);
+    // 全部子任务完成后父任务仍未完成。
+    final TodoRecord awaitingRoot = await (database.select(
+      database.todoItems,
+    )..where((TodoItems table) => table.id.equals(root.id))).getSingle();
+    expect(awaitingRoot.isCompleted, isFalse);
+    expect(awaitingRoot.completedAt, isNull);
+
+    await tester.tap(
+      find.byKey(ValueKey<String>('todo-completion-checkbox-${root.id}')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 621));
+    await tester.pump();
     expect(find.text(root.title), findsNothing);
-    // 最后一个子任务完成后自动完成的父任务。
+    // 用户手动勾选后父任务才完成。
     final TodoRecord completedRoot = await (database.select(
       database.todoItems,
     )..where((TodoItems table) => table.id.equals(root.id))).getSingle();

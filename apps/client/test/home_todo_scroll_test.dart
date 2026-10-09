@@ -205,7 +205,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('移动端展开较长待办后仅正文滚动且模块标题固定', (WidgetTester tester) async {
+  testWidgets('移动端展开较长待办后仅正文滚动且模块导航固定', (WidgetTester tester) async {
     // 移动端也使用真实待办树与完整首页。
     final AppDatabase database = AppDatabase.forTesting(
       NativeDatabase.memory(),
@@ -217,7 +217,12 @@ void main() {
       database: database,
       size: const Size(412, 915),
       platform: TargetPlatform.android,
+      useDefaultCards: true,
     );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('home-mobile-tab-todos')),
+    );
+    await tester.pumpAndSettle();
     expect(find.text('第1组子任务 1'), findsNothing);
     await tester.tap(
       find.byKey(ValueKey<String>('home-todo-tree-toggle-${roots.first.id}')),
@@ -233,9 +238,13 @@ void main() {
       find.descendant(of: card, matching: find.byType(Scrollable)),
       findsOneWidget,
     );
-    // 固定模块标题不随任务正文滚动。
+    // 模块导航不随任务正文滚动，重复标题已删除。
+    expect(
+      find.byKey(const ValueKey<String>('home-todo-header')),
+      findsNothing,
+    );
     final Finder header = find.byKey(
-      const ValueKey<String>('home-todo-header'),
+      const ValueKey<String>('home-mobile-tabs'),
     );
     // 仍位于屏幕内的首条子任务。
     final Finder firstChild = find.text('第1组子任务 1');

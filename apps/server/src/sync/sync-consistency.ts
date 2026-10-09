@@ -218,27 +218,20 @@ async function reconcileTodos(
       AND child."parent_id" = parent."id"
       AND child."deleted_at" IS NULL AND parent."deleted_at" IS NOT NULL
   `;
+  // 普通主任务保留手动完成状态；仅在有效子任务未完成时撤销完成。
   await transaction.$executeRaw`
     UPDATE "todo_items" AS parent
-    SET "is_completed" = children."all_completed",
-        "completed_at" = CASE WHEN children."all_completed"
-          THEN COALESCE(children."completed_at", parent."completed_at", CURRENT_TIMESTAMP)
-          ELSE NULL END,
+    SET "is_completed" = false, "completed_at" = NULL,
         "updated_at" = CURRENT_TIMESTAMP
-    FROM (
-      SELECT "parent_id", BOOL_AND("is_completed") AS "all_completed",
-             MAX("completed_at") AS "completed_at"
-      FROM "todo_items"
-      WHERE "user_id" = ${userId}::uuid AND "parent_id" IS NOT NULL AND "deleted_at" IS NULL
-      GROUP BY "parent_id"
-    ) AS children
-    WHERE parent."user_id" = ${userId}::uuid AND parent."id" = children."parent_id"
+    WHERE parent."user_id" = ${userId}::uuid
       AND parent."parent_id" IS NULL AND parent."deleted_at" IS NULL
       AND parent."task_type" = 'normal'
-      AND (parent."is_completed" IS DISTINCT FROM children."all_completed"
-        OR (NOT children."all_completed" AND parent."completed_at" IS NOT NULL)
-        OR (children."all_completed" AND parent."completed_at" IS DISTINCT FROM
-          COALESCE(children."completed_at", parent."completed_at", CURRENT_TIMESTAMP)))
+      AND (parent."is_completed" OR parent."completed_at" IS NOT NULL)
+      AND EXISTS (
+        SELECT 1 FROM "todo_items" AS child
+        WHERE child."user_id" = parent."user_id" AND child."parent_id" = parent."id"
+          AND child."deleted_at" IS NULL AND NOT child."is_completed"
+      )
   `;
   // 满进度永不自动完成；只在最终步骤集合失效时撤销手动完成。
   // 包括并发删成零步、添加未完成步骤、撤销任一步和无效离线确认。

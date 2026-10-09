@@ -1388,7 +1388,7 @@ integration('SyncService PostgreSQL 集成', () => {
     ).toBe(timestamp);
   });
 
-  it('两个设备分别完成两个孩子后，父任务根据最终状态完成', async () => {
+  it('跨端完成全部子任务后等待手动完成父任务，重开子任务仍撤销父完成', async () => {
     // 主任务。
     const parent = put('todo_items', {
       title: 'root',
@@ -1422,10 +1422,80 @@ integration('SyncService PostgreSQL 集成', () => {
         ),
       ),
     );
+    // 子任务全部完成不能改变父任务的手动状态。
+    const pendingParent = await prisma!.todoItem.findUniqueOrThrow({
+      where: { id: parent.id },
+    });
+    expect(pendingParent.isCompleted).toBe(false);
+    expect(pendingParent.completedAt).toBeNull();
+    // 父任务手动确认的时间应独立于子任务完成时间。
+    const confirmedAt = '2026-09-25T09:00:00.000Z';
+    await service.applyBatch(
+      ownerId,
+      batch([
+        {
+          op: 'PATCH',
+          table: 'todo_items',
+          id: parent.id,
+          data: { is_completed: true, completed_at: confirmedAt },
+        },
+      ]),
+    );
+    // 再次同步子任务也不能重写父任务确认时间。
+    await service.applyBatch(
+      ownerId,
+      batch([
+        {
+          op: 'PATCH',
+          table: 'todo_items',
+          id: second.id,
+          data: { title: 'second updated' },
+        },
+      ]),
+    );
+    // 同步后的父任务保留用户手动完成状态。
+    const confirmedParent = await prisma!.todoItem.findUniqueOrThrow({
+      where: { id: parent.id },
+    });
+    expect(confirmedParent.isCompleted).toBe(true);
+    expect(confirmedParent.completedAt?.toISOString()).toBe(confirmedAt);
+
+    await service.applyBatch(
+      ownerId,
+      batch([
+        {
+          op: 'PATCH',
+          table: 'todo_items',
+          id: first.id,
+          data: { is_completed: false, completed_at: null },
+        },
+      ]),
+    );
     expect(
-      (await prisma!.todoItem.findUniqueOrThrow({ where: { id: parent.id } }))
-        .isCompleted,
-    ).toBe(true);
+      (
+        await prisma!.todoItem.findUniqueOrThrow({
+          where: { id: parent.id },
+        })
+      ).isCompleted,
+    ).toBe(false);
+    await service.applyBatch(
+      ownerId,
+      batch([
+        {
+          op: 'PATCH',
+          table: 'todo_items',
+          id: first.id,
+          data: { is_completed: true, completed_at: timestamp },
+        },
+      ]),
+    );
+    expect(
+      (
+        await prisma!.todoItem.findUniqueOrThrow({
+          where: { id: parent.id },
+        })
+      ).isCompleted,
+    ).toBe(false);
   });
 
   it('软删除父任务后新增孩子继承软删除，两者显式恢复后正常显示', async () => {

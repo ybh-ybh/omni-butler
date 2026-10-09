@@ -45,32 +45,38 @@ class HomeTodayContextCard extends ConsumerWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: colors.brandSoft,
-                  borderRadius: BorderRadius.circular(OmniRadius.control),
+          if (!flat) ...<Widget>[
+            Row(
+              children: <Widget>[
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: colors.brandSoft,
+                    borderRadius: BorderRadius.circular(OmniRadius.control),
+                  ),
+                  child: Icon(
+                    Icons.hub_outlined,
+                    color: colors.brand,
+                    size: 20,
+                  ),
                 ),
-                child: Icon(Icons.hub_outlined, color: colors.brand, size: 20),
-              ),
-              const SizedBox(width: OmniSpacing.xs),
-              Expanded(
-                child: Text(
-                  '今日脉络',
-                  style: Theme.of(context).textTheme.titleMedium,
+                const SizedBox(width: OmniSpacing.xs),
+                Expanded(
+                  child: Text(
+                    '今日脉络',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                 ),
-              ),
-              Text(
-                DateFormat('MM.dd').format(now),
-                style: Theme.of(context).textTheme.labelMedium
-                    ?.copyWith(color: colors.muted),
-              ),
-            ],
-          ),
-          const SizedBox(height: OmniSpacing.lg),
+                Text(
+                  DateFormat('MM.dd').format(now),
+                  style: Theme.of(context).textTheme.labelMedium
+                      ?.copyWith(color: colors.muted),
+                ),
+              ],
+            ),
+            const SizedBox(height: OmniSpacing.lg),
+          ],
           if (showEvents)
             _EventContextRow(
               key: const ValueKey<String>('home-context-events'),

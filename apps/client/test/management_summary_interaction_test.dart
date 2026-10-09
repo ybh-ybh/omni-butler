@@ -6,6 +6,41 @@ import 'package:omni_butler/features/management/presentation/management_mobile_s
 
 /// 验证真实手势中间态、列表几何、遮罩和可取消的弹簧。
 void main() {
+  // 明暗主题都应使用覆盖卡片四周的同一层半透明遮罩。
+  for (final Brightness brightness in Brightness.values) {
+    testWidgets('统计展开后四周统一遮罩且边缘点击可收起 ${brightness.name}', (
+      WidgetTester tester,
+    ) async {
+      await _pump(tester, brightness: brightness);
+      // 卡片顶部、左侧、右侧和底部留白的真实点击位置。
+      for (final Offset point in <Offset>[
+        const Offset(195, 2),
+        const Offset(2, 100),
+        const Offset(388, 100),
+        const Offset(195, 600),
+      ]) {
+        await tester.tap(_key('management-summary-toggle'));
+        await tester.pumpAndSettle();
+        // 遮罩必须覆盖整个管理内容区，包括圆角外的留白。
+        expect(
+          tester.getRect(_key('management-summary-scrim')),
+          tester.getRect(find.byType(ManagementMobileScaffold)),
+        );
+        // 直接点击卡片标题仍应命中前景卡片，统计详情保持可滚动。
+        expect(_key('management-summary-toggle').hitTestable(), findsOneWidget);
+        expect(
+          _key('management-summary-details').hitTestable(),
+          findsOneWidget,
+        );
+        await tester.tapAt(point);
+        await tester.pumpAndSettle();
+        expect(_key('management-summary-scrim'), findsNothing);
+        expect(_translation(tester), 0);
+        expect(tester.takeException(), isNull);
+      }
+    });
+  }
+
   testWidgets('摘要横滑消费层无空滚动语义且保留收起入口读屏范围', (WidgetTester tester) async {
     // 读取实际交给系统辅助功能的语义节点。
     final SemanticsHandle semantics = tester.ensureSemantics();
@@ -170,6 +205,10 @@ void main() {
       closeTo(translation.transform.storage[13], 0.1),
     );
     expect(_key('management-summary-scrim'), findsOneWidget);
+    expect(
+      tester.getRect(_key('management-summary-scrim')),
+      tester.getRect(find.byType(ManagementMobileScaffold)),
+    );
     await gesture.up(timeStamp: const Duration(milliseconds: 180));
     await tester.pumpAndSettle();
     if (_key('management-summary-scrim').evaluate().isNotEmpty) {
@@ -321,6 +360,7 @@ Future<void> _pump(
   Size size = const Size(390, 844),
   double scale = 1,
   bool reduced = false,
+  Brightness brightness = Brightness.light,
   ScrollController? list,
   VoidCallback? onBodyTap,
   ValueNotifier<bool>? active,
@@ -366,7 +406,7 @@ Future<void> _pump(
   );
   await tester.pumpWidget(
     MaterialApp(
-      theme: AppTheme.build(brightness: Brightness.light)
+      theme: AppTheme.build(brightness: brightness)
           .copyWith(platform: TargetPlatform.android),
       builder: (BuildContext context, Widget? child) => MediaQuery(
         data: MediaQuery.of(context).copyWith(

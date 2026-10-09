@@ -237,6 +237,55 @@ void main() {
     );
   });
 
+  test('普通任务的子任务全部完成后仍等待手动完成主任务', () async {
+    // 固定任务所属自然日。
+    final DateTime day = DateTime(2026, 9, 20);
+    await repository.save(TodoDraft(title: '手动确认发布', scheduledDate: day));
+    // 子任务所属的主任务。
+    final TodoRecord root = (await repository.watchForDay(day).first).single;
+    for (final String title in <String>['编写说明', '检查构建']) {
+      await repository.save(
+        TodoDraft(title: title, parentId: root.id, scheduledDate: day),
+      );
+    }
+    // 逐个完成的直属子任务。
+    final List<TodoRecord> children =
+        (await repository.watchActiveTrees(day).first).single.children;
+    for (final TodoRecord child in children) {
+      await repository.setCompleted(child.id, true);
+      expect((await repository.watchById(root.id).first)!.isCompleted, isFalse);
+      expect((await repository.watchById(root.id).first)!.completedAt, isNull);
+    }
+    // 全部子任务完成后，主任务仍在活动树中等待确认。
+    final TodoTreeNode pending =
+        (await repository.watchActiveTrees(day).first).single;
+    expect(pending.pendingChildrenCount, 0);
+    expect(pending.hasPending, isTrue);
+    expect(
+      await repository.watchCompletedForDay(DateTime.now()).first,
+      hasLength(2),
+    );
+
+    await repository.setCompleted(root.id, true);
+    expect((await repository.watchById(root.id).first)!.completedAt, isNotNull);
+    expect(await repository.watchActiveTrees(day).first, isEmpty);
+    expect(
+      await repository.watchCompletedForDay(DateTime.now()).first,
+      hasLength(3),
+    );
+    for (final TodoRecord child in pending.children) {
+      expect(
+        (await repository.watchById(child.id).first)!.completedAt,
+        child.completedAt,
+      );
+    }
+
+    await repository.setCompleted(children.first.id, false);
+    expect((await repository.watchById(root.id).first)!.isCompleted, isFalse);
+    await repository.setCompleted(children.first.id, true);
+    expect((await repository.watchById(root.id).first)!.isCompleted, isFalse);
+  });
+
   test('移动主任务会级联更新子任务象限并保存用户顺序', () async {
     // 当前测试自然日。
     final DateTime day = DateTime(2026, 9, 20);

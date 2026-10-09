@@ -169,20 +169,23 @@ class _HomeTimeStatusCardState extends ConsumerState<HomeTimeStatusCard> {
             OmniSpacing.md,
             OmniSpacing.md,
           ),
-          header: Padding(
-            key: const ValueKey<String>('home-time-header'),
-            padding: const EdgeInsets.fromLTRB(
-              OmniSpacing.md,
-              OmniSpacing.md,
-              OmniSpacing.md,
-              OmniSpacing.xs,
-            ),
-            child: _TimeStatusHeader(
-              onStart: () => showStartTimeEntryDialog(context, day: now),
-              onBackfill: () => showBackfillTimeEntryDialog(context, day: now),
-              showActions: !androidCompact,
-            ),
-          ),
+          header: widget.flat
+              ? null
+              : Padding(
+                  key: const ValueKey<String>('home-time-header'),
+                  padding: const EdgeInsets.fromLTRB(
+                    OmniSpacing.md,
+                    OmniSpacing.md,
+                    OmniSpacing.md,
+                    OmniSpacing.xs,
+                  ),
+                  child: _TimeStatusHeader(
+                    onStart: () => showStartTimeEntryDialog(context, day: now),
+                    onBackfill: () =>
+                        showBackfillTimeEntryDialog(context, day: now),
+                    showActions: !androidCompact,
+                  ),
+                ),
           child: Column(
             key: const ValueKey<String>('home-time-content'),
             mainAxisSize: MainAxisSize.min,
