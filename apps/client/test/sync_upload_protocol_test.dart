@@ -307,6 +307,10 @@ void main() {
       // 各表真实旧版队列可能保留的退休字段。
       final Map<String, Map<String, Object?>> legacyData =
           <String, Map<String, Object?>>{
+            'events': <String, Object?>{
+              'notes': '保留事件备注',
+              'description': '删除旧事件说明',
+            },
             'daily_quote_selections': <String, Object?>{
               'quote_id': null,
               'is_manual': 1,
@@ -338,7 +342,9 @@ void main() {
           await transaction.execute(
             'INSERT INTO powersync_crud(op, id, type, data) VALUES(?, ?, ?, ?)',
             <Object?>[
-              entry.key == 'daily_quote_selections' ? 'PUT' : 'PATCH',
+              entry.key == 'daily_quote_selections' || entry.key == 'events'
+                  ? 'PUT'
+                  : 'PATCH',
               '01990000-7000-8002-8000-000000000001',
               entry.key,
               jsonEncode(entry.value),
@@ -363,11 +369,12 @@ void main() {
       // 所有有效操作保持原顺序，纯退休列 PATCH 被忽略。
       final List<dynamic> operations =
           auth.requests.single['operations'] as List<dynamic>;
-      expect(operations, hasLength(6));
+      expect(operations, hasLength(7));
       expect(operations.first['op'], 'PUT');
       expect(
         operations.map((dynamic operation) => operation['data']),
         <Map<String, Object?>>[
+          <String, Object?>{'notes': '保留事件备注'},
           <String, Object?>{'quote_id': null},
           <String, Object?>{'name': '分类'},
           <String, Object?>{'name': '会员'},
@@ -376,7 +383,7 @@ void main() {
           <String, Object?>{'unknown_future_column': '保留给服务器校验'},
         ],
       );
-      expect((await runtime.powerSync.getUploadQueueStats()).count, 7);
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 8);
       await runtime.close();
       runtime = await OmniSyncRuntime.openAtPath(auth, databasePath);
       auth.loseResponse = false;
@@ -407,8 +414,8 @@ void main() {
         <Object?>[
           'PATCH',
           '01990000-7000-8002-8000-000000000001',
-          'daily_quote_selections',
-          '{"is_manual":1}',
+          'events',
+          '{"description":"删除旧说明"}',
         ],
       );
       await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);

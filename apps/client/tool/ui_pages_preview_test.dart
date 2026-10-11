@@ -337,7 +337,7 @@ Future<void> _seedPreviewData(AppDatabase database) async {
     EventDraft(
       name: '预览 · 更换滤芯',
       category: '居家维护',
-      description: '仅用于界面预览的示例事件',
+      notes: '仅用于界面预览的示例事件',
       intervalValue: 3,
       intervalUnit: EventIntervalUnit.month,
       lastCompletedAt: DateTime(2026, 7, 12, 9),

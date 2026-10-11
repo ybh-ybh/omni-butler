@@ -145,6 +145,32 @@ describe('SyncSqlBuilder', () => {
     expect(operation.data).toEqual({ name: '   ' });
   });
 
+  it('事件只允许写入备注，拒绝已删除的事件说明', () => {
+    // 备注继续使用参数化更新。
+    const statement = builder.build(
+      {
+        op: 'PATCH',
+        table: 'events',
+        id: recordId,
+        data: { notes: '保留备注' },
+      },
+      userId,
+    );
+    expect(statement.sql).toContain('SET "notes" = $3');
+    expect(statement.values).toEqual([recordId, userId, '保留备注']);
+    expect(() =>
+      builder.build(
+        {
+          op: 'PUT',
+          table: 'events',
+          id: recordId,
+          data: { name: '事件', description: '旧说明' },
+        },
+        userId,
+      ),
+    ).toThrow(BadRequestException);
+  });
+
   it.each([
     ['todo_items', { task_type: 'unknown' }],
     ['todo_items', { progress_unit: '章'.repeat(11) }],

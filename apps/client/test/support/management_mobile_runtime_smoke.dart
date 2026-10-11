@@ -122,7 +122,7 @@ Future<void> _seedManagement(AppDatabase database, DateTime now) async {
     await events.save(
       EventDraft(
         name: '演示事件 ${(index + 1).toString().padLeft(2, '0')}',
-        description: index.isEven ? '家庭维护与检查' : '学习资料整理',
+        notes: index.isEven ? '家庭维护与检查' : '学习资料整理',
         intervalValue: 7,
         intervalUnit: EventIntervalUnit.day,
         lastCompletedAt: today.subtract(Duration(days: 11 - index % 12)),

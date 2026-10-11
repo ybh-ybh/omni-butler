@@ -7,6 +7,92 @@ import 'package:omni_butler/core/database/app_database.dart';
 
 /// 验证 v2 本地数据升级为最新 PowerSync 兼容结构且内容不丢失。
 void main() {
+  test('v15 升级删除事件说明，保留备注、归档状态与完成历史', () async {
+    // 独占临时目录，避免接触真实用户数据库。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_event_description_migration_',
+    );
+    // 重开文件触发真实数据库升级。
+    final File file = File('${directory.path}/migration.sqlite');
+    // 固定时间用于验证迁移不会修改业务时间。
+    final DateTime now = DateTime.utc(2026, 10, 11, 3);
+    // 从当前结构补回旧列，构造包含备注及关联历史的 v15 库。
+    AppDatabase database = AppDatabase.forTesting(NativeDatabase(file));
+    await database
+        .into(database.events)
+        .insert(
+          EventsCompanion.insert(
+            id: 'preserved-event',
+            name: '检查滤芯',
+            category: const Value<String?>('家务'),
+            notes: const Value<String?>('需要保留的备注'),
+            intervalValue: const Value<int>(2),
+            reminderEnabled: const Value<bool>(true),
+            isArchived: const Value<bool>(true),
+            archivedAt: Value<DateTime?>(now),
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    await database
+        .into(database.eventCompletions)
+        .insert(
+          EventCompletionsCompanion.insert(
+            id: 'preserved-completion',
+            eventId: 'preserved-event',
+            completedAt: now,
+            notes: const Value<String?>('保留完成记录备注'),
+            createdAt: now,
+          ),
+        );
+    await database.customStatement(
+      'ALTER TABLE events ADD COLUMN description TEXT',
+    );
+    await database.customStatement(
+      "UPDATE events SET description = '应删除的事件说明'",
+    );
+    await database.customStatement('PRAGMA user_version = 15');
+    await database.close();
+    database = AppDatabase.forTesting(NativeDatabase(file));
+    try {
+      // 读取触发升级并检查物理列已删除。
+      final EventRecord event = await database
+          .select(database.events)
+          .getSingle();
+      // 升级后事件表的实际列名。
+      final List<QueryRow> columns = await database
+          .customSelect("PRAGMA table_info('events')")
+          .get();
+      expect(
+        columns.map((QueryRow row) => row.read<String>('name')),
+        isNot(contains('description')),
+      );
+      expect(event.id, 'preserved-event');
+      expect(event.name, '检查滤芯');
+      expect(event.category, '家务');
+      expect(event.notes, '需要保留的备注');
+      expect(event.intervalValue, 2);
+      expect(event.reminderEnabled, isTrue);
+      expect(event.isArchived, isTrue);
+      expect(event.archivedAt, now);
+      expect(event.createdAt, now);
+      expect(event.updatedAt, now);
+      // 原完成记录继续引用同一个事件。
+      final EventCompletionRecord completion = await database
+          .select(database.eventCompletions)
+          .getSingle();
+      expect(completion.eventId, event.id);
+      expect(completion.notes, '保留完成记录备注');
+      expect(
+        await database.customSelect('PRAGMA foreign_key_check').get(),
+        isEmpty,
+      );
+    } finally {
+      await database.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('v2 日期、内置标识、待办象限与父任务字段安全迁移到 v10', () async {
     // 本测试独占的临时目录。
     final Directory directory = await Directory.systemTemp.createTemp(

@@ -40,9 +40,6 @@ class EventDraft {
   /// 事件名称。
   final String name;
 
-  /// 可选事件说明。
-  final String? description;
-
   /// 可选分类。
   final String? category;
 
@@ -71,7 +68,6 @@ class EventDraft {
   const EventDraft({
     this.id,
     required this.name,
-    this.description,
     this.category,
     required this.intervalValue,
     required this.intervalUnit,
@@ -306,7 +302,6 @@ class EventRepository {
               EventsCompanion.insert(
                 id: eventId,
                 name: name,
-                description: Value<String?>(_cleanOptional(draft.description)),
                 category: Value<String?>(_cleanOptional(draft.category)),
                 intervalValue: Value<int>(draft.intervalValue),
                 intervalUnit: Value<String>(draft.intervalUnit.name),
@@ -328,7 +323,6 @@ class EventRepository {
       )..where((Events table) => table.id.equals(existingId))).write(
         EventsCompanion(
           name: Value<String>(name),
-          description: Value<String?>(_cleanOptional(draft.description)),
           category: Value<String?>(_cleanOptional(draft.category)),
           intervalValue: Value<int>(draft.intervalValue),
           intervalUnit: Value<String>(draft.intervalUnit.name),

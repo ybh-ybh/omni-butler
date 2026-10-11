@@ -118,7 +118,6 @@ final Schema omniSyncSchema = Schema(
     _rawTable('events', <String>[
       'name',
       'category',
-      'description',
       'interval_value',
       'interval_unit',
       'last_completed_at',

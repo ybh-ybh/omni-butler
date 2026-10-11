@@ -49,7 +49,7 @@ void main() {
       EventDraft(
         name: eventName,
         category: '家庭设备维护与日常安全检查',
-        description: '检查运行状态并记录维护结果',
+        notes: '检查运行状态并记录维护结果',
         intervalValue: 1,
         intervalUnit: EventIntervalUnit.month,
         lastCompletedAt: DateTime(2026, 9, 1),

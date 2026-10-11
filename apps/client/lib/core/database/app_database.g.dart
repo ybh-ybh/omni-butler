@@ -4899,17 +4899,6 @@ class $EventsTable extends Events with TableInfo<$EventsTable, EventRecord> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
-  static const VerificationMeta _descriptionMeta = const VerificationMeta(
-    'description',
-  );
-  @override
-  late final GeneratedColumn<String> description = GeneratedColumn<String>(
-    'description',
-    aliasedName,
-    true,
-    type: DriftSqlType.string,
-    requiredDuringInsert: false,
-  );
   static const VerificationMeta _intervalValueMeta = const VerificationMeta(
     'intervalValue',
   );
@@ -5068,7 +5057,6 @@ class $EventsTable extends Events with TableInfo<$EventsTable, EventRecord> {
     id,
     name,
     category,
-    description,
     intervalValue,
     intervalUnit,
     lastCompletedAt,
@@ -5112,15 +5100,6 @@ class $EventsTable extends Events with TableInfo<$EventsTable, EventRecord> {
       context.handle(
         _categoryMeta,
         category.isAcceptableOrUnknown(data['category']!, _categoryMeta),
-      );
-    }
-    if (data.containsKey('description')) {
-      context.handle(
-        _descriptionMeta,
-        description.isAcceptableOrUnknown(
-          data['description']!,
-          _descriptionMeta,
-        ),
       );
     }
     if (data.containsKey('interval_value')) {
@@ -5244,10 +5223,6 @@ class $EventsTable extends Events with TableInfo<$EventsTable, EventRecord> {
         DriftSqlType.string,
         data['${effectivePrefix}category'],
       ),
-      description: attachedDatabase.typeMapping.read(
-        DriftSqlType.string,
-        data['${effectivePrefix}description'],
-      ),
       intervalValue: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}interval_value'],
@@ -5319,9 +5294,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
   /// 事件分类。
   final String? category;
 
-  /// 事件说明。
-  final String? description;
-
   /// 周期间隔数值。
   final int intervalValue;
 
@@ -5364,7 +5336,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
     required this.id,
     required this.name,
     this.category,
-    this.description,
     required this.intervalValue,
     required this.intervalUnit,
     this.lastCompletedAt,
@@ -5386,9 +5357,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
     map['name'] = Variable<String>(name);
     if (!nullToAbsent || category != null) {
       map['category'] = Variable<String>(category);
-    }
-    if (!nullToAbsent || description != null) {
-      map['description'] = Variable<String>(description);
     }
     map['interval_value'] = Variable<int>(intervalValue);
     map['interval_unit'] = Variable<String>(intervalUnit);
@@ -5421,9 +5389,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
       category: category == null && nullToAbsent
           ? const Value.absent()
           : Value(category),
-      description: description == null && nullToAbsent
-          ? const Value.absent()
-          : Value(description),
       intervalValue: Value(intervalValue),
       intervalUnit: Value(intervalUnit),
       lastCompletedAt: lastCompletedAt == null && nullToAbsent
@@ -5457,7 +5422,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
       id: serializer.fromJson<String>(json['id']),
       name: serializer.fromJson<String>(json['name']),
       category: serializer.fromJson<String?>(json['category']),
-      description: serializer.fromJson<String?>(json['description']),
       intervalValue: serializer.fromJson<int>(json['intervalValue']),
       intervalUnit: serializer.fromJson<String>(json['intervalUnit']),
       lastCompletedAt: serializer.fromJson<DateTime?>(json['lastCompletedAt']),
@@ -5482,7 +5446,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
       'id': serializer.toJson<String>(id),
       'name': serializer.toJson<String>(name),
       'category': serializer.toJson<String?>(category),
-      'description': serializer.toJson<String?>(description),
       'intervalValue': serializer.toJson<int>(intervalValue),
       'intervalUnit': serializer.toJson<String>(intervalUnit),
       'lastCompletedAt': serializer.toJson<DateTime?>(lastCompletedAt),
@@ -5503,7 +5466,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
     String? id,
     String? name,
     Value<String?> category = const Value.absent(),
-    Value<String?> description = const Value.absent(),
     int? intervalValue,
     String? intervalUnit,
     Value<DateTime?> lastCompletedAt = const Value.absent(),
@@ -5521,7 +5483,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
     id: id ?? this.id,
     name: name ?? this.name,
     category: category.present ? category.value : this.category,
-    description: description.present ? description.value : this.description,
     intervalValue: intervalValue ?? this.intervalValue,
     intervalUnit: intervalUnit ?? this.intervalUnit,
     lastCompletedAt: lastCompletedAt.present
@@ -5543,9 +5504,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
       id: data.id.present ? data.id.value : this.id,
       name: data.name.present ? data.name.value : this.name,
       category: data.category.present ? data.category.value : this.category,
-      description: data.description.present
-          ? data.description.value
-          : this.description,
       intervalValue: data.intervalValue.present
           ? data.intervalValue.value
           : this.intervalValue,
@@ -5584,7 +5542,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
           ..write('id: $id, ')
           ..write('name: $name, ')
           ..write('category: $category, ')
-          ..write('description: $description, ')
           ..write('intervalValue: $intervalValue, ')
           ..write('intervalUnit: $intervalUnit, ')
           ..write('lastCompletedAt: $lastCompletedAt, ')
@@ -5607,7 +5564,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
     id,
     name,
     category,
-    description,
     intervalValue,
     intervalUnit,
     lastCompletedAt,
@@ -5629,7 +5585,6 @@ class EventRecord extends DataClass implements Insertable<EventRecord> {
           other.id == this.id &&
           other.name == this.name &&
           other.category == this.category &&
-          other.description == this.description &&
           other.intervalValue == this.intervalValue &&
           other.intervalUnit == this.intervalUnit &&
           other.lastCompletedAt == this.lastCompletedAt &&
@@ -5649,7 +5604,6 @@ class EventsCompanion extends UpdateCompanion<EventRecord> {
   final Value<String> id;
   final Value<String> name;
   final Value<String?> category;
-  final Value<String?> description;
   final Value<int> intervalValue;
   final Value<String> intervalUnit;
   final Value<DateTime?> lastCompletedAt;
@@ -5668,7 +5622,6 @@ class EventsCompanion extends UpdateCompanion<EventRecord> {
     this.id = const Value.absent(),
     this.name = const Value.absent(),
     this.category = const Value.absent(),
-    this.description = const Value.absent(),
     this.intervalValue = const Value.absent(),
     this.intervalUnit = const Value.absent(),
     this.lastCompletedAt = const Value.absent(),
@@ -5688,7 +5641,6 @@ class EventsCompanion extends UpdateCompanion<EventRecord> {
     required String id,
     required String name,
     this.category = const Value.absent(),
-    this.description = const Value.absent(),
     this.intervalValue = const Value.absent(),
     this.intervalUnit = const Value.absent(),
     this.lastCompletedAt = const Value.absent(),
@@ -5711,7 +5663,6 @@ class EventsCompanion extends UpdateCompanion<EventRecord> {
     Expression<String>? id,
     Expression<String>? name,
     Expression<String>? category,
-    Expression<String>? description,
     Expression<int>? intervalValue,
     Expression<String>? intervalUnit,
     Expression<DateTime>? lastCompletedAt,
@@ -5731,7 +5682,6 @@ class EventsCompanion extends UpdateCompanion<EventRecord> {
       if (id != null) 'id': id,
       if (name != null) 'name': name,
       if (category != null) 'category': category,
-      if (description != null) 'description': description,
       if (intervalValue != null) 'interval_value': intervalValue,
       if (intervalUnit != null) 'interval_unit': intervalUnit,
       if (lastCompletedAt != null) 'last_completed_at': lastCompletedAt,
@@ -5755,7 +5705,6 @@ class EventsCompanion extends UpdateCompanion<EventRecord> {
     Value<String>? id,
     Value<String>? name,
     Value<String?>? category,
-    Value<String?>? description,
     Value<int>? intervalValue,
     Value<String>? intervalUnit,
     Value<DateTime?>? lastCompletedAt,
@@ -5775,7 +5724,6 @@ class EventsCompanion extends UpdateCompanion<EventRecord> {
       id: id ?? this.id,
       name: name ?? this.name,
       category: category ?? this.category,
-      description: description ?? this.description,
       intervalValue: intervalValue ?? this.intervalValue,
       intervalUnit: intervalUnit ?? this.intervalUnit,
       lastCompletedAt: lastCompletedAt ?? this.lastCompletedAt,
@@ -5804,9 +5752,6 @@ class EventsCompanion extends UpdateCompanion<EventRecord> {
     }
     if (category.present) {
       map['category'] = Variable<String>(category.value);
-    }
-    if (description.present) {
-      map['description'] = Variable<String>(description.value);
     }
     if (intervalValue.present) {
       map['interval_value'] = Variable<int>(intervalValue.value);
@@ -5859,7 +5804,6 @@ class EventsCompanion extends UpdateCompanion<EventRecord> {
           ..write('id: $id, ')
           ..write('name: $name, ')
           ..write('category: $category, ')
-          ..write('description: $description, ')
           ..write('intervalValue: $intervalValue, ')
           ..write('intervalUnit: $intervalUnit, ')
           ..write('lastCompletedAt: $lastCompletedAt, ')
@@ -13591,7 +13535,6 @@ typedef $$EventsTableCreateCompanionBuilder = EventsCompanion Function({
   required String id,
   required String name,
   Value<String?> category,
-  Value<String?> description,
   Value<int> intervalValue,
   Value<String> intervalUnit,
   Value<DateTime?> lastCompletedAt,
@@ -13611,7 +13554,6 @@ typedef $$EventsTableUpdateCompanionBuilder = EventsCompanion Function({
   Value<String> id,
   Value<String> name,
   Value<String?> category,
-  Value<String?> description,
   Value<int> intervalValue,
   Value<String> intervalUnit,
   Value<DateTime?> lastCompletedAt,
@@ -13677,11 +13619,6 @@ class $$EventsTableFilterComposer
 
   ColumnFilters<String> get category => $composableBuilder(
     column: $table.category,
-    builder: (column) => ColumnFilters(column),
-  );
-
-  ColumnFilters<String> get description => $composableBuilder(
-    column: $table.description,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -13800,11 +13737,6 @@ class $$EventsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get description => $composableBuilder(
-    column: $table.description,
-    builder: (column) => ColumnOrderings(column),
-  );
-
   ColumnOrderings<int> get intervalValue => $composableBuilder(
     column: $table.intervalValue,
     builder: (column) => ColumnOrderings(column),
@@ -13888,11 +13820,6 @@ class $$EventsTableAnnotationComposer
 
   GeneratedColumn<String> get category =>
       $composableBuilder(column: $table.category, builder: (column) => column);
-
-  GeneratedColumn<String> get description => $composableBuilder(
-    column: $table.description,
-    builder: (column) => column,
-  );
 
   GeneratedColumn<int> get intervalValue => $composableBuilder(
     column: $table.intervalValue,
@@ -14006,7 +13933,6 @@ class $$EventsTableTableManager
                 Value<String> id = const Value.absent(),
                 Value<String> name = const Value.absent(),
                 Value<String?> category = const Value.absent(),
-                Value<String?> description = const Value.absent(),
                 Value<int> intervalValue = const Value.absent(),
                 Value<String> intervalUnit = const Value.absent(),
                 Value<DateTime?> lastCompletedAt = const Value.absent(),
@@ -14025,7 +13951,6 @@ class $$EventsTableTableManager
                 id: id,
                 name: name,
                 category: category,
-                description: description,
                 intervalValue: intervalValue,
                 intervalUnit: intervalUnit,
                 lastCompletedAt: lastCompletedAt,
@@ -14046,7 +13971,6 @@ class $$EventsTableTableManager
                 required String id,
                 required String name,
                 Value<String?> category = const Value.absent(),
-                Value<String?> description = const Value.absent(),
                 Value<int> intervalValue = const Value.absent(),
                 Value<String> intervalUnit = const Value.absent(),
                 Value<DateTime?> lastCompletedAt = const Value.absent(),
@@ -14065,7 +13989,6 @@ class $$EventsTableTableManager
                 id: id,
                 name: name,
                 category: category,
-                description: description,
                 intervalValue: intervalValue,
                 intervalUnit: intervalUnit,
                 lastCompletedAt: lastCompletedAt,

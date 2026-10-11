@@ -37,7 +37,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
   /// 安卓管理页的事件搜索控制器。
   final TextEditingController _searchController = TextEditingController();
 
-  /// 安卓管理页当前已输入的名称或描述关键词。
+  /// 安卓管理页当前已输入的名称或备注关键词。
   String _query = '';
 
   /// 是否优先使用双列事件卡片布局。
@@ -216,12 +216,12 @@ class _EventsPageState extends ConsumerState<EventsPage> {
         final String keyword = widget.embeddedInManagement
             ? _query.trim().toLowerCase()
             : '';
-        // 保留仓储默认顺序的名称和描述搜索结果。
+        // 保留仓储默认顺序的名称和备注搜索结果。
         final List<EventRecord> visibleRecords = keyword.isEmpty
             ? records
             : records
                   .where((EventRecord event) {
-                    return '${event.name} ${event.description ?? ''}'
+                    return '${event.name} ${event.notes ?? ''}'
                         .toLowerCase()
                         .contains(keyword);
                   })
@@ -301,7 +301,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
           children: <Widget>[
             ManagementSearchToolbar(
               controller: _searchController,
-              hintText: '搜索事件名称或描述',
+              hintText: '搜索事件名称或备注',
               onChanged: (String value) => setState(() => _query = value),
               onClear: () {
                 _searchController.clear();
@@ -1323,13 +1323,13 @@ class _EventCard extends ConsumerWidget {
     final (String, Color) effectiveStatusView = archived
         ? ('已归档', colors.muted)
         : statusView;
-    // 事件说明优先展示描述，其次展示备注。
-    final String detail = (event.description ?? event.notes ?? '').trim();
+    // 展示事件备注。
+    final String detail = (event.notes ?? '').trim();
     // 事件分类文案。
     final String categoryLabel = event.category?.trim().isNotEmpty == true
         ? event.category!.trim()
         : '未分类';
-    // 分类、周期与说明组成的一行元信息。
+    // 分类、周期与备注组成的一行元信息。
     final String metadata = <String>[
       categoryLabel,
       _intervalLabel(event),
@@ -2064,9 +2064,6 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
   /// 分类控制器。
   late final TextEditingController _categoryController;
 
-  /// 说明控制器。
-  late final TextEditingController _descriptionController;
-
   /// 间隔控制器。
   late final TextEditingController _intervalController;
 
@@ -2110,9 +2107,6 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
     final EventRecord? event = widget.event;
     _nameController = TextEditingController(text: event?.name ?? '');
     _categoryController = TextEditingController(text: event?.category ?? '');
-    _descriptionController = TextEditingController(
-      text: event?.description ?? '',
-    );
     _intervalController = TextEditingController(
       text: '${event?.intervalValue ?? 1}',
     );
@@ -2133,7 +2127,6 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
   void dispose() {
     _nameController.dispose();
     _categoryController.dispose();
-    _descriptionController.dispose();
     _intervalController.dispose();
     _reminderController.dispose();
     _notesController.dispose();
@@ -2171,7 +2164,6 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
             EventDraft(
               id: widget.event?.id,
               name: _nameController.text,
-              description: _descriptionController.text,
               category: _categoryController.text,
               intervalValue: int.parse(_intervalController.text),
               intervalUnit: _unit,
@@ -2254,12 +2246,6 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
                 OmniTextField(
                   controller: _categoryController,
                   decoration: const InputDecoration(labelText: '分类'),
-                ),
-                const SizedBox(height: 14),
-                OmniTextField(
-                  controller: _descriptionController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(labelText: '事件说明'),
                 ),
                 const SizedBox(height: 14),
                 Row(
@@ -2515,19 +2501,6 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
                     ),
                     child: OmniFormGroup(
                       children: <Widget>[
-                        OmniFormRow(
-                          label: '事件说明',
-                          child: OmniTextField(
-                            key: const ValueKey<String>(
-                              'event-create-description',
-                            ),
-                            controller: _descriptionController,
-                            maxLines: 2,
-                            decoration: omniGroupedInputDecoration.copyWith(
-                              hintText: '选填',
-                            ),
-                          ),
-                        ),
                         OmniFormRow(
                           label: '备注',
                           child: OmniTextField(

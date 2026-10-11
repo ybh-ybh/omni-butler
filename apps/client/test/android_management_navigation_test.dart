@@ -1387,7 +1387,7 @@ Future<_ManagementTestApp> _pumpManagementApp(WidgetTester tester) async {
     await events.save(
       EventDraft(
         name: '测试事件 $index',
-        description: '日常维护测试记录',
+        notes: '日常维护测试记录',
         intervalValue: index + 1,
         intervalUnit: EventIntervalUnit.day,
       ),

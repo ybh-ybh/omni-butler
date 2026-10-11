@@ -28,7 +28,7 @@ streams:
         SELECT id, module, record_id, taxonomy_id, created_at, deleted_at
         FROM record_taxonomy_links WHERE user_id = auth.user_id()
       - >-
-        SELECT id, name, category, description, interval_value, interval_unit,
+        SELECT id, name, category, interval_value, interval_unit,
         last_completed_at, reminder_enabled, reminder_days_before,
         reminder_time_minutes, is_archived, archived_at, notes, created_at,
         updated_at, deleted_at FROM events WHERE user_id = auth.user_id()

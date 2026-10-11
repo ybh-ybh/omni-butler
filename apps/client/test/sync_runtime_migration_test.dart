@@ -73,6 +73,48 @@ void main() {
         ),
       );
 
+  test('旧事件快照删除说明后仍可恢复备注和事件主体', () async {
+    await source.database
+        .into(source.database.events)
+        .insert(
+          EventsCompanion.insert(
+            id: 'preserved-event',
+            name: '检查滤芯',
+            notes: const Value<String?>('保留备注'),
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    await source.freezeWrites();
+    // 旧持久快照保留原始说明，恢复仅调整独立业务副本。
+    final Map<String, dynamic> json = jsonDecode(
+      jsonEncode((await source.exportSnapshot()).toJson()),
+    ) as Map<String, dynamic>;
+    json['tables']['events'][0]['description'] = '删除说明';
+    // 从旧格式读取后的快照。
+    final SyncSnapshot snapshot = SyncSnapshot.fromJson(json);
+    expect(json['tables']['events'][0]['description'], '删除说明');
+    expect(snapshot.tables['events']!.single, isNot(contains('description')));
+    expect(snapshot.operations.single['data'], containsPair('notes', '保留备注'));
+    // 真实候选数据库验证恢复不会访问已删除列。
+    final OmniSyncRuntime candidate = await OmniSyncRuntime.createCandidate(
+      auth,
+      '${directory.path}/event-candidate.sqlite',
+      snapshot,
+      'B',
+      mergeInitial: true,
+      useLocalData: true,
+    );
+    candidates.add(candidate);
+    // 恢复后的业务记录。
+    final EventRecord event = await candidate.database
+        .select(candidate.database.events)
+        .getSingle();
+    expect(event.id, 'preserved-event');
+    expect(event.name, '检查滤芯');
+    expect(event.notes, '保留备注');
+  });
+
   test('真实进度快照保留步骤身份、名称和手动完成，候选库不重放旧队列', () async {
     // 通过正式仓储写入真实 PowerSync 数据表。
     final TodoRepository repository = TodoRepository(source.database);

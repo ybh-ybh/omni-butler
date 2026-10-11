@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:drift/drift.dart' show Value;
@@ -19,6 +20,85 @@ import 'package:powersync/powersync.dart';
 /// 验证 PowerSync Raw Table 与 Drift 业务表共用同一 SQLite 文件。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('v15 同步库升级保留历史队列，重装事件触发器后仅捕获备注', () async {
+    // 独占临时数据库路径。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_event_sync_upgrade_',
+    );
+    // 升级前后复用同一个文件。
+    final String databasePath = '${directory.path}/runtime.sqlite';
+    // 本测试不发起网络请求。
+    final AuthRepository auth = AuthRepository(const FlutterSecureStorage());
+    // 构造带旧列和旧 PowerSync 触发器的同步库。
+    OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      databasePath,
+    );
+    try {
+      await runtime.database.customStatement(
+        'ALTER TABLE events ADD COLUMN description TEXT',
+      );
+      // 还原 v15 事件同步列，保留历史 CRUD 负载。
+      final RawTable oldTable = RawTable.inferred(
+        name: 'events',
+        schema: RawTableSchema(
+          syncedColumns: <String>[
+            ...omniSyncSchema.rawTables
+                .singleWhere((RawTable table) => table.name == 'events')
+                .schema!
+                .syncedColumns!,
+            'description',
+          ],
+        ),
+      );
+      for (final String operation in <String>['INSERT', 'UPDATE', 'DELETE']) {
+        // 旧版真实同步触发器名称。
+        final String trigger = 'powersync_events_${operation.toLowerCase()}';
+        await runtime.powerSync.execute('DROP TRIGGER "$trigger"');
+        await runtime.powerSync.execute(
+          'SELECT powersync_create_raw_table_crud_trigger(?, ?, ?)',
+          <Object?>[jsonEncode(oldTable), trigger, operation],
+        );
+      }
+      await runtime.database.customStatement(
+        'INSERT INTO events(id, name, notes, description, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?)',
+        <Object?>[
+          'preserved-event',
+          '检查滤芯',
+          '保留备注',
+          '删除说明',
+          '2026-10-11T03:00:00Z',
+          '2026-10-11T03:00:00Z',
+        ],
+      );
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 1);
+      await runtime.database.customStatement('PRAGMA user_version = 15');
+      await runtime.close();
+      runtime = await OmniSyncRuntime.openAtPath(auth, databasePath);
+      expect(
+        (await runtime.database.select(runtime.database.events).getSingle())
+            .notes,
+        '保留备注',
+      );
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 1);
+      // 已存在的旧队列仍可由退休字段适配器处理。
+      final CrudTransaction? legacy = await runtime.powerSync
+          .getNextCrudTransaction();
+      expect(legacy!.crud.single.opData!['description'], '删除说明');
+      await legacy.complete();
+      await runtime.database
+          .update(runtime.database.events)
+          .write(const EventsCompanion(notes: Value<String?>('更新备注')));
+      // 重新安装后的触发器不再引用已删除列。
+      final CrudTransaction? updated = await runtime.powerSync
+          .getNextCrudTransaction();
+      expect(updated!.crud.single.opData, containsPair('notes', '更新备注'));
+      expect(updated.crud.single.opData, isNot(contains('description')));
+    } finally {
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
 
   test('真实 PowerSync 下支付统计流会收到订阅后的续费记录', () async {
     // 当前测试独占的真实 SQLite 文件目录。

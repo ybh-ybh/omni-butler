@@ -26,10 +26,11 @@ void main() {
     expect(fixture.rootNavigator.currentState!.canPop(), isTrue);
     expect(fixture.innerNavigator.currentState!.canPop(), isFalse);
     expect(find.text('测试底部导航').hitTestable(), findsNothing);
-    expect(_key('event-create-description'), findsNothing);
+    expect(_key('event-create-notes'), findsNothing);
     await _enter(tester, 'event-create-name', '检查滤芯');
     await _toggleSupplement(tester);
-    await _enter(tester, 'event-create-description', '每月检查清洁情况');
+    expect(find.text('事件说明'), findsNothing);
+    expect(_key('event-create-description'), findsNothing);
     await _enter(tester, 'event-create-notes', '保存折叠内容');
     await _toggleSupplement(tester);
     expect(_key('event-create-notes'), findsNothing);
@@ -40,7 +41,6 @@ void main() {
         .select(fixture.database.events)
         .getSingle();
     expect(record.name, '检查滤芯');
-    expect(record.description, '每月检查清洁情况');
     expect(record.notes, '保存折叠内容');
     expect(record.intervalValue, 1);
     expect(record.intervalUnit, 'month');

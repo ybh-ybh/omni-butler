@@ -15,7 +15,7 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 验证安卓事件平铺页的查询范围、筛选草稿和原有记录操作。
 void main() {
-  testWidgets('名称描述搜索只过滤列表且空结果能清除条件', (WidgetTester tester) async {
+  testWidgets('名称备注搜索只过滤列表且空结果能清除条件', (WidgetTester tester) async {
     // 使用包含活动、未记录和归档事件的独立内存页面。
     await _pumpEvents(tester);
     // 搜索前全部事件统计的胶囊数值。
@@ -260,7 +260,7 @@ Future<_EventsFixture> _pumpEvents(
   await repository.save(
     EventDraft(
       name: '更换滤芯',
-      description: '检查饮水安全并完成维护',
+      notes: '检查饮水安全并完成维护',
       intervalValue: 10,
       intervalUnit: EventIntervalUnit.day,
       lastCompletedAt: DateTime(2026, 10, 1, 10),
@@ -269,7 +269,7 @@ Future<_EventsFixture> _pumpEvents(
   await repository.save(
     const EventDraft(
       name: '检查药箱',
-      description: '核对常用药品是否过期',
+      notes: '核对常用药品是否过期',
       intervalValue: 1,
       intervalUnit: EventIntervalUnit.month,
     ),

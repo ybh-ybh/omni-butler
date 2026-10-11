@@ -335,9 +335,6 @@ class Events extends Table {
   /// 事件分类。
   TextColumn get category => text().nullable()();
 
-  /// 事件说明。
-  TextColumn get description => text().nullable()();
-
   /// 周期间隔数值。
   IntColumn get intervalValue =>
       integer().withDefault(const Constant<int>(1))();
@@ -735,7 +732,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 16;
 
   /// 创建数据库并从旧版本安全升级。
   @override
@@ -752,7 +749,6 @@ class AppDatabase extends _$AppDatabase {
         await migrator.createTable(attachments);
         await migrator.createTable(taxonomyEntries);
         await migrator.createTable(recordTaxonomyLinks);
-        await migrator.addColumn(events, events.description);
         await migrator.addColumn(events, events.reminderTimeMinutes);
         await migrator.addColumn(events, events.archivedAt);
         await migrator.addColumn(eventCompletions, eventCompletions.source);
@@ -907,6 +903,10 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         ).getSingleOrNull();
         if (steps == null) await migrator.createTable(todoProgressSteps);
         await _createTodoIndexes();
+      }
+      if (from < 16) {
+        // 按当前定义重建事件表，删除事件说明并保留备注、历史关联及其他字段。
+        await migrator.alterTable(TableMigration(events));
       }
     },
   );

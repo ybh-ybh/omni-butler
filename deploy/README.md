@@ -33,6 +33,10 @@ docker compose up -d --build --wait
 
 如果之前在终端设置过同名端口变量，请清除它们或打开一个未设置这些变量的新终端；终端环境变量的优先级高于 `.env`。
 
+## 删除事件说明的升级
+
+2026-10-11 起事件仅保留 `notes`（备注），删除 `events.description`（事件说明）及其旧内容。先更新服务端代码和 PowerSync 查询配置，在部署目录执行 `docker compose up -d --build --wait`，应用 `20261011000000_remove_event_description` 增量迁移；再升级所有客户端。本地 SQLite 会自动升级至 v16，保留备注、事件主体及完成历史。新客户端会过滤旧上传队列及旧迁移快照中的事件说明，避免访问已删除列。不要删除数据库或 Docker 卷。
+
 ## 可选图片同步
 
 只需在 `.env` 中设置 `IMAGE_SYNC_ENABLED=true`，再执行上面的 `docker compose up -d --build --wait`。只接受小写 `true` 或 `false`，已有部署未填写该项时默认关闭。首次开启会启动固定版本的 MinIO 官方镜像；默认关闭时不拉取、不运行 MinIO。

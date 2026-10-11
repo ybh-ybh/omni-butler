@@ -285,7 +285,6 @@ model Event {
   userId              String            @map("user_id") @db.Uuid
   name                String            @db.VarChar(200)
   category            String?
-  description         String?
   intervalValue       Int               @default(1) @map("interval_value")
   intervalUnit        String            @default("month") @map("interval_unit") @db.VarChar(16)
   lastCompletedAt     DateTime?         @map("last_completed_at") @db.Timestamptz(3)

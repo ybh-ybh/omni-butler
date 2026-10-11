@@ -48,7 +48,14 @@ class SyncSnapshot {
       tables: <String, List<Map<String, Object?>>>{
         for (final String table in tableNames)
           table: (encoded[table] as List)
-              .map((dynamic row) => Map<String, Object?>.from(row as Map))
+              .map((dynamic row) {
+                // 恢复旧快照时只丢弃已下线的事件说明，保留原文件与其他业务字段。
+                final Map<String, Object?> restored = Map<String, Object?>.from(
+                  row as Map,
+                );
+                if (table == 'events') restored.remove('description');
+                return restored;
+              })
               .toList(growable: false),
       },
       pendingOperations: json['pendingOperations'] as int,

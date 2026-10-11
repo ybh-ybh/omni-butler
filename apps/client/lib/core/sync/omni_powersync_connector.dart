@@ -9,6 +9,7 @@ import 'package:powersync/powersync.dart';
 class OmniPowerSyncConnector extends PowerSyncBackendConnector {
   /// 已明确下线的同步列；旧队列只移除这些字段，未知字段仍由服务器校验。
   static const Map<String, Set<String>> _retiredColumns = <String, Set<String>>{
+    'events': <String>{'description'},
     'daily_quote_selections': <String>{'is_manual'},
     'taxonomy_entries': <String>{'normalized_name', 'icon_code_point'},
     'memberships': <String>{

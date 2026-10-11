@@ -42,7 +42,7 @@ void main() {
       EventDraft(
         name: '更换净水滤芯',
         category: '家务',
-        description: '检查滤芯状态并完成更换',
+        notes: '检查滤芯状态并完成更换',
         intervalValue: 10,
         intervalUnit: EventIntervalUnit.day,
         lastCompletedAt: DateTime(2026, 8, 31, 10),

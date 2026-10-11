@@ -75,7 +75,6 @@ export const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
   events: new Set([
     'name',
     'category',
-    'description',
     'interval_value',
     'interval_unit',
     'last_completed_at',
