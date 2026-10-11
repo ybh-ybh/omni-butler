@@ -1,14 +1,12 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
-  CreateBucketCommand,
   DeleteObjectCommand,
   GetObjectCommand,
-  HeadBucketCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { readFile } from 'node:fs/promises';
+import { MinioConnection } from '../storage/minio-connection';
 
 /// 固定私有桶，只由后端代理访问。
 export const IMAGE_BUCKET = 'omni-butler-images';
@@ -25,17 +23,9 @@ export abstract class ImageObjectStore {
 
 /// 通过 Docker 内网访问内置 MinIO，关闭时不读取凭证、不连接存储。
 @Injectable()
-export class MinioImageObjectStore
-  extends ImageObjectStore
-  implements OnModuleDestroy
-{
-  /// 首次使用时懒加载初始化任务，失败后允许重试。
-  private ready: Promise<S3Client> | undefined;
-  /// 生命周期内复用的客户端。
-  private client: S3Client | undefined;
-
+export class MinioImageObjectStore extends ImageObjectStore {
   /// 注入应用唯一图片开关。
-  constructor(private readonly config: ConfigService) {
+  constructor(private readonly config: ConfigService, private readonly connection: MinioConnection) {
     super();
   }
 
@@ -43,51 +33,16 @@ export class MinioImageObjectStore
   private async connect(): Promise<S3Client> {
     if (!this.config.get<boolean>('IMAGE_SYNC_ENABLED'))
       throw new Error('图片同步未启用');
-    if (!this.ready) {
-      this.ready = this.initialize().catch((error: unknown) => {
-        this.ready = undefined;
-        throw error;
-      });
-    }
-    return this.ready;
+    return this.connection.forBucket(IMAGE_BUCKET);
   }
-
-  /// 建立内部连接；桶创建冲突可由其他 API 副本先行完成。
-  private async initialize(): Promise<S3Client> {
-    // 系统生成并持久化在私有卷内的凭证。
-    const credentials = JSON.parse(
-      await readFile('/app/image-storage/credentials.json', 'utf8'),
-    ) as { accessKeyId: string; secretAccessKey: string };
-    this.client?.destroy();
-    this.client = new S3Client({
-      endpoint: 'http://minio:9000',
-      region: 'us-east-1',
-      forcePathStyle: true,
-      credentials,
-      maxAttempts: 2,
-    });
-    try {
-      await this.client.send(new HeadBucketCommand({ Bucket: IMAGE_BUCKET }), {
-        abortSignal: AbortSignal.timeout(15000),
-      });
-    } catch {
-      try {
-        await this.client.send(
-          new CreateBucketCommand({ Bucket: IMAGE_BUCKET }),
-          { abortSignal: AbortSignal.timeout(15000) },
-        );
-      } catch {
-        await this.client.send(
-          new HeadBucketCommand({ Bucket: IMAGE_BUCKET }),
-          { abortSignal: AbortSignal.timeout(15000) },
-        );
-      }
-    }
-    return this.client;
+  /// 图片对象仅允许后端生成的归属、操作和对象三个UUID。
+  private validateKey(key: string): void {
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}(\/[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}){2}$/.test(key)) throw new Error('非法图片对象键');
   }
 
   /// 写入经校验的原文件，并提供真实 MIME。
   async put(key: string, bytes: Buffer, mime: string): Promise<void> {
+    this.validateKey(key);
     // 共享内部连接。
     const client = await this.connect();
     await client.send(
@@ -103,6 +58,7 @@ export class MinioImageObjectStore
 
   /// 将单张受大小限制的图片读入响应缓冲区。
   async get(key: string): Promise<Buffer> {
+    this.validateKey(key);
     // 共享内部连接。
     const client = await this.connect();
     // 对象读取结果。
@@ -116,6 +72,7 @@ export class MinioImageObjectStore
 
   /// 删除不存在的键也视为成功。
   async delete(key: string): Promise<void> {
+    this.validateKey(key);
     // 共享内部连接。
     const client = await this.connect();
     await client.send(
@@ -124,8 +81,4 @@ export class MinioImageObjectStore
     );
   }
 
-  /// 停机时释放连接池。
-  onModuleDestroy(): void {
-    this.client?.destroy();
-  }
 }

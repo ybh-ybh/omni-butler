@@ -164,6 +164,18 @@ class OmniPowerSyncConnector extends PowerSyncBackendConnector {
     final Map<String, Object?>? data = entry.opData == null
         ? null
         : Map<String, Object?>.from(entry.opData!);
+    // 标签使用队列中持久保存的前值计算新增/移除，离线重试保持同一意图。
+    if (entry.table == 'note_entries' &&
+        entry.op == UpdateType.patch &&
+        data != null &&
+        data.containsKey('tags')) {
+      // 前值由真实 SQLite UPDATE 捕获，不能用上传时的最新本地行替代。
+      final Object? originalTags = entry.previousValues?['tags'];
+      if (originalTags is! String) {
+        throw const ApiFailure('笔记标签同步缺少修改前值，请重新整理该篇标签后重试');
+      }
+      data['tags_base'] = originalTags;
+    }
     // 当前表明确退休的字段。
     final Set<String> retired =
         _retiredColumns[entry.table] ?? const <String>{};

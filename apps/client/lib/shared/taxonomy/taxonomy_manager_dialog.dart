@@ -122,6 +122,7 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
         TaxonomyKind.location => '物品位置',
       },
       TaxonomyModule.membership => '会员分类',
+      TaxonomyModule.notes => widget.kind == TaxonomyKind.tag ? '笔记标签' : '笔记类别',
     };
   }
 
@@ -269,11 +270,21 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
 
   /// 删除分类标签并提供撤销入口。
   Future<void> _delete(TaxonomyEntry entry) async {
+    // 本模块标签采用解除关联语义，删除前给出影响数量。
+    final int? affectedNotes =
+        widget.module == TaxonomyModule.notes && widget.kind == TaxonomyKind.tag
+        ? await ref.read(taxonomyRepositoryProvider).affectedNoteCount(entry.id)
+        : null;
+    if (!mounted) return;
     // 用户是否确认删除。
     final bool confirmed = await showOmniConfirmDialog(
       context,
       title: '删除“${entry.name}”？',
-      message: '删除后不能再为新记录选择它，已有记录中的$_typeName名称会继续保留。',
+      message:
+          widget.module == TaxonomyModule.notes &&
+              widget.kind == TaxonomyKind.tag
+          ? '将解除 $affectedNotes 篇笔记中的标签关联，保留全部正文和原音。'
+          : '删除后不能再为新记录选择它，已有记录中的$_typeName名称会继续保留。',
       confirmLabel: '删除',
       danger: true,
     );

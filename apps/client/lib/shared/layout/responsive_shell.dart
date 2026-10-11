@@ -14,6 +14,7 @@ import 'package:omni_butler/features/management/presentation/android_management_
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
+import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/shared/search/global_search_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:powersync/powersync.dart' show SyncStatus;
@@ -80,6 +81,14 @@ const List<_AppDestination> _desktopDestinations = <_AppDestination>[
     features: <AppFeature>[AppFeature.timeline],
   ),
   _AppDestination(
+    path: '/notes',
+    label: '笔记',
+    icon: Icons.edit_note_outlined,
+    selectedIcon: Icons.edit_note_rounded,
+    features: <AppFeature>[AppFeature.notes],
+    primaryDestination: PrimaryNavigationDestination.notes,
+  ),
+  _AppDestination(
     path: '/inventory',
     label: '管理',
     icon: Icons.dashboard_customize_outlined,
@@ -125,6 +134,14 @@ const List<_AppDestination> _compactDestinations = <_AppDestination>[
     features: <AppFeature>[AppFeature.timeline],
   ),
   _AppDestination(
+    path: '/notes',
+    label: '笔记',
+    icon: Icons.edit_note_outlined,
+    selectedIcon: Icons.edit_note_rounded,
+    features: <AppFeature>[AppFeature.notes],
+    primaryDestination: PrimaryNavigationDestination.notes,
+  ),
+  _AppDestination(
     path: '/inventory',
     label: '物品',
     icon: Icons.inventory_2_outlined,
@@ -163,6 +180,14 @@ const List<_AppDestination> _androidCompactDestinations = <_AppDestination>[
     selectedIcon: Icons.access_time_filled,
     features: <AppFeature>[AppFeature.timeline],
     primaryDestination: PrimaryNavigationDestination.timeline,
+  ),
+  _AppDestination(
+    path: '/notes',
+    label: '笔记',
+    icon: Icons.edit_note_outlined,
+    selectedIcon: Icons.edit_note_rounded,
+    features: <AppFeature>[AppFeature.notes],
+    primaryDestination: PrimaryNavigationDestination.notes,
   ),
   _AppDestination(
     path: '/inventory',
@@ -383,6 +408,14 @@ class ResponsiveShell extends ConsumerWidget {
     ManagementSection preferredSection,
     StatefulNavigationShell? navigationShell,
   ) {
+    if (destination.path == '/notes') {
+      // 主动导航清除旧搜索定位；已在记录页再次点击入口也提供新草稿。
+      if (location == '/notes') {
+        ref.read(noteEditorProvider).enter();
+      }
+      context.go('/notes');
+      return;
+    }
     // 当前导航项对应的一级分支。
     final PrimaryNavigationDestination? primaryDestination =
         destination.primaryDestination;

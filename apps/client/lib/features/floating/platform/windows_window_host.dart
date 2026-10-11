@@ -12,6 +12,7 @@ import 'package:flutter/src/widgets/_window_win32.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
+import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/app/router/app_router.dart';
 import 'package:omni_butler/app/theme/app_chrome_colors.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -940,6 +941,18 @@ class _WindowsWindowCoordinatorState
       return;
     }
     _isExiting = true;
+    // 先结束采集并确认原件落库，不能销毁窗口后才异步保存。
+    try {
+      await ref.read(noteEditorProvider).shutdown();
+    } catch (failure) {
+      // 保存失败保留窗口和输入，恢复退出入口供用户重试。
+      _isExiting = false;
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text('退出前保存笔记失败：$failure')));
+      }
+      return;
+    }
     // 捕获清理排空任务；先关闭可见窗口，再等待事务完成才退出进程。
     final Future<void>? recycleCleanup = ref
         .read(recycleBinCleanupProvider)

@@ -1064,6 +1064,7 @@ extension _AppFeaturePresentation on AppFeature {
     AppFeature.events => '事件管理',
     AppFeature.inventory => '物品管理',
     AppFeature.memberships => '会员管理',
+    AppFeature.notes => '笔记',
   };
 
   /// 功能用途说明。
@@ -1073,6 +1074,7 @@ extension _AppFeaturePresentation on AppFeature {
     AppFeature.events => '跟踪周期事件与完成记录',
     AppFeature.inventory => '管理物品、位置与配套关系',
     AppFeature.memberships => '管理会员、续费与到期提醒',
+    AppFeature.notes => '记录想法、语音与工作生活进展',
   };
 
   /// 功能图标。
@@ -1082,6 +1084,7 @@ extension _AppFeaturePresentation on AppFeature {
     AppFeature.events => Icons.calendar_today_outlined,
     AppFeature.inventory => Icons.inventory_2_outlined,
     AppFeature.memberships => Icons.credit_card_outlined,
+    AppFeature.notes => Icons.edit_note_rounded,
   };
 }
 

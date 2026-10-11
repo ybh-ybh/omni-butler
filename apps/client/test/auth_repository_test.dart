@@ -37,7 +37,7 @@ Dio _client(
                   requestOptions: options,
                   statusCode: 200,
                   data: <String, dynamic>{
-                    'syncSchemaVersion': 2,
+                    'syncSchemaVersion': syncSchemaVersion,
                     ...await respond(options),
                   },
                 ),
@@ -118,7 +118,7 @@ void main() {
     expect(
       requests.every(
         (RequestOptions request) =>
-            request.headers['X-Omni-Sync-Schema'] == '2',
+            request.headers['X-Omni-Sync-Schema'] == '$syncSchemaVersion',
       ),
       isTrue,
     );
@@ -178,7 +178,7 @@ void main() {
             if (request.path == '/sync/connection-preview') {
               return <String, dynamic>{
                 'protocolVersion': 1,
-                'snapshotVersion': 2,
+                'snapshotVersion': 3,
                 'ownerId': 'owner-b',
               };
             }

@@ -11,6 +11,9 @@ export interface SyncStatement {
 
 /// 各同步表允许由客户端写入的列。
 export const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
+  note_entries: new Set(['body', 'day_key', 'creation_timezone', 'category_id', 'category_name', 'tags', 'revision', 'created_at', 'updated_at', 'deleted_at']),
+  note_versions: new Set(['note_id', 'body', 'base_revision', 'revision', 'created_at', 'deleted_at']),
+  note_audio_segments: new Set(['note_id', 'sort_order', 'duration_ms', 'mime', 'sha256', 'byte_size', 'transcript', 'created_at', 'updated_at', 'deleted_at']),
   todo_items: new Set([
     'parent_id',
     'title',
@@ -186,6 +189,24 @@ export class SyncSqlBuilder {
     }
     // 客户端提交的数据。
     const data = { ...operation.data };
+    if (operation.table === 'note_entries' && data.creation_timezone !== undefined) {
+      // 保留客户端创建时的精确字符串，不能从服务器当前时区重新推导。
+      const timezone = data.creation_timezone;
+      if (typeof timezone !== 'string' || timezone.trim().length === 0 || [...timezone].length > 128) throw new BadRequestException('笔记创建时区必须为一至一百二十八字的非空文字');
+    }
+    if (operation.table === 'note_entries' && data.tags !== undefined) {
+      // 标签必须是最多二十个 UUID 的 JSON 文本，防止歧义同步。
+      let tags: unknown;
+      try { if (typeof data.tags !== 'string') throw new Error('invalid'); tags = JSON.parse(data.tags); } catch { throw new BadRequestException('笔记标签必须为 JSON 数组'); }
+      if (!Array.isArray(tags) || tags.length > 20 || tags.some((tag: unknown) => typeof tag !== 'string' || !/^[a-f0-9-]{36}$/i.test(tag))) throw new BadRequestException('笔记最多支持二十个有效标签');
+    }
+    if (operation.table === 'note_entries' && data.day_key !== undefined) {
+      // 真实自然日校验，不能接受 2 月 30 日之类无效值。
+      const day = typeof data.day_key === 'string' ? data.day_key : '';
+      // 对应 UTC 自然日的解析值。
+      const parsed = new Date(`${day}T00:00:00Z`);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) throw new BadRequestException('笔记日期无效');
+    }
     // 对新类型字段给出明确的客户端错误，原始负载保持幂等摘要不变。
     if (operation.table === 'todo_items') {
       if (

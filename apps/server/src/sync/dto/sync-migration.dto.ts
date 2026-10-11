@@ -1,7 +1,9 @@
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
-  Equals,
+  IsIn,
+  IsOptional,
+  ArrayUnique,
   IsArray,
   IsString,
   IsUUID,
@@ -32,8 +34,15 @@ export class SyncMigrationDto extends MigrationStatusDto {
   expectedOwnerId!: string;
 
   /// 当前严格快照协议版本。
-  @Equals(2)
+  @IsIn([2, 3])
   snapshotVersion!: number;
+
+  /// 用户明确确认缺失原音的不完整迁移，仅 v3 允许。
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  omittedAudioIds?: string[];
 
   /// 所有同步表的完整 PUT；空数组表示明确用空库覆盖。
   @IsArray()

@@ -1,4 +1,16 @@
 {
+  "lib/features/notes/presentation/note_audio_card.dart :: Slider": {
+    "count": 1,
+    "reason": "原音回听进度保留Slider的连续拖动、onChangeEnd提交seek及读屏时间语义；没有对应Omni进度选择包装器，颜色和禁用态继承统一SliderTheme。"
+  },
+  "lib/features/notes/presentation/notes_page.dart :: FilterChip": {
+    "count": 3,
+    "reason": "三处构造分别为历史未打标签筛选、历史多标签交集筛选、正文标签多选，保留selected/onSelected和键盘选择语义；OmniTag仅为只读状态标签，不能替代可选择控件，外观继承统一ChipTheme。"
+  },
+  "lib/features/notes/presentation/notes_page.dart :: showDateRangePicker": {
+    "count": 1,
+    "reason": "历史自定义范围需要同时选择起止日期并保留取消及日期范围语义；现有OmniDatePickerButton仅支持单日且已用于归档日期，范围选择保留统一主题的原生日期范围弹窗。"
+  },
   "lib/features/settings/presentation/sync_connection_dialog.dart :: Dialog": {
     "count": 1,
     "reason": "安卓连接服务器按用户要求使用补记同款 Dialog.fullscreen 容器；入口仍由 showOmniDialog 统一管理，背景及操作复用 Omni 语义色和控件。"

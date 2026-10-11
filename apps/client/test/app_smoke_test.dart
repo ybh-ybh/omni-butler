@@ -53,7 +53,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('紧凑布局只展示五个底部入口', (WidgetTester tester) async {
+  testWidgets('紧凑布局只展示六个底部入口', (WidgetTester tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     SharedPreferences.setMockInitialValues(<String, Object>{});
     // 测试用主题偏好存储。
@@ -85,6 +85,7 @@ void main() {
       ('/home', '首页'),
       ('/todos', '待办'),
       ('/timeline', '时间'),
+      ('/notes', '笔记'),
       ('/inventory', '管理'),
       ('/settings', '设置'),
     ]) {

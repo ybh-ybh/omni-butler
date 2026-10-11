@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/core/attachments/attachment_repository.dart';
 import 'package:omni_butler/core/database/app_database.dart';
+import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/features/events/data/event_repository.dart';
 import 'package:omni_butler/features/home/data/quote_repository.dart';
@@ -399,7 +401,37 @@ final Provider<RecycleBinRepository> recycleBinRepositoryProvider =
       final AppDatabase database = ref.watch(appDatabaseProvider);
       // 待办仓储。
       final TodoRepository todoRepository = ref.watch(todoRepositoryProvider);
-      return RecycleBinRepository(database, todoRepository);
+      // 捕获当前数据源的恢复目录，迟到清理不得写到新服务器对应目录。
+      final recorder = ref.watch(syncRuntimeProvider) == null
+          ? null
+          : ref.watch(noteRecorderProvider);
+      return RecycleBinRepository(
+        database,
+        todoRepository,
+        onNoteDeleted: recorder == null
+            ? null
+            : (id) async {
+                // 独立另存的有效原音仍引用同一物理文件，不能随原笔记清理。
+                final List<NoteAudioSegmentRecord> audio = await database
+                    .select(database.noteAudioSegments)
+                    .get();
+                final List<NoteAudioLocalFileRecord> files = await database
+                    .select(database.noteAudioLocalFiles)
+                    .get();
+                final Set<String> referenced = audio
+                    .map((segment) => segment.id)
+                    .toSet();
+                final Set<String> protectedPaths = files
+                    .where((file) => referenced.contains(file.id))
+                    .map((file) => file.localPath)
+                    .whereType<String>()
+                    .toSet();
+                await recorder.discardPendingForNote(
+                  id,
+                  protectedPaths: protectedPaths,
+                );
+              },
+      );
     });
 
 /// 统一回收站记录提供者。

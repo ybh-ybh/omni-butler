@@ -19,6 +19,9 @@ enum AppFeature {
 
   /// 会员管理功能。
   memberships,
+
+  /// 语音与文字笔记功能。
+  notes,
 }
 
 /// 单个功能的本机持久化键。

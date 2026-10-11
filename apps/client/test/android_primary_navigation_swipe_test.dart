@@ -52,7 +52,7 @@ void main() {
     );
   });
 
-  testWidgets('五个一级页面双向切换且拖动时展示真实卡片动效', (WidgetTester tester) async {
+  testWidgets('六个一级页面双向切换且拖动时展示真实卡片动效', (WidgetTester tester) async {
     // 当前测试使用的应用环境。
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
       tester,
@@ -83,7 +83,7 @@ void main() {
     final Transform currentScale = tester.widget<Transform>(
       find.byKey(const ValueKey<String>('primary-navigation-scale-2')),
     );
-    // 正在进入的管理卡片缩放变换。
+    // 正在进入的笔记卡片缩放变换。
     final Transform targetScale = tester.widget<Transform>(
       find.byKey(const ValueKey<String>('primary-navigation-scale-3')),
     );
@@ -102,6 +102,8 @@ void main() {
     await tester.pump();
     await gesture.up();
     await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/notes');
+    await _swipePrimary(tester, -220);
     expect(_currentPath(app.container), '/inventory');
 
     // 管理末页不能横滑进入更多，通过底栏继续一级导航。
@@ -122,9 +124,10 @@ void main() {
     await _swipePrimary(tester, -220);
     expect(_currentPath(app.container), '/settings');
 
-    // 反向依次返回管理、时间、待办和首页。
+    // 反向依次返回管理、笔记、时间、待办和首页。
     for (final String expectedPath in <String>[
       '/inventory',
+      '/notes',
       '/timeline',
       '/todos',
       '/home',
@@ -147,6 +150,7 @@ void main() {
         'appearance.theme_mode': 'light',
         'features.todos.enabled': false,
         'features.timeline.enabled': false,
+        'features.notes.enabled': false,
       },
     );
 
@@ -160,11 +164,11 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
     expect(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-3')),
+      find.byKey(const ValueKey<String>('primary-navigation-scale-4')),
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-4')),
+      find.byKey(const ValueKey<String>('primary-navigation-scale-5')),
       findsOneWidget,
     );
     expect(_currentPath(app.container), '/inventory');
@@ -273,7 +277,7 @@ void main() {
         ) +
         const Offset(-52, 24);
     // 连续甩动过程中始终不等待旧弹簧完成。
-    for (final int targetIndex in <int>[3, 4]) {
+    for (final int targetIndex in <int>[3, 4, 5]) {
       // 真实带时间戳和离手速度的触摸，吸附中的卡片不能吞掉后续手势。
       await tester.flingFrom(flingStart, const Offset(-230, 0), 900);
       await tester.pump();
@@ -283,9 +287,9 @@ void main() {
     }
     await tester.pumpAndSettle();
     expect(_currentPath(app.container), '/settings');
-    expect(_primaryOffset(tester, 4), 0);
+    expect(_primaryOffset(tester, 5), 0);
     // 反向也可在旧动画结束前连续接手，且不会被旧回调跳回。
-    for (final int targetIndex in <int>[3, 2, 1, 0]) {
+    for (final int targetIndex in <int>[4, 3, 2, 1, 0]) {
       _primaryController(tester).beginPrimarySwipe();
       _primaryController(tester).updatePrimarySwipe(230);
       _primaryController(tester).endPrimarySwipe(900);
@@ -393,11 +397,11 @@ void main() {
 
     // 减弱动效后的完整目标卡片。
     final PhysicalModel card = tester.widget<PhysicalModel>(
-      find.byKey(const ValueKey<String>('primary-navigation-card-4')),
+      find.byKey(const ValueKey<String>('primary-navigation-card-5')),
     );
     // 减弱动效后的目标缩放变换。
     final Transform scale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-4')),
+      find.byKey(const ValueKey<String>('primary-navigation-scale-5')),
     );
     expect(_currentPath(app.container), '/settings');
     expect(scale.transform.storage[0], 1);

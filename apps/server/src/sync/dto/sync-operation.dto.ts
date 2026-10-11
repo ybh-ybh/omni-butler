@@ -29,6 +29,9 @@ export class SyncOperationDto {
     'time_entries',
     'memberships',
     'membership_payments',
+    'note_entries',
+    'note_versions',
+    'note_audio_segments',
   ])
   table!: string;
 

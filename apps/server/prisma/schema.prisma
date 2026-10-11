@@ -42,8 +42,129 @@ model SyncOwner {
   membershipPayments   MembershipPayment[]
   images               BusinessImage[]
   imageReceipts        ImageOperationReceipt[]
+  /// 笔记正文、历史版本、音频与持久识别任务。
+  noteEntries          NoteEntry[]
+  noteVersions         NoteVersion[]
+  noteAudioSegments    NoteAudioSegment[]
+  noteAudioAssets      NoteAudioAsset[]
+  noteRecognitionJobs  NoteRecognitionJob[]
 
   @@map("sync_owners")
+}
+
+/// 本地优先笔记；正文版本身份用于检测并发编辑。
+model NoteEntry {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  body String @default("")
+  dayKey String @map("day_key") @db.VarChar(10)
+  /// 创建时区名称与当时UTC偏移，旧行明确标记为未知而不伪造地区。
+  creationTimezone String @default("legacy:unknown") @map("creation_timezone") @db.VarChar(128)
+  categoryId String? @map("category_id") @db.Uuid
+  categoryName String? @map("category_name") @db.VarChar(80)
+  tags String @default("[]")
+  revision String @db.Uuid
+  createdAt DateTime @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions NoteVersion[]
+  audioSegments NoteAudioSegment[]
+  @@unique([userId, id])
+  @@index([userId, dayKey])
+  @@map("note_entries")
+}
+
+/// 不可变正文候选；base_revision 不匹配时也完整保留。
+model NoteVersion {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  noteId String @map("note_id") @db.Uuid
+  body String
+  baseRevision String @map("base_revision") @db.Uuid
+  revision String @db.Uuid
+  createdAt DateTime @map("created_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  note NoteEntry @relation(fields: [userId, noteId], references: [userId, id], onDelete: Cascade)
+  @@unique([userId, noteId, revision])
+  @@index([userId, noteId])
+  @@map("note_versions")
+}
+
+/// 音频事实同步；存储路径和服务商任务身份仅留在后端私有表。
+model NoteAudioSegment {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  noteId String @map("note_id") @db.Uuid
+  sortOrder Int @map("sort_order")
+  durationMs Int @map("duration_ms")
+  mime String @db.VarChar(32)
+  sha256 String @db.VarChar(64)
+  byteSize Int @map("byte_size")
+  transcript String?
+  createdAt DateTime @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  note NoteEntry @relation(fields: [userId, noteId], references: [userId, id], onDelete: Cascade)
+  asset NoteAudioAsset?
+  recognitionJobs NoteRecognitionJob[]
+  @@unique([userId, id])
+  @@index([userId, noteId, sortOrder])
+  @@map("note_audio_segments")
+}
+
+/// 经摘要校验的不可变原音文件归属。
+model NoteAudioAsset {
+  segmentId String @id @map("segment_id") @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  objectKey String @unique @map("object_key")
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  segment NoteAudioSegment @relation(fields: [userId, segmentId], references: [userId, id], onDelete: Cascade)
+  @@unique([userId, segmentId])
+  @@map("note_audio_assets")
+}
+
+/// 持久任务与提交不确定状态防止断网或进程重启重复计费。
+model NoteRecognitionJob {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  segmentId String @map("segment_id") @db.Uuid
+  provider String @db.VarChar(32)
+  model String @db.VarChar(64)
+  status String @db.VarChar(32)
+  providerTaskId String? @map("provider_task_id") @db.VarChar(64)
+  transcript String?
+  errorCode String? @map("error_code") @db.VarChar(128)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  nextPollAt DateTime @default(now()) @map("next_poll_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  segment NoteAudioSegment @relation(fields: [userId, segmentId], references: [userId, id], onDelete: Cascade)
+  @@index([userId, segmentId, createdAt])
+  @@index([status, nextPollAt])
+  @@map("note_recognition_jobs")
+}
+
+/// 独立于归属和记录生命周期的文件清理回执。
+model NoteAudioGarbage {
+  objectKey String @id @map("object_key")
+  dueAt DateTime @default(now()) @map("due_at") @db.Timestamptz(3)
+  @@map("note_audio_garbage")
+}
+
+/// 与迁移身份绑定的原音暂存，只有完整校验后的快照才能接管。
+model NoteAudioStaging {
+  migrationId String @map("migration_id") @db.Uuid
+  segmentId String @map("segment_id") @db.Uuid
+  sha256 String @db.VarChar(64)
+  byteSize Int @map("byte_size")
+  mime String @db.VarChar(32)
+  objectKey String @unique @map("object_key")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@id([migrationId, segmentId])
+  @@map("note_audio_staging")
 }
 
 /// 图片关联与显式移除标记通过独立接口同步，不进入 PowerSync 业务白名单。

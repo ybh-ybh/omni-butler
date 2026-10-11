@@ -6,7 +6,7 @@
 
 ## 盘点口径与统一基础
 
-- 主导航有 **7 个路由**，另有 Windows 独立悬浮窗；Android 管理聚合器和设置详情属于既有路由内的二级界面。
+- 主导航有 **8 个路由**，另有 Windows 独立悬浮窗；Android 管理聚合器和设置详情属于既有路由内的二级界面。
 - 有 **24 个具名业务弹窗/侧栏组件**。同一组件的新增、编辑、开始、结束等状态合并计数；`State` 类、基础 `OmniDialogScaffold` 和内联确认框不重复计数。
 - 所有界面均需检查：正常、加载、空态、失败、禁用/只读、提交中、保存失败；只有相关界面才需构造对应状态，不能用空页面代替表单或列表验收。
 - 主题矩阵为六套配色 × 浅色/深色，另验跟随系统切换；平台矩阵为 Windows 宽窗/窄窗、Android 紧凑布局、Windows 悬浮窗专用尺寸。
@@ -23,6 +23,7 @@
 | `/events`；`lib/features/events/presentation/events_page.dart` | 事件列表/卡片、状态筛选、归档、周期提醒；记录完成、历史、撤销 | Windows 宽/窄窗、Android 管理聚合 | 页面与编辑器接共享主题、表单、按钮、菜单、开关、日期时间；保留事件业务状态色 | `events_layout_test.dart`、`management_compact_cards_test.dart`、`business_repositories_test.dart` | 自动化通过；人工矩阵待验 |
 | `/inventory`；`lib/features/inventory/presentation/inventory_page.dart` | 物品卡片、搜索/分类/位置/状态筛选、统计、详情、配套物品、批量迁移；继承位置、附件状态 | Windows 宽/窄窗、Android 管理聚合 | 通用控件接 Omni；详情卡和统计图保留专用布局；详情翻转及新增拆分菜单列为专用浮层 | `inventory_layout_test.dart`、`inventory_move_dialog_test.dart`、`management_compact_cards_test.dart` | 自动化通过；人工矩阵待验 |
 | `/memberships`；`lib/features/memberships/presentation/memberships_page.dart` | 会员卡片、搜索/类别/状态筛选、支出统计、到期时间轴、缴费历史；永久/到期/续费/提醒状态 | Windows 宽/窄窗、Android 管理聚合 | 共享面板、表单、日期、开关、菜单和消息；会员状态信息/图表维持业务语义 | `memberships_layout_test.dart`、`management_compact_cards_test.dart`、`business_repositories_test.dart` | 自动化通过；人工矩阵待验 |
+| `/notes`；`lib/features/notes/presentation/notes_page.dart`、`note_audio_card.dart` | 空白编辑、自动保存、历史组合筛选、分类标签、录音/回听/转写、失败与版本候选 | Windows 并排/窄窗、Android | 输入、下拉、单日选择、按钮和图标操作接Omni；正文保留无边框多行编辑；版本和转写查看通过showOmniDialog与OmniDialogScaffold；标签多选、日期范围、回听seek为逐项受控例外 | `features/notes/notes_page_test.dart`、`features/notes/note_audio_card_test.dart` | 本轮样式收尾仅定向分析及样式检查，页面/实机验收由功能验证记录说明 |
 | `/settings`；`lib/features/settings/presentation/settings_page.dart` | 首页设置、功能管理、外观与主题、通知提醒、数据同步、回收站；Android 概览→详情→返回；断开/重连/清空/恢复状态 | Windows 宽/窄窗、Android | Android 六色入口图标，首页设置两端实底分组；同步连接、备份、断开操作独立分组，窄屏整行排列；保留既有设置导航与危险操作边界 | `settings_layout_test.dart`、`home_mobile_settings_test.dart`、`theme_settings_test.dart`、`feature_preferences_test.dart`、`android_settings_transition_test.dart`、`sync_connection_dialog_test.dart` | 自动化与中文明暗预览通过；人工矩阵待验 |
 | `FloatingWindowPage`；`lib/features/floating/presentation/floating_window_page.dart` | 待办象限/子任务、快速新增、开始记录/补记、进行中、撤销；拖动、缩放、唤起主窗口 | Windows 独立悬浮窗 | 共享语义色、输入、下拉、按钮和消息；紧凑行高、宿主窗口拖拽/缩放及浮层材质为受控差异 | `floating_window_page_test.dart`、`floating_resize_scheduler_test.dart`、`windows_floating_resize_service_test.dart`、`support/windows_floating_host_smoke.dart` | 自动化通过；人工矩阵待验 |
 | `ResponsiveShell`、管理聚合器；`lib/shared/layout/responsive_shell.dart`、`lib/features/management/presentation/` | 侧栏/导航轨、桌面管理切换、底部导航、Android 主页面/管理分区横滑、同步状态入口 | Windows、Android | 共享主题、图标操作与菜单；导航关系、预加载和手势协调保持既有契约 | `desktop_management_navigation_test.dart`、`android_management_navigation_test.dart`、`android_primary_navigation_swipe_test.dart`、`responsive_shell_sync_status_test.dart` | 自动化通过；人工矩阵待验 |
@@ -276,3 +277,10 @@
 - 待办子任务批量展开／收起移到每个象限标题右侧，仅处理该象限实际显示的全部可展开父项，无未完成子项时隐藏按钮；与单项展开联动，修复旧批量逻辑仍限制前三个父项的问题。桌面和Android宽屏沿用原展示。
 - 6个相关测试文件 **68项通过**，覆盖标题删除、批量作用域、第四父项、数据更新隐藏、跟手与反向拖动、320dp双倍字号导航、减少动画、模块增删重排、滚动与展开保留。首页 **3项Golden通过**，仅更新Android紧凑基线；全量静态分析及样式检查通过。
 - 首页隔离中文预览 **2项通过**，已查看明暗四模块及子任务展开／折叠截图。证据：`output/home-header-tabs-tests.log`、`output/home-header-tabs-golden.log`、`output/home-header-tabs-analyze.log`、`output/home-header-tabs-preview-scoped.log`，图片位于`output/ui-pages-preview/`。未构建安装APK，未做实体Android设备动效或TalkBack验收。
+
+## 2026-10-11 笔记界面统一控件收尾
+
+- 范围仅为笔记页与原音卡片的呈现、样式例外和本清单。搜索及无边框多行正文复用OmniTextField，保留原controller、输入法、焦点、行数和onChanged；普通下拉、图标、文字操作及单日归档选择分别接OmniDropdownButton、OmniIconButton、OmniButton和OmniDatePickerButton，原业务回调与文案不变。
+- 版本记录和原始/本次转写查看统一通过showOmniDialog与OmniDialogScaffold，保留版本选择、复制及关闭动作。按钮使用OmniSize.control视觉高度，触控热区由公共组件独立保持，不再把原音卡片按钮视觉高度固定为48。
+- 仅新增三项受控例外，共五处构造：FilterChip三处保留历史与正文多选语义（OmniTag为只读状态标签）；showDateRangePicker一处满足起止日期范围（已有Omni日期控件只支持单日）；Slider一处保留连续拖动、结束后seek和读屏时间。均继承统一主题，已在tool/ui_style_exceptions.json逐项记录原因与数量；全仓共44项受控例外。
+- 两文件定向dart format、dart analyze及dart run tool/check_ui_style.dart通过，差异检查通过。本轮按并行录音验证的协调要求未运行Flutter测试、未更新Golden或构建安装；界面实测与设备语音验证由笔记功能验收另行记录。

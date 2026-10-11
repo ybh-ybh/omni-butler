@@ -3,7 +3,7 @@ import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 /// 不携带同步检查点、客户端身份或设备密钥的完整业务快照。
 class SyncSnapshot {
   /// 当前快照持久化格式版本。
-  static const int version = 2;
+  static const int version = 3;
 
   /// 包含所有业务表及本机附件、横幅设置的原始 SQLite 行。
   final Map<String, List<Map<String, Object?>>> tables;
@@ -16,7 +16,9 @@ class SyncSnapshot {
 
   /// 从迁移控制文件恢复快照，拒绝不支持的格式和未知表。
   factory SyncSnapshot.fromJson(Map<String, dynamic> json) {
-    if (json['version'] != version && json['version'] != 1) {
+    if (json['version'] != version &&
+        json['version'] != 2 &&
+        json['version'] != 1) {
       throw const FormatException('不支持的迁移快照版本');
     }
     // 只接受当前版本固定定义的业务表名。
@@ -40,6 +42,17 @@ class SyncSnapshot {
             .toList(growable: false);
       }
     }
+    if (json['version'] == 1 || json['version'] == 2) {
+      // 旧快照没有笔记，补齐空表以维持完整备份白名单。
+      for (final String table in <String>[
+        'note_entries',
+        'note_versions',
+        'note_audio_segments',
+        'note_audio_local_files',
+      ]) {
+        encoded.putIfAbsent(table, () => <dynamic>[]);
+      }
+    }
     if (encoded.keys.any((String table) => !tableNames.contains(table)) ||
         tableNames.any((String table) => !encoded.containsKey(table))) {
       throw const FormatException('迁移快照业务表不完整');
@@ -54,6 +67,12 @@ class SyncSnapshot {
                   row as Map,
                 );
                 if (table == 'events') restored.remove('description');
+                if (table == 'note_entries') {
+                  restored.putIfAbsent(
+                    'creation_timezone',
+                    () => 'legacy:unknown',
+                  );
+                }
                 return restored;
               })
               .toList(growable: false),
@@ -67,6 +86,7 @@ class SyncSnapshot {
     ...omniSyncSchema.rawTables.map((table) => table.name),
     'banner_settings',
     'attachments',
+    'note_audio_local_files',
   ];
 
   /// 按同步白名单生成服务器可接受的完整 PUT 列表。
@@ -100,7 +120,11 @@ class SyncSnapshot {
     0,
     (int sum, table) =>
         sum +
-        (table.name == 'todo_progress_steps'
+        (<String>{
+              'todo_progress_steps',
+              'note_versions',
+              'note_audio_segments',
+            }.contains(table.name)
             ? 0
             : (tables[table.name] ?? <Map<String, Object?>>[])
                   .where(

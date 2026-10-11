@@ -1,0 +1,246 @@
+{
+  "clientId": "ff7b5baf-0144-498f-98fe-4131f58a0543",
+  "noteId": "d5efab42-7a42-468b-bd07-e12ac9dd1e4e",
+  "segmentId": "e7750999-0650-4ff4-a7e4-2767e313cf7f",
+  "categoryId": "5c041757-f101-4a87-bd76-4409a6470416",
+  "tagId": "1a44f3fc-b1cd-4282-8633-d873cdd931fe",
+  "audioSha256": "643f8a8dc8bd9c19225afffad2becfec5426180b3749cb208abdf1a6c8354efc",
+  "audioByteSize": 32044,
+  "transactions": [
+    {
+      "clientId": "ff7b5baf-0144-498f-98fe-4131f58a0543",
+      "transactionId": "2",
+      "operations": [
+        {
+          "op": "PUT",
+          "table": "taxonomy_entries",
+          "id": "5c041757-f101-4a87-bd76-4409a6470416",
+          "data": {
+            "color_value": 0,
+            "created_at": "2026-10-11T00:00:00Z",
+            "is_enabled": 1,
+            "kind": "category",
+            "module": "notes",
+            "name": "测试category",
+            "sort_order": 0,
+            "updated_at": "2026-10-11T00:00:00Z"
+          }
+        },
+        {
+          "op": "PUT",
+          "table": "taxonomy_entries",
+          "id": "1a44f3fc-b1cd-4282-8633-d873cdd931fe",
+          "data": {
+            "color_value": 0,
+            "created_at": "2026-10-11T00:00:00Z",
+            "is_enabled": 1,
+            "kind": "tag",
+            "module": "notes",
+            "name": "测试tag",
+            "sort_order": 0,
+            "updated_at": "2026-10-11T00:00:00Z"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "ff7b5baf-0144-498f-98fe-4131f58a0543",
+      "transactionId": "3",
+      "operations": [
+        {
+          "op": "PUT",
+          "table": "note_entries",
+          "id": "d5efab42-7a42-468b-bd07-e12ac9dd1e4e",
+          "data": {
+            "body": "客户端创建",
+            "created_at": "2026-10-11T15:11:16.742474 +08:00",
+            "creation_timezone": "中国标准时间|+08:00",
+            "day_key": "2026-10-11",
+            "revision": "8f1f539c-7ad6-48b3-a6c8-488d834676f2",
+            "tags": "[]",
+            "updated_at": "2026-10-11T15:11:16.742474 +08:00"
+          }
+        },
+        {
+          "op": "PUT",
+          "table": "note_versions",
+          "id": "8f1f539c-7ad6-48b3-a6c8-488d834676f2",
+          "data": {
+            "base_revision": "8f1f539c-7ad6-48b3-a6c8-488d834676f2",
+            "body": "客户端创建",
+            "created_at": "2026-10-11T15:11:16.742474 +08:00",
+            "note_id": "d5efab42-7a42-468b-bd07-e12ac9dd1e4e",
+            "revision": "8f1f539c-7ad6-48b3-a6c8-488d834676f2"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "ff7b5baf-0144-498f-98fe-4131f58a0543",
+      "transactionId": "4",
+      "operations": [
+        {
+          "op": "PUT",
+          "table": "note_versions",
+          "id": "b6726b04-274e-4814-ae9a-0805cc994f2b",
+          "data": {
+            "base_revision": "8f1f539c-7ad6-48b3-a6c8-488d834676f2",
+            "body": "客户端编辑后的正文",
+            "created_at": "2026-10-11T15:11:16.762474 +08:00",
+            "note_id": "d5efab42-7a42-468b-bd07-e12ac9dd1e4e",
+            "revision": "b6726b04-274e-4814-ae9a-0805cc994f2b"
+          }
+        },
+        {
+          "op": "PATCH",
+          "table": "note_entries",
+          "id": "d5efab42-7a42-468b-bd07-e12ac9dd1e4e",
+          "data": {
+            "body": "客户端编辑后的正文",
+            "revision": "b6726b04-274e-4814-ae9a-0805cc994f2b",
+            "updated_at": "2026-10-11T15:11:16.762474 +08:00"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "ff7b5baf-0144-498f-98fe-4131f58a0543",
+      "transactionId": "5",
+      "operations": [
+        {
+          "op": "PATCH",
+          "table": "note_entries",
+          "id": "d5efab42-7a42-468b-bd07-e12ac9dd1e4e",
+          "data": {
+            "category_id": "5c041757-f101-4a87-bd76-4409a6470416",
+            "category_name": "测试category",
+            "tags": "[\"1a44f3fc-b1cd-4282-8633-d873cdd931fe\"]",
+            "updated_at": "2026-10-11T15:11:16.774474 +08:00",
+            "tags_base": "[]"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "ff7b5baf-0144-498f-98fe-4131f58a0543",
+      "transactionId": "6",
+      "operations": [
+        {
+          "op": "PUT",
+          "table": "note_audio_segments",
+          "id": "e7750999-0650-4ff4-a7e4-2767e313cf7f",
+          "data": {
+            "byte_size": 32044,
+            "created_at": "2026-10-11T15:11:16.818342 +08:00",
+            "duration_ms": 1000,
+            "mime": "audio/wav",
+            "note_id": "d5efab42-7a42-468b-bd07-e12ac9dd1e4e",
+            "sha256": "643f8a8dc8bd9c19225afffad2becfec5426180b3749cb208abdf1a6c8354efc",
+            "sort_order": 0,
+            "updated_at": "2026-10-11T15:11:16.818342 +08:00"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "ff7b5baf-0144-498f-98fe-4131f58a0543",
+      "transactionId": "7",
+      "operations": [
+        {
+          "op": "PATCH",
+          "table": "note_entries",
+          "id": "d5efab42-7a42-468b-bd07-e12ac9dd1e4e",
+          "data": {
+            "deleted_at": "2026-10-11T15:11:16.828340 +08:00",
+            "updated_at": "2026-10-11T15:11:16.829342 +08:00"
+          }
+        },
+        {
+          "op": "PATCH",
+          "table": "note_versions",
+          "id": "8f1f539c-7ad6-48b3-a6c8-488d834676f2",
+          "data": {
+            "deleted_at": "2026-10-11T15:11:16.828340 +08:00"
+          }
+        },
+        {
+          "op": "PATCH",
+          "table": "note_versions",
+          "id": "b6726b04-274e-4814-ae9a-0805cc994f2b",
+          "data": {
+            "deleted_at": "2026-10-11T15:11:16.828340 +08:00"
+          }
+        },
+        {
+          "op": "PATCH",
+          "table": "note_audio_segments",
+          "id": "e7750999-0650-4ff4-a7e4-2767e313cf7f",
+          "data": {
+            "deleted_at": "2026-10-11T15:11:16.828340 +08:00",
+            "updated_at": "2026-10-11T15:11:16.832340 +08:00"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "ff7b5baf-0144-498f-98fe-4131f58a0543",
+      "transactionId": "8",
+      "operations": [
+        {
+          "op": "PATCH",
+          "table": "note_entries",
+          "id": "d5efab42-7a42-468b-bd07-e12ac9dd1e4e",
+          "data": {
+            "deleted_at": null,
+            "updated_at": "2026-10-11T15:11:16.844340 +08:00"
+          }
+        },
+        {
+          "op": "PATCH",
+          "table": "note_versions",
+          "id": "8f1f539c-7ad6-48b3-a6c8-488d834676f2",
+          "data": {
+            "deleted_at": null
+          }
+        },
+        {
+          "op": "PATCH",
+          "table": "note_versions",
+          "id": "b6726b04-274e-4814-ae9a-0805cc994f2b",
+          "data": {
+            "deleted_at": null
+          }
+        },
+        {
+          "op": "PATCH",
+          "table": "note_audio_segments",
+          "id": "e7750999-0650-4ff4-a7e4-2767e313cf7f",
+          "data": {
+            "deleted_at": null,
+            "updated_at": "2026-10-11T15:11:16.846341 +08:00"
+          }
+        }
+      ]
+    }
+  ],
+  "source": "Flutter NoteRepository → real PowerSync SQLite CRUD → OmniPowerSyncConnector authorizedRequestForGeneration capture; command flutter test test/notes_integration_test.dart --plain-name 真实PowerSync --dart-define=NOTES_CLIENT_FIXTURE=true",
+  "expected": {
+    "body": "客户端编辑后的正文",
+    "dayKey": "2026-10-11",
+    "revision": "b6726b04-274e-4814-ae9a-0805cc994f2b",
+    "categoryName": "测试category",
+    "tags": [
+      "1a44f3fc-b1cd-4282-8633-d873cdd931fe"
+    ],
+    "deletedAt": null,
+    "audioCount": 1,
+    "versionCount": 2
+  },
+  "audioFixture": {
+    "headerByteCount": 44,
+    "pcmFillByte": 0,
+    "pcmByteCount": 32000,
+    "riffChunkSize": 32036,
+    "format": "PCM WAV, mono 16kHz, 16-bit little endian"
+  }
+}

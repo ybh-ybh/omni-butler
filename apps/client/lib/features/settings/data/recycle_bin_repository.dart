@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
+import 'package:omni_butler/features/notes/data/note_repository.dart';
 
 /// 回收站业务类型。
 enum RecycleEntityType {
@@ -21,6 +22,9 @@ enum RecycleEntityType {
 
   /// 名言。
   quote,
+
+  /// 笔记及其录音、版本。
+  note,
 }
 
 /// 回收站统一展示项。
@@ -54,13 +58,20 @@ class RecycleBinRepository {
   /// 待办仓储，用于保持任务树恢复与永久删除语义。
   final TodoRepository _todoRepository;
 
+  /// 笔记事务提交后清理未落库恢复原件；不得在 SQL 回滚前删除文件。
+  final Future<void> Function(String id)? onNoteDeleted;
+
   /// 创建统一回收站仓储。
-  const RecycleBinRepository(this._database, this._todoRepository);
+  const RecycleBinRepository(
+    this._database,
+    this._todoRepository, {
+    this.onNoteDeleted,
+  });
 
   /// 读取全部顶层软删除记录。
   Future<List<RecycleBinItem>> loadItems() => _loadItems(grouped: true);
 
-  /// 监听六张业务表，事务读取保证分组来自同一数据库快照。
+  /// 监听各业务表，事务读取保证分组来自同一数据库快照。
   Stream<List<RecycleBinItem>> watchItems() {
     return _database
         .customSelect(
@@ -69,7 +80,8 @@ class RecycleBinRepository {
           'SELECT COUNT(*) FROM inventory_items UNION ALL '
           'SELECT COUNT(*) FROM time_entries UNION ALL '
           'SELECT COUNT(*) FROM memberships UNION ALL '
-          'SELECT COUNT(*) FROM quotes',
+          'SELECT COUNT(*) FROM quotes UNION ALL '
+          'SELECT COUNT(*) FROM note_entries',
           readsFrom: {
             _database.todoItems,
             _database.events,
@@ -77,6 +89,7 @@ class RecycleBinRepository {
             _database.timeEntries,
             _database.memberships,
             _database.quotes,
+            _database.noteEntries,
           },
         )
         .watch()
@@ -198,6 +211,22 @@ class RecycleBinRepository {
         ),
       ),
     );
+    // 笔记以主记录展示，原音和历史版本随主记录绑定恢复或永久删除。
+    final List<NoteEntryRecord> notes = await (_database.select(
+      _database.noteEntries,
+    )..where((NoteEntries table) => table.deletedAt.isNotNull())).get();
+    items.addAll(
+      notes.map(
+        (NoteEntryRecord record) => RecycleBinItem(
+          type: RecycleEntityType.note,
+          id: record.id,
+          title: record.body.trim().isEmpty
+              ? '语音笔记'
+              : record.body.trim().split('\n').first,
+          deletedAt: record.deletedAt!.toLocal(),
+        ),
+      ),
+    );
     items.sort(
       (RecycleBinItem left, RecycleBinItem right) =>
           right.deletedAt.compareTo(left.deletedAt),
@@ -211,6 +240,8 @@ class RecycleBinRepository {
     // 当前恢复时间。
     final DateTime now = DateTime.now();
     switch (item.type) {
+      case RecycleEntityType.note:
+        await NoteRepository(_database).restore(item.id);
       case RecycleEntityType.todo:
         await _todoRepository.restore(item.id);
       case RecycleEntityType.event:
@@ -271,6 +302,11 @@ class RecycleBinRepository {
   Future<bool> _isCurrent(RecycleBinItem item, {DateTime? cutoff}) async {
     // 当前业务记录的删除时间。
     final DateTime? deletedAt = await switch (item.type) {
+      RecycleEntityType.note =>
+        (_database.select(_database.noteEntries)
+              ..where((NoteEntries table) => table.id.equals(item.id)))
+            .map((NoteEntryRecord record) => record.deletedAt)
+            .getSingleOrNull(),
       RecycleEntityType.todo =>
         (_database.select(_database.todoItems)
               ..where((TodoItems table) => table.id.equals(item.id)))
@@ -309,7 +345,12 @@ class RecycleBinRepository {
 
   /// 永久删除一条顶层业务记录及其从属历史。
   Future<void> permanentlyDelete(RecycleBinItem item) async {
-    await _deleteIfCurrent(item);
+    // 只在实际删除或原记录已经不存在时处理原件，恢复的记录不能被迟到请求清理。
+    final bool deleted = await _deleteIfCurrent(item);
+    if (item.type == RecycleEntityType.note &&
+        (deleted || await NoteRepository(_database).find(item.id) == null)) {
+      await onNoteDeleted?.call(item.id);
+    }
   }
 
   /// 复核后永久删除，返回是否实际处理了这条记录。
@@ -318,6 +359,8 @@ class RecycleBinRepository {
       if (!await _isCurrent(item, cutoff: cutoff)) return false;
       await _preserveChildren(item, cutoff: cutoff);
       switch (item.type) {
+        case RecycleEntityType.note:
+          await NoteRepository(_database).permanentlyDelete(item.id);
         case RecycleEntityType.todo:
           await _todoRepository.permanentlyDelete(item.id);
         case RecycleEntityType.event:
@@ -418,18 +461,28 @@ class RecycleBinRepository {
   }
 
   /// 在一个事务中读取并复核全部候选记录，失败时整体回滚。
-  Future<int> _deleteBatch({DateTime? cutoff}) =>
-      _database.transaction(() async {
-        // 当前数据库中全部已删除业务记录。
-        final List<RecycleBinItem> items = await _loadItems(grouped: false);
-        // 实际处理的业务记录数，已由父项级联删除的子项不重复计数。
-        int count = 0;
-        for (final RecycleBinItem item in items) {
-          if (cutoff != null && !item.deletedAt.isBefore(cutoff)) continue;
-          if (await _deleteIfCurrent(item, cutoff: cutoff)) count++;
+  Future<int> _deleteBatch({DateTime? cutoff}) async {
+    // 文件清理只能在整个批量事务提交后执行。
+    final List<String> deletedNotes = [];
+    final int result = await _database.transaction(() async {
+      // 当前数据库中全部已删除业务记录。
+      final List<RecycleBinItem> items = await _loadItems(grouped: false);
+      // 实际处理的业务记录数，已由父项级联删除的子项不重复计数。
+      int count = 0;
+      for (final RecycleBinItem item in items) {
+        if (cutoff != null && !item.deletedAt.isBefore(cutoff)) continue;
+        if (await _deleteIfCurrent(item, cutoff: cutoff)) {
+          count++;
+          if (item.type == RecycleEntityType.note) deletedNotes.add(item.id);
         }
-        return count;
-      });
+      }
+      return count;
+    });
+    for (final String id in deletedNotes) {
+      await onNoteDeleted?.call(id);
+    }
+    return result;
+  }
 
   /// 清理超过 30 天保留期的记录。
   Future<int> purgeExpired({DateTime? now}) async {

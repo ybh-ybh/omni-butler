@@ -2,7 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
 
-/// 为回收站测试创建六类真实业务记录，避免依赖会播种或生成重复项的页面。
+/// 为回收站测试创建全部回收站类型的真实业务记录，避免依赖会播种或生成重复项的页面。
 Future<void> seedRecycleRecord(
   AppDatabase database,
   RecycleEntityType type,
@@ -16,6 +16,20 @@ Future<void> seedRecycleRecord(
   // 记录标识保持稳定，预览可以使用真实中文业务标题。
   final String label = title ?? id;
   switch (type) {
+    case RecycleEntityType.note:
+      await database
+          .into(database.noteEntries)
+          .insert(
+            NoteEntriesCompanion.insert(
+              id: id,
+              body: Value(label),
+              dayKey: '2026-01-01',
+              revision: 'initial-$id',
+              createdAt: createdAt,
+              updatedAt: createdAt,
+              deletedAt: Value(deletedAt),
+            ),
+          );
     case RecycleEntityType.todo:
       await database
           .into(database.todoItems)

@@ -111,6 +111,157 @@ Future<void> _insertTodo(AppDatabase database, String id) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('真实笔记PUT不携带标签基线，正文类别PATCH不附带未修改标签基线', () async {
+    // 仅使用真实生产触发器生成队列，不手工插入powersync_crud。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_note_tags_shape_',
+    );
+    // 捕获真实连接器最终请求。
+    final _RecordingAuth auth = _RecordingAuth();
+    // 隔离运行时与业务数据库。
+    final OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      '${directory.path}/db.sqlite',
+    );
+    // 初始归档时刻。
+    final DateTime now = DateTime.utc(2026, 10, 11);
+    try {
+      await runtime.database
+          .into(runtime.database.noteEntries)
+          .insert(
+            NoteEntriesCompanion.insert(
+              id: '01990000-7000-8002-8000-000000000101',
+              body: const Value('初始正文'),
+              dayKey: '2026-10-11',
+              tags: const Value('["initial"]'),
+              revision: '01990000-7000-8002-8000-000000000102',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+      // SDK实际创建操作，不是快照合成操作。
+      final CrudTransaction? creation = await runtime.powerSync
+          .getNextCrudTransaction();
+      expect(creation!.crud.single.op, UpdateType.put);
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      // 首次PUT以完整tags定义新记录，不需要旧版本基线。
+      final Map<String, dynamic> created =
+          (auth.requests.single['operations'] as List).single
+              as Map<String, dynamic>;
+      expect(created['data']['tags'], '["initial"]');
+      expect((created['data'] as Map).containsKey('tags_base'), isFalse);
+      auth.requests.clear();
+      await (runtime.database.update(runtime.database.noteEntries)..where(
+            (row) => row.id.equals('01990000-7000-8002-8000-000000000101'),
+          ))
+          .write(const NoteEntriesCompanion(body: Value('只改正文')));
+      await (runtime.database.update(runtime.database.noteEntries)..where(
+            (row) => row.id.equals('01990000-7000-8002-8000-000000000101'),
+          ))
+          .write(
+            const NoteEntriesCompanion(
+              categoryId: Value('01990000-7000-8002-8000-000000000103'),
+              categoryName: Value('只改分类'),
+            ),
+          );
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      expect(auth.requests, hasLength(2));
+      for (final Map<String, dynamic> request in auth.requests) {
+        // 两次独立PATCH不得意外传入其他设备标签整理的旧基线。
+        final Map<String, dynamic> operation =
+            (request['operations'] as List).single as Map<String, dynamic>;
+        expect(operation['op'], 'PATCH');
+        expect((operation['data'] as Map).containsKey('tags'), isFalse);
+        expect((operation['data'] as Map).containsKey('tags_base'), isFalse);
+      }
+    } finally {
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('连续离线标签增删持久保留各自OLD.tags，响应丢失重启重试身份与基线不变', () async {
+    // 重启后保留同一真实SQLite与SDK队列。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_note_tags_retry_',
+    );
+    final String databasePath = '${directory.path}/db.sqlite';
+    // 服务端响应可由测试独立丢弃。
+    final _RecordingAuth auth = _RecordingAuth();
+    OmniSyncRuntime? runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      databasePath,
+    );
+    final DateTime now = DateTime.utc(2026, 10, 11);
+    try {
+      await runtime.database
+          .into(runtime.database.noteEntries)
+          .insert(
+            NoteEntriesCompanion.insert(
+              id: '01990000-7000-8002-8000-000000000101',
+              dayKey: '2026-10-11',
+              tags: const Value('["initial"]'),
+              revision: '01990000-7000-8002-8000-000000000102',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      auth.requests.clear();
+      await (runtime.database.update(runtime.database.noteEntries)..where(
+            (row) => row.id.equals('01990000-7000-8002-8000-000000000101'),
+          ))
+          .write(
+            const NoteEntriesCompanion(tags: Value('["initial","added"]')),
+          );
+      await (runtime.database.update(runtime.database.noteEntries)..where(
+            (row) => row.id.equals('01990000-7000-8002-8000-000000000101'),
+          ))
+          .write(const NoteEntriesCompanion(tags: Value('["added"]')));
+      // 真正的SDK前态捕获应区别于最新业务表中的最终标签。
+      final CrudTransaction? queued = await runtime.powerSync
+          .getNextCrudTransaction();
+      expect(queued!.crud.single.previousValues?['tags'], '["initial"]');
+      expect(queued.crud.single.opData!['tags'], '["initial","added"]');
+      auth.loseResponse = true;
+      await expectLater(
+        OmniPowerSyncConnector(auth).uploadData(runtime.powerSync),
+        throwsA(isA<ApiFailure>()),
+      );
+      final Map<String, dynamic> first =
+          (auth.requests.single['operations'] as List).single
+              as Map<String, dynamic>;
+      expect(first['data']['tags_base'], '["initial"]');
+      expect(first['data']['tags'], '["initial","added"]');
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 2);
+      await runtime.close();
+      runtime = null;
+      runtime = await OmniSyncRuntime.openAtPath(auth, databasePath);
+      // 重启后SDK仍持有旧前态，不能改读当前表中的[added]。
+      final CrudTransaction? restarted = await runtime.powerSync
+          .getNextCrudTransaction();
+      expect(restarted!.crud.single.previousValues?['tags'], '["initial"]');
+      auth.loseResponse = false;
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      expect(auth.requests, hasLength(3));
+      expect(auth.requests[1], auth.requests[0]);
+      // 后续移除操作的独立前态必须是上一笔加入完成后的标签集合。
+      final Map<String, dynamic> second =
+          (auth.requests.last['operations'] as List).single
+              as Map<String, dynamic>;
+      expect(second['data']['tags_base'], '["initial","added"]');
+      expect(second['data']['tags'], '["added"]');
+      expect(
+        auth.requests.last['transactionId'],
+        isNot(auth.requests.first['transactionId']),
+      );
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 0);
+    } finally {
+      await runtime?.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('结构版本不兼容时停止同步并保留可见错误及未确认队列', () async {
     // 使用真实 PowerSync 引擎证明停止重试和队列保留。
     final Directory directory = await Directory.systemTemp.createTemp(

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
@@ -16,11 +17,14 @@ import { reconcileSync } from './sync-consistency';
 import { SyncSqlBuilder, writableColumns } from './sync-sql.builder';
 import { canonicalize } from './sync.service';
 import { syncSchemaVersion } from './sync-schema';
+import { NoteAudioStore } from '../notes/note-audio-store';
 
 /// 客户端预检与服务端统一使用的快照上限。
 const limits = { maxOperations: 100000, maxBytes: 33554432 } as const;
 /// 必须包含在同一快照内的业务引用。
 const references: Record<string, Record<string, string>> = {
+  note_versions: { note_id: 'note_entries' },
+  note_audio_segments: { note_id: 'note_entries' },
   todo_items: { parent_id: 'todo_items' },
   todo_progress_steps: { todo_id: 'todo_items' },
   daily_quote_selections: { quote_id: 'quotes' },
@@ -34,6 +38,7 @@ const taxonomyRecordTables: Record<string, string> = {
   inventory: 'inventory_items',
   timeline: 'time_entries',
   membership: 'memberships',
+  notes: 'note_entries',
 };
 
 /// 跨重建保留的迁移结果；superseded 不允许本地激活。
@@ -58,6 +63,7 @@ export class SyncMigrationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auth: AuthService,
+    @Optional() private readonly audioStore?: NoteAudioStore,
   ) {}
 
   /// 在同一个一致视图中返回目标身份与各表数量。
@@ -100,7 +106,7 @@ export class SyncMigrationService {
         }
         return {
           protocolVersion: 1,
-          snapshotVersion: 2,
+          snapshotVersion: 3,
           syncSchemaVersion,
           ownerId: owner.id,
           counts,
@@ -144,6 +150,7 @@ export class SyncMigrationService {
             expectedOwnerId: input.expectedOwnerId,
             snapshotVersion: input.snapshotVersion,
             operations: input.operations,
+            ...(input.snapshotVersion === 3 ? { omittedAudioIds: input.omittedAudioIds ?? [] } : {}),
           }),
         ),
       )
@@ -172,6 +179,21 @@ export class SyncMigrationService {
             code: 'SYNC_OWNER_CHANGED',
             message: '目标服务器数据归属已改变，请重新预检',
           });
+        // 覆盖前验证全部非省略原音，缺失文件不得删除当前快照。
+        const audioOperations = input.operations.filter((operation) => operation.table === 'note_audio_segments');
+        // 用户已明确接受不完整迁移的原音身份。
+        const omitted = new Set((input.omittedAudioIds ?? []).map((id) => id.toLowerCase()));
+        // 完整暂存文件仅在此原子事务内被新归属接管。
+        const staged = await transaction.noteAudioStaging.findMany({ where: { migrationId: input.migrationId } });
+        for (const operation of audioOperations) {
+          if (omitted.has(operation.id.toLowerCase())) continue;
+          // 一段音频必须有同身份、摘要、大小和 MIME 的真实文件。
+          const asset = staged.find((candidate) => candidate.segmentId.toLowerCase() === operation.id.toLowerCase());
+          if (!asset || asset.sha256 !== operation.data!.sha256 || asset.byteSize !== operation.data!.byte_size || asset.mime !== operation.data!.mime) throw new BadRequestException({ code: 'NOTE_AUDIO_STAGE_MISSING', message: '迁移原音未暂存或文件校验不匹配', segmentId: operation.id });
+          // 覆盖前再次读取真实文件，暂存回执不能替代文件存在和完整性证据。
+          const bytes = await this.audioStore?.get(asset.objectKey).catch(() => undefined);
+          if (!bytes || bytes.length !== asset.byteSize || createHash('sha256').update(bytes).digest('hex') !== asset.sha256) throw new BadRequestException({ code: 'NOTE_AUDIO_STAGE_CORRUPTED', message: '迁移原音文件丢失或校验失败', segmentId: operation.id });
+        }
         await transaction.syncOwner.delete({
           where: { id: input.expectedOwnerId },
         });
@@ -187,6 +209,14 @@ export class SyncMigrationService {
           );
           if (affected !== 1) throw new ConflictException('快照记录身份冲突');
         }
+        for (const operation of audioOperations) {
+          if (omitted.has(operation.id.toLowerCase())) continue;
+          // 元数据插入完成后关联不可变真实文件。
+          const asset = staged.find((candidate) => candidate.segmentId.toLowerCase() === operation.id.toLowerCase())!;
+          await transaction.noteAudioAsset.create({ data: { userId: owner.id, segmentId: operation.id, objectKey: asset.objectKey } });
+        }
+        // 删除暂存回执不删除已被新资产引用的文件。
+        await transaction.noteAudioStaging.deleteMany({ where: { migrationId: input.migrationId } });
         await reconcileSync(transaction, owner.id, input.operations);
         // 在保存回执前主动检查全部延迟外键。
         await transaction.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
@@ -208,7 +238,7 @@ export class SyncMigrationService {
   /// 验证完整列、重复身份、引用闭包与请求大小，空快照合法。
   private validateSnapshot(input: SyncMigrationDto): void {
     if (
-      input.snapshotVersion !== 2 ||
+      ![2, 3].includes(input.snapshotVersion) ||
       input.operations.length > limits.maxOperations ||
       Buffer.byteLength(JSON.stringify(input), 'utf8') > limits.maxBytes
     )
@@ -216,6 +246,12 @@ export class SyncMigrationService {
         code: 'SNAPSHOT_LIMIT_EXCEEDED',
         message: '快照版本或大小不受支持',
       });
+    if (input.snapshotVersion === 2 && (input.operations.some((operation) => operation.table.startsWith('note_')) || (input.omittedAudioIds?.length ?? 0) > 0)) throw new BadRequestException('笔记原音迁移需要快照协议 v3');
+    // 省略原音必须明确指向本次快照中的段，不能误拼导致静默丢附件。
+    const audioIdentities = new Set(input.operations.filter((operation) => operation.table === 'note_audio_segments').map((operation) => operation.id.toLowerCase()));
+    // 相同 UUID 大小写也视作重复省略。
+    const omitted = (input.omittedAudioIds ?? []).map((id) => id.toLowerCase());
+    if (new Set(omitted).size !== omitted.length || omitted.some((id) => !audioIdentities.has(id))) throw new BadRequestException('省略原音清单不是本次快照的有效段子集');
     // 已声明的同表业务身份。
     const identities = new Map<string, Record<string, unknown>>();
     for (const operation of input.operations) {

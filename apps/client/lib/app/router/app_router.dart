@@ -15,6 +15,8 @@ import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/presentation/todos_page.dart';
 import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
 import 'package:omni_butler/shared/layout/responsive_shell.dart';
+import 'package:omni_butler/features/notes/presentation/notes_page.dart';
+import 'package:omni_butler/features/notes/data/note_providers.dart';
 
 /// 应用路由器提供者。
 final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
@@ -100,6 +102,27 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
                     _redirectDisabledFeature(ref, AppFeature.timeline),
                 builder: (context, state) =>
                     _PrimaryRouteSurface(child: const TimelinePage()),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            preload: preloadPrimaryBranches,
+            routes: <RouteBase>[
+              GoRoute(
+                path: '/notes',
+                onExit: (context, state) async {
+                  // 保存失败保持当前页面，让用户重试或复制未保存内容。
+                  final editor = ref.read(noteEditorProvider);
+                  await editor.flush();
+                  return !editor.dirty;
+                },
+                redirect: (context, state) =>
+                    _redirectDisabledFeature(ref, AppFeature.notes),
+                builder: (context, state) => _PrimaryRouteSurface(
+                  child: NotesPage(
+                    initialNoteId: state.uri.queryParameters['id'],
+                  ),
+                ),
               ),
             ],
           ),

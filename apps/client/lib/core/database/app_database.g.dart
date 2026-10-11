@@ -10627,6 +10627,2465 @@ class MembershipPaymentsCompanion
   }
 }
 
+class $NoteEntriesTable extends NoteEntries
+    with TableInfo<$NoteEntriesTable, NoteEntryRecord> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $NoteEntriesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _bodyMeta = const VerificationMeta('body');
+  @override
+  late final GeneratedColumn<String> body = GeneratedColumn<String>(
+    'body',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  static const VerificationMeta _dayKeyMeta = const VerificationMeta('dayKey');
+  @override
+  late final GeneratedColumn<String> dayKey = GeneratedColumn<String>(
+    'day_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _categoryIdMeta = const VerificationMeta(
+    'categoryId',
+  );
+  @override
+  late final GeneratedColumn<String> categoryId = GeneratedColumn<String>(
+    'category_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _categoryNameMeta = const VerificationMeta(
+    'categoryName',
+  );
+  @override
+  late final GeneratedColumn<String> categoryName = GeneratedColumn<String>(
+    'category_name',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _tagsMeta = const VerificationMeta('tags');
+  @override
+  late final GeneratedColumn<String> tags = GeneratedColumn<String>(
+    'tags',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('[]'),
+  );
+  static const VerificationMeta _revisionMeta = const VerificationMeta(
+    'revision',
+  );
+  @override
+  late final GeneratedColumn<String> revision = GeneratedColumn<String>(
+    'revision',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _creationTimezoneMeta = const VerificationMeta(
+    'creationTimezone',
+  );
+  @override
+  late final GeneratedColumn<String> creationTimezone = GeneratedColumn<String>(
+    'creation_timezone',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('legacy:unknown'),
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    body,
+    dayKey,
+    categoryId,
+    categoryName,
+    tags,
+    revision,
+    createdAt,
+    creationTimezone,
+    updatedAt,
+    deletedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'note_entries';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<NoteEntryRecord> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('body')) {
+      context.handle(
+        _bodyMeta,
+        body.isAcceptableOrUnknown(data['body']!, _bodyMeta),
+      );
+    }
+    if (data.containsKey('day_key')) {
+      context.handle(
+        _dayKeyMeta,
+        dayKey.isAcceptableOrUnknown(data['day_key']!, _dayKeyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_dayKeyMeta);
+    }
+    if (data.containsKey('category_id')) {
+      context.handle(
+        _categoryIdMeta,
+        categoryId.isAcceptableOrUnknown(data['category_id']!, _categoryIdMeta),
+      );
+    }
+    if (data.containsKey('category_name')) {
+      context.handle(
+        _categoryNameMeta,
+        categoryName.isAcceptableOrUnknown(
+          data['category_name']!,
+          _categoryNameMeta,
+        ),
+      );
+    }
+    if (data.containsKey('tags')) {
+      context.handle(
+        _tagsMeta,
+        tags.isAcceptableOrUnknown(data['tags']!, _tagsMeta),
+      );
+    }
+    if (data.containsKey('revision')) {
+      context.handle(
+        _revisionMeta,
+        revision.isAcceptableOrUnknown(data['revision']!, _revisionMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_revisionMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('creation_timezone')) {
+      context.handle(
+        _creationTimezoneMeta,
+        creationTimezone.isAcceptableOrUnknown(
+          data['creation_timezone']!,
+          _creationTimezoneMeta,
+        ),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  NoteEntryRecord map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return NoteEntryRecord(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      body: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}body'],
+      )!,
+      dayKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}day_key'],
+      )!,
+      categoryId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}category_id'],
+      ),
+      categoryName: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}category_name'],
+      ),
+      tags: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tags'],
+      )!,
+      revision: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}revision'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      creationTimezone: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}creation_timezone'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}deleted_at'],
+      ),
+    );
+  }
+
+  @override
+  $NoteEntriesTable createAlias(String alias) {
+    return $NoteEntriesTable(attachedDatabase, alias);
+  }
+}
+
+class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
+  /// 稳定笔记标识。
+  final String id;
+
+  /// 人工可编辑正文。
+  final String body;
+
+  /// 不随时区漂移的归档自然日。
+  final String dayKey;
+
+  /// 可选自定义类别身份。
+  final String? categoryId;
+
+  /// 删除类别后仍保留的历史名称。
+  final String? categoryName;
+
+  /// 多标签身份的 JSON 数组。
+  final String tags;
+
+  /// 当前正文的稳定版本身份。
+  final String revision;
+
+  /// 原始创建时间。
+  final DateTime createdAt;
+
+  /// 创建时设备时区名称与 UTC 偏移，历史未知值不推测。
+  final String creationTimezone;
+
+  /// 最后修改时间。
+  final DateTime updatedAt;
+
+  /// 整篇进入回收站的时间。
+  final DateTime? deletedAt;
+  const NoteEntryRecord({
+    required this.id,
+    required this.body,
+    required this.dayKey,
+    this.categoryId,
+    this.categoryName,
+    required this.tags,
+    required this.revision,
+    required this.createdAt,
+    required this.creationTimezone,
+    required this.updatedAt,
+    this.deletedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['body'] = Variable<String>(body);
+    map['day_key'] = Variable<String>(dayKey);
+    if (!nullToAbsent || categoryId != null) {
+      map['category_id'] = Variable<String>(categoryId);
+    }
+    if (!nullToAbsent || categoryName != null) {
+      map['category_name'] = Variable<String>(categoryName);
+    }
+    map['tags'] = Variable<String>(tags);
+    map['revision'] = Variable<String>(revision);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['creation_timezone'] = Variable<String>(creationTimezone);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
+    return map;
+  }
+
+  NoteEntriesCompanion toCompanion(bool nullToAbsent) {
+    return NoteEntriesCompanion(
+      id: Value(id),
+      body: Value(body),
+      dayKey: Value(dayKey),
+      categoryId: categoryId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(categoryId),
+      categoryName: categoryName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(categoryName),
+      tags: Value(tags),
+      revision: Value(revision),
+      createdAt: Value(createdAt),
+      creationTimezone: Value(creationTimezone),
+      updatedAt: Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+    );
+  }
+
+  factory NoteEntryRecord.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return NoteEntryRecord(
+      id: serializer.fromJson<String>(json['id']),
+      body: serializer.fromJson<String>(json['body']),
+      dayKey: serializer.fromJson<String>(json['dayKey']),
+      categoryId: serializer.fromJson<String?>(json['categoryId']),
+      categoryName: serializer.fromJson<String?>(json['categoryName']),
+      tags: serializer.fromJson<String>(json['tags']),
+      revision: serializer.fromJson<String>(json['revision']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      creationTimezone: serializer.fromJson<String>(json['creationTimezone']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'body': serializer.toJson<String>(body),
+      'dayKey': serializer.toJson<String>(dayKey),
+      'categoryId': serializer.toJson<String?>(categoryId),
+      'categoryName': serializer.toJson<String?>(categoryName),
+      'tags': serializer.toJson<String>(tags),
+      'revision': serializer.toJson<String>(revision),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'creationTimezone': serializer.toJson<String>(creationTimezone),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
+    };
+  }
+
+  NoteEntryRecord copyWith({
+    String? id,
+    String? body,
+    String? dayKey,
+    Value<String?> categoryId = const Value.absent(),
+    Value<String?> categoryName = const Value.absent(),
+    String? tags,
+    String? revision,
+    DateTime? createdAt,
+    String? creationTimezone,
+    DateTime? updatedAt,
+    Value<DateTime?> deletedAt = const Value.absent(),
+  }) => NoteEntryRecord(
+    id: id ?? this.id,
+    body: body ?? this.body,
+    dayKey: dayKey ?? this.dayKey,
+    categoryId: categoryId.present ? categoryId.value : this.categoryId,
+    categoryName: categoryName.present ? categoryName.value : this.categoryName,
+    tags: tags ?? this.tags,
+    revision: revision ?? this.revision,
+    createdAt: createdAt ?? this.createdAt,
+    creationTimezone: creationTimezone ?? this.creationTimezone,
+    updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+  );
+  NoteEntryRecord copyWithCompanion(NoteEntriesCompanion data) {
+    return NoteEntryRecord(
+      id: data.id.present ? data.id.value : this.id,
+      body: data.body.present ? data.body.value : this.body,
+      dayKey: data.dayKey.present ? data.dayKey.value : this.dayKey,
+      categoryId: data.categoryId.present
+          ? data.categoryId.value
+          : this.categoryId,
+      categoryName: data.categoryName.present
+          ? data.categoryName.value
+          : this.categoryName,
+      tags: data.tags.present ? data.tags.value : this.tags,
+      revision: data.revision.present ? data.revision.value : this.revision,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      creationTimezone: data.creationTimezone.present
+          ? data.creationTimezone.value
+          : this.creationTimezone,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NoteEntryRecord(')
+          ..write('id: $id, ')
+          ..write('body: $body, ')
+          ..write('dayKey: $dayKey, ')
+          ..write('categoryId: $categoryId, ')
+          ..write('categoryName: $categoryName, ')
+          ..write('tags: $tags, ')
+          ..write('revision: $revision, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('creationTimezone: $creationTimezone, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    body,
+    dayKey,
+    categoryId,
+    categoryName,
+    tags,
+    revision,
+    createdAt,
+    creationTimezone,
+    updatedAt,
+    deletedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NoteEntryRecord &&
+          other.id == this.id &&
+          other.body == this.body &&
+          other.dayKey == this.dayKey &&
+          other.categoryId == this.categoryId &&
+          other.categoryName == this.categoryName &&
+          other.tags == this.tags &&
+          other.revision == this.revision &&
+          other.createdAt == this.createdAt &&
+          other.creationTimezone == this.creationTimezone &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt);
+}
+
+class NoteEntriesCompanion extends UpdateCompanion<NoteEntryRecord> {
+  final Value<String> id;
+  final Value<String> body;
+  final Value<String> dayKey;
+  final Value<String?> categoryId;
+  final Value<String?> categoryName;
+  final Value<String> tags;
+  final Value<String> revision;
+  final Value<DateTime> createdAt;
+  final Value<String> creationTimezone;
+  final Value<DateTime> updatedAt;
+  final Value<DateTime?> deletedAt;
+  final Value<int> rowid;
+  const NoteEntriesCompanion({
+    this.id = const Value.absent(),
+    this.body = const Value.absent(),
+    this.dayKey = const Value.absent(),
+    this.categoryId = const Value.absent(),
+    this.categoryName = const Value.absent(),
+    this.tags = const Value.absent(),
+    this.revision = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.creationTimezone = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  NoteEntriesCompanion.insert({
+    required String id,
+    this.body = const Value.absent(),
+    required String dayKey,
+    this.categoryId = const Value.absent(),
+    this.categoryName = const Value.absent(),
+    this.tags = const Value.absent(),
+    required String revision,
+    required DateTime createdAt,
+    this.creationTimezone = const Value.absent(),
+    required DateTime updatedAt,
+    this.deletedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       dayKey = Value(dayKey),
+       revision = Value(revision),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<NoteEntryRecord> custom({
+    Expression<String>? id,
+    Expression<String>? body,
+    Expression<String>? dayKey,
+    Expression<String>? categoryId,
+    Expression<String>? categoryName,
+    Expression<String>? tags,
+    Expression<String>? revision,
+    Expression<DateTime>? createdAt,
+    Expression<String>? creationTimezone,
+    Expression<DateTime>? updatedAt,
+    Expression<DateTime>? deletedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (body != null) 'body': body,
+      if (dayKey != null) 'day_key': dayKey,
+      if (categoryId != null) 'category_id': categoryId,
+      if (categoryName != null) 'category_name': categoryName,
+      if (tags != null) 'tags': tags,
+      if (revision != null) 'revision': revision,
+      if (createdAt != null) 'created_at': createdAt,
+      if (creationTimezone != null) 'creation_timezone': creationTimezone,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  NoteEntriesCompanion copyWith({
+    Value<String>? id,
+    Value<String>? body,
+    Value<String>? dayKey,
+    Value<String?>? categoryId,
+    Value<String?>? categoryName,
+    Value<String>? tags,
+    Value<String>? revision,
+    Value<DateTime>? createdAt,
+    Value<String>? creationTimezone,
+    Value<DateTime>? updatedAt,
+    Value<DateTime?>? deletedAt,
+    Value<int>? rowid,
+  }) {
+    return NoteEntriesCompanion(
+      id: id ?? this.id,
+      body: body ?? this.body,
+      dayKey: dayKey ?? this.dayKey,
+      categoryId: categoryId ?? this.categoryId,
+      categoryName: categoryName ?? this.categoryName,
+      tags: tags ?? this.tags,
+      revision: revision ?? this.revision,
+      createdAt: createdAt ?? this.createdAt,
+      creationTimezone: creationTimezone ?? this.creationTimezone,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (body.present) {
+      map['body'] = Variable<String>(body.value);
+    }
+    if (dayKey.present) {
+      map['day_key'] = Variable<String>(dayKey.value);
+    }
+    if (categoryId.present) {
+      map['category_id'] = Variable<String>(categoryId.value);
+    }
+    if (categoryName.present) {
+      map['category_name'] = Variable<String>(categoryName.value);
+    }
+    if (tags.present) {
+      map['tags'] = Variable<String>(tags.value);
+    }
+    if (revision.present) {
+      map['revision'] = Variable<String>(revision.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (creationTimezone.present) {
+      map['creation_timezone'] = Variable<String>(creationTimezone.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NoteEntriesCompanion(')
+          ..write('id: $id, ')
+          ..write('body: $body, ')
+          ..write('dayKey: $dayKey, ')
+          ..write('categoryId: $categoryId, ')
+          ..write('categoryName: $categoryName, ')
+          ..write('tags: $tags, ')
+          ..write('revision: $revision, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('creationTimezone: $creationTimezone, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $NoteVersionsTable extends NoteVersions
+    with TableInfo<$NoteVersionsTable, NoteVersionRecord> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $NoteVersionsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _noteIdMeta = const VerificationMeta('noteId');
+  @override
+  late final GeneratedColumn<String> noteId = GeneratedColumn<String>(
+    'note_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _bodyMeta = const VerificationMeta('body');
+  @override
+  late final GeneratedColumn<String> body = GeneratedColumn<String>(
+    'body',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _baseRevisionMeta = const VerificationMeta(
+    'baseRevision',
+  );
+  @override
+  late final GeneratedColumn<String> baseRevision = GeneratedColumn<String>(
+    'base_revision',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _revisionMeta = const VerificationMeta(
+    'revision',
+  );
+  @override
+  late final GeneratedColumn<String> revision = GeneratedColumn<String>(
+    'revision',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    noteId,
+    body,
+    baseRevision,
+    revision,
+    createdAt,
+    deletedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'note_versions';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<NoteVersionRecord> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('note_id')) {
+      context.handle(
+        _noteIdMeta,
+        noteId.isAcceptableOrUnknown(data['note_id']!, _noteIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_noteIdMeta);
+    }
+    if (data.containsKey('body')) {
+      context.handle(
+        _bodyMeta,
+        body.isAcceptableOrUnknown(data['body']!, _bodyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_bodyMeta);
+    }
+    if (data.containsKey('base_revision')) {
+      context.handle(
+        _baseRevisionMeta,
+        baseRevision.isAcceptableOrUnknown(
+          data['base_revision']!,
+          _baseRevisionMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_baseRevisionMeta);
+    }
+    if (data.containsKey('revision')) {
+      context.handle(
+        _revisionMeta,
+        revision.isAcceptableOrUnknown(data['revision']!, _revisionMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_revisionMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  NoteVersionRecord map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return NoteVersionRecord(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      noteId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}note_id'],
+      )!,
+      body: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}body'],
+      )!,
+      baseRevision: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}base_revision'],
+      )!,
+      revision: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}revision'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}deleted_at'],
+      ),
+    );
+  }
+
+  @override
+  $NoteVersionsTable createAlias(String alias) {
+    return $NoteVersionsTable(attachedDatabase, alias);
+  }
+}
+
+class NoteVersionRecord extends DataClass
+    implements Insertable<NoteVersionRecord> {
+  /// 稳定版本标识。
+  final String id;
+
+  /// 所属笔记。
+  final String noteId;
+
+  /// 此次正文快照。
+  final String body;
+
+  /// 修改所基于的正文版本。
+  final String baseRevision;
+
+  /// 新正文版本身份。
+  final String revision;
+
+  /// 版本创建时间。
+  final DateTime createdAt;
+
+  /// 随笔记进入回收站。
+  final DateTime? deletedAt;
+  const NoteVersionRecord({
+    required this.id,
+    required this.noteId,
+    required this.body,
+    required this.baseRevision,
+    required this.revision,
+    required this.createdAt,
+    this.deletedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['note_id'] = Variable<String>(noteId);
+    map['body'] = Variable<String>(body);
+    map['base_revision'] = Variable<String>(baseRevision);
+    map['revision'] = Variable<String>(revision);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
+    return map;
+  }
+
+  NoteVersionsCompanion toCompanion(bool nullToAbsent) {
+    return NoteVersionsCompanion(
+      id: Value(id),
+      noteId: Value(noteId),
+      body: Value(body),
+      baseRevision: Value(baseRevision),
+      revision: Value(revision),
+      createdAt: Value(createdAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+    );
+  }
+
+  factory NoteVersionRecord.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return NoteVersionRecord(
+      id: serializer.fromJson<String>(json['id']),
+      noteId: serializer.fromJson<String>(json['noteId']),
+      body: serializer.fromJson<String>(json['body']),
+      baseRevision: serializer.fromJson<String>(json['baseRevision']),
+      revision: serializer.fromJson<String>(json['revision']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'noteId': serializer.toJson<String>(noteId),
+      'body': serializer.toJson<String>(body),
+      'baseRevision': serializer.toJson<String>(baseRevision),
+      'revision': serializer.toJson<String>(revision),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
+    };
+  }
+
+  NoteVersionRecord copyWith({
+    String? id,
+    String? noteId,
+    String? body,
+    String? baseRevision,
+    String? revision,
+    DateTime? createdAt,
+    Value<DateTime?> deletedAt = const Value.absent(),
+  }) => NoteVersionRecord(
+    id: id ?? this.id,
+    noteId: noteId ?? this.noteId,
+    body: body ?? this.body,
+    baseRevision: baseRevision ?? this.baseRevision,
+    revision: revision ?? this.revision,
+    createdAt: createdAt ?? this.createdAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+  );
+  NoteVersionRecord copyWithCompanion(NoteVersionsCompanion data) {
+    return NoteVersionRecord(
+      id: data.id.present ? data.id.value : this.id,
+      noteId: data.noteId.present ? data.noteId.value : this.noteId,
+      body: data.body.present ? data.body.value : this.body,
+      baseRevision: data.baseRevision.present
+          ? data.baseRevision.value
+          : this.baseRevision,
+      revision: data.revision.present ? data.revision.value : this.revision,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NoteVersionRecord(')
+          ..write('id: $id, ')
+          ..write('noteId: $noteId, ')
+          ..write('body: $body, ')
+          ..write('baseRevision: $baseRevision, ')
+          ..write('revision: $revision, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('deletedAt: $deletedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    noteId,
+    body,
+    baseRevision,
+    revision,
+    createdAt,
+    deletedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NoteVersionRecord &&
+          other.id == this.id &&
+          other.noteId == this.noteId &&
+          other.body == this.body &&
+          other.baseRevision == this.baseRevision &&
+          other.revision == this.revision &&
+          other.createdAt == this.createdAt &&
+          other.deletedAt == this.deletedAt);
+}
+
+class NoteVersionsCompanion extends UpdateCompanion<NoteVersionRecord> {
+  final Value<String> id;
+  final Value<String> noteId;
+  final Value<String> body;
+  final Value<String> baseRevision;
+  final Value<String> revision;
+  final Value<DateTime> createdAt;
+  final Value<DateTime?> deletedAt;
+  final Value<int> rowid;
+  const NoteVersionsCompanion({
+    this.id = const Value.absent(),
+    this.noteId = const Value.absent(),
+    this.body = const Value.absent(),
+    this.baseRevision = const Value.absent(),
+    this.revision = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  NoteVersionsCompanion.insert({
+    required String id,
+    required String noteId,
+    required String body,
+    required String baseRevision,
+    required String revision,
+    required DateTime createdAt,
+    this.deletedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       noteId = Value(noteId),
+       body = Value(body),
+       baseRevision = Value(baseRevision),
+       revision = Value(revision),
+       createdAt = Value(createdAt);
+  static Insertable<NoteVersionRecord> custom({
+    Expression<String>? id,
+    Expression<String>? noteId,
+    Expression<String>? body,
+    Expression<String>? baseRevision,
+    Expression<String>? revision,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? deletedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (noteId != null) 'note_id': noteId,
+      if (body != null) 'body': body,
+      if (baseRevision != null) 'base_revision': baseRevision,
+      if (revision != null) 'revision': revision,
+      if (createdAt != null) 'created_at': createdAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  NoteVersionsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? noteId,
+    Value<String>? body,
+    Value<String>? baseRevision,
+    Value<String>? revision,
+    Value<DateTime>? createdAt,
+    Value<DateTime?>? deletedAt,
+    Value<int>? rowid,
+  }) {
+    return NoteVersionsCompanion(
+      id: id ?? this.id,
+      noteId: noteId ?? this.noteId,
+      body: body ?? this.body,
+      baseRevision: baseRevision ?? this.baseRevision,
+      revision: revision ?? this.revision,
+      createdAt: createdAt ?? this.createdAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (noteId.present) {
+      map['note_id'] = Variable<String>(noteId.value);
+    }
+    if (body.present) {
+      map['body'] = Variable<String>(body.value);
+    }
+    if (baseRevision.present) {
+      map['base_revision'] = Variable<String>(baseRevision.value);
+    }
+    if (revision.present) {
+      map['revision'] = Variable<String>(revision.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NoteVersionsCompanion(')
+          ..write('id: $id, ')
+          ..write('noteId: $noteId, ')
+          ..write('body: $body, ')
+          ..write('baseRevision: $baseRevision, ')
+          ..write('revision: $revision, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $NoteAudioSegmentsTable extends NoteAudioSegments
+    with TableInfo<$NoteAudioSegmentsTable, NoteAudioSegmentRecord> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $NoteAudioSegmentsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _noteIdMeta = const VerificationMeta('noteId');
+  @override
+  late final GeneratedColumn<String> noteId = GeneratedColumn<String>(
+    'note_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _sortOrderMeta = const VerificationMeta(
+    'sortOrder',
+  );
+  @override
+  late final GeneratedColumn<int> sortOrder = GeneratedColumn<int>(
+    'sort_order',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _durationMsMeta = const VerificationMeta(
+    'durationMs',
+  );
+  @override
+  late final GeneratedColumn<int> durationMs = GeneratedColumn<int>(
+    'duration_ms',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _mimeMeta = const VerificationMeta('mime');
+  @override
+  late final GeneratedColumn<String> mime = GeneratedColumn<String>(
+    'mime',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _sha256Meta = const VerificationMeta('sha256');
+  @override
+  late final GeneratedColumn<String> sha256 = GeneratedColumn<String>(
+    'sha256',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _byteSizeMeta = const VerificationMeta(
+    'byteSize',
+  );
+  @override
+  late final GeneratedColumn<int> byteSize = GeneratedColumn<int>(
+    'byte_size',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _transcriptMeta = const VerificationMeta(
+    'transcript',
+  );
+  @override
+  late final GeneratedColumn<String> transcript = GeneratedColumn<String>(
+    'transcript',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    noteId,
+    sortOrder,
+    durationMs,
+    mime,
+    sha256,
+    byteSize,
+    transcript,
+    createdAt,
+    updatedAt,
+    deletedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'note_audio_segments';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<NoteAudioSegmentRecord> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('note_id')) {
+      context.handle(
+        _noteIdMeta,
+        noteId.isAcceptableOrUnknown(data['note_id']!, _noteIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_noteIdMeta);
+    }
+    if (data.containsKey('sort_order')) {
+      context.handle(
+        _sortOrderMeta,
+        sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_sortOrderMeta);
+    }
+    if (data.containsKey('duration_ms')) {
+      context.handle(
+        _durationMsMeta,
+        durationMs.isAcceptableOrUnknown(data['duration_ms']!, _durationMsMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_durationMsMeta);
+    }
+    if (data.containsKey('mime')) {
+      context.handle(
+        _mimeMeta,
+        mime.isAcceptableOrUnknown(data['mime']!, _mimeMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_mimeMeta);
+    }
+    if (data.containsKey('sha256')) {
+      context.handle(
+        _sha256Meta,
+        sha256.isAcceptableOrUnknown(data['sha256']!, _sha256Meta),
+      );
+    } else if (isInserting) {
+      context.missing(_sha256Meta);
+    }
+    if (data.containsKey('byte_size')) {
+      context.handle(
+        _byteSizeMeta,
+        byteSize.isAcceptableOrUnknown(data['byte_size']!, _byteSizeMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_byteSizeMeta);
+    }
+    if (data.containsKey('transcript')) {
+      context.handle(
+        _transcriptMeta,
+        transcript.isAcceptableOrUnknown(data['transcript']!, _transcriptMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  NoteAudioSegmentRecord map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return NoteAudioSegmentRecord(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      noteId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}note_id'],
+      )!,
+      sortOrder: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}sort_order'],
+      )!,
+      durationMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}duration_ms'],
+      )!,
+      mime: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}mime'],
+      )!,
+      sha256: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}sha256'],
+      )!,
+      byteSize: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}byte_size'],
+      )!,
+      transcript: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}transcript'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}deleted_at'],
+      ),
+    );
+  }
+
+  @override
+  $NoteAudioSegmentsTable createAlias(String alias) {
+    return $NoteAudioSegmentsTable(attachedDatabase, alias);
+  }
+}
+
+class NoteAudioSegmentRecord extends DataClass
+    implements Insertable<NoteAudioSegmentRecord> {
+  /// 原音与识别操作的稳定身份。
+  final String id;
+
+  /// 所属笔记。
+  final String noteId;
+
+  /// 同篇录音顺序。
+  final int sortOrder;
+
+  /// 实际采样时长，不含暂停。
+  final int durationMs;
+
+  /// 原音类型。
+  final String mime;
+
+  /// 原音 SHA256，缓存与迁移均须核验。
+  final String sha256;
+
+  /// 原音字节长度。
+  final int byteSize;
+
+  /// 供应商原始转写结果，与正文独立。
+  final String? transcript;
+
+  /// 原音创建时间。
+  final DateTime createdAt;
+
+  /// 转写或元数据更新时间。
+  final DateTime updatedAt;
+
+  /// 随笔记进入回收站。
+  final DateTime? deletedAt;
+  const NoteAudioSegmentRecord({
+    required this.id,
+    required this.noteId,
+    required this.sortOrder,
+    required this.durationMs,
+    required this.mime,
+    required this.sha256,
+    required this.byteSize,
+    this.transcript,
+    required this.createdAt,
+    required this.updatedAt,
+    this.deletedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['note_id'] = Variable<String>(noteId);
+    map['sort_order'] = Variable<int>(sortOrder);
+    map['duration_ms'] = Variable<int>(durationMs);
+    map['mime'] = Variable<String>(mime);
+    map['sha256'] = Variable<String>(sha256);
+    map['byte_size'] = Variable<int>(byteSize);
+    if (!nullToAbsent || transcript != null) {
+      map['transcript'] = Variable<String>(transcript);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
+    return map;
+  }
+
+  NoteAudioSegmentsCompanion toCompanion(bool nullToAbsent) {
+    return NoteAudioSegmentsCompanion(
+      id: Value(id),
+      noteId: Value(noteId),
+      sortOrder: Value(sortOrder),
+      durationMs: Value(durationMs),
+      mime: Value(mime),
+      sha256: Value(sha256),
+      byteSize: Value(byteSize),
+      transcript: transcript == null && nullToAbsent
+          ? const Value.absent()
+          : Value(transcript),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+    );
+  }
+
+  factory NoteAudioSegmentRecord.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return NoteAudioSegmentRecord(
+      id: serializer.fromJson<String>(json['id']),
+      noteId: serializer.fromJson<String>(json['noteId']),
+      sortOrder: serializer.fromJson<int>(json['sortOrder']),
+      durationMs: serializer.fromJson<int>(json['durationMs']),
+      mime: serializer.fromJson<String>(json['mime']),
+      sha256: serializer.fromJson<String>(json['sha256']),
+      byteSize: serializer.fromJson<int>(json['byteSize']),
+      transcript: serializer.fromJson<String?>(json['transcript']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'noteId': serializer.toJson<String>(noteId),
+      'sortOrder': serializer.toJson<int>(sortOrder),
+      'durationMs': serializer.toJson<int>(durationMs),
+      'mime': serializer.toJson<String>(mime),
+      'sha256': serializer.toJson<String>(sha256),
+      'byteSize': serializer.toJson<int>(byteSize),
+      'transcript': serializer.toJson<String?>(transcript),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
+    };
+  }
+
+  NoteAudioSegmentRecord copyWith({
+    String? id,
+    String? noteId,
+    int? sortOrder,
+    int? durationMs,
+    String? mime,
+    String? sha256,
+    int? byteSize,
+    Value<String?> transcript = const Value.absent(),
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    Value<DateTime?> deletedAt = const Value.absent(),
+  }) => NoteAudioSegmentRecord(
+    id: id ?? this.id,
+    noteId: noteId ?? this.noteId,
+    sortOrder: sortOrder ?? this.sortOrder,
+    durationMs: durationMs ?? this.durationMs,
+    mime: mime ?? this.mime,
+    sha256: sha256 ?? this.sha256,
+    byteSize: byteSize ?? this.byteSize,
+    transcript: transcript.present ? transcript.value : this.transcript,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+  );
+  NoteAudioSegmentRecord copyWithCompanion(NoteAudioSegmentsCompanion data) {
+    return NoteAudioSegmentRecord(
+      id: data.id.present ? data.id.value : this.id,
+      noteId: data.noteId.present ? data.noteId.value : this.noteId,
+      sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+      durationMs: data.durationMs.present
+          ? data.durationMs.value
+          : this.durationMs,
+      mime: data.mime.present ? data.mime.value : this.mime,
+      sha256: data.sha256.present ? data.sha256.value : this.sha256,
+      byteSize: data.byteSize.present ? data.byteSize.value : this.byteSize,
+      transcript: data.transcript.present
+          ? data.transcript.value
+          : this.transcript,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NoteAudioSegmentRecord(')
+          ..write('id: $id, ')
+          ..write('noteId: $noteId, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('durationMs: $durationMs, ')
+          ..write('mime: $mime, ')
+          ..write('sha256: $sha256, ')
+          ..write('byteSize: $byteSize, ')
+          ..write('transcript: $transcript, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    noteId,
+    sortOrder,
+    durationMs,
+    mime,
+    sha256,
+    byteSize,
+    transcript,
+    createdAt,
+    updatedAt,
+    deletedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NoteAudioSegmentRecord &&
+          other.id == this.id &&
+          other.noteId == this.noteId &&
+          other.sortOrder == this.sortOrder &&
+          other.durationMs == this.durationMs &&
+          other.mime == this.mime &&
+          other.sha256 == this.sha256 &&
+          other.byteSize == this.byteSize &&
+          other.transcript == this.transcript &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt);
+}
+
+class NoteAudioSegmentsCompanion
+    extends UpdateCompanion<NoteAudioSegmentRecord> {
+  final Value<String> id;
+  final Value<String> noteId;
+  final Value<int> sortOrder;
+  final Value<int> durationMs;
+  final Value<String> mime;
+  final Value<String> sha256;
+  final Value<int> byteSize;
+  final Value<String?> transcript;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<DateTime?> deletedAt;
+  final Value<int> rowid;
+  const NoteAudioSegmentsCompanion({
+    this.id = const Value.absent(),
+    this.noteId = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.durationMs = const Value.absent(),
+    this.mime = const Value.absent(),
+    this.sha256 = const Value.absent(),
+    this.byteSize = const Value.absent(),
+    this.transcript = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  NoteAudioSegmentsCompanion.insert({
+    required String id,
+    required String noteId,
+    required int sortOrder,
+    required int durationMs,
+    required String mime,
+    required String sha256,
+    required int byteSize,
+    this.transcript = const Value.absent(),
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    this.deletedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       noteId = Value(noteId),
+       sortOrder = Value(sortOrder),
+       durationMs = Value(durationMs),
+       mime = Value(mime),
+       sha256 = Value(sha256),
+       byteSize = Value(byteSize),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<NoteAudioSegmentRecord> custom({
+    Expression<String>? id,
+    Expression<String>? noteId,
+    Expression<int>? sortOrder,
+    Expression<int>? durationMs,
+    Expression<String>? mime,
+    Expression<String>? sha256,
+    Expression<int>? byteSize,
+    Expression<String>? transcript,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<DateTime>? deletedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (noteId != null) 'note_id': noteId,
+      if (sortOrder != null) 'sort_order': sortOrder,
+      if (durationMs != null) 'duration_ms': durationMs,
+      if (mime != null) 'mime': mime,
+      if (sha256 != null) 'sha256': sha256,
+      if (byteSize != null) 'byte_size': byteSize,
+      if (transcript != null) 'transcript': transcript,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  NoteAudioSegmentsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? noteId,
+    Value<int>? sortOrder,
+    Value<int>? durationMs,
+    Value<String>? mime,
+    Value<String>? sha256,
+    Value<int>? byteSize,
+    Value<String?>? transcript,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<DateTime?>? deletedAt,
+    Value<int>? rowid,
+  }) {
+    return NoteAudioSegmentsCompanion(
+      id: id ?? this.id,
+      noteId: noteId ?? this.noteId,
+      sortOrder: sortOrder ?? this.sortOrder,
+      durationMs: durationMs ?? this.durationMs,
+      mime: mime ?? this.mime,
+      sha256: sha256 ?? this.sha256,
+      byteSize: byteSize ?? this.byteSize,
+      transcript: transcript ?? this.transcript,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (noteId.present) {
+      map['note_id'] = Variable<String>(noteId.value);
+    }
+    if (sortOrder.present) {
+      map['sort_order'] = Variable<int>(sortOrder.value);
+    }
+    if (durationMs.present) {
+      map['duration_ms'] = Variable<int>(durationMs.value);
+    }
+    if (mime.present) {
+      map['mime'] = Variable<String>(mime.value);
+    }
+    if (sha256.present) {
+      map['sha256'] = Variable<String>(sha256.value);
+    }
+    if (byteSize.present) {
+      map['byte_size'] = Variable<int>(byteSize.value);
+    }
+    if (transcript.present) {
+      map['transcript'] = Variable<String>(transcript.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NoteAudioSegmentsCompanion(')
+          ..write('id: $id, ')
+          ..write('noteId: $noteId, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('durationMs: $durationMs, ')
+          ..write('mime: $mime, ')
+          ..write('sha256: $sha256, ')
+          ..write('byteSize: $byteSize, ')
+          ..write('transcript: $transcript, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $NoteAudioLocalFilesTable extends NoteAudioLocalFiles
+    with TableInfo<$NoteAudioLocalFilesTable, NoteAudioLocalFileRecord> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $NoteAudioLocalFilesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _localPathMeta = const VerificationMeta(
+    'localPath',
+  );
+  @override
+  late final GeneratedColumn<String> localPath = GeneratedColumn<String>(
+    'local_path',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _uploadStateMeta = const VerificationMeta(
+    'uploadState',
+  );
+  @override
+  late final GeneratedColumn<String> uploadState = GeneratedColumn<String>(
+    'upload_state',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('pending'),
+  );
+  static const VerificationMeta _recognitionIdMeta = const VerificationMeta(
+    'recognitionId',
+  );
+  @override
+  late final GeneratedColumn<String> recognitionId = GeneratedColumn<String>(
+    'recognition_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _recognitionStateMeta = const VerificationMeta(
+    'recognitionState',
+  );
+  @override
+  late final GeneratedColumn<String> recognitionState = GeneratedColumn<String>(
+    'recognition_state',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('idle'),
+  );
+  static const VerificationMeta _lastErrorMeta = const VerificationMeta(
+    'lastError',
+  );
+  @override
+  late final GeneratedColumn<String> lastError = GeneratedColumn<String>(
+    'last_error',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _consentMeta = const VerificationMeta(
+    'consent',
+  );
+  @override
+  late final GeneratedColumn<bool> consent = GeneratedColumn<bool>(
+    'consent',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("consent" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _insertedRevisionMeta = const VerificationMeta(
+    'insertedRevision',
+  );
+  @override
+  late final GeneratedColumn<String> insertedRevision = GeneratedColumn<String>(
+    'inserted_revision',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _candidateTranscriptMeta =
+      const VerificationMeta('candidateTranscript');
+  @override
+  late final GeneratedColumn<String> candidateTranscript =
+      GeneratedColumn<String>(
+        'candidate_transcript',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    localPath,
+    uploadState,
+    recognitionId,
+    recognitionState,
+    lastError,
+    consent,
+    insertedRevision,
+    candidateTranscript,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'note_audio_local_files';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<NoteAudioLocalFileRecord> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('local_path')) {
+      context.handle(
+        _localPathMeta,
+        localPath.isAcceptableOrUnknown(data['local_path']!, _localPathMeta),
+      );
+    }
+    if (data.containsKey('upload_state')) {
+      context.handle(
+        _uploadStateMeta,
+        uploadState.isAcceptableOrUnknown(
+          data['upload_state']!,
+          _uploadStateMeta,
+        ),
+      );
+    }
+    if (data.containsKey('recognition_id')) {
+      context.handle(
+        _recognitionIdMeta,
+        recognitionId.isAcceptableOrUnknown(
+          data['recognition_id']!,
+          _recognitionIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('recognition_state')) {
+      context.handle(
+        _recognitionStateMeta,
+        recognitionState.isAcceptableOrUnknown(
+          data['recognition_state']!,
+          _recognitionStateMeta,
+        ),
+      );
+    }
+    if (data.containsKey('last_error')) {
+      context.handle(
+        _lastErrorMeta,
+        lastError.isAcceptableOrUnknown(data['last_error']!, _lastErrorMeta),
+      );
+    }
+    if (data.containsKey('consent')) {
+      context.handle(
+        _consentMeta,
+        consent.isAcceptableOrUnknown(data['consent']!, _consentMeta),
+      );
+    }
+    if (data.containsKey('inserted_revision')) {
+      context.handle(
+        _insertedRevisionMeta,
+        insertedRevision.isAcceptableOrUnknown(
+          data['inserted_revision']!,
+          _insertedRevisionMeta,
+        ),
+      );
+    }
+    if (data.containsKey('candidate_transcript')) {
+      context.handle(
+        _candidateTranscriptMeta,
+        candidateTranscript.isAcceptableOrUnknown(
+          data['candidate_transcript']!,
+          _candidateTranscriptMeta,
+        ),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  NoteAudioLocalFileRecord map(
+    Map<String, dynamic> data, {
+    String? tablePrefix,
+  }) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return NoteAudioLocalFileRecord(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      localPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}local_path'],
+      ),
+      uploadState: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}upload_state'],
+      )!,
+      recognitionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}recognition_id'],
+      ),
+      recognitionState: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}recognition_state'],
+      )!,
+      lastError: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}last_error'],
+      ),
+      consent: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}consent'],
+      )!,
+      insertedRevision: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}inserted_revision'],
+      ),
+      candidateTranscript: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}candidate_transcript'],
+      ),
+    );
+  }
+
+  @override
+  $NoteAudioLocalFilesTable createAlias(String alias) {
+    return $NoteAudioLocalFilesTable(attachedDatabase, alias);
+  }
+}
+
+class NoteAudioLocalFileRecord extends DataClass
+    implements Insertable<NoteAudioLocalFileRecord> {
+  /// 对应原音段身份。
+  final String id;
+
+  /// 本机持久音频路径。
+  final String? localPath;
+
+  /// 文件传输状态。
+  final String uploadState;
+
+  /// 已持久化识别操作身份。
+  final String? recognitionId;
+
+  /// 当前识别状态。
+  final String recognitionState;
+
+  /// 最近失败原因。
+  final String? lastError;
+
+  /// 用户是否同意将本段提交供应商。
+  final bool consent;
+
+  /// 已插入正文的版本；waiting:前缀记录首次转写预留位置的起点版本。
+  final String? insertedRevision;
+
+  /// 重新转写的本机候选，不覆盖共享原始转写。
+  final String? candidateTranscript;
+  const NoteAudioLocalFileRecord({
+    required this.id,
+    this.localPath,
+    required this.uploadState,
+    this.recognitionId,
+    required this.recognitionState,
+    this.lastError,
+    required this.consent,
+    this.insertedRevision,
+    this.candidateTranscript,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    if (!nullToAbsent || localPath != null) {
+      map['local_path'] = Variable<String>(localPath);
+    }
+    map['upload_state'] = Variable<String>(uploadState);
+    if (!nullToAbsent || recognitionId != null) {
+      map['recognition_id'] = Variable<String>(recognitionId);
+    }
+    map['recognition_state'] = Variable<String>(recognitionState);
+    if (!nullToAbsent || lastError != null) {
+      map['last_error'] = Variable<String>(lastError);
+    }
+    map['consent'] = Variable<bool>(consent);
+    if (!nullToAbsent || insertedRevision != null) {
+      map['inserted_revision'] = Variable<String>(insertedRevision);
+    }
+    if (!nullToAbsent || candidateTranscript != null) {
+      map['candidate_transcript'] = Variable<String>(candidateTranscript);
+    }
+    return map;
+  }
+
+  NoteAudioLocalFilesCompanion toCompanion(bool nullToAbsent) {
+    return NoteAudioLocalFilesCompanion(
+      id: Value(id),
+      localPath: localPath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(localPath),
+      uploadState: Value(uploadState),
+      recognitionId: recognitionId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recognitionId),
+      recognitionState: Value(recognitionState),
+      lastError: lastError == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastError),
+      consent: Value(consent),
+      insertedRevision: insertedRevision == null && nullToAbsent
+          ? const Value.absent()
+          : Value(insertedRevision),
+      candidateTranscript: candidateTranscript == null && nullToAbsent
+          ? const Value.absent()
+          : Value(candidateTranscript),
+    );
+  }
+
+  factory NoteAudioLocalFileRecord.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return NoteAudioLocalFileRecord(
+      id: serializer.fromJson<String>(json['id']),
+      localPath: serializer.fromJson<String?>(json['localPath']),
+      uploadState: serializer.fromJson<String>(json['uploadState']),
+      recognitionId: serializer.fromJson<String?>(json['recognitionId']),
+      recognitionState: serializer.fromJson<String>(json['recognitionState']),
+      lastError: serializer.fromJson<String?>(json['lastError']),
+      consent: serializer.fromJson<bool>(json['consent']),
+      insertedRevision: serializer.fromJson<String?>(json['insertedRevision']),
+      candidateTranscript: serializer.fromJson<String?>(
+        json['candidateTranscript'],
+      ),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'localPath': serializer.toJson<String?>(localPath),
+      'uploadState': serializer.toJson<String>(uploadState),
+      'recognitionId': serializer.toJson<String?>(recognitionId),
+      'recognitionState': serializer.toJson<String>(recognitionState),
+      'lastError': serializer.toJson<String?>(lastError),
+      'consent': serializer.toJson<bool>(consent),
+      'insertedRevision': serializer.toJson<String?>(insertedRevision),
+      'candidateTranscript': serializer.toJson<String?>(candidateTranscript),
+    };
+  }
+
+  NoteAudioLocalFileRecord copyWith({
+    String? id,
+    Value<String?> localPath = const Value.absent(),
+    String? uploadState,
+    Value<String?> recognitionId = const Value.absent(),
+    String? recognitionState,
+    Value<String?> lastError = const Value.absent(),
+    bool? consent,
+    Value<String?> insertedRevision = const Value.absent(),
+    Value<String?> candidateTranscript = const Value.absent(),
+  }) => NoteAudioLocalFileRecord(
+    id: id ?? this.id,
+    localPath: localPath.present ? localPath.value : this.localPath,
+    uploadState: uploadState ?? this.uploadState,
+    recognitionId: recognitionId.present
+        ? recognitionId.value
+        : this.recognitionId,
+    recognitionState: recognitionState ?? this.recognitionState,
+    lastError: lastError.present ? lastError.value : this.lastError,
+    consent: consent ?? this.consent,
+    insertedRevision: insertedRevision.present
+        ? insertedRevision.value
+        : this.insertedRevision,
+    candidateTranscript: candidateTranscript.present
+        ? candidateTranscript.value
+        : this.candidateTranscript,
+  );
+  NoteAudioLocalFileRecord copyWithCompanion(
+    NoteAudioLocalFilesCompanion data,
+  ) {
+    return NoteAudioLocalFileRecord(
+      id: data.id.present ? data.id.value : this.id,
+      localPath: data.localPath.present ? data.localPath.value : this.localPath,
+      uploadState: data.uploadState.present
+          ? data.uploadState.value
+          : this.uploadState,
+      recognitionId: data.recognitionId.present
+          ? data.recognitionId.value
+          : this.recognitionId,
+      recognitionState: data.recognitionState.present
+          ? data.recognitionState.value
+          : this.recognitionState,
+      lastError: data.lastError.present ? data.lastError.value : this.lastError,
+      consent: data.consent.present ? data.consent.value : this.consent,
+      insertedRevision: data.insertedRevision.present
+          ? data.insertedRevision.value
+          : this.insertedRevision,
+      candidateTranscript: data.candidateTranscript.present
+          ? data.candidateTranscript.value
+          : this.candidateTranscript,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NoteAudioLocalFileRecord(')
+          ..write('id: $id, ')
+          ..write('localPath: $localPath, ')
+          ..write('uploadState: $uploadState, ')
+          ..write('recognitionId: $recognitionId, ')
+          ..write('recognitionState: $recognitionState, ')
+          ..write('lastError: $lastError, ')
+          ..write('consent: $consent, ')
+          ..write('insertedRevision: $insertedRevision, ')
+          ..write('candidateTranscript: $candidateTranscript')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    localPath,
+    uploadState,
+    recognitionId,
+    recognitionState,
+    lastError,
+    consent,
+    insertedRevision,
+    candidateTranscript,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NoteAudioLocalFileRecord &&
+          other.id == this.id &&
+          other.localPath == this.localPath &&
+          other.uploadState == this.uploadState &&
+          other.recognitionId == this.recognitionId &&
+          other.recognitionState == this.recognitionState &&
+          other.lastError == this.lastError &&
+          other.consent == this.consent &&
+          other.insertedRevision == this.insertedRevision &&
+          other.candidateTranscript == this.candidateTranscript);
+}
+
+class NoteAudioLocalFilesCompanion
+    extends UpdateCompanion<NoteAudioLocalFileRecord> {
+  final Value<String> id;
+  final Value<String?> localPath;
+  final Value<String> uploadState;
+  final Value<String?> recognitionId;
+  final Value<String> recognitionState;
+  final Value<String?> lastError;
+  final Value<bool> consent;
+  final Value<String?> insertedRevision;
+  final Value<String?> candidateTranscript;
+  final Value<int> rowid;
+  const NoteAudioLocalFilesCompanion({
+    this.id = const Value.absent(),
+    this.localPath = const Value.absent(),
+    this.uploadState = const Value.absent(),
+    this.recognitionId = const Value.absent(),
+    this.recognitionState = const Value.absent(),
+    this.lastError = const Value.absent(),
+    this.consent = const Value.absent(),
+    this.insertedRevision = const Value.absent(),
+    this.candidateTranscript = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  NoteAudioLocalFilesCompanion.insert({
+    required String id,
+    this.localPath = const Value.absent(),
+    this.uploadState = const Value.absent(),
+    this.recognitionId = const Value.absent(),
+    this.recognitionState = const Value.absent(),
+    this.lastError = const Value.absent(),
+    this.consent = const Value.absent(),
+    this.insertedRevision = const Value.absent(),
+    this.candidateTranscript = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id);
+  static Insertable<NoteAudioLocalFileRecord> custom({
+    Expression<String>? id,
+    Expression<String>? localPath,
+    Expression<String>? uploadState,
+    Expression<String>? recognitionId,
+    Expression<String>? recognitionState,
+    Expression<String>? lastError,
+    Expression<bool>? consent,
+    Expression<String>? insertedRevision,
+    Expression<String>? candidateTranscript,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (localPath != null) 'local_path': localPath,
+      if (uploadState != null) 'upload_state': uploadState,
+      if (recognitionId != null) 'recognition_id': recognitionId,
+      if (recognitionState != null) 'recognition_state': recognitionState,
+      if (lastError != null) 'last_error': lastError,
+      if (consent != null) 'consent': consent,
+      if (insertedRevision != null) 'inserted_revision': insertedRevision,
+      if (candidateTranscript != null)
+        'candidate_transcript': candidateTranscript,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  NoteAudioLocalFilesCompanion copyWith({
+    Value<String>? id,
+    Value<String?>? localPath,
+    Value<String>? uploadState,
+    Value<String?>? recognitionId,
+    Value<String>? recognitionState,
+    Value<String?>? lastError,
+    Value<bool>? consent,
+    Value<String?>? insertedRevision,
+    Value<String?>? candidateTranscript,
+    Value<int>? rowid,
+  }) {
+    return NoteAudioLocalFilesCompanion(
+      id: id ?? this.id,
+      localPath: localPath ?? this.localPath,
+      uploadState: uploadState ?? this.uploadState,
+      recognitionId: recognitionId ?? this.recognitionId,
+      recognitionState: recognitionState ?? this.recognitionState,
+      lastError: lastError ?? this.lastError,
+      consent: consent ?? this.consent,
+      insertedRevision: insertedRevision ?? this.insertedRevision,
+      candidateTranscript: candidateTranscript ?? this.candidateTranscript,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (localPath.present) {
+      map['local_path'] = Variable<String>(localPath.value);
+    }
+    if (uploadState.present) {
+      map['upload_state'] = Variable<String>(uploadState.value);
+    }
+    if (recognitionId.present) {
+      map['recognition_id'] = Variable<String>(recognitionId.value);
+    }
+    if (recognitionState.present) {
+      map['recognition_state'] = Variable<String>(recognitionState.value);
+    }
+    if (lastError.present) {
+      map['last_error'] = Variable<String>(lastError.value);
+    }
+    if (consent.present) {
+      map['consent'] = Variable<bool>(consent.value);
+    }
+    if (insertedRevision.present) {
+      map['inserted_revision'] = Variable<String>(insertedRevision.value);
+    }
+    if (candidateTranscript.present) {
+      map['candidate_transcript'] = Variable<String>(candidateTranscript.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NoteAudioLocalFilesCompanion(')
+          ..write('id: $id, ')
+          ..write('localPath: $localPath, ')
+          ..write('uploadState: $uploadState, ')
+          ..write('recognitionId: $recognitionId, ')
+          ..write('recognitionState: $recognitionState, ')
+          ..write('lastError: $lastError, ')
+          ..write('consent: $consent, ')
+          ..write('insertedRevision: $insertedRevision, ')
+          ..write('candidateTranscript: $candidateTranscript, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -10652,6 +13111,12 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $MembershipsTable memberships = $MembershipsTable(this);
   late final $MembershipPaymentsTable membershipPayments =
       $MembershipPaymentsTable(this);
+  late final $NoteEntriesTable noteEntries = $NoteEntriesTable(this);
+  late final $NoteVersionsTable noteVersions = $NoteVersionsTable(this);
+  late final $NoteAudioSegmentsTable noteAudioSegments =
+      $NoteAudioSegmentsTable(this);
+  late final $NoteAudioLocalFilesTable noteAudioLocalFiles =
+      $NoteAudioLocalFilesTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -10671,6 +13136,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     timeEntries,
     memberships,
     membershipPayments,
+    noteEntries,
+    noteVersions,
+    noteAudioSegments,
+    noteAudioLocalFiles,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -16546,6 +19015,1244 @@ typedef $$MembershipPaymentsTableProcessedTableManager =
       MembershipPaymentRecord,
       PrefetchHooks Function({bool membershipId})
     >;
+typedef $$NoteEntriesTableCreateCompanionBuilder =
+    NoteEntriesCompanion Function({
+      required String id,
+      Value<String> body,
+      required String dayKey,
+      Value<String?> categoryId,
+      Value<String?> categoryName,
+      Value<String> tags,
+      required String revision,
+      required DateTime createdAt,
+      Value<String> creationTimezone,
+      required DateTime updatedAt,
+      Value<DateTime?> deletedAt,
+      Value<int> rowid,
+    });
+typedef $$NoteEntriesTableUpdateCompanionBuilder =
+    NoteEntriesCompanion Function({
+      Value<String> id,
+      Value<String> body,
+      Value<String> dayKey,
+      Value<String?> categoryId,
+      Value<String?> categoryName,
+      Value<String> tags,
+      Value<String> revision,
+      Value<DateTime> createdAt,
+      Value<String> creationTimezone,
+      Value<DateTime> updatedAt,
+      Value<DateTime?> deletedAt,
+      Value<int> rowid,
+    });
+
+class $$NoteEntriesTableFilterComposer
+    extends Composer<_$AppDatabase, $NoteEntriesTable> {
+  $$NoteEntriesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get body => $composableBuilder(
+    column: $table.body,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get dayKey => $composableBuilder(
+    column: $table.dayKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get categoryId => $composableBuilder(
+    column: $table.categoryId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get categoryName => $composableBuilder(
+    column: $table.categoryName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get tags => $composableBuilder(
+    column: $table.tags,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get revision => $composableBuilder(
+    column: $table.revision,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get creationTimezone => $composableBuilder(
+    column: $table.creationTimezone,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$NoteEntriesTableOrderingComposer
+    extends Composer<_$AppDatabase, $NoteEntriesTable> {
+  $$NoteEntriesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get body => $composableBuilder(
+    column: $table.body,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get dayKey => $composableBuilder(
+    column: $table.dayKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get categoryId => $composableBuilder(
+    column: $table.categoryId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get categoryName => $composableBuilder(
+    column: $table.categoryName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get tags => $composableBuilder(
+    column: $table.tags,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get revision => $composableBuilder(
+    column: $table.revision,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get creationTimezone => $composableBuilder(
+    column: $table.creationTimezone,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$NoteEntriesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $NoteEntriesTable> {
+  $$NoteEntriesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get body =>
+      $composableBuilder(column: $table.body, builder: (column) => column);
+
+  GeneratedColumn<String> get dayKey =>
+      $composableBuilder(column: $table.dayKey, builder: (column) => column);
+
+  GeneratedColumn<String> get categoryId => $composableBuilder(
+    column: $table.categoryId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get categoryName => $composableBuilder(
+    column: $table.categoryName,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get tags =>
+      $composableBuilder(column: $table.tags, builder: (column) => column);
+
+  GeneratedColumn<String> get revision =>
+      $composableBuilder(column: $table.revision, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<String> get creationTimezone => $composableBuilder(
+    column: $table.creationTimezone,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+}
+
+class $$NoteEntriesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $NoteEntriesTable,
+          NoteEntryRecord,
+          $$NoteEntriesTableFilterComposer,
+          $$NoteEntriesTableOrderingComposer,
+          $$NoteEntriesTableAnnotationComposer,
+          $$NoteEntriesTableCreateCompanionBuilder,
+          $$NoteEntriesTableUpdateCompanionBuilder,
+          (
+            NoteEntryRecord,
+            BaseReferences<_$AppDatabase, $NoteEntriesTable, NoteEntryRecord>,
+          ),
+          NoteEntryRecord,
+          PrefetchHooks Function()
+        > {
+  $$NoteEntriesTableTableManager(_$AppDatabase db, $NoteEntriesTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$NoteEntriesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$NoteEntriesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$NoteEntriesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> body = const Value.absent(),
+                Value<String> dayKey = const Value.absent(),
+                Value<String?> categoryId = const Value.absent(),
+                Value<String?> categoryName = const Value.absent(),
+                Value<String> tags = const Value.absent(),
+                Value<String> revision = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<String> creationTimezone = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NoteEntriesCompanion(
+                id: id,
+                body: body,
+                dayKey: dayKey,
+                categoryId: categoryId,
+                categoryName: categoryName,
+                tags: tags,
+                revision: revision,
+                createdAt: createdAt,
+                creationTimezone: creationTimezone,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                Value<String> body = const Value.absent(),
+                required String dayKey,
+                Value<String?> categoryId = const Value.absent(),
+                Value<String?> categoryName = const Value.absent(),
+                Value<String> tags = const Value.absent(),
+                required String revision,
+                required DateTime createdAt,
+                Value<String> creationTimezone = const Value.absent(),
+                required DateTime updatedAt,
+                Value<DateTime?> deletedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NoteEntriesCompanion.insert(
+                id: id,
+                body: body,
+                dayKey: dayKey,
+                categoryId: categoryId,
+                categoryName: categoryName,
+                tags: tags,
+                revision: revision,
+                createdAt: createdAt,
+                creationTimezone: creationTimezone,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$NoteEntriesTable, NoteEntryRecord>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $NoteEntriesTable,
+                    NoteEntryRecord
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$NoteEntriesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $NoteEntriesTable,
+      NoteEntryRecord,
+      $$NoteEntriesTableFilterComposer,
+      $$NoteEntriesTableOrderingComposer,
+      $$NoteEntriesTableAnnotationComposer,
+      $$NoteEntriesTableCreateCompanionBuilder,
+      $$NoteEntriesTableUpdateCompanionBuilder,
+      (
+        NoteEntryRecord,
+        BaseReferences<_$AppDatabase, $NoteEntriesTable, NoteEntryRecord>,
+      ),
+      NoteEntryRecord,
+      PrefetchHooks Function()
+    >;
+typedef $$NoteVersionsTableCreateCompanionBuilder =
+    NoteVersionsCompanion Function({
+      required String id,
+      required String noteId,
+      required String body,
+      required String baseRevision,
+      required String revision,
+      required DateTime createdAt,
+      Value<DateTime?> deletedAt,
+      Value<int> rowid,
+    });
+typedef $$NoteVersionsTableUpdateCompanionBuilder =
+    NoteVersionsCompanion Function({
+      Value<String> id,
+      Value<String> noteId,
+      Value<String> body,
+      Value<String> baseRevision,
+      Value<String> revision,
+      Value<DateTime> createdAt,
+      Value<DateTime?> deletedAt,
+      Value<int> rowid,
+    });
+
+class $$NoteVersionsTableFilterComposer
+    extends Composer<_$AppDatabase, $NoteVersionsTable> {
+  $$NoteVersionsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get noteId => $composableBuilder(
+    column: $table.noteId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get body => $composableBuilder(
+    column: $table.body,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get baseRevision => $composableBuilder(
+    column: $table.baseRevision,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get revision => $composableBuilder(
+    column: $table.revision,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$NoteVersionsTableOrderingComposer
+    extends Composer<_$AppDatabase, $NoteVersionsTable> {
+  $$NoteVersionsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get noteId => $composableBuilder(
+    column: $table.noteId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get body => $composableBuilder(
+    column: $table.body,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get baseRevision => $composableBuilder(
+    column: $table.baseRevision,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get revision => $composableBuilder(
+    column: $table.revision,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$NoteVersionsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $NoteVersionsTable> {
+  $$NoteVersionsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get noteId =>
+      $composableBuilder(column: $table.noteId, builder: (column) => column);
+
+  GeneratedColumn<String> get body =>
+      $composableBuilder(column: $table.body, builder: (column) => column);
+
+  GeneratedColumn<String> get baseRevision => $composableBuilder(
+    column: $table.baseRevision,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get revision =>
+      $composableBuilder(column: $table.revision, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+}
+
+class $$NoteVersionsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $NoteVersionsTable,
+          NoteVersionRecord,
+          $$NoteVersionsTableFilterComposer,
+          $$NoteVersionsTableOrderingComposer,
+          $$NoteVersionsTableAnnotationComposer,
+          $$NoteVersionsTableCreateCompanionBuilder,
+          $$NoteVersionsTableUpdateCompanionBuilder,
+          (
+            NoteVersionRecord,
+            BaseReferences<
+              _$AppDatabase,
+              $NoteVersionsTable,
+              NoteVersionRecord
+            >,
+          ),
+          NoteVersionRecord,
+          PrefetchHooks Function()
+        > {
+  $$NoteVersionsTableTableManager(_$AppDatabase db, $NoteVersionsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$NoteVersionsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$NoteVersionsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$NoteVersionsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> noteId = const Value.absent(),
+                Value<String> body = const Value.absent(),
+                Value<String> baseRevision = const Value.absent(),
+                Value<String> revision = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NoteVersionsCompanion(
+                id: id,
+                noteId: noteId,
+                body: body,
+                baseRevision: baseRevision,
+                revision: revision,
+                createdAt: createdAt,
+                deletedAt: deletedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String noteId,
+                required String body,
+                required String baseRevision,
+                required String revision,
+                required DateTime createdAt,
+                Value<DateTime?> deletedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NoteVersionsCompanion.insert(
+                id: id,
+                noteId: noteId,
+                body: body,
+                baseRevision: baseRevision,
+                revision: revision,
+                createdAt: createdAt,
+                deletedAt: deletedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$NoteVersionsTable, NoteVersionRecord>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $NoteVersionsTable,
+                    NoteVersionRecord
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$NoteVersionsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $NoteVersionsTable,
+      NoteVersionRecord,
+      $$NoteVersionsTableFilterComposer,
+      $$NoteVersionsTableOrderingComposer,
+      $$NoteVersionsTableAnnotationComposer,
+      $$NoteVersionsTableCreateCompanionBuilder,
+      $$NoteVersionsTableUpdateCompanionBuilder,
+      (
+        NoteVersionRecord,
+        BaseReferences<_$AppDatabase, $NoteVersionsTable, NoteVersionRecord>,
+      ),
+      NoteVersionRecord,
+      PrefetchHooks Function()
+    >;
+typedef $$NoteAudioSegmentsTableCreateCompanionBuilder =
+    NoteAudioSegmentsCompanion Function({
+      required String id,
+      required String noteId,
+      required int sortOrder,
+      required int durationMs,
+      required String mime,
+      required String sha256,
+      required int byteSize,
+      Value<String?> transcript,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+      Value<DateTime?> deletedAt,
+      Value<int> rowid,
+    });
+typedef $$NoteAudioSegmentsTableUpdateCompanionBuilder =
+    NoteAudioSegmentsCompanion Function({
+      Value<String> id,
+      Value<String> noteId,
+      Value<int> sortOrder,
+      Value<int> durationMs,
+      Value<String> mime,
+      Value<String> sha256,
+      Value<int> byteSize,
+      Value<String?> transcript,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<DateTime?> deletedAt,
+      Value<int> rowid,
+    });
+
+class $$NoteAudioSegmentsTableFilterComposer
+    extends Composer<_$AppDatabase, $NoteAudioSegmentsTable> {
+  $$NoteAudioSegmentsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get noteId => $composableBuilder(
+    column: $table.noteId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mime => $composableBuilder(
+    column: $table.mime,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sha256 => $composableBuilder(
+    column: $table.sha256,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get byteSize => $composableBuilder(
+    column: $table.byteSize,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get transcript => $composableBuilder(
+    column: $table.transcript,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$NoteAudioSegmentsTableOrderingComposer
+    extends Composer<_$AppDatabase, $NoteAudioSegmentsTable> {
+  $$NoteAudioSegmentsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get noteId => $composableBuilder(
+    column: $table.noteId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get mime => $composableBuilder(
+    column: $table.mime,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get sha256 => $composableBuilder(
+    column: $table.sha256,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get byteSize => $composableBuilder(
+    column: $table.byteSize,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get transcript => $composableBuilder(
+    column: $table.transcript,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$NoteAudioSegmentsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $NoteAudioSegmentsTable> {
+  $$NoteAudioSegmentsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get noteId =>
+      $composableBuilder(column: $table.noteId, builder: (column) => column);
+
+  GeneratedColumn<int> get sortOrder =>
+      $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  GeneratedColumn<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get mime =>
+      $composableBuilder(column: $table.mime, builder: (column) => column);
+
+  GeneratedColumn<String> get sha256 =>
+      $composableBuilder(column: $table.sha256, builder: (column) => column);
+
+  GeneratedColumn<int> get byteSize =>
+      $composableBuilder(column: $table.byteSize, builder: (column) => column);
+
+  GeneratedColumn<String> get transcript => $composableBuilder(
+    column: $table.transcript,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+}
+
+class $$NoteAudioSegmentsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $NoteAudioSegmentsTable,
+          NoteAudioSegmentRecord,
+          $$NoteAudioSegmentsTableFilterComposer,
+          $$NoteAudioSegmentsTableOrderingComposer,
+          $$NoteAudioSegmentsTableAnnotationComposer,
+          $$NoteAudioSegmentsTableCreateCompanionBuilder,
+          $$NoteAudioSegmentsTableUpdateCompanionBuilder,
+          (
+            NoteAudioSegmentRecord,
+            BaseReferences<
+              _$AppDatabase,
+              $NoteAudioSegmentsTable,
+              NoteAudioSegmentRecord
+            >,
+          ),
+          NoteAudioSegmentRecord,
+          PrefetchHooks Function()
+        > {
+  $$NoteAudioSegmentsTableTableManager(
+    _$AppDatabase db,
+    $NoteAudioSegmentsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$NoteAudioSegmentsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$NoteAudioSegmentsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$NoteAudioSegmentsTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> noteId = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<int> durationMs = const Value.absent(),
+                Value<String> mime = const Value.absent(),
+                Value<String> sha256 = const Value.absent(),
+                Value<int> byteSize = const Value.absent(),
+                Value<String?> transcript = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NoteAudioSegmentsCompanion(
+                id: id,
+                noteId: noteId,
+                sortOrder: sortOrder,
+                durationMs: durationMs,
+                mime: mime,
+                sha256: sha256,
+                byteSize: byteSize,
+                transcript: transcript,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String noteId,
+                required int sortOrder,
+                required int durationMs,
+                required String mime,
+                required String sha256,
+                required int byteSize,
+                Value<String?> transcript = const Value.absent(),
+                required DateTime createdAt,
+                required DateTime updatedAt,
+                Value<DateTime?> deletedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NoteAudioSegmentsCompanion.insert(
+                id: id,
+                noteId: noteId,
+                sortOrder: sortOrder,
+                durationMs: durationMs,
+                mime: mime,
+                sha256: sha256,
+                byteSize: byteSize,
+                transcript: transcript,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$NoteAudioSegmentsTable, NoteAudioSegmentRecord>(
+                    table,
+                  ),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $NoteAudioSegmentsTable,
+                    NoteAudioSegmentRecord
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$NoteAudioSegmentsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $NoteAudioSegmentsTable,
+      NoteAudioSegmentRecord,
+      $$NoteAudioSegmentsTableFilterComposer,
+      $$NoteAudioSegmentsTableOrderingComposer,
+      $$NoteAudioSegmentsTableAnnotationComposer,
+      $$NoteAudioSegmentsTableCreateCompanionBuilder,
+      $$NoteAudioSegmentsTableUpdateCompanionBuilder,
+      (
+        NoteAudioSegmentRecord,
+        BaseReferences<
+          _$AppDatabase,
+          $NoteAudioSegmentsTable,
+          NoteAudioSegmentRecord
+        >,
+      ),
+      NoteAudioSegmentRecord,
+      PrefetchHooks Function()
+    >;
+typedef $$NoteAudioLocalFilesTableCreateCompanionBuilder =
+    NoteAudioLocalFilesCompanion Function({
+      required String id,
+      Value<String?> localPath,
+      Value<String> uploadState,
+      Value<String?> recognitionId,
+      Value<String> recognitionState,
+      Value<String?> lastError,
+      Value<bool> consent,
+      Value<String?> insertedRevision,
+      Value<String?> candidateTranscript,
+      Value<int> rowid,
+    });
+typedef $$NoteAudioLocalFilesTableUpdateCompanionBuilder =
+    NoteAudioLocalFilesCompanion Function({
+      Value<String> id,
+      Value<String?> localPath,
+      Value<String> uploadState,
+      Value<String?> recognitionId,
+      Value<String> recognitionState,
+      Value<String?> lastError,
+      Value<bool> consent,
+      Value<String?> insertedRevision,
+      Value<String?> candidateTranscript,
+      Value<int> rowid,
+    });
+
+class $$NoteAudioLocalFilesTableFilterComposer
+    extends Composer<_$AppDatabase, $NoteAudioLocalFilesTable> {
+  $$NoteAudioLocalFilesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get localPath => $composableBuilder(
+    column: $table.localPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get uploadState => $composableBuilder(
+    column: $table.uploadState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get recognitionId => $composableBuilder(
+    column: $table.recognitionId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get recognitionState => $composableBuilder(
+    column: $table.recognitionState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get lastError => $composableBuilder(
+    column: $table.lastError,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get consent => $composableBuilder(
+    column: $table.consent,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get insertedRevision => $composableBuilder(
+    column: $table.insertedRevision,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get candidateTranscript => $composableBuilder(
+    column: $table.candidateTranscript,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$NoteAudioLocalFilesTableOrderingComposer
+    extends Composer<_$AppDatabase, $NoteAudioLocalFilesTable> {
+  $$NoteAudioLocalFilesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get localPath => $composableBuilder(
+    column: $table.localPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get uploadState => $composableBuilder(
+    column: $table.uploadState,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get recognitionId => $composableBuilder(
+    column: $table.recognitionId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get recognitionState => $composableBuilder(
+    column: $table.recognitionState,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get lastError => $composableBuilder(
+    column: $table.lastError,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get consent => $composableBuilder(
+    column: $table.consent,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get insertedRevision => $composableBuilder(
+    column: $table.insertedRevision,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get candidateTranscript => $composableBuilder(
+    column: $table.candidateTranscript,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$NoteAudioLocalFilesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $NoteAudioLocalFilesTable> {
+  $$NoteAudioLocalFilesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get localPath =>
+      $composableBuilder(column: $table.localPath, builder: (column) => column);
+
+  GeneratedColumn<String> get uploadState => $composableBuilder(
+    column: $table.uploadState,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get recognitionId => $composableBuilder(
+    column: $table.recognitionId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get recognitionState => $composableBuilder(
+    column: $table.recognitionState,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get lastError =>
+      $composableBuilder(column: $table.lastError, builder: (column) => column);
+
+  GeneratedColumn<bool> get consent =>
+      $composableBuilder(column: $table.consent, builder: (column) => column);
+
+  GeneratedColumn<String> get insertedRevision => $composableBuilder(
+    column: $table.insertedRevision,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get candidateTranscript => $composableBuilder(
+    column: $table.candidateTranscript,
+    builder: (column) => column,
+  );
+}
+
+class $$NoteAudioLocalFilesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $NoteAudioLocalFilesTable,
+          NoteAudioLocalFileRecord,
+          $$NoteAudioLocalFilesTableFilterComposer,
+          $$NoteAudioLocalFilesTableOrderingComposer,
+          $$NoteAudioLocalFilesTableAnnotationComposer,
+          $$NoteAudioLocalFilesTableCreateCompanionBuilder,
+          $$NoteAudioLocalFilesTableUpdateCompanionBuilder,
+          (
+            NoteAudioLocalFileRecord,
+            BaseReferences<
+              _$AppDatabase,
+              $NoteAudioLocalFilesTable,
+              NoteAudioLocalFileRecord
+            >,
+          ),
+          NoteAudioLocalFileRecord,
+          PrefetchHooks Function()
+        > {
+  $$NoteAudioLocalFilesTableTableManager(
+    _$AppDatabase db,
+    $NoteAudioLocalFilesTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$NoteAudioLocalFilesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$NoteAudioLocalFilesTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$NoteAudioLocalFilesTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String?> localPath = const Value.absent(),
+                Value<String> uploadState = const Value.absent(),
+                Value<String?> recognitionId = const Value.absent(),
+                Value<String> recognitionState = const Value.absent(),
+                Value<String?> lastError = const Value.absent(),
+                Value<bool> consent = const Value.absent(),
+                Value<String?> insertedRevision = const Value.absent(),
+                Value<String?> candidateTranscript = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NoteAudioLocalFilesCompanion(
+                id: id,
+                localPath: localPath,
+                uploadState: uploadState,
+                recognitionId: recognitionId,
+                recognitionState: recognitionState,
+                lastError: lastError,
+                consent: consent,
+                insertedRevision: insertedRevision,
+                candidateTranscript: candidateTranscript,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                Value<String?> localPath = const Value.absent(),
+                Value<String> uploadState = const Value.absent(),
+                Value<String?> recognitionId = const Value.absent(),
+                Value<String> recognitionState = const Value.absent(),
+                Value<String?> lastError = const Value.absent(),
+                Value<bool> consent = const Value.absent(),
+                Value<String?> insertedRevision = const Value.absent(),
+                Value<String?> candidateTranscript = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NoteAudioLocalFilesCompanion.insert(
+                id: id,
+                localPath: localPath,
+                uploadState: uploadState,
+                recognitionId: recognitionId,
+                recognitionState: recognitionState,
+                lastError: lastError,
+                consent: consent,
+                insertedRevision: insertedRevision,
+                candidateTranscript: candidateTranscript,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<
+                    $NoteAudioLocalFilesTable,
+                    NoteAudioLocalFileRecord
+                  >(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $NoteAudioLocalFilesTable,
+                    NoteAudioLocalFileRecord
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$NoteAudioLocalFilesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $NoteAudioLocalFilesTable,
+      NoteAudioLocalFileRecord,
+      $$NoteAudioLocalFilesTableFilterComposer,
+      $$NoteAudioLocalFilesTableOrderingComposer,
+      $$NoteAudioLocalFilesTableAnnotationComposer,
+      $$NoteAudioLocalFilesTableCreateCompanionBuilder,
+      $$NoteAudioLocalFilesTableUpdateCompanionBuilder,
+      (
+        NoteAudioLocalFileRecord,
+        BaseReferences<
+          _$AppDatabase,
+          $NoteAudioLocalFilesTable,
+          NoteAudioLocalFileRecord
+        >,
+      ),
+      NoteAudioLocalFileRecord,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -16578,4 +20285,12 @@ class $AppDatabaseManager {
       $$MembershipsTableTableManager(_db, _db.memberships);
   $$MembershipPaymentsTableTableManager get membershipPayments =>
       $$MembershipPaymentsTableTableManager(_db, _db.membershipPayments);
+  $$NoteEntriesTableTableManager get noteEntries =>
+      $$NoteEntriesTableTableManager(_db, _db.noteEntries);
+  $$NoteVersionsTableTableManager get noteVersions =>
+      $$NoteVersionsTableTableManager(_db, _db.noteVersions);
+  $$NoteAudioSegmentsTableTableManager get noteAudioSegments =>
+      $$NoteAudioSegmentsTableTableManager(_db, _db.noteAudioSegments);
+  $$NoteAudioLocalFilesTableTableManager get noteAudioLocalFiles =>
+      $$NoteAudioLocalFilesTableTableManager(_db, _db.noteAudioLocalFiles);
 }

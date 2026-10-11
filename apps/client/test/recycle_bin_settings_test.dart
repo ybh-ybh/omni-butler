@@ -109,7 +109,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         await fixture.container.read(recycleBinRepositoryProvider).loadItems(),
-        hasLength(5),
+        hasLength(RecycleEntityType.values.length - 1),
       );
       expect(tester.takeException(), isNull);
     } finally {
@@ -248,7 +248,7 @@ void main() {
               await fixture.container
                   .read(recycleBinRepositoryProvider)
                   .loadItems(),
-              hasLength(6),
+              hasLength(RecycleEntityType.values.length),
             );
             await tester.tap(
               find.byKey(const ValueKey<String>('recycle-empty')),
@@ -357,7 +357,7 @@ void main() {
       );
       expect(
         await fixture.container.read(recycleBinRepositoryProvider).loadItems(),
-        hasLength(6),
+        hasLength(RecycleEntityType.values.length),
       );
       expect(
         tester
@@ -492,7 +492,7 @@ Future<_SettingsFixture> _openSettings(
   SharedPreferences.setMockInitialValues({});
   // 设置页功能偏好所需的本机存储。
   final SharedPreferences preferences = await SharedPreferences.getInstance();
-  // 独立测试数据库与六类近期删除记录。
+  // 独立测试数据库与全部类型近期删除记录。
   final AppDatabase database = AppDatabase.forTesting(NativeDatabase.memory());
   for (final RecycleEntityType type in RecycleEntityType.values) {
     await seedRecycleRecord(
@@ -507,6 +507,7 @@ Future<_SettingsFixture> _openSettings(
         RecycleEntityType.timeEntry => '阅读与学习',
         RecycleEntityType.membership => '云盘年度会员',
         RecycleEntityType.quote => '时间不是被填满的容器，而是被认真看见的生活。',
+        RecycleEntityType.note => '周末记录：阅读与生活想法',
       },
     );
   }

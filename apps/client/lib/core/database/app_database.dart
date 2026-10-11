@@ -2,6 +2,9 @@ import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 import 'package:uuid/uuid.dart';
 
+import 'note_tables.dart';
+export 'note_tables.dart';
+
 part 'app_database.g.dart';
 
 /// 用业务身份生成跨设备一致的 UUID，不包含设备时间或随机量。
@@ -696,6 +699,10 @@ class MembershipPayments extends Table {
     TimeEntries,
     Memberships,
     MembershipPayments,
+    NoteEntries,
+    NoteVersions,
+    NoteAudioSegments,
+    NoteAudioLocalFiles,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -732,7 +739,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 16;
+  int get schemaVersion => 18;
 
   /// 创建数据库并从旧版本安全升级。
   @override
@@ -741,6 +748,7 @@ class AppDatabase extends _$AppDatabase {
       await migrator.createAll();
       await _createImageSyncMetadata();
       await _createTodoIndexes();
+      await _createNoteIndexes();
     },
     onUpgrade: (Migrator migrator, int from, int to) async {
       if (from < 14) await _createImageSyncMetadata();
@@ -908,8 +916,51 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         // 按当前定义重建事件表，删除事件说明并保留备注、历史关联及其他字段。
         await migrator.alterTable(TableMigration(events));
       }
+      if (from < 17) {
+        await migrator.createTable(noteEntries);
+        await migrator.createTable(noteVersions);
+        await migrator.createTable(noteAudioSegments);
+        await migrator.createTable(noteAudioLocalFiles);
+        await _createNoteIndexes();
+      }
+      if (from == 17) {
+        // 内部试用版本可能已经具有候选列，逐列检查避免重复升级。
+        final List<QueryRow> noteColumns = await customSelect(
+          'PRAGMA table_info(note_entries)',
+        ).get();
+        if (!noteColumns.any(
+          (row) => row.read<String>('name') == 'creation_timezone',
+        )) {
+          await migrator.addColumn(noteEntries, noteEntries.creationTimezone);
+        }
+        // 重新转写候选只保存在本机。
+        final List<QueryRow> localColumns = await customSelect(
+          'PRAGMA table_info(note_audio_local_files)',
+        ).get();
+        if (!localColumns.any(
+          (row) => row.read<String>('name') == 'candidate_transcript',
+        )) {
+          await migrator.addColumn(
+            noteAudioLocalFiles,
+            noteAudioLocalFiles.candidateTranscript,
+          );
+        }
+      }
     },
   );
+
+  /// 时间归档及原音列表使用复合索引。
+  Future<void> _createNoteIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS notes_day_idx ON note_entries(deleted_at, day_key, created_at)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS notes_audio_idx ON note_audio_segments(note_id, sort_order)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS notes_versions_idx ON note_versions(note_id, created_at)',
+    );
+  }
 
   /// 图片传输状态只属于本机，不进入 PowerSync 业务表或迁移快照。
   Future<void> _createImageSyncMetadata() => customStatement(

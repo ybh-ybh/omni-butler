@@ -1,0 +1,12 @@
+# 与 docker-compose.yml 合并，仅用于 omni-notes-storage-test 隔离项目。
+services:
+  postgres:
+    ports: ["127.0.0.1:55449:5432"]
+  minio:
+    ports: ["127.0.0.1:55490:9000"]
+  api:
+    ports: !override ["127.0.0.1:55430:3000"]
+    environment:
+      POWERSYNC_URL: http://127.0.0.1:55480
+  powersync:
+    ports: !override ["127.0.0.1:55480:8080"]

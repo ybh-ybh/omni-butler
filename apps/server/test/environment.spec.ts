@@ -46,6 +46,9 @@ describe('validateEnvironment', () => {
 
     expect(environment.PORT).toBe(3000);
     expect(environment.IMAGE_SYNC_ENABLED).toBe(false);
+    expect(environment.MINIO_ENDPOINT).toBe('http://minio:9000');
+    expect(environment.MINIO_CREDENTIALS_FILE).toBe('/app/image-storage/credentials.json');
+    expect(environment).not.toHaveProperty('NOTE_AUDIO_DIR');
     expect(environment.JWT_ISSUER).toBe('omni-butler');
     expect(environment.JWT_AUDIENCE).toBe('omni-butler-api');
     expect(environment.POWERSYNC_AUDIENCE).toBe('omni-butler-powersync');
@@ -75,6 +78,13 @@ describe('validateEnvironment', () => {
     expect(() => validateEnvironment(source)).toThrow(
       'SYNC_SECRET 至少需要 16 个字符',
     );
+  });
+  it.each(['', 42, 'ftp://minio/', 'http://user:secret@minio:9000', 'http://minio:9000/bucket', 'http://minio:9000/?token=secret', ' http://minio:9000', 'http://minio:9000/#secret'])('拒绝不安全的MINIO_ENDPOINT配置：%s', (endpoint) => {
+    expect(() => validateEnvironment({ ...automaticEnvironment(), MINIO_ENDPOINT: endpoint })).toThrow('MINIO_ENDPOINT');
+    expect(existsSync(join(keysDirectory, 'jwt-private.pem'))).toBe(false);
+  });
+  it.each(['', 42, ' file.json', 'file.json\0'])('拒绝非法MINIO_CREDENTIALS_FILE：%s', (file) => {
+    expect(() => validateEnvironment({ ...automaticEnvironment(), MINIO_CREDENTIALS_FILE: file })).toThrow('MINIO_CREDENTIALS_FILE');
   });
 
   it('首次生成可用 RSA 密钥，重启后仍能验证先前签名', () => {
@@ -145,6 +155,81 @@ describe('validateEnvironment', () => {
     expect(environment.POWERSYNC_URL).toBe(
       'https://butler.example.com/omni-butler/powersync/',
     );
+  });
+
+  it.each([
+    ['https://butler.example.com', 'https://butler.example.com'],
+    ['https://butler.example.com/', 'https://butler.example.com'],
+    ['https://butler.example.com:8443/', 'https://butler.example.com:8443'],
+  ])('从公网根地址 %s 推导两个固定前缀', (base, origin) => {
+    // Compose 未设置独立覆盖时传入空字符串。
+    const environment = validateEnvironment({
+      ...automaticEnvironment(), PUBLIC_BASE_URL: base,
+      POWERSYNC_URL: '', NOTE_ASR_PUBLIC_URL: '',
+    });
+    expect(environment.POWERSYNC_URL).toBe(`${origin}/omni-butler/powersync/`);
+    expect(environment.NOTE_ASR_PUBLIC_URL).toBe(`${origin}/omni-butler/api/v1`);
+  });
+
+  it.each([
+    ['', '', 'https://butler.example.com/omni-butler/powersync/', 'https://butler.example.com/omni-butler/api/v1'],
+    ['', '  ', 'https://butler.example.com/omni-butler/powersync/', 'https://butler.example.com/omni-butler/api/v1'],
+    ['http://192.168.1.10:9080', '', 'http://192.168.1.10:9080', 'https://butler.example.com/omni-butler/api/v1'],
+    ['', 'https://audio.example.com/omni-butler/api/v1/', 'https://butler.example.com/omni-butler/powersync/', 'https://audio.example.com/omni-butler/api/v1'],
+    ['http://192.168.1.10:9080', 'https://audio.example.com/omni-butler/api/v1', 'http://192.168.1.10:9080', 'https://audio.example.com/omni-butler/api/v1'],
+  ])('独立覆盖优先且空值使用推导：同步 %s，取音 %s', (sync, audio, expectedSync, expectedAudio) => {
+    // 两个业务地址各自解析，不要求使用相同主机或协议。
+    const environment = validateEnvironment({
+      ...automaticEnvironment(), PUBLIC_BASE_URL: 'https://butler.example.com',
+      POWERSYNC_URL: sync, NOTE_ASR_PUBLIC_URL: audio,
+    });
+    expect(environment.POWERSYNC_URL).toBe(expectedSync);
+    expect(environment.NOTE_ASR_PUBLIC_URL).toBe(expectedAudio);
+  });
+
+  it('未配置公网根地址时保留局域网 HTTP 端口与内联识别', () => {
+    // 旧部署仅配置同步地址，API 可以在另外的端口。
+    const environment = validateEnvironment({
+      ...automaticEnvironment(), PUBLIC_BASE_URL: '',
+      POWERSYNC_URL: 'http://192.168.1.10:9080', NOTE_ASR_PUBLIC_URL: '',
+    });
+    expect(environment.POWERSYNC_URL).toBe('http://192.168.1.10:9080');
+    expect(environment.NOTE_ASR_PUBLIC_URL).toBe('');
+  });
+
+  it('没有基础地址或有效同步覆盖时拒绝启动且不生成密钥', () => {
+    expect(() => validateEnvironment({ ...automaticEnvironment(), POWERSYNC_URL: '' })).toThrow('POWERSYNC_URL');
+    expect(existsSync(join(keysDirectory, 'jwt-private.pem'))).toBe(false);
+    expect(existsSync(join(keysDirectory, 'jwt-public.pem'))).toBe(false);
+  });
+
+  it.each([
+    42, 'http://butler.example.com', 'https://user:pass@butler.example.com',
+    'https://@butler.example.com', 'https://butler.example.com/custom',
+    'https://butler.example.com/path/../', 'https://butler.example.com//',
+    'https://butler.example.com?token=value', 'https://butler.example.com?',
+    'https://butler.example.com/#fragment', 'https://butler.example.com#',
+    ' https://butler.example.com', 'https://butler.example.com ',
+    'https://butler.example.com:invalid', 'https://', 'https://butler.\nexample.com',
+  ])('非法基础地址 %s 即使有覆盖仍拒绝且不生成密钥', (base) => {
+    expect(() => validateEnvironment({ ...automaticEnvironment(), PUBLIC_BASE_URL: base })).toThrow('PUBLIC_BASE_URL');
+    expect(existsSync(join(keysDirectory, 'jwt-private.pem'))).toBe(false);
+    expect(existsSync(join(keysDirectory, 'jwt-public.pem'))).toBe(false);
+  });
+
+  it.each([
+    { POWERSYNC_URL: 'bad-url' }, { POWERSYNC_URL: ' ' }, { POWERSYNC_URL: 42 },
+    { NOTE_ASR_PUBLIC_URL: 'bad-url' }, { NOTE_ASR_PUBLIC_URL: 'http://audio.example.com/omni-butler/api/v1' },
+    { NOTE_ASR_PUBLIC_URL: '/' },
+    { NOTE_ASR_PUBLIC_URL: 'https://audio.example.com/custom' },
+    { NOTE_ASR_PUBLIC_URL: 'https://user:pass@audio.example.com/omni-butler/api/v1' },
+    { NOTE_ASR_PUBLIC_URL: 'https://audio.example.com/omni-butler/api/v1?token=secret' },
+    { NOTE_ASR_PUBLIC_URL: 'https://audio.example.com/omni-butler/api/v1#fragment' },
+    { NOTE_ASR_PUBLIC_URL: 42 },
+  ])('非法非空独立地址不得回退到基础地址：%j', (override) => {
+    expect(() => validateEnvironment({ ...automaticEnvironment(), PUBLIC_BASE_URL: 'https://butler.example.com', ...override })).toThrow(/POWERSYNC_URL|NOTE_ASR_PUBLIC_URL/);
+    expect(existsSync(join(keysDirectory, 'jwt-private.pem'))).toBe(false);
+    expect(existsSync(join(keysDirectory, 'jwt-public.pem'))).toBe(false);
   });
 
   it.each([

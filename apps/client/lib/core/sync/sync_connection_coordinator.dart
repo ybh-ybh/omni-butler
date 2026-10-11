@@ -12,6 +12,7 @@ import 'package:omni_butler/core/sync/sync_connection_store.dart';
 import 'package:omni_butler/core/sync/sync_disk_space.dart';
 import 'package:omni_butler/core/sync/sync_snapshot.dart';
 import 'package:omni_butler/core/sync/sync_image_report.dart';
+import 'package:omni_butler/core/sync/sync_note_audio_backup.dart';
 import 'package:path/path.dart' as path;
 import 'package:uuid/uuid.dart';
 
@@ -80,7 +81,7 @@ class SyncConnectionCoordinator {
     return () => _backgroundStops.remove(stop);
   }
 
-  /// 先排空图片网络响应，再获取一致业务快照。
+  /// 先排空图片与原音网络响应，再获取一致业务快照。
   Future<void> _stopBackgroundTasks() async {
     await Future.wait(List.of(_backgroundStops).map((stop) => stop()));
   }
@@ -100,7 +101,7 @@ class SyncConnectionCoordinator {
   /// 在启动业务 Provider 前恢复持久维护门禁，不自动连接旧服务器。
   Future<void> initialize() async {
     await directory.create(recursive: true);
-    // 已完成迁移的缺图报告与活动数据库引用一起持久化。
+    // 已完成迁移的附件缺失报告与活动数据库引用一起持久化。
     final Map<String, dynamic>? active = await store.read('active');
     _publish(
       missingImages: List<String>.from(
@@ -160,7 +161,10 @@ class SyncConnectionCoordinator {
       queuedOperations: local.pendingOperations,
       maxOperations: (limits['maxOperations'] as num).toInt(),
       maxBytes: (limits['maxBytes'] as num).toInt(),
-      missingImages: await findMissingMigrationImages(local),
+      missingImages: [
+        ...await findMissingMigrationImages(local),
+        ...await findMissingMigrationNoteAudio(local),
+      ],
     );
   }
 
@@ -185,13 +189,31 @@ class SyncConnectionCoordinator {
       if (await runtime.ownerId != preview.localOwnerId) {
         throw const ApiFailure('本机数据来源已变化，请重新检查');
       }
-      // 冻结后的完整本机快照，包括本机图片关联。
-      final SyncSnapshot snapshot = await runtime.exportSnapshot();
-      // 只有采用本机数据的策略需要把旧主图携带到目标服务器。
+      // 冻结后的完整本机快照，包括本机图片与原音关联。
+      SyncSnapshot snapshot = await runtime.exportSnapshot();
+      // 只有采用本机数据的策略需要把旧图片与原音携带到目标服务器。
       final List<String> missingImages =
           strategy == SyncConnectionStrategy.replaceLocal
           ? const <String>[]
-          : await findMissingMigrationImages(snapshot);
+          : [
+              ...await findMissingMigrationImages(snapshot),
+              ...await findMissingMigrationNoteAudio(snapshot),
+            ];
+      if (missingImages.any(
+        (String missing) => !preview.missingImages.contains(missing),
+      )) {
+        throw const ApiFailure('本机附件可用性已变化，请重新检查并确认缺失的图片或原音');
+      }
+      // 请求预检也纳入用户确认的缺音身份，避免大量省略项突破请求上限。
+      final List<String> omittedAudioIds =
+          (snapshot.tables['note_audio_segments'] ?? <Map<String, Object?>>[])
+              .where(
+                (Map<String, Object?> row) => missingImages.contains(
+                  '笔记原音：${row['note_id']} / ${row['id']}',
+                ),
+              )
+              .map((Map<String, Object?> row) => row['id']! as String)
+              .toList();
       // 整个操作生命周期固定使用同一迁移身份。
       final String id = const Uuid().v4();
       // 预检完整请求而非只计算行数据大小。
@@ -201,8 +223,9 @@ class SyncConnectionCoordinator {
               'syncKey': syncKey,
               'migrationId': id,
               'expectedOwnerId': preview.ownerId,
-              'snapshotVersion': 2,
+              'snapshotVersion': SyncSnapshot.version,
               'operations': snapshot.operations,
+              'omittedAudioIds': omittedAudioIds,
             }),
           )
           .length;
@@ -211,18 +234,40 @@ class SyncConnectionCoordinator {
               uploadBytes > preview.maxBytes)) {
         throw const ApiFailure('完整快照超过服务器允许的记录数或请求大小，尚未修改服务器');
       }
+      // 原音文件体的预算覆盖独立备份与新库副本，不包含任何识别密钥。
+      final int audioBytes =
+          (snapshot.tables['note_audio_segments'] ?? <Map<String, Object?>>[])
+              .fold(
+                0,
+                (int total, Map<String, Object?> row) =>
+                    total + ((row['byte_size'] as num?)?.toInt() ?? 0),
+              );
       // 快照文件也保留原始本机字段，不保存密钥。
-      final List<int> snapshotBytes = utf8.encode(
-        jsonEncode(snapshot.toJson()),
-      );
+      List<int> snapshotBytes = utf8.encode(jsonEncode(snapshot.toJson()));
       // 为快照、候选数据和 SQLite 日志留出额外空间；实际写入仍须成功。
-      final int needed = snapshotBytes.length * 4 + 64 * 1024 * 1024;
+      final int needed =
+          snapshotBytes.length * 4 + audioBytes * 2 + 64 * 1024 * 1024;
       if (await freeBytes(directory.path) < needed) {
         throw const ApiFailure('本机剩余空间不足，无法安全保存迁移备份');
       }
       // 每次迁移独立目录，候选文件永不覆盖原数据库。
       final Directory work = Directory(path.join(directory.path, id));
       await work.create();
+      // 独立保留录音体，快照引用备份副本并用同步摘要逐文件验证。
+      snapshot = await backupMigrationNoteAudio(
+        snapshot,
+        Directory(path.join(work.path, 'note_audio_backup')),
+      );
+      // 原音在复制期间发生变化时必须重新确认，不能擅自扩大缺失清单。
+      final List<String> backupMissing = await findMissingMigrationNoteAudio(
+        snapshot,
+      );
+      if (backupMissing.any(
+        (String missing) => !preview.missingImages.contains(missing),
+      )) {
+        throw const ApiFailure('原音文件在备份期间变化，请重新检查并确认缺失记录');
+      }
+      snapshotBytes = utf8.encode(jsonEncode(snapshot.toJson()));
       // 持久化的逻辑快照。
       final String snapshotPath = path.join(work.path, 'snapshot.json');
       await File(snapshotPath).writeAsBytes(snapshotBytes, flush: true);
@@ -346,6 +391,15 @@ class SyncConnectionCoordinator {
             journal['phase'] == 'ready') {
           throw const ApiFailure('服务器丢失已提交迁移回执，已停止自动操作以保护现有数据');
         }
+        _publish(maintenance: true, busy: true, message: '正在暂存并校验目标服务器原音');
+        // 原音完整暂存后才允许原子替换，重试沿用相同迁移与录音身份。
+        final List<String> omittedAudioIds = await stageMigrationNoteAudio(
+          auth: auth,
+          serverAddress: address,
+          syncKey: secret,
+          migrationId: id,
+          snapshot: snapshot,
+        );
         journal['phase'] = 'submitting';
         await store.write('pending', journal);
         _publish(maintenance: true, busy: true, message: '正在原子替换目标服务器数据');
@@ -355,6 +409,7 @@ class SyncConnectionCoordinator {
           migrationId: id,
           expectedOwnerId: owner,
           operations: snapshot.operations,
+          omittedAudioIds: omittedAudioIds,
         );
       }
       if (result['status'] != 'committed') {
@@ -416,6 +471,7 @@ class SyncConnectionCoordinator {
     await _candidate!.connect(owner, session: session);
     await _candidate!.catchUp(timeout: catchUpTimeout);
     await _candidate!.restoreLocalAttachments(snapshot, matchingOnly: true);
+    await _candidate!.restoreLocalNoteAudio(snapshot);
     // 检查点后再次验证当前 API 身份，旧 PowerSync JWT 不能作为身份有效凭据。
     final SyncSession? checked = await candidateAuth.restoreSession();
     if (checked == null || checked.isOffline || checked.identity.id != owner) {
@@ -457,7 +513,7 @@ class SyncConnectionCoordinator {
     _candidate = null;
     _auth = candidateAuth;
     _publish(
-      message: '服务器连接完成，业务数据已同步；本机图片将在目标支持时继续补传',
+      message: '服务器连接完成，业务数据已同步；本机图片与原音将继续补传',
       generation: state.generation + 1,
       missingImages: List<String>.from(
         journal['missingImages'] as List? ?? const <String>[],
@@ -611,6 +667,34 @@ class SyncConnectionCoordinator {
           path.basename(path.dirname(snapshotPath)) != id) {
         throw const ApiFailure('备份快照路径与迁移身份不一致');
       }
+      // 先验证独占原音备份目录，链接或陌生目录不能把清理指向活动附件。
+      final Directory audioBackup = Directory(
+        path.join(path.dirname(snapshotPath), 'note_audio_backup'),
+      );
+      // 仅收集经过验证的普通文件，目录内不执行递归删除。
+      final List<File> audioBackupFiles = [];
+      // 不跟随符号链接检查目录本身。
+      final FileSystemEntityType audioType = await FileSystemEntity.type(
+        audioBackup.path,
+        followLinks: false,
+      );
+      if (audioType != FileSystemEntityType.notFound) {
+        if (audioType != FileSystemEntityType.directory ||
+            !path.isWithin(
+              await directory.resolveSymbolicLinks(),
+              await audioBackup.resolveSymbolicLinks(),
+            )) {
+          throw const ApiFailure('原音备份目录不属于受管理迁移目录');
+        }
+        for (final FileSystemEntity entry in audioBackup.listSync(
+          followLinks: false,
+        )) {
+          if (entry is! File || !path.isWithin(audioBackup.path, entry.path)) {
+            throw const ApiFailure('原音备份目录包含不允许清理的链接或子目录');
+          }
+          audioBackupFiles.add(entry);
+        }
+      }
       // 在旧连接全部关闭后才清理其 SQLite 文件。
       await releaseRetired();
       for (final String suffix in ['', '-wal', '-shm']) {
@@ -621,6 +705,13 @@ class SyncConnectionCoordinator {
       // 快照路径同样必须属于当前应用迁移目录。
       final File snapshot = File(snapshotPath);
       if (await snapshot.exists()) await snapshot.delete();
+      // 只删除这次快照独占的录音备份，新库音频位于另外的目录。
+      for (final File file in audioBackupFiles) {
+        if (await file.exists()) await file.delete();
+      }
+      if (audioType == FileSystemEntityType.directory) {
+        await audioBackup.delete();
+      }
       await store.remove('backup:$id');
       // 旧凭证不可误删当前活动会话。
       final String? oldKey = backup['sessionKey'] as String?;

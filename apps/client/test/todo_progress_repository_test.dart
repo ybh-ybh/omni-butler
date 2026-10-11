@@ -414,7 +414,7 @@ void main() {
       <String, Object?>{'id': 'step', 'deleted_at': '2026-10-01'},
     ];
     expect(snapshot.deletedCount, 1);
-    expect(snapshot.toJson()['version'], 2);
+    expect(snapshot.toJson()['version'], SyncSnapshot.version);
     expect(
       omniSyncSchema.rawTables.any(
         (table) => table.name == 'todo_progress_steps',

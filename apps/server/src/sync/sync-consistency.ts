@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { Prisma } from '../generated/prisma/client';
 import type { SyncOperationDto } from './dto/sync-operation.dto';
+import { reconcileNotes } from './note-sync';
 
 /// 与客户端 stableBusinessId 使用相同 URL 命名空间和编码规则。
 function stableBusinessId(kind: string, parts: string[]): string {
@@ -110,6 +111,7 @@ export async function reconcileSync(
   userId: string,
   operations: SyncOperationDto[],
 ): Promise<void> {
+  if (operations.some((operation) => operation.table.startsWith('note_') || operation.table === 'taxonomy_entries')) await reconcileNotes(transaction, userId);
   if (
     operations.some(
       (operation) =>

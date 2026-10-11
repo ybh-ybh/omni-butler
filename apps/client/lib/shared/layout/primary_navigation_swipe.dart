@@ -19,6 +19,9 @@ enum PrimaryNavigationDestination {
   /// 时间管理分支。
   timeline,
 
+  /// 独立笔记分支。
+  notes,
+
   /// 事件、会员与物品组成的管理分支。
   management,
 
@@ -34,6 +37,8 @@ List<int> enabledPrimaryBranchIndices(FeaturePreference preference) {
       PrimaryNavigationDestination.todos.index,
     if (preference.isEnabled(AppFeature.timeline))
       PrimaryNavigationDestination.timeline.index,
+    if (preference.isEnabled(AppFeature.notes))
+      PrimaryNavigationDestination.notes.index,
     if (preference.isEnabled(AppFeature.events) ||
         preference.isEnabled(AppFeature.memberships) ||
         preference.isEnabled(AppFeature.inventory))

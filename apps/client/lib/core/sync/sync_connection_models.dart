@@ -31,7 +31,7 @@ class SyncConnectionPreview {
   /// 本机来源地址（历史版本可能未保存）。
   final String? sourceAddress;
 
-  /// 本机没有文件的业务主图，仅提示，不阻止迁移。
+  /// 本机缺失或损坏的业务图片与原音，确认后可显式迁移不完整附件。
   final List<String> missingImages;
 
   /// 本机各表数量。
@@ -97,6 +97,6 @@ class SyncConnectionState {
   /// 尚未提交远端时允许取消。
   final bool canCancel;
 
-  /// 上次完成迁移时无法携带的图片，重启后仍可查看。
+  /// 上次完成迁移时无法携带的图片与原音，重启后仍可查看。
   final List<String> missingImages;
 }

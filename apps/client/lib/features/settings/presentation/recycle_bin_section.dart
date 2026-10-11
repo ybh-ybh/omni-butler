@@ -317,6 +317,7 @@ class _RecycleBinSectionState extends ConsumerState<RecycleBinSection> {
     RecycleEntityType.timeEntry => '时间记录',
     RecycleEntityType.membership => '会员',
     RecycleEntityType.quote => '名言',
+    RecycleEntityType.note => '笔记',
   };
 
   /// 使用现有业务图标表达各分组。
@@ -327,5 +328,6 @@ class _RecycleBinSectionState extends ConsumerState<RecycleBinSection> {
     RecycleEntityType.timeEntry => Icons.view_timeline_outlined,
     RecycleEntityType.membership => Icons.loyalty_outlined,
     RecycleEntityType.quote => Icons.format_quote_rounded,
+    RecycleEntityType.note => Icons.edit_note_rounded,
   };
 }

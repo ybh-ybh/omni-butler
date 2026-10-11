@@ -31,7 +31,7 @@ void main() {
   });
   tearDown(() => database.close());
 
-  test('清空六类业务及历史，保留活动记录与每日名言槽位', () async {
+  test('清空全部类型业务及历史，保留活动记录与每日名言槽位', () async {
     for (final RecycleEntityType type in RecycleEntityType.values) {
       await seedRecycleRecord(database, type, type.name, now);
       await seedRecycleRecord(database, type, '${type.name}-active', null);
@@ -68,7 +68,7 @@ void main() {
             updatedAt: now,
           ),
         );
-    expect(await repository.empty(), 6);
+    expect(await repository.empty(), RecycleEntityType.values.length);
     expect(await repository.loadItems(), isEmpty);
     expect(await database.select(database.eventCompletions).get(), isEmpty);
     expect(await database.select(database.membershipPayments).get(), isEmpty);
@@ -84,6 +84,7 @@ void main() {
       database.timeEntries,
       database.memberships,
       database.quotes,
+      database.noteEntries,
     ]) {
       expect(await database.select(table).get(), hasLength(1));
     }
@@ -138,7 +139,7 @@ void main() {
     );
   });
 
-  test('六类业务严格超过30天才清理，UTC与本地边界等价', () async {
+  test('全部类型业务严格超过30天才清理，UTC与本地边界等价', () async {
     for (final RecycleEntityType type in RecycleEntityType.values) {
       await seedRecycleRecord(
         database,
@@ -159,13 +160,22 @@ void main() {
         now.subtract(const Duration(days: 29)),
       );
     }
-    expect(await repository.purgeExpired(now: now.toLocal()), 6);
-    expect(await repository.loadItems(), hasLength(12));
+    expect(
+      await repository.purgeExpired(now: now.toLocal()),
+      RecycleEntityType.values.length,
+    );
+    expect(
+      await repository.loadItems(),
+      hasLength(RecycleEntityType.values.length * 2),
+    );
     expect(
       await repository.purgeExpired(now: now.add(const Duration(seconds: 1))),
-      6,
+      RecycleEntityType.values.length,
     );
-    expect(await repository.loadItems(), hasLength(6));
+    expect(
+      await repository.loadItems(),
+      hasLength(RecycleEntityType.values.length),
+    );
   });
 
   test('删除前复核，已恢复或重新删除的记录不接受旧界面操作', () async {

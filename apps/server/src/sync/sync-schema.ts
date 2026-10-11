@@ -1,7 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 
-/// 进度任务要求所有同步参与者认识独立步骤表。
-export const syncSchemaVersion = 2;
+/// 笔记要求所有同步参与者认识正文、候选版本与原音表。
+export const syncSchemaVersion = 3;
 
 /// 在写入和签发下行凭证前阻止旧客户端解释新版任务。
 export function requireSyncSchemaVersion(version: string | undefined): void {

@@ -8,7 +8,7 @@ import 'package:omni_butler/core/auth/auth_models.dart';
 const String fixedApiPath = '/omni-butler/api/v1';
 
 /// 当前客户端支持的业务同步结构版本。
-const int syncSchemaVersion = 2;
+const int syncSchemaVersion = 3;
 
 /// 完整设备会话使用同一个安全存储键，避免写入中断造成凭证混搭。
 const String _sessionKey = 'sync.device_session';
@@ -187,7 +187,7 @@ class AuthRepository {
       <String, Object?>{'syncKey': syncKey},
     );
     _verifySyncSchema(result);
-    if (result['protocolVersion'] != 1 || result['snapshotVersion'] != 2) {
+    if (result['protocolVersion'] != 1 || result['snapshotVersion'] != 3) {
       throw const ApiFailure('服务器尚不支持当前迁移协议，请先升级后端');
     }
     return result;
@@ -200,14 +200,16 @@ class AuthRepository {
     required String migrationId,
     required String expectedOwnerId,
     required List<Map<String, Object?>> operations,
+    List<String> omittedAudioIds = const <String>[],
   }) {
     // 包含同步密钥的完整编码大小才是服务端请求上限的依据。
     final Map<String, Object?> payload = <String, Object?>{
       'syncKey': syncKey,
       'migrationId': migrationId,
       'expectedOwnerId': expectedOwnerId,
-      'snapshotVersion': 2,
+      'snapshotVersion': 3,
       'operations': operations,
+      'omittedAudioIds': omittedAudioIds,
     };
     if (operations.length > 100000 ||
         utf8.encode(jsonEncode(payload)).length > 32 * 1024 * 1024) {

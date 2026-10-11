@@ -64,7 +64,24 @@ void main() {
       isFalse,
     );
     expect(preferences.getBool('features.memberships.enabled'), isFalse);
+    expect(
+      container.read(featurePreferenceProvider).isEnabled(AppFeature.notes),
+      isTrue,
+    );
+    await container
+        .read(featurePreferenceProvider.notifier)
+        .setFeatureEnabled(AppFeature.notes, false);
+    expect(preferences.getBool('features.notes.enabled'), isFalse);
     container.dispose();
+    // 重建应用容器后仍沿用明确关闭的笔记入口。
+    final ProviderContainer reopened = ProviderContainer(
+      overrides: [sharedPreferencesProvider.overrideWithValue(preferences)],
+    );
+    expect(
+      reopened.read(featurePreferenceProvider).isEnabled(AppFeature.notes),
+      isFalse,
+    );
+    reopened.dispose();
   });
 
   testWidgets('Windows 设置页展示左侧一级分类并可关闭功能', (WidgetTester tester) async {

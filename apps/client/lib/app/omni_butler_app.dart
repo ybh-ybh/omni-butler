@@ -17,6 +17,7 @@ import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/core/sync/image_sync_providers.dart';
 import 'package:omni_butler/core/sync/sync_connection_providers.dart';
 import 'package:omni_butler/core/sync/sync_maintenance_boundary.dart';
+import 'package:omni_butler/features/notes/data/note_providers.dart';
 
 /// Omni Butler 根应用。
 class OmniButlerApp extends ConsumerStatefulWidget {
@@ -120,6 +121,8 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
     ref.watch(notificationCoordinatorProvider);
     ref.watch(syncControllerProvider);
     ref.watch(imageSyncServiceProvider);
+    ref.watch(noteInfrastructureProvider);
+    ref.watch(noteAudioTransferProvider);
     // 仅新挂载或数据库代次切换时启动，普通重建不能重启正在退出的清理器。
     final RecycleBinCleanupCoordinator? cleanup = ref.watch(
       recycleBinCleanupProvider,

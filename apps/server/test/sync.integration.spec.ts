@@ -604,12 +604,12 @@ integration('SyncService PostgreSQL 集成', () => {
     expect(preview).toMatchObject({
       ownerId,
       protocolVersion: 1,
-      snapshotVersion: 2,
+      snapshotVersion: 3,
       deletedCount: 1,
       counts: { quotes: 2 },
       limits: { maxOperations: 100000, maxBytes: 33554432 },
     });
-    expect(Object.keys(preview.counts)).toHaveLength(12);
+    expect(Object.keys(preview.counts)).toHaveLength(15);
   });
 
   afterAll(async () => {
@@ -637,6 +637,9 @@ integration('SyncService PostgreSQL 集成', () => {
       'inventory_items',
       'membership_payments',
       'memberships',
+      'note_audio_segments',
+      'note_entries',
+      'note_versions',
       'quotes',
       'record_taxonomy_links',
       'taxonomy_entries',

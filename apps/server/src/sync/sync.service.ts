@@ -13,9 +13,12 @@ import {
   reconcileSync,
 } from './sync-consistency';
 import { SyncSqlBuilder } from './sync-sql.builder';
+import { normalizeNoteOperation, validateNoteTagOperation } from './note-sync';
 
 /// 同步操作引用的业务父表，用于处理永久删除后的迟到写入。
 const parentReferences: Readonly<Record<string, Record<string, string>>> = {
+  note_versions: { note_id: 'note_entries' },
+  note_audio_segments: { note_id: 'note_entries' },
   todo_items: { parent_id: 'todo_items' },
   todo_progress_steps: { todo_id: 'todo_items' },
   record_taxonomy_links: { taxonomy_id: 'taxonomy_entries' },
@@ -60,7 +63,7 @@ export class SyncService {
   async applyBatch(userId: string, batch: SyncBatchDto): Promise<SyncResult> {
     // 写入之前校验全部表和列，避免忽略路径绕过白名单。
     for (const operation of batch.operations) {
-      this.sqlBuilder.build(operation, userId);
+      this.sqlBuilder.build(validateNoteTagOperation(operation), userId);
     }
     // 操作摘要用于拒绝复用事务身份提交不同内容。
     const payloadHash = createHash('sha256')
@@ -166,12 +169,14 @@ export class SyncService {
           }
           await this.validateProgressIdentity(transaction, userId, operation);
           // 自动续费只允许推进账期，人工编辑保持原意。
-          const normalized = await normalizeAutomaticRenewalPatch(
+          const renewed = await normalizeAutomaticRenewalPatch(
             transaction,
             userId,
             operation,
             batch.operations,
           );
+          // 笔记保留所有候选，仅基线匹配的正文允许替换当前修订。
+          const normalized = await normalizeNoteOperation(transaction, userId, renewed);
           // 当前操作的参数化 SQL。
           const statement = this.sqlBuilder.build(normalized, userId);
           // 真实受影响行数，缺失行 PATCH 不能伪装成同步成功。

@@ -152,7 +152,7 @@ class _SyncBackupDialogState extends ConsumerState<_SyncBackupDialog> {
                     ),
                     if ((backup['missingImages'] as List?)?.isNotEmpty ?? false)
                       SelectableText(
-                        '本次迁移缺失的图片：\n${(backup['missingImages'] as List).join('\n')}',
+                        '本次迁移缺失的附件（图片或笔记原音）：\n${(backup['missingImages'] as List).join('\n')}',
                       ),
                     Align(
                       alignment: Alignment.centerRight,

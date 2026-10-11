@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:flutter/material.dart';
 import 'package:omni_butler/core/database/app_database.dart';
@@ -13,6 +15,9 @@ enum TaxonomyModule {
 
   /// 会员模块。
   membership,
+
+  /// 笔记模块。
+  notes,
 }
 
 /// 分类标签类型。
@@ -65,6 +70,9 @@ class TaxonomyRepository {
 
   /// UUID 生成器。
   final Uuid _uuid;
+
+  /// 本次会话删除笔记标签的关联，供用户立即撤销；不影响其他模块。
+  final Map<String, Set<String>> _removedNoteTagLinks = {};
 
   /// 创建分类标签仓储。
   TaxonomyRepository(this._database, {this._uuid = const Uuid()});
@@ -244,6 +252,15 @@ class TaxonomyRepository {
           newName,
           now,
           draft.id!,
+        );
+      case (TaxonomyModule.notes, TaxonomyKind.category):
+        await (_database.update(
+          _database.noteEntries,
+        )..where((table) => table.categoryId.equals(draft.id!))).write(
+          NoteEntriesCompanion(
+            categoryName: Value(newName),
+            updatedAt: Value(now),
+          ),
         );
       case _:
         break;
@@ -444,28 +461,87 @@ class TaxonomyRepository {
 
   /// 将分类标签移入回收状态。
   Future<void> delete(String id) async {
+    // 删除前核实条目模块与类型。
+    final TaxonomyEntry? entry = await (_database.select(
+      _database.taxonomyEntries,
+    )..where((table) => table.id.equals(id))).getSingleOrNull();
     // 当前删除时间。
     final DateTime now = DateTime.now();
-    await (_database.update(
-      _database.taxonomyEntries,
-    )..where((TaxonomyEntries table) => table.id.equals(id))).write(
-      TaxonomyEntriesCompanion(
-        deletedAt: Value<DateTime>(now),
-        updatedAt: Value<DateTime>(now),
-      ),
-    );
+    await _database.transaction(() async {
+      if (entry?.module == 'notes' && entry?.kind == 'tag') {
+        // 保留回收站也解除关联，恢复时不带回已删除标签。
+        final List<NoteEntryRecord> notes = await _database
+            .select(_database.noteEntries)
+            .get();
+        final Set<String> affected = {};
+        for (final NoteEntryRecord note in notes) {
+          final List<String> tags = (jsonDecode(note.tags) as List)
+              .cast<String>();
+          if (!tags.remove(id)) continue;
+          affected.add(note.id);
+          await (_database.update(
+            _database.noteEntries,
+          )..where((table) => table.id.equals(note.id))).write(
+            NoteEntriesCompanion(
+              tags: Value(jsonEncode(tags)),
+              updatedAt: Value(now),
+            ),
+          );
+        }
+        _removedNoteTagLinks[id] = affected;
+      }
+      await (_database.update(
+        _database.taxonomyEntries,
+      )..where((TaxonomyEntries table) => table.id.equals(id))).write(
+        TaxonomyEntriesCompanion(
+          deletedAt: Value<DateTime>(now),
+          updatedAt: Value<DateTime>(now),
+        ),
+      );
+    });
   }
 
   /// 恢复刚删除的分类标签。
   Future<void> restore(String id) async {
-    await (_database.update(
-      _database.taxonomyEntries,
-    )..where((TaxonomyEntries table) => table.id.equals(id))).write(
-      TaxonomyEntriesCompanion(
-        deletedAt: const Value<DateTime?>(null),
-        updatedAt: Value<DateTime>(DateTime.now()),
-      ),
-    );
+    await _database.transaction(() async {
+      await (_database.update(
+        _database.taxonomyEntries,
+      )..where((TaxonomyEntries table) => table.id.equals(id))).write(
+        TaxonomyEntriesCompanion(
+          deletedAt: const Value<DateTime?>(null),
+          updatedAt: Value<DateTime>(DateTime.now()),
+        ),
+      );
+      // 只恢复本次明确撤销所移除的关联，不从同名标签推断历史关系。
+      final Set<String> affected = _removedNoteTagLinks[id] ?? {};
+      for (final String noteId in affected) {
+        final NoteEntryRecord? note = await (_database.select(
+          _database.noteEntries,
+        )..where((table) => table.id.equals(noteId))).getSingleOrNull();
+        if (note == null) continue;
+        final Set<String> tags =
+            (jsonDecode(note.tags) as List).cast<String>().toSet()..add(id);
+        await (_database.update(
+          _database.noteEntries,
+        )..where((table) => table.id.equals(noteId))).write(
+          NoteEntriesCompanion(
+            tags: Value(jsonEncode(tags.toList()..sort())),
+            updatedAt: Value(DateTime.now()),
+          ),
+        );
+      }
+    });
+    _removedNoteTagLinks.remove(id);
+  }
+
+  /// 笔记标签删除确认显示实际受影响笔记数量。
+  Future<int> affectedNoteCount(String id) async {
+    final List<NoteEntryRecord> notes = await _database
+        .select(_database.noteEntries)
+        .get();
+    return notes
+        .where((note) => (jsonDecode(note.tags) as List).contains(id))
+        .length;
   }
 
   /// 用新的标签集合替换记录的现有标签关系。

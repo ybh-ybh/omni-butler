@@ -1,5 +1,7 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
+# 原音播放器依赖现代运行时库选择策略。
+cmake_policy(SET CMP0091 NEW)
 project(omni_butler LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change

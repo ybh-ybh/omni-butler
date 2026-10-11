@@ -1,0 +1,2 @@
+# Linux 容器直接执行的启动脚本必须使用 LF。
+/deploy/image-sync/start-minio.sh text eol=lf

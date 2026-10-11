@@ -6,6 +6,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { SyncModule } from './sync/sync.module';
 import { validateEnvironment } from './config/environment';
 import { ImagesModule } from './images/images.module';
+import { NotesModule } from './notes/notes.module';
 
 /// Omni Butler 服务端根模块。
 @Module({
@@ -20,6 +21,7 @@ import { ImagesModule } from './images/images.module';
     AuthModule,
     SyncModule,
     ImagesModule,
+    NotesModule,
   ],
 })
 export class AppModule {}

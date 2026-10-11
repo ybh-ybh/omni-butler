@@ -1,9 +1,0 @@
-services:
-  api:
-    environment:
-      IMAGE_SYNC_ENABLED: "false"
-  # 默认关闭时不拉取或启动 MinIO 镜像。
-  minio:
-    image: node:24-bookworm-slim
-    deploy:
-      replicas: 0

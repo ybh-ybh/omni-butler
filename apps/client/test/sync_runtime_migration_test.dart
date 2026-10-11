@@ -245,7 +245,7 @@ void main() {
     expect(snapshot.deletedCount, 1);
     expect(snapshot.pendingOperations, 1);
     expect(snapshot.tables.keys, unorderedEquals(SyncSnapshot.tableNames));
-    expect(snapshot.tables, hasLength(14));
+    expect(snapshot.tables, hasLength(18));
     expect(snapshot.operations.single['data'], isNot(contains('sync_state')));
     for (final bool merge in <bool>[true, false]) {
       // 两种保留本机的策略均从全新候选库开始。

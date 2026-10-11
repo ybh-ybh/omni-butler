@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:drift/drift.dart' show ApplyInterceptorConnection;
+import 'package:crypto/crypto.dart';
 import 'package:drift_sqlite_async/drift_sqlite_async.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
 import 'package:omni_butler/core/auth/auth_repository.dart';
@@ -12,6 +13,7 @@ import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 import 'package:omni_butler/core/sync/sync_client_identity.dart';
 import 'package:omni_butler/core/sync/sync_snapshot.dart';
 import 'package:omni_butler/core/sync/sync_image_report.dart';
+import 'package:omni_butler/core/sync/sync_note_audio_backup.dart';
 import 'package:omni_butler/core/sync/sync_write_gate.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -42,6 +44,7 @@ class OmniSyncRuntime {
   static const List<String> _localOnlyTableNames = <String>[
     'banner_settings',
     'attachments',
+    'note_audio_local_files',
   ];
 
   /// PowerSync 底层数据库。
@@ -332,6 +335,8 @@ class OmniSyncRuntime {
         }
       }
       for (final String table in SyncSnapshot.tableNames) {
+        // 原音本机状态单独按文件校验恢复，不携带旧源识别任务或共享备份路径。
+        if (table == 'note_audio_local_files') continue;
         if (!useLocalData &&
             table != 'banner_settings' &&
             table != 'attachments') {
@@ -393,6 +398,7 @@ class OmniSyncRuntime {
     });
     await ensureSyncClientId(powerSync);
     await _installRawTableTriggers();
+    await restoreLocalNoteAudio(snapshot);
   }
 
   /// 在完整下行后恢复同业务类型、同记录 ID 的本机图片，不上传附件。
@@ -492,6 +498,47 @@ class OmniSyncRuntime {
         }
       }
     });
+  }
+
+  /// 只恢复同身份、同摘要的原音，并将文件与旧快照备份隔离。
+  Future<void> restoreLocalNoteAudio(SyncSnapshot snapshot) async {
+    // 当前候选库独占的音频目录，删除笔记不能连带删掉独立迁移备份。
+    final Directory audioDirectory = Directory(
+      path.join(path.dirname(databasePath), 'note_audio_live'),
+    );
+    for (final Map<String, Object?> source
+        in snapshot.tables['note_audio_local_files'] ??
+            <Map<String, Object?>>[]) {
+      // 服务端下行后必须仍存在同一录音段，不能复活已删除的旧业务记录。
+      final Map<String, Object?>? segment = await powerSync.getOptional(
+        'SELECT * FROM note_audio_segments WHERE id = ?',
+        <Object?>[source['id']],
+      );
+      if (segment == null) continue;
+      // 新库只能接受当前摘要对应的有效文件体。
+      String? localPath;
+      if (await isMigrationNoteAudioValid(
+        source['local_path'] as String?,
+        segment,
+      )) {
+        await audioDirectory.create(recursive: true);
+        // 对标识做摘要，避免快照字段参与路径拼接。
+        final String fileName =
+            '${sha256.convert(utf8.encode(source['id'].toString()))}.audio';
+        // 新库自己的文件副本，不再依赖备份生命周期。
+        final File file = await File(source['local_path']! as String)
+            .copy(path.join(audioDirectory.path, fileName));
+        if (!await isMigrationNoteAudioValid(file.path, segment)) {
+          throw const FileSystemException('迁移原音恢复校验失败');
+        }
+        localPath = file.path;
+      }
+      await powerSync.execute(
+        'INSERT OR REPLACE INTO note_audio_local_files '
+        '(id, local_path, upload_state, recognition_state, consent) VALUES (?, ?, ?, ?, ?)',
+        <Object?>[source['id'], localPath, 'pending', 'idle', 0],
+      );
+    }
   }
 
   /// 等待上传全部获确认，再请求服务器检查点并等待其完整落入候选库。

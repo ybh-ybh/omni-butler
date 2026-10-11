@@ -1,12 +1,20 @@
 import 'package:powersync/powersync.dart';
 
 /// 为现有 Drift 业务表创建一个可推断同步映射的 PowerSync Raw Table。
-RawTable _rawTable(String name, List<String> syncedColumns) {
+RawTable _rawTable(
+  String name,
+  List<String> syncedColumns, {
+  // 需要增量合并的字段由 SDK 在持久 CRUD 队列中记录修改前值。
+  TrackPreviousValuesOptions? trackPreviousValues,
+}) {
   return RawTable.inferred(
     name: name,
     schema: RawTableSchema(
       syncedColumns: syncedColumns,
-      options: const TableOptions(ignoreEmptyUpdates: true),
+      options: TableOptions(
+        ignoreEmptyUpdates: true,
+        trackPreviousValues: trackPreviousValues,
+      ),
     ),
     clear: 'DELETE FROM "$name"',
   );
@@ -194,6 +202,45 @@ final Schema omniSyncSchema = Schema(
       'reminder_time_minutes',
       'cancel_guide',
       'notes',
+      'created_at',
+      'updated_at',
+      'deleted_at',
+    ]),
+    _rawTable(
+      'note_entries',
+      <String>[
+        'body',
+        'day_key',
+        'creation_timezone',
+        'category_id',
+        'category_name',
+        'tags',
+        'revision',
+        'created_at',
+        'updated_at',
+        'deleted_at',
+      ],
+      trackPreviousValues: const TrackPreviousValuesOptions(
+        columnFilter: <String>['tags'],
+        onlyWhenChanged: true,
+      ),
+    ),
+    _rawTable('note_versions', <String>[
+      'note_id',
+      'body',
+      'base_revision',
+      'revision',
+      'created_at',
+      'deleted_at',
+    ]),
+    _rawTable('note_audio_segments', <String>[
+      'note_id',
+      'sort_order',
+      'duration_ms',
+      'mime',
+      'sha256',
+      'byte_size',
+      'transcript',
       'created_at',
       'updated_at',
       'deleted_at',

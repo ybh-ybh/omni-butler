@@ -57,8 +57,14 @@ dependencies:
   powersync: ^2.4.0
   drift_sqlite_async: ^0.3.1
   image: ^4.9.2
+  # Windows 采集 PCM 流；Android 使用本应用原生前台录音服务。
+  record: ^7.1.2
+  # 两端播放私有目录中保存的原始录音。
+  audioplayers: ^6.8.1
 
 dev_dependencies:
+  # 文件传输测试只替换私有目录，禁止写入真实用户数据路径。
+  path_provider_platform_interface: ^2.1.3
   flutter_test:
     sdk: flutter
 

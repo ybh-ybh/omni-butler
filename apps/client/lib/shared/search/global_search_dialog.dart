@@ -74,7 +74,7 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
             autofocus: true,
             decoration: const InputDecoration(
               prefixIcon: Icon(Icons.search_rounded),
-              hintText: '搜索待办、事件、物品、时间记录、会员或名言',
+              hintText: '搜索笔记、待办、事件、物品、时间记录、会员或名言',
             ),
             textInputAction: TextInputAction.search,
             onChanged: _search,
@@ -166,6 +166,7 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
         AppFeature.memberships,
       ),
       GlobalSearchType.quote => true,
+      GlobalSearchType.note => preference.isEnabled(AppFeature.notes),
     };
   }
 
@@ -178,6 +179,7 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
       GlobalSearchType.timeEntry => Icons.view_timeline_outlined,
       GlobalSearchType.membership => Icons.loyalty_outlined,
       GlobalSearchType.quote => Icons.format_quote_rounded,
+      GlobalSearchType.note => Icons.edit_note_rounded,
     };
   }
 
@@ -190,6 +192,7 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
       GlobalSearchType.timeEntry => '时间记录',
       GlobalSearchType.membership => '会员',
       GlobalSearchType.quote => '名言',
+      GlobalSearchType.note => '笔记',
     };
   }
 
@@ -204,6 +207,7 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
       GlobalSearchType.timeEntry => colors.time,
       GlobalSearchType.membership => colors.member,
       GlobalSearchType.quote => colors.brand,
+      GlobalSearchType.note => colors.brand,
     };
   }
 }

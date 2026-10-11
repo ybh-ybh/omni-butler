@@ -598,6 +598,7 @@ void main() {
       'features.events.enabled': false,
       'features.inventory.enabled': false,
       'features.memberships.enabled': false,
+      'features.notes.enabled': false,
     });
 
     // 显式管理的测试依赖容器。
@@ -700,6 +701,7 @@ void main() {
     final SharedPreferences preferences = await _preferences(<String, Object>{
       'features.events.enabled': false,
       'features.memberships.enabled': false,
+      'features.notes.enabled': false,
       'features.inventory.enabled': true,
     });
 

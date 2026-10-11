@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 
@@ -20,6 +22,9 @@ enum GlobalSearchType {
 
   /// 名言。
   quote,
+
+  /// 笔记。
+  note,
 }
 
 /// 全局搜索结果。
@@ -191,7 +196,69 @@ class GlobalSearchRepository {
         );
       }
     }
+    // 有效笔记按记录日期倒序搜索，正文、原始转写、类别与标签都可命中。
+    final List<NoteEntryRecord> notes =
+        await (_database.select(_database.noteEntries)
+              ..where((NoteEntries table) => table.deletedAt.isNull())
+              ..orderBy([
+                (NoteEntries table) => OrderingTerm.desc(table.dayKey),
+              ]))
+            .get();
+    // 原始转写按笔记索引，已删除音频不参与全局搜索。
+    final List<NoteAudioSegmentRecord> audio = await (_database.select(
+      _database.noteAudioSegments,
+    )..where((NoteAudioSegments table) => table.deletedAt.isNull())).get();
+    // 类别与标签的真实显示名称，已删除的标签不再作为分类命中。
+    final List<TaxonomyEntry> taxonomy =
+        await (_database.select(_database.taxonomyEntries)..where(
+              (TaxonomyEntries table) =>
+                  table.module.equals('notes') & table.deletedAt.isNull(),
+            ))
+            .get();
+    // 有效类别和标签名称按身份索引。
+    final Map<String, String> names = {
+      for (final TaxonomyEntry entry in taxonomy) entry.id: entry.name,
+    };
+    for (final NoteEntryRecord record in notes) {
+      if (_matches(keyword, <String?>[
+        record.body,
+        names[record.categoryId] ?? record.categoryName,
+        ..._tagNames(record.tags, names),
+        ...audio
+            .where(
+              (NoteAudioSegmentRecord segment) => segment.noteId == record.id,
+            )
+            .map((NoteAudioSegmentRecord segment) => segment.transcript),
+      ])) {
+        results.add(
+          GlobalSearchResult(
+            type: GlobalSearchType.note,
+            id: record.id,
+            title: record.body.trim().isEmpty
+                ? '语音笔记'
+                : record.body.trim().split('\n').first,
+            subtitle: '${record.dayKey} · ${record.categoryName ?? '未分类'}',
+            route: '/notes?id=${Uri.encodeQueryComponent(record.id)}',
+          ),
+        );
+      }
+    }
     return results.take(50).toList(growable: false);
+  }
+
+  /// 从持久标签身份解析有效显示名称，坏旧数据不阻止搜索其他字段。
+  List<String> _tagNames(String encoded, Map<String, String> names) {
+    try {
+      // 本篇笔记保存的标签身份数组。
+      final Object? decoded = jsonDecode(encoded);
+      if (decoded is! List) return const [];
+      return decoded
+          .map((dynamic id) => names[id])
+          .whereType<String>()
+          .toList();
+    } on FormatException {
+      return const [];
+    }
   }
 
   /// 判断一组可选字段是否包含搜索词。

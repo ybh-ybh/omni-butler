@@ -184,8 +184,8 @@ class _Fixture {
       case '/sync/connection-preview':
         return <String, dynamic>{
           'protocolVersion': 1,
-          'snapshotVersion': 2,
-          'syncSchemaVersion': 2,
+          'snapshotVersion': 3,
+          'syncSchemaVersion': 3,
           'ownerId': remoteOwner,
           'counts': <String, int>{'todo_items': 7},
           'deletedCount': 2,
@@ -201,7 +201,7 @@ class _Fixture {
           'expiresIn': 900,
         };
       case '/auth/session':
-        return <String, dynamic>{'sub': remoteOwner, 'syncSchemaVersion': 2};
+        return <String, dynamic>{'sub': remoteOwner, 'syncSchemaVersion': 3};
       case '/auth/disconnect':
         return <String, dynamic>{};
       default:
@@ -374,6 +374,132 @@ void main() {
     expect((await fixture.source.exportSnapshot()).totalCount, 1);
     expect(await fixture.source.ownerId, 'owner-a');
     expect(fixture.source.writesFrozen, isFalse);
+  });
+
+  test('替换前先暂存原音并核验回执，响应未知重试复用身份与同一文件', () async {
+    // 测试专属原音文件，迁移时会复制到独立备份目录。
+    final File audio = File('${fixture.directory.path}/original.wav');
+    await audio.writeAsBytes([1, 2, 3, 4]);
+    // 真实同步元数据，与文件体的长度、摘要一致。
+    final String digest = sha256.convert([1, 2, 3, 4]).toString();
+    await fixture.source.powerSync.execute(
+      'INSERT INTO note_entries (id, body, day_key, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [
+        'note',
+        '记录',
+        '2026-10-11',
+        'rev',
+        '2026-10-11T00:00:00Z',
+        '2026-10-11T00:00:00Z',
+      ],
+    );
+    await fixture.source.powerSync.execute(
+      'INSERT INTO note_audio_segments (id, note_id, sort_order, duration_ms, mime, sha256, byte_size, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        'segment',
+        'note',
+        0,
+        1000,
+        'audio/wav',
+        digest,
+        4,
+        '2026-10-11T00:00:00Z',
+        '2026-10-11T00:00:00Z',
+      ],
+    );
+    await fixture.source.powerSync.execute(
+      'INSERT INTO note_audio_local_files (id, local_path) VALUES (?, ?)',
+      ['segment', audio.path],
+    );
+    fixture.respond = (RequestOptions request) async {
+      if (request.path == '/sync/migrations/status') {
+        return {'status': 'notFound'};
+      }
+      if (request.path == '/notes/audio/migration/stage') {
+        // 实际 multipart 字段，验证迁移 ID、MIME 与内容摘要。
+        final Map<String, String> fields = Map.fromEntries(
+          (request.data as FormData).fields,
+        );
+        expect(fields['mime'], 'audio/wav');
+        return {
+          'migrationId': fields['migrationId'],
+          'segmentId': fields['segmentId'],
+          'sha256': fields['sha256'],
+          'byteSize': 4,
+        };
+      }
+      return fixture.defaultResponse(request);
+    };
+    // 模拟替换响应丢失，暂存步骤本身已获校验。
+    final SyncConnectionPreview preview = await fixture.preview();
+    await expectLater(
+      fixture.coordinator.start(
+        preview: preview,
+        syncKey: 'test-sync-secret',
+        strategy: SyncConnectionStrategy.replaceServer,
+      ),
+      throwsA(isA<ApiFailure>()),
+    );
+    // 使用同一次迁移恢复，原文件删除后仍由独立备份重新上传。
+    await audio.delete();
+    await expectLater(fixture.coordinator.resume(), throwsA(isA<ApiFailure>()));
+    // 两次替换请求中的显式省略清单均为空，原音不可被静默放弃。
+    expect(fixture.replacements, hasLength(2));
+    expect(
+      (fixture.replacements.first.data as Map)['omittedAudioIds'],
+      isEmpty,
+    );
+    // HTTP 顺序证明原音暂存成功之后才执行替换。
+    final List<String> paths = fixture.requests
+        .map((RequestOptions request) => request.path)
+        .toList();
+    expect(
+      paths.indexOf('/notes/audio/migration/stage'),
+      lessThan(paths.indexOf('/sync/migrations')),
+    );
+    // 幂等身份在恢复时保持不变。
+    final List<Map<String, String>> staged = fixture.requests
+        .where(
+          (RequestOptions request) =>
+              request.path == '/notes/audio/migration/stage',
+        )
+        .map(
+          (RequestOptions request) => Map<String, String>.fromEntries(
+            (request.data as FormData).fields,
+          ),
+        )
+        .toList();
+    expect(staged, hasLength(2));
+    expect(staged.first, staged.last);
+    // 服务端回执字段错误时不得继续第三次替换。
+    fixture.respond = (RequestOptions request) async {
+      if (request.path == '/sync/migrations/status') {
+        return {'status': 'notFound'};
+      }
+      if (request.path == '/notes/audio/migration/stage') {
+        return {
+          'migrationId': 'wrong-migration',
+          'segmentId': 'segment',
+          'sha256': digest,
+          'byteSize': 4,
+        };
+      }
+      return fixture.defaultResponse(request);
+    };
+    await expectLater(fixture.coordinator.resume(), throwsA(isA<ApiFailure>()));
+    expect(fixture.replacements, hasLength(2));
+    expect(await fixture.source.ownerId, 'owner-a');
+    // 备份文件后来损坏时也不能静默省略原音，保持同一次迁移可恢复状态。
+    final Map<String, dynamic> journal = (await fixture.store.read('pending'))!;
+    final Map<String, dynamic> snapshot = jsonDecode(
+      await File(journal['snapshotPath'] as String).readAsString(),
+    );
+    final String backupPath =
+        snapshot['tables']['note_audio_local_files'][0]['local_path'] as String;
+    await File(backupPath).writeAsBytes([4, 3, 2, 1]);
+    await expectLater(fixture.coordinator.resume(), throwsA(isA<ApiFailure>()));
+    expect(fixture.replacements, hasLength(2));
+    expect((await fixture.store.read('pending'))!['id'], journal['id']);
   });
 
   test('提交响应未知必须保留维护锁，重试使用相同迁移 ID 和完整请求', () async {
@@ -873,6 +999,42 @@ void main() {
     expect(await wrongSnapshot.readAsString(), 'must remain');
     expect(await outside.readAsString(), 'outside must remain');
     expect((await fixture.source.exportSnapshot()).totalCount, 1);
+  });
+
+  test('原音备份包含陌生子目录时先拒绝清理，SQL与快照都保持完整', () async {
+    // 所有文件和目录属于当前测试，模拟被意外改动的备份目录结构。
+    final Directory work = Directory(
+      '${fixture.directory.path}/migrations/audio-backup',
+    );
+    await work.create(recursive: true);
+    final File old = File('${fixture.directory.path}/old-audio.sqlite');
+    final File snapshot = File('${work.path}/snapshot.json');
+    await old.writeAsString('old database');
+    await snapshot.writeAsString('snapshot body');
+    final Directory unexpected = Directory(
+      '${work.path}/note_audio_backup/unexpected',
+    );
+    await unexpected.create(recursive: true);
+    await fixture.store.write('backup:audio-backup', {
+      'id': 'audio-backup',
+      'databasePath': old.path,
+      'snapshotPath': snapshot.path,
+    });
+    await expectLater(
+      fixture.coordinator.deleteBackup('audio-backup'),
+      throwsA(isA<ApiFailure>()),
+    );
+    expect(await old.readAsString(), 'old database');
+    expect(await snapshot.readAsString(), 'snapshot body');
+    // 解除结构异常后，正常的独占音频副本可与SQL快照一并清理。
+    await unexpected.delete();
+    final File audio = File('${work.path}/note_audio_backup/owned.audio');
+    await audio.writeAsBytes([1, 2, 3]);
+    await fixture.coordinator.deleteBackup('audio-backup');
+    expect(await old.exists(), isFalse);
+    expect(await snapshot.exists(), isFalse);
+    expect(await audio.exists(), isFalse);
+    expect(await fixture.store.read('backup:audio-backup'), isNull);
   });
 
   test('备份清理与恢复共享同步准入锁，未登记身份不能删除任意文件', () async {
