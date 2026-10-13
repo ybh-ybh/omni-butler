@@ -8,9 +8,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/app/theme/note_composer_style.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart';
+import 'package:omni_butler/features/notes/audio/note_audio_export_service.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
+import 'package:omni_butler/shared/ui/omni_note_audio_controls.dart';
+import 'package:omni_butler/shared/ui/omni_note_composer_button.dart';
+
+part 'note_audio_compact.dart';
 
 /// 每段原音独立展示回听、识别状态和待插入文本，不直接编辑笔记正文。
 class NoteAudioCard extends StatefulWidget {
@@ -23,6 +29,12 @@ class NoteAudioCard extends StatefulWidget {
     required this.onCancel,
     required this.onInsert,
     required this.recordingActive,
+    this.compact = false,
+    this.editing = false,
+    this.editEnabled = true,
+    this.recognitionEnabled = true,
+    this.onDelete,
+    this.exporter = const NoteAudioExportService(),
     super.key,
   });
 
@@ -46,6 +58,24 @@ class NoteAudioCard extends StatefulWidget {
 
   /// 正在录音时禁用回听，文字和转写管理继续可用。
   final bool recordingActive;
+
+  /// Windows阅读与编辑共用紧凑音频条，Android沿用完整卡片。
+  final bool compact;
+
+  /// 历史编辑在原有音频工具后增加正文插入和草稿删除。
+  final bool editing;
+
+  /// 冻结或正在提交的草稿禁止更改正文与音频。
+  final bool editEnabled;
+
+  /// 尚未发布的本机草稿原音不能启动正式识别任务。
+  final bool recognitionEnabled;
+
+  /// 删除由父编辑器暂存，只有显式保存才修改正式记录。
+  final VoidCallback? onDelete;
+
+  /// 下载只导出已核验原音副本，测试可替换系统保存边界。
+  final NoteAudioExportService exporter;
 
   /// 创建当前卡片局部状态。
   @override
@@ -80,6 +110,20 @@ class _NoteAudioCardState extends State<NoteAudioCard> {
 
   /// 异步文件检查代次，旧路径结果不能覆盖新缓存。
   int _fileCheck = 0;
+
+  /// 紧凑音频条的原文展开状态与播放状态互不影响。
+  bool _detailsExpanded = false;
+
+  /// 保存文件期间阻止重复打开系统保存窗口。
+  bool _exporting = false;
+
+  /// 下载错误不混入播放或厂商识别状态。
+  String? _exportError;
+
+  /// 同库紧凑视图通过此入口更新状态，避免访问受保护的框架方法。
+  void _updateCompact(VoidCallback change) {
+    if (mounted) setState(change);
+  }
 
   /// 当前播放器是否绑定本段本机原音。
   bool get _isCurrent =>
@@ -343,6 +387,15 @@ class _NoteAudioCardState extends State<NoteAudioCard> {
     final cancelling = widget.local?.recognitionState == 'cancelPending';
     // 不明确的提交回执必须先查原任务，不能直接重新付费。
     final unknown = widget.local?.recognitionState == 'submissionUnknown';
+    if (widget.compact) {
+      return _compactAudioCard(
+        playing: playing,
+        paused: paused,
+        progress: progress,
+        total: total,
+        recognizing: pending || cancelling || unknown,
+      );
+    }
     return FocusTraversalGroup(
       child: OmniPanel(
         padding: const EdgeInsets.all(OmniSpacing.md),

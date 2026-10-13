@@ -53,6 +53,9 @@ abstract final class OmniSize {
   /// 桌面页面主操作高度。
   static const double pageAction = 36;
 
+  /// Windows普通图标按钮统一为36dp方形，字形与背景分别居中。
+  static const double iconButton = 36;
+
   /// 桌面大控件高度。
   static const double controlLarge = 40;
 

@@ -111,7 +111,7 @@ Future<void> _insertTodo(AppDatabase database, String id) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('真实笔记PUT不携带标签基线，正文类别PATCH不附带未修改标签基线', () async {
+  test('真实笔记PUT不携带标签基线，正文日期PATCH不附带未修改标签基线', () async {
     // 仅使用真实生产触发器生成队列，不手工插入powersync_crud。
     final Directory directory = await Directory.systemTemp.createTemp(
       'omni_note_tags_shape_',
@@ -158,12 +158,7 @@ void main() {
       await (runtime.database.update(runtime.database.noteEntries)..where(
             (row) => row.id.equals('01990000-7000-8002-8000-000000000101'),
           ))
-          .write(
-            const NoteEntriesCompanion(
-              categoryId: Value('01990000-7000-8002-8000-000000000103'),
-              categoryName: Value('只改分类'),
-            ),
-          );
+          .write(const NoteEntriesCompanion(dayKey: Value('2026-10-10')));
       await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
       expect(auth.requests, hasLength(2));
       for (final Map<String, dynamic> request in auth.requests) {

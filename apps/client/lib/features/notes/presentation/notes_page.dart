@@ -6,18 +6,32 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/app/theme/note_composer_style.dart';
+import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/sync/sync_preferences.dart';
 import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
+import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart';
 import 'package:omni_butler/features/notes/data/note_editor_controller.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
 import 'package:omni_butler/features/notes/presentation/note_audio_card.dart';
+import 'package:omni_butler/features/notes/presentation/note_search_focus.dart';
+import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
+import 'package:omni_butler/features/settings/presentation/recycle_bin_section.dart';
+import 'package:omni_butler/shared/search/global_search_dialog.dart';
 import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
+import 'package:omni_butler/shared/ui/omni_note_composer_button.dart';
+import 'package:omni_butler/shared/ui/omni_note_audio_controls.dart';
 import 'package:uuid/uuid.dart';
+
+part 'windows_notes_view.dart';
+part 'windows_note_tags.dart';
+part 'windows_note_body.dart';
 
 /// 含已删除名称的笔记分类流，历史名称不能丢失。
 final _noteTaxonomiesProvider = StreamProvider<List<TaxonomyEntry>>((ref) {
@@ -63,6 +77,9 @@ class _NotesPageState extends ConsumerState<NotesPage>
   /// 正文焦点，用于失焦落盘。
   final FocusNode _focus = FocusNode();
 
+  /// 正文和底部工具共同决定输入卡片的聚焦外观。
+  bool _composerFocused = false;
+
   /// 可选的已挂载路由器。
   GoRouter? _router;
 
@@ -84,8 +101,58 @@ class _NotesPageState extends ConsumerState<NotesPage>
   /// 用户自定义起止自然日。
   DateTimeRange? _customRange;
 
-  /// 可选类别，none表示没有有效分类。
-  String? _categoryFilter;
+  /// 桌面搜索的独立键盘焦点。
+  FocusNode get _searchFocus => ref.read(noteSearchFocusProvider);
+
+  /// 桌面正文与卡片共用滚动位置。
+  final ScrollController _notesScroll = ScrollController();
+
+  /// 桌面抽屉宿主用于选择过滤项后关闭导航。
+  final GlobalKey<ScaffoldState> _notesScaffold = GlobalKey<ScaffoldState>();
+
+  /// 笔记侧栏的会话内宽度，拖动时限制在 220–340dp。
+  double _noteSidebarWidth = 264;
+
+  /// 宽窗笔记侧栏是否完全收起。
+  bool _noteSidebarHidden = false;
+
+  /// 鼠标位于整个笔记侧栏时显示收起入口。
+  bool _noteSidebarHovered = false;
+
+  /// 鼠标按住分隔条时立即绘制主题色指示线。
+  bool _noteSidebarResizing = false;
+
+  /// 分隔条悬停时显示灰色提示。
+  bool _noteSidebarDividerHovered = false;
+
+  /// 桌面标签选择器按需展开。
+  bool _showTagEditor = false;
+
+  /// 展开的唯一历史笔记。
+  String? _expandedNoteId;
+
+  /// 阅读正文只展开一篇，独立于真实编辑器与录音原文展开。
+  String? _expandedBodyNoteId;
+
+  /// 当前热力图选择的自然日。
+  String? _selectedDay;
+
+  /// 笔记内独立回收站视图。
+  bool _recycle = false;
+
+  /// 卡片定位锚点，外部搜索定位使用。
+  final Map<String, GlobalKey> _noteKeys = {};
+
+  /// 保存或取消正在执行，阻止重复点击。
+  bool _committing = false;
+
+  /// 当前是否使用 Windows 的显式提交布局。
+  bool get _windows => Theme.of(context).platform == TargetPlatform.windows;
+
+  /// 供桌面呈现扩展更新页面交互状态。
+  void _updateWindows(VoidCallback change) {
+    if (mounted) setState(change);
+  }
 
   /// 多标签交集筛选。
   final Set<String> _tagFilter = {};
@@ -157,7 +224,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
         widget.initialNoteId != null) {
       _openedRequestId = widget.initialNoteId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) unawaited(_open(widget.initialNoteId!));
+        if (mounted) unawaited(_open(widget.initialNoteId!, reveal: true));
       });
     }
   }
@@ -172,11 +239,16 @@ class _NotesPageState extends ConsumerState<NotesPage>
       if (widget.initialNoteId != null &&
           _openedRequestId != widget.initialNoteId) {
         _openedRequestId = widget.initialNoteId;
-        unawaited(_open(widget.initialNoteId!));
+        unawaited(_open(widget.initialNoteId!, reveal: true));
       } else {
         unawaited(
           _perform(() async {
-            await _editor?.enter();
+            if (_windows) {
+              await _editor?.openComposer();
+              _expandedNoteId = null;
+            } else {
+              await _editor?.enter();
+            }
             if (mounted) setState(() => _history = false);
           }),
         );
@@ -220,6 +292,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
     _body.dispose();
     _search.dispose();
     _focus.dispose();
+    _notesScroll.dispose();
     super.dispose();
   }
 
@@ -234,9 +307,43 @@ class _NotesPageState extends ConsumerState<NotesPage>
   }
 
   /// 打开历史先排空当前编辑。
-  Future<void> _open(String id) => _perform(() async {
+  Future<void> _open(String id, {bool reveal = false}) => _perform(() async {
+    if (_committing ||
+        _editor?.committing == true ||
+        _editor?.recordingStarting == true) {
+      return;
+    }
     await _editor?.open(id);
-    if (mounted && _editor?.draft.id == id) setState(() => _history = false);
+    if (mounted && _editor?.draft.id == id) {
+      setState(() {
+        _history = false;
+        _recycle = false;
+        if (_windows) {
+          _expandedNoteId = id;
+          _expandedBodyNoteId = null;
+          if (reveal) {
+            _search.clear();
+            _tagFilter.clear();
+            _selectedDay = null;
+          }
+        }
+      });
+      if (_windows && reveal) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          // 主列表采用完整锚点，旧记录也能直接定位。
+          final BuildContext? target = _noteKeys[id]?.currentContext;
+          if (target != null) {
+            unawaited(
+              Scrollable.ensureVisible(
+                target,
+                duration: OmniMotion.duration(context, OmniMotion.panel),
+                alignment: 0.1,
+              ),
+            );
+          }
+        });
+      }
+    }
   });
 
   /// 可组合的日期、类别、标签与关键词筛选。
@@ -245,19 +352,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
     List<TaxonomyEntry> taxonomies,
     List<NoteAudioSegmentRecord> audio,
   ) {
-    // 有效分类集合。
-    final Set<String> categories = taxonomies
-        .where((item) => item.kind == 'category' && item.deletedAt == null)
-        .map((item) => item.id)
-        .toSet();
-    if (_categoryFilter == 'none' && categories.contains(note.categoryId)) {
-      return false;
-    }
-    if (_categoryFilter != null &&
-        _categoryFilter != 'none' &&
-        note.categoryId != _categoryFilter) {
-      return false;
-    }
+    if (_selectedDay != null && note.dayKey != _selectedDay) return false;
     // 有效多标签，不把被删除标签算入未打标签判断。
     final Set<String> tags = noteTagIds(note.tags).intersection(
       taxonomies
@@ -294,7 +389,6 @@ class _NotesPageState extends ConsumerState<NotesPage>
     if (keyword.isEmpty) return true;
     return [
       note.body,
-      note.categoryName ?? '',
       ...taxonomies
           .where((item) => tags.contains(item.id))
           .map((item) => item.name),
@@ -336,14 +430,23 @@ class _NotesPageState extends ConsumerState<NotesPage>
     if (!_acceptingRemote &&
         record.hasValue &&
         (_observedId != editor.draft.id || _lastObserved != current) &&
-        !editor.dirty) {
+        (_windows || !editor.dirty)) {
       _observedId = editor.draft.id;
       _lastObserved = current;
       _acceptingRemote = true;
+      // 延迟回填必须仍对应同一编辑器和笔记，空值也不能跨篇冻结。
+      final String observingId = editor.draft.id;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _acceptingRemote = false;
-        if (mounted) editor.acceptRemote(current);
+        if (mounted &&
+            identical(_editor, editor) &&
+            editor.draft.id == observingId) {
+          editor.acceptRemote(current);
+        }
       });
+    }
+    if (_windows) {
+      return _windowsView(editor, taxonomy, notes, segments, local, recording);
     }
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -364,7 +467,10 @@ class _NotesPageState extends ConsumerState<NotesPage>
                       onPressed: () => _perform(() async {
                         await editor.flush();
                         if (!editor.dirty && mounted) {
-                          setState(() => _history = !_history);
+                          setState(() {
+                            _history = !_history;
+                            _recycle = false;
+                          });
                         }
                       }),
                     ),
@@ -397,7 +503,9 @@ class _NotesPageState extends ConsumerState<NotesPage>
                       children: [
                         SizedBox(
                           width: 320,
-                          child: _historyPanel(notes, taxonomy),
+                          child: _recycle
+                              ? _noteRecycleView()
+                              : _historyPanel(notes, taxonomy),
                         ),
                         const VerticalDivider(width: 1),
                         Expanded(
@@ -412,7 +520,9 @@ class _NotesPageState extends ConsumerState<NotesPage>
                       ],
                     )
                   : _history
-                  ? _historyPanel(notes, taxonomy)
+                  ? _recycle
+                        ? _noteRecycleView()
+                        : _historyPanel(notes, taxonomy)
                   : _editorPanel(editor, taxonomy, segments, local, recording),
             ),
           ],
@@ -440,7 +550,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
           child: OmniTextField(
             controller: _search,
             decoration: const InputDecoration(
-              hintText: '搜索笔记、类别或标签',
+              hintText: '搜索笔记、标签或转写',
               prefixIcon: Icon(Icons.search),
             ),
             onChanged: (_) => setState(() {}),
@@ -476,35 +586,6 @@ class _NotesPageState extends ConsumerState<NotesPage>
                   if (mounted) setState(() => _range = value ?? 'all');
                 },
               ),
-              OmniDropdownButton<String>(
-                value:
-                    _categoryFilter != null &&
-                        _categoryFilter != 'none' &&
-                        !taxonomy.any(
-                          (item) =>
-                              item.id == _categoryFilter &&
-                              item.deletedAt == null,
-                        )
-                    ? null
-                    : _categoryFilter,
-                hint: const Text('全部类别'),
-                items: [
-                  const DropdownMenuItem(value: null, child: Text('全部类别')),
-                  const DropdownMenuItem(value: 'none', child: Text('未分类')),
-                  ...taxonomy
-                      .where(
-                        (item) =>
-                            item.kind == 'category' && item.deletedAt == null,
-                      )
-                      .map(
-                        (item) => DropdownMenuItem(
-                          value: item.id,
-                          child: Text(item.name),
-                        ),
-                      ),
-                ],
-                onChanged: (value) => setState(() => _categoryFilter = value),
-              ),
               FilterChip(
                 label: const Text('未打标签'),
                 selected: _untagged,
@@ -532,6 +613,15 @@ class _NotesPageState extends ConsumerState<NotesPage>
             ],
           ),
         ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: OmniButton(
+            label: '笔记回收站',
+            icon: Icons.delete_outline,
+            variant: OmniButtonVariant.text,
+            onPressed: () => setState(() => _recycle = true),
+          ),
+        ),
         if (notes.isLoading) const LinearProgressIndicator(),
         if (notes.hasError) Text('加载失败：${notes.error}'),
         if (!notes.isLoading && filtered.isEmpty)
@@ -548,7 +638,6 @@ class _NotesPageState extends ConsumerState<NotesPage>
                     onPressed: () => setState(() {
                       _search.clear();
                       _range = 'all';
-                      _categoryFilter = null;
                       _tagFilter.clear();
                       _untagged = false;
                     }),
@@ -589,7 +678,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
                           overflow: TextOverflow.ellipsis,
                         ),
                         subtitle: Text(
-                          '${note.createdAt.toLocal().hour.toString().padLeft(2, '0')}:${note.createdAt.toLocal().minute.toString().padLeft(2, '0')}  ${note.categoryName ?? '未分类'}',
+                          '${note.createdAt.toLocal().hour.toString().padLeft(2, '0')}:${note.createdAt.toLocal().minute.toString().padLeft(2, '0')}',
                         ),
                         onTap: () => unawaited(_open(note.id)),
                       ),
@@ -609,67 +698,75 @@ class _NotesPageState extends ConsumerState<NotesPage>
     List<TaxonomyEntry> taxonomy,
     List<NoteAudioSegmentRecord> segments,
     List<NoteAudioLocalFileRecord> local,
-    NoteRecordingState recording,
-  ) {
-    // 当前仍有效的分类与历史显示名称。
-    final TaxonomyEntry? category = taxonomy
-        .where((item) => item.id == editor.draft.categoryId)
-        .firstOrNull;
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+    NoteRecordingState recording, {
+    bool inline = false,
+  }) {
+    // 历史编辑按实际内容撑高，顶部新建输入保留既有留白。
+    final bool historyEditing = inline && _expandedNoteId == editor.draft.id;
+    // 桌面内嵌编辑器由外层列表负责滚动。
+    final Widget content = Padding(
+      padding: inline
+          ? const EdgeInsets.fromLTRB(
+              OmniSpacing.xl,
+              OmniSpacing.xl,
+              OmniSpacing.md,
+              OmniSpacing.sm,
+            )
+          : const EdgeInsets.fromLTRB(20, 0, 20, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              OmniDatePickerButton(
-                value: DateTime.parse(editor.draft.dayKey),
-                initialDate: DateTime.parse(editor.draft.dayKey),
-                firstDate: DateTime(2000),
-                lastDate: DateTime.now(),
-                label: editor.draft.dayKey,
-                icon: Icons.calendar_today,
-                onChanged: (day) => editor.edit(dayKey: businessDayKey(day)),
-              ),
-              Text(
-                editor.saveStatus,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              if (editor.dirty || editor.error != null)
-                OmniButton(
-                  label: '重试保存',
-                  variant: OmniButtonVariant.text,
-                  visualHeight: OmniSize.control,
-                  onPressed: () => _perform(editor.flush),
+          if (!inline)
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                OmniDatePickerButton(
+                  value: DateTime.parse(editor.draft.dayKey),
+                  initialDate: DateTime.parse(editor.draft.dayKey),
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime.now(),
+                  label: editor.draft.dayKey,
+                  icon: Icons.calendar_today,
+                  onChanged: (day) => editor.edit(dayKey: businessDayKey(day)),
                 ),
-              if (editor.error != null || editor.conflicted)
-                OmniButton(
-                  label: '另存为新笔记',
-                  variant: OmniButtonVariant.text,
-                  visualHeight: OmniSize.control,
-                  onPressed: () => _perform(editor.saveAsNew),
+                Text(
+                  editor.saveStatus,
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
-              OmniIconButton(
-                tooltip: '复制正文',
-                onPressed: () =>
-                    Clipboard.setData(ClipboardData(text: _body.text)),
-                icon: const Icon(Icons.copy_outlined),
-              ),
-              OmniIconButton(
-                tooltip: '版本记录',
-                onPressed: () => _showVersions(editor),
-                icon: const Icon(Icons.restore),
-              ),
-              OmniIconButton(
-                tooltip: '删除笔记',
-                onPressed: () => _deleteNote(editor),
-                icon: const Icon(Icons.delete_outline),
-              ),
-            ],
-          ),
+                if (editor.dirty || editor.error != null)
+                  OmniButton(
+                    label: '重试保存',
+                    variant: OmniButtonVariant.text,
+                    visualHeight: OmniSize.control,
+                    onPressed: () => _perform(editor.flush),
+                  ),
+                if (editor.error != null || editor.conflicted)
+                  OmniButton(
+                    label: '另存为新笔记',
+                    variant: OmniButtonVariant.text,
+                    visualHeight: OmniSize.control,
+                    onPressed: () => _perform(editor.saveAsNew),
+                  ),
+                OmniIconButton(
+                  tooltip: '复制正文',
+                  onPressed: () =>
+                      Clipboard.setData(ClipboardData(text: _body.text)),
+                  icon: const Icon(Icons.copy_outlined),
+                ),
+                OmniIconButton(
+                  tooltip: '版本记录',
+                  onPressed: () => _showVersions(editor),
+                  icon: const Icon(Icons.restore),
+                ),
+                OmniIconButton(
+                  tooltip: '删除笔记',
+                  onPressed: () => _deleteNote(editor),
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ],
+            ),
           if (editor.error != null)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
@@ -687,77 +784,106 @@ class _NotesPageState extends ConsumerState<NotesPage>
             ),
           OmniTextField(
             controller: _body,
+            enabled: !_committing && !editor.committing,
+            readOnly: editor.frozen || editor.conflicted,
             focusNode: _focus,
-            minLines: 9,
+            minLines: inline ? (historyEditing ? 1 : 5) : 9,
             maxLines: null,
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.7),
-            decoration: const InputDecoration(
-              hintText: '记下此刻的想法…\n也可以点麦克风，慢慢说。',
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+              height: inline ? 1.5 : 1.7,
+              color: inline && Theme.of(context).brightness == Brightness.light
+                  ? NoteComposerStyle.ink
+                  : null,
+            ),
+            decoration: InputDecoration(
+              hintText: inline ? '现在的想法是...' : '记下此刻的想法…',
+              hintStyle: inline
+                  ? TextStyle(
+                      color: Theme.of(context).brightness == Brightness.light
+                          ? NoteComposerStyle.muted
+                          : OmniColors.of(context).muted,
+                    )
+                  : null,
+              filled: inline ? false : null,
+              fillColor: inline ? Colors.transparent : null,
+              hoverColor: inline ? Colors.transparent : null,
+              contentPadding: inline ? EdgeInsets.zero : null,
+              constraints: inline && !historyEditing
+                  ? const BoxConstraints(
+                      minHeight: NoteComposerStyle.bodyHeight,
+                    )
+                  : null,
               border: InputBorder.none,
               enabledBorder: InputBorder.none,
               focusedBorder: InputBorder.none,
+              disabledBorder: inline ? InputBorder.none : null,
             ),
             onChanged: (value) => editor.edit(body: value),
           ),
-          const Divider(),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              if (!recording.isActive)
-                OmniButton(
-                  label: '开始录音',
-                  visualHeight: OmniSize.control,
-                  icon: Icons.mic_none,
-                  onPressed: () => _perform(editor.startRecording),
-                )
-              else ...[
-                Text(
-                  '${recording.phase == NoteRecordingPhase.paused ? '已暂停' : '正在录音'}  ${_duration(recording.duration)}',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
-                OmniButton(
-                  label: recording.phase == NoteRecordingPhase.paused
-                      ? '继续'
-                      : '暂停',
-                  visualHeight: OmniSize.control,
-                  variant: OmniButtonVariant.secondary,
-                  onPressed: () => _perform(
-                    recording.phase == NoteRecordingPhase.paused
-                        ? editor.recorder.resume
-                        : editor.recorder.pause,
-                  ),
-                ),
-                OmniButton(
-                  label: '结束录音',
-                  visualHeight: OmniSize.control,
-                  onPressed: () => _perform(() async {
-                    await editor.recorder.stop();
-                  }),
-                ),
-                if (recording.noteId != editor.draft.id)
+          if (!inline) const Divider(),
+          if (!inline || recording.isActive)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                if (!recording.isActive)
                   OmniButton(
-                    label: '返回正在录音的笔记',
+                    label: '开始录音',
+                    visualHeight: OmniSize.control,
+                    icon: Icons.mic_none,
+                    onPressed: editor.frozen || editor.committing
+                        ? null
+                        : () => _perform(editor.startRecording),
+                  )
+                else ...[
+                  Text(
+                    '${recording.phase == NoteRecordingPhase.paused ? '已暂停' : '正在录音'}  ${_duration(recording.duration)}',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  OmniButton(
+                    label: recording.phase == NoteRecordingPhase.paused
+                        ? '继续'
+                        : '暂停',
+                    visualHeight: OmniSize.control,
+                    variant: OmniButtonVariant.secondary,
+                    onPressed: () => _perform(
+                      recording.phase == NoteRecordingPhase.paused
+                          ? editor.recorder.resume
+                          : editor.recorder.pause,
+                    ),
+                  ),
+                  OmniButton(
+                    label: '结束录音',
+                    visualHeight: OmniSize.control,
+                    onPressed: () => _perform(() async {
+                      await editor.recorder.stop();
+                    }),
+                  ),
+                  if (recording.noteId != editor.draft.id)
+                    OmniButton(
+                      label: '返回正在录音的笔记',
+                      variant: OmniButtonVariant.text,
+                      visualHeight: OmniSize.control,
+                      onPressed: () => _open(recording.noteId!, reveal: true),
+                    ),
+                ],
+                if (!inline)
+                  OmniButton(
+                    label: '恢复上次录音',
                     variant: OmniButtonVariant.text,
                     visualHeight: OmniSize.control,
-                    onPressed: () => _open(recording.noteId!),
+                    onPressed: () => _perform(editor.recover),
+                  ),
+                if (!inline || recording.isActive)
+                  OmniButton(
+                    label: editor.voiceConsent ? '关闭自动转文字' : '开启自动转文字',
+                    variant: OmniButtonVariant.text,
+                    visualHeight: OmniSize.control,
+                    onPressed: () => _enableVoice(editor),
                   ),
               ],
-              OmniButton(
-                label: '恢复上次录音',
-                variant: OmniButtonVariant.text,
-                visualHeight: OmniSize.control,
-                onPressed: () => _perform(editor.recover),
-              ),
-              OmniButton(
-                label: editor.voiceConsent ? '关闭自动转文字' : '开启自动转文字',
-                variant: OmniButtonVariant.text,
-                visualHeight: OmniSize.control,
-                onPressed: () => _enableVoice(editor),
-              ),
-            ],
-          ),
+            ),
           if (recording.approachingLimit)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
@@ -770,107 +896,90 @@ class _NotesPageState extends ConsumerState<NotesPage>
               visualHeight: OmniSize.control,
               onPressed: () => _perform(editor.recorder.openSettings),
             ),
-          const SizedBox(height: 16),
-          ...segments.map(
-            (segment) => Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: NoteAudioCard(
-                segment: segment,
-                local: local.where((item) => item.id == segment.id).firstOrNull,
-                player: ref.read(noteAudioPlayerProvider),
-                recordingActive: recording.isActive,
-                onRecognize: () => _recognize(segment),
-                onCancel: () => _cancelRecognition(segment),
-                onInsert: (text) => _insertTranscript(segment, text),
-              ),
-            ),
-          ),
-          const Divider(),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              OmniDropdownButton<String>(
-                value: category?.deletedAt == null ? category?.id : null,
-                hint: Text(
-                  category?.deletedAt != null
-                      ? '${category!.name}（已删除）'
-                      : editor.draft.categoryName ?? '未分类',
-                ),
-                items: taxonomy
-                    .where(
-                      (item) =>
-                          item.kind == 'category' && item.deletedAt == null,
-                    )
-                    .map(
-                      (item) => DropdownMenuItem(
-                        value: item.id,
-                        child: Text(item.name),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (id) {
-                  final TaxonomyEntry? selected = taxonomy
-                      .where((item) => item.id == id)
-                      .firstOrNull;
-                  editor.edit(categoryId: id, categoryName: selected?.name);
-                },
-              ),
-              if (editor.draft.categoryId != null)
-                OmniIconButton(
-                  tooltip: '清除类别',
-                  onPressed: () => editor.edit(clearCategory: true),
-                  icon: const Icon(Icons.close),
-                ),
-              OmniButton(
-                label: '管理类别',
-                variant: OmniButtonVariant.text,
-                visualHeight: OmniSize.control,
-                onPressed: () => TaxonomyManagerDialog.show(
-                  context,
-                  module: TaxonomyModule.notes,
-                  kind: TaxonomyKind.category,
-                ),
-              ),
-              OmniButton(
-                label: '管理标签',
-                variant: OmniButtonVariant.text,
-                visualHeight: OmniSize.control,
-                onPressed: () => TaxonomyManagerDialog.show(
-                  context,
-                  module: TaxonomyModule.notes,
-                  kind: TaxonomyKind.tag,
-                ),
-              ),
-            ],
-          ),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: taxonomy
-                .where((item) => item.kind == 'tag' && item.deletedAt == null)
-                .map(
-                  (item) => FilterChip(
-                    label: Text(item.name),
-                    selected: editor.draft.tags.contains(item.id),
-                    onSelected: (selected) {
-                      // 标签选择保留身份，重命名不需改正文。
-                      final Set<String> tags = {...editor.draft.tags};
-                      if (selected) {
-                        tags.add(item.id);
-                      } else {
-                        tags.remove(item.id);
-                      }
-                      editor.edit(tags: tags);
-                    },
+          if (!inline || segments.isNotEmpty) const SizedBox(height: 16),
+          ...segments
+              .where((segment) => !inline || !editor.isAudioRemoved(segment.id))
+              .map(
+                (segment) => Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: NoteAudioCard(
+                    key: ValueKey('note-editor-audio-${segment.id}'),
+                    compact: inline,
+                    editing: historyEditing,
+                    editEnabled:
+                        !editor.frozen &&
+                        !editor.conflicted &&
+                        !editor.committing &&
+                        !_committing,
+                    onDelete: historyEditing
+                        ? () => _removeEditedAudio(editor, segment.id)
+                        : null,
+                    segment: segment,
+                    local: local
+                        .where((item) => item.id == segment.id)
+                        .firstOrNull,
+                    player: ref.read(noteAudioPlayerProvider),
+                    recordingActive: recording.isActive,
+                    onRecognize: () => _recognize(segment),
+                    onCancel: () => _cancelRecognition(segment),
+                    onInsert: (text) => _insertTranscript(segment, text),
                   ),
-                )
-                .toList(),
-          ),
+                ),
+              ),
+          if (!inline) const Divider(),
+          if (!inline || _showTagEditor)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                OmniButton(
+                  label: '管理标签',
+                  variant: OmniButtonVariant.text,
+                  visualHeight: OmniSize.control,
+                  onPressed: () => TaxonomyManagerDialog.show(
+                    context,
+                    module: TaxonomyModule.notes,
+                    kind: TaxonomyKind.tag,
+                  ),
+                ),
+              ],
+            ),
+          if (!inline || _showTagEditor)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: taxonomy
+                  .where((item) => item.kind == 'tag' && item.deletedAt == null)
+                  .map(
+                    (item) => FilterChip(
+                      label: Text(item.name),
+                      selected: editor.draft.tags.contains(item.id),
+                      onSelected: editor.frozen || editor.committing
+                          ? null
+                          : (selected) {
+                              // 标签选择保留身份，重命名不需改正文。
+                              final Set<String> tags = {...editor.draft.tags};
+                              if (selected) {
+                                tags.add(item.id);
+                              } else {
+                                tags.remove(item.id);
+                              }
+                              editor.edit(tags: tags);
+                            },
+                    ),
+                  )
+                  .toList(),
+            ),
+          if (inline) ...[
+            const SizedBox(height: OmniSpacing.sm),
+            _draftAudio(editor),
+            _commitActions(editor, segments, recording),
+          ],
         ],
       ),
     );
+    return inline ? content : SingleChildScrollView(child: content);
   }
 
   /// 格式化有效采样时长。
@@ -879,7 +988,16 @@ class _NotesPageState extends ConsumerState<NotesPage>
         if (_inserting.contains(segment.id)) return;
         // 候选归属不能越过用户切换的笔记。
         final NoteEditorController editor = ref.read(noteEditorProvider);
-        if (editor.draft.id != segment.noteId) return;
+        if (editor.draft.id != segment.noteId ||
+            editor.isAudioRemoved(segment.id) ||
+            editor.frozen ||
+            editor.conflicted ||
+            editor.committing ||
+            _committing) {
+          return;
+        }
+        // 异步候选查询只能标记本次编辑代次。
+        final String? draftId = editor.draftId;
         _inserting.add(segment.id);
         try {
           // 使用用户光标位置，正文替换只发生在明确选中的范围。
@@ -891,6 +1009,25 @@ class _NotesPageState extends ConsumerState<NotesPage>
               ? selection.end.clamp(start, _body.text.length)
               : start;
           editor.edit(body: _body.text.replaceRange(start, end, text));
+          if (_windows) {
+            // 原始转写与再识别候选分别记录，发布前不消费正式候选。
+            final NoteAudioLocalFileRecord? current =
+                await (editor.repository.database.select(
+                      editor.repository.database.noteAudioLocalFiles,
+                    )..where((table) => table.id.equals(segment.id)))
+                    .getSingleOrNull();
+            if (editor.draftId != draftId ||
+                editor.draft.id != segment.noteId ||
+                editor.isAudioRemoved(segment.id)) {
+              return;
+            }
+            editor.markTranscriptInsertion(
+              segment.id,
+              candidate: current?.candidateTranscript == text,
+            );
+            await editor.flush();
+            return;
+          }
           await editor.flush();
           if (editor.dirty || editor.draft.id != segment.noteId) return;
           await (editor.repository.database.update(
@@ -985,14 +1122,23 @@ class _NotesPageState extends ConsumerState<NotesPage>
     final bool confirmed = await showOmniConfirmDialog(
       context,
       title: '删除这篇笔记？',
-      message: '正文、原音和转写一起进入 30 天回收站，可在设置中恢复。',
+      message: '正文、原音和转写一起进入笔记回收站，30 天内可恢复。',
       confirmLabel: '删除',
       danger: true,
     );
     if (!confirmed) return;
-    await editor.shutdown();
+    // 只结束本篇正在采集的录音，浏览其他笔记不停止原采集。
+    if (editor.recorder.state.noteId == editor.draft.id) {
+      await editor.recorder.stop();
+    }
+    await editor.flush();
     await editor.repository.softDelete(editor.draft.id);
-    await editor.newNote();
+    if (_windows) {
+      await editor.openComposer();
+      if (mounted) setState(() => _expandedNoteId = null);
+    } else {
+      await editor.newNote();
+    }
   });
 
   /// 原始版本与离线冲突保留用户选择。

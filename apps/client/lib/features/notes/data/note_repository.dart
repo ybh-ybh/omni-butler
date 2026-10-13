@@ -10,6 +10,22 @@ import 'package:uuid/uuid.dart';
 Set<String> noteTagIds(String encoded) =>
     (jsonDecode(encoded) as List).cast<String>().toSet();
 
+/// 取消或永久删除只保留代次身份，避免正文和整理信息继续进入本机备份。
+NoteLocalDraftsCompanion noteDraftTombstone() => NoteLocalDraftsCompanion(
+  body: const Value(''),
+  dayKey: const Value(''),
+  baseRevision: const Value(''),
+  tags: const Value('[]'),
+  originalTags: const Value(null),
+  createdAt: const Value(null),
+  creationTimezone: const Value(null),
+  dateEdited: const Value(false),
+  isNew: const Value(false),
+  discarded: const Value(true),
+  pendingInsertions: const Value('{}'),
+  updatedAt: Value(DateTime.now()),
+);
+
 /// 保留原始时区名称与有符号 UTC 偏移，不推测 IANA 地区。
 String noteCreationTimezone(DateTime instant) {
   // 创建时的本地时间及偏移分钟。
@@ -46,12 +62,6 @@ class NoteDraft {
   /// 当前编辑起点的正文版本。
   final String baseRevision;
 
-  /// 可选类别身份。
-  final String? categoryId;
-
-  /// 历史类别名称。
-  final String? categoryName;
-
   /// 用户标签身份。
   final Set<String> tags;
 
@@ -64,9 +74,6 @@ class NoteDraft {
   /// 编辑起点的标签，null表示调用方明确替换完整整理信息。
   final Set<String>? originalTags;
 
-  /// 本次是否由用户主动选择类别。
-  final bool categoryEdited;
-
   /// 本次是否由用户主动选择日期。
   final bool dateEdited;
 
@@ -76,13 +83,10 @@ class NoteDraft {
     required this.body,
     required this.dayKey,
     required this.baseRevision,
-    this.categoryId,
-    this.categoryName,
     this.tags = const {},
     this.createdAt,
     this.creationTimezone,
     this.originalTags,
-    this.categoryEdited = false,
     this.dateEdited = false,
   });
 }
@@ -136,14 +140,11 @@ class NoteRepository {
     if (mergedTags.length > 10) {
       throw const FormatException('合并后超过 10 个标签，请调整标签后重试');
     }
-    // 只有明确改动的日期或类别才覆盖最新持久值。
+    // 只有明确改动的日期才覆盖最新持久值。
     final bool tracked = previous != null && draft.originalTags != null;
     final String effectiveDay = tracked && !draft.dateEdited
         ? previous.dayKey
         : draft.dayKey;
-    final String? effectiveCategory = tracked && !draft.categoryEdited
-        ? previous.categoryId
-        : draft.categoryId;
     // 当前写入时刻，创建时间不随编辑更新。
     final DateTime now = DateTime.now();
     // 标签身份排序，避免纯顺序变化反复同步。
@@ -155,27 +156,15 @@ class NoteRepository {
                   table.module.equals('notes') & table.deletedAt.isNull(),
             ))
             .get();
-    // 有效标签与类别。
+    // 当前可用的标签身份。
     final Set<String> validTags = validTaxonomies
         .where((item) => item.kind == 'tag')
         .map((item) => item.id)
         .toSet();
     tagIds.removeWhere((id) => !validTags.contains(id));
-    // 已删除类别保留原历史名字，不能新挂到失效类别。
-    final TaxonomyEntry? category = validTaxonomies
-        .where(
-          (item) => item.kind == 'category' && item.id == effectiveCategory,
-        )
-        .firstOrNull;
     if (previous != null &&
         previous.body == draft.body &&
         previous.dayKey == effectiveDay &&
-        previous.categoryId == effectiveCategory &&
-        (category?.name ??
-                (tracked && !draft.categoryEdited
-                    ? previous.categoryName
-                    : draft.categoryName)) ==
-            previous.categoryName &&
         previous.tags == jsonEncode(tagIds)) {
       return previous;
     }
@@ -209,8 +198,6 @@ class NoteRepository {
               id: draft.id,
               body: Value(draft.body),
               dayKey: draft.dayKey,
-              categoryId: Value(category?.id),
-              categoryName: Value(category?.name),
               tags: Value(jsonEncode(tagIds)),
               revision: revision,
               createdAt: draft.createdAt ?? now,
@@ -237,16 +224,6 @@ class NoteRepository {
               ),
             );
       }
-      // 历史类别只有在用户明确换选时才清除。
-      final String? categoryId =
-          category?.id ??
-          (effectiveCategory == previous.categoryId
-              ? previous.categoryId
-              : null);
-      // 历史类别快照名称。
-      final String? categoryName =
-          category?.name ??
-          (categoryId == previous.categoryId ? previous.categoryName : null);
       await (database.update(
         database.noteEntries,
       )..where((table) => table.id.equals(draft.id))).write(
@@ -255,12 +232,6 @@ class NoteRepository {
           revision: bodyChanged ? Value(revision) : const Value.absent(),
           dayKey: effectiveDay != previous.dayKey
               ? Value(effectiveDay)
-              : const Value.absent(),
-          categoryId: categoryId != previous.categoryId
-              ? Value(categoryId)
-              : const Value.absent(),
-          categoryName: categoryName != previous.categoryName
-              ? Value(categoryName)
               : const Value.absent(),
           tags: jsonEncode(tagIds) != previous.tags
               ? Value(jsonEncode(tagIds))
@@ -374,11 +345,19 @@ class NoteRepository {
   }
 
   /// 另存使用独立原音身份；删除原记录不会删除新篇的文件引用。
-  Future<NoteEntryRecord> saveAsNew(NoteDraft source) async {
+  Future<NoteEntryRecord> saveAsNew(
+    NoteDraft source, {
+    bool hasAdditionalAudio = false,
+    Set<String> excludedAudioIds = const {},
+  }) async {
     // 包括回收站原音，以便删除与离线编辑并发时显式恢复副本。
-    final List<NoteAudioSegmentRecord> audio = await (database.select(
-      database.noteAudioSegments,
-    )..where((table) => table.noteId.equals(source.id))).get();
+    final List<NoteAudioSegmentRecord> audio =
+        await (database.select(database.noteAudioSegments)..where(
+              (table) =>
+                  table.noteId.equals(source.id) &
+                  table.id.isNotIn(excludedAudioIds),
+            ))
+            .get();
     // 预检完整原件，不能将缺失资产默默丢弃后宣称另存成功。
     final Map<String, String> paths = {};
     for (final NoteAudioSegmentRecord segment in audio) {
@@ -398,7 +377,7 @@ class NoteRepository {
       }
       paths[segment.id] = file.path;
     }
-    if (source.body.trim().isEmpty && audio.isEmpty) {
+    if (source.body.trim().isEmpty && audio.isEmpty && !hasAdditionalAudio) {
       throw StateError('当前没有可另存的正文或原音');
     }
     // 新创建时刻不冒充原记录的创建时刻。
@@ -408,8 +387,6 @@ class NoteRepository {
       body: source.body,
       dayKey: source.dayKey,
       baseRevision: '',
-      categoryId: source.categoryId,
-      categoryName: source.categoryName,
       tags: source.tags,
       createdAt: now,
       creationTimezone: noteCreationTimezone(now),
@@ -418,7 +395,7 @@ class NoteRepository {
       // 副本资产及正文必须一起成功，授权和旧任务身份不能继承。
       final NoteEntryRecord? saved = await save(
         replacement,
-        hasAudio: audio.isNotEmpty,
+        hasAudio: audio.isNotEmpty || hasAdditionalAudio,
       );
       if (saved == null) throw StateError('新笔记保存失败');
       for (final NoteAudioSegmentRecord segment in audio) {
@@ -457,6 +434,14 @@ class NoteRepository {
   Future<void> insertReadyTranscripts(
     String noteId,
   ) => database.transaction(() async {
+    // 即使另一张卡片正在编辑，也不能越过本机持久草稿自动改正文。
+    final List<NoteLocalDraftRecord> drafts =
+        await (database.select(database.noteLocalDrafts)..where(
+              (table) =>
+                  table.noteId.equals(noteId) & table.discarded.equals(false),
+            ))
+            .get();
+    if (drafts.isNotEmpty) return;
     // 当前正式正文与原音顺序。
     NoteEntryRecord? note = await find(noteId);
     if (note == null || note.deletedAt != null) return;
@@ -496,8 +481,6 @@ class NoteRepository {
           body: body,
           dayKey: note.dayKey,
           baseRevision: base,
-          categoryId: note.categoryId,
-          categoryName: note.categoryName,
           tags: noteTagIds(note.tags),
         ),
         hasAudio: true,
@@ -558,6 +541,10 @@ class NoteRepository {
 
   /// 永久删除业务记录；文件只在事务提交后由孤儿清理器移除。
   Future<void> permanentlyDelete(String id) => database.transaction(() async {
+    // 明确永久删除也取消对应本机草稿，物理原件等待事务提交后再清理。
+    await (database.update(
+      database.noteLocalDrafts,
+    )..where((table) => table.noteId.equals(id))).write(noteDraftTombstone());
     await (database.delete(
       database.noteVersions,
     )..where((table) => table.noteId.equals(id))).go();
@@ -569,8 +556,43 @@ class NoteRepository {
     )..where((table) => table.id.equals(id))).go();
   });
 
+  /// 正式原音及未丢弃草稿共同保护文件路径，另存可以共享同一原件。
+  Future<Set<String>> protectedAudioPaths() => database.transaction(() async {
+    // 正式片段包含回收站，保留期内原音仍受保护。
+    final Set<String> referenced =
+        (await database.select(database.noteAudioSegments).get())
+            .map((item) => item.id)
+            .toSet();
+    // 可恢复草稿代次。
+    final Set<String> drafts =
+        (await (database.select(
+              database.noteLocalDrafts,
+            )..where((table) => table.discarded.equals(false))).get())
+            .map((item) => item.id)
+            .toSet();
+    // 已发布文件及未发布原件分别读取，不能给草稿创建正式本机文件行。
+    final List<NoteAudioLocalFileRecord> local = await database
+        .select(database.noteAudioLocalFiles)
+        .get();
+    // 草稿原件不经过自动传输器。
+    final List<NoteDraftAudioSegmentRecord> staged = await database
+        .select(database.noteDraftAudioSegments)
+        .get();
+    return {
+      for (final NoteAudioLocalFileRecord item in local)
+        if (referenced.contains(item.id) && item.localPath != null)
+          item.localPath!,
+      for (final NoteDraftAudioSegmentRecord item in staged)
+        if (drafts.contains(item.draftId) && item.localPath != null)
+          item.localPath!,
+    };
+  });
+
   /// 在已提交数据库状态下清理永久删除的文件，失败保留记录以便重试。
-  Future<void> purgeOrphanFiles() async {
+  Future<void> purgeOrphanFiles() => database.transaction(() async {
+    // 引用快照、文件删除与本机行清理持有同一写事务，新增草稿不能夹在检查之间。
+    // 本机草稿原件与正式文件共享保护集合，取消不会删掉已另存的引用。
+    final Set<String> protectedPaths = await protectedAudioPaths();
     // 本机已管理的原音缓存。
     final List<NoteAudioLocalFileRecord> local = await database
         .select(database.noteAudioLocalFiles)
@@ -583,6 +605,7 @@ class NoteRepository {
     for (final NoteAudioLocalFileRecord item in local) {
       if (referenced.contains(item.id)) continue;
       if (item.localPath != null &&
+          !protectedPaths.contains(item.localPath) &&
           !local.any(
             (other) =>
                 other.id != item.id &&
@@ -597,5 +620,27 @@ class NoteRepository {
         database.noteAudioLocalFiles,
       )..where((table) => table.id.equals(item.id))).go();
     }
-  }
+    // 已取消或明确永久删除的草稿原件在事务提交后重试清理。
+    final Set<String> activeDrafts =
+        (await (database.select(
+              database.noteLocalDrafts,
+            )..where((table) => table.discarded.equals(false))).get())
+            .map((item) => item.id)
+            .toSet();
+    // 无草稿主记录的残余新增原音也不能无限留存。
+    final List<NoteDraftAudioSegmentRecord> staged = await database
+        .select(database.noteDraftAudioSegments)
+        .get();
+    for (final NoteDraftAudioSegmentRecord item in staged) {
+      if (activeDrafts.contains(item.draftId)) continue;
+      if (item.localPath != null && !protectedPaths.contains(item.localPath)) {
+        // 路径来自当前受管理数据源的本机录音或已验证迁移副本。
+        final File file = File(item.localPath!);
+        if (await file.exists()) await file.delete();
+      }
+      await (database.delete(
+        database.noteDraftAudioSegments,
+      )..where((table) => table.id.equals(item.id))).go();
+    }
+  });
 }

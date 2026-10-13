@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:omni_butler/shared/ui/omni_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
@@ -147,6 +148,9 @@ class OmniDropdownButtonFormField<T> extends FormField<T> {
 
 /// 统一的操作菜单按钮。
 class OmniPopupMenuButton<T> extends StatelessWidget {
+  /// 业务可显式要求手形指针；为空时保留框架的本机默认行为。
+  final MouseCursor? mouseCursor;
+
   /// 菜单项构建器。
   final PopupMenuItemBuilder<T> itemBuilder;
 
@@ -193,6 +197,7 @@ class OmniPopupMenuButton<T> extends StatelessWidget {
     this.enabled = true,
     this.menuConstraints,
     this.borderRadius,
+    this.mouseCursor,
     super.key,
   }) : assert(child == null || icon == null, 'child 与 icon 不能同时设置');
 
@@ -206,6 +211,21 @@ class OmniPopupMenuButton<T> extends StatelessWidget {
       onCanceled: onCanceled,
       tooltip: tooltip,
       borderRadius: borderRadius,
+      padding:
+          child == null && Theme.of(context).platform == TargetPlatform.windows
+          ? EdgeInsets.zero
+          : const EdgeInsets.all(OmniSpacing.xs),
+      style: child == null
+          ? OmniIconButton.styleOf(context).copyWith(
+              mouseCursor: mouseCursor == null
+                  ? null
+                  : WidgetStateProperty.resolveWith(
+                      (states) => states.contains(WidgetState.disabled)
+                          ? SystemMouseCursors.basic
+                          : mouseCursor!,
+                    ),
+            )
+          : null,
       icon:
           icon ?? (child == null ? const Icon(Icons.more_horiz_rounded) : null),
       enabled: enabled,

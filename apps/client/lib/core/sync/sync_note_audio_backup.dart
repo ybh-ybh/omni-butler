@@ -47,6 +47,16 @@ Future<List<String>> findMissingMigrationNoteAudio(
       missing.add('笔记原音：${segment['note_id']} / ${segment['id']}');
     }
   }
+  for (final Map<String, Object?> segment
+      in snapshot.tables['note_draft_audio_segments'] ??
+          <Map<String, Object?>>[]) {
+    if (!await isMigrationNoteAudioValid(
+      segment['local_path'] as String?,
+      segment,
+    )) {
+      missing.add('草稿原音：${segment['note_id']} / ${segment['id']}');
+    }
+  }
   return missing;
 }
 
@@ -92,8 +102,35 @@ Future<SyncSnapshot> backupMigrationNoteAudio(
     }
     files.add(row);
   }
+  // 草稿原音仅保留独立本机副本，不进入服务器暂存请求。
+  final List<Map<String, Object?>> draftFiles = [];
+  for (final Map<String, Object?> source
+      in snapshot.tables['note_draft_audio_segments'] ??
+          <Map<String, Object?>>[]) {
+    // 不改写原数据库路径。
+    final Map<String, Object?> row = Map<String, Object?>.from(source);
+    if (await isMigrationNoteAudioValid(row['local_path'] as String?, row)) {
+      await backupDirectory.create(recursive: true);
+      // 草稿命名空间避免与正式原音意外同身份覆盖。
+      final String fileName =
+          'draft-${sha256.convert(utf8.encode(row['id'].toString()))}.audio';
+      final File copy = await File(row['local_path']! as String)
+          .copy(path.join(backupDirectory.path, fileName));
+      if (!await isMigrationNoteAudioValid(copy.path, row)) {
+        throw const FileSystemException('草稿原音备份校验失败');
+      }
+      row['local_path'] = copy.path;
+    } else {
+      row['local_path'] = null;
+    }
+    draftFiles.add(row);
+  }
   return SyncSnapshot(
-    tables: {...snapshot.tables, 'note_audio_local_files': files},
+    tables: {
+      ...snapshot.tables,
+      'note_audio_local_files': files,
+      'note_draft_audio_segments': draftFiles,
+    },
     pendingOperations: snapshot.pendingOperations,
   );
 }

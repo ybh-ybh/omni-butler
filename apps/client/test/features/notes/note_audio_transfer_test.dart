@@ -81,7 +81,7 @@ void main() {
     });
     respond = (request) async {
       if (request.path == '/auth/session') {
-        return {'sub': 'test-owner', 'syncSchemaVersion': 3};
+        return {'sub': 'test-owner', 'syncSchemaVersion': syncSchemaVersion};
       }
       if (request.path.endsWith('/capabilities')) {
         return {

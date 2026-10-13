@@ -33,11 +33,13 @@ class _Recorder implements NoteRecorderService {
   Future<void> start(
     String noteId, {
     Duration remaining = NoteRecorderService.noteLimit,
+    String? draftId,
   }) async {
     this.remaining = remaining;
     state = NoteRecordingState(
       phase: NoteRecordingPhase.recording,
       noteId: noteId,
+      draftId: draftId,
     );
   }
 
@@ -119,25 +121,18 @@ void main() {
     await database.close();
   });
 
-  /// 创建真实有效分类和标签，避免整理合并测试被过滤失效身份。
+  /// 创建真实有效标签，避免整理合并测试被过滤失效身份。
   Future<void> seedTaxonomies() async {
-    // 固定分类创建时刻。
+    // 固定标签创建时刻。
     final DateTime now = DateTime.utc(2026, 10, 11);
-    for (final String id in [
-      'category-a',
-      'category-b',
-      'keep',
-      'remove',
-      'local',
-      'remote',
-    ]) {
+    for (final String id in ['keep', 'remove', 'local', 'remote']) {
       await database
           .into(database.taxonomyEntries)
           .insert(
             TaxonomyEntriesCompanion.insert(
               id: id,
               module: 'notes',
-              kind: id.startsWith('category') ? 'category' : 'tag',
+              kind: 'tag',
               name: id,
               colorValue: 0,
               createdAt: now,
@@ -147,7 +142,7 @@ void main() {
     }
   }
 
-  test('正文dirty期间B整理改变而revision不变，A保存仍保留B分类日期标签', () async {
+  test('正文dirty期间B整理改变而revision不变，A保存仍保留B日期标签', () async {
     await seedTaxonomies();
     // A打开的原始记录。
     final NoteEntryRecord initial = (await repository.save(
@@ -156,7 +151,6 @@ void main() {
         body: '初始正文',
         dayKey: '2026-10-10',
         baseRevision: '',
-        categoryId: 'category-a',
         tags: {'keep'},
       ),
     ))!;
@@ -166,8 +160,6 @@ void main() {
       database.noteEntries,
     )..where((row) => row.id.equals(initial.id))).write(
       const NoteEntriesCompanion(
-        categoryId: Value('category-b'),
-        categoryName: Value('category-b'),
         dayKey: Value('2026-10-09'),
         tags: Value('["keep","remote"]'),
       ),
@@ -177,13 +169,12 @@ void main() {
     // A只能提交正文，不得撤销B整理。
     final NoteEntryRecord saved = (await repository.find(initial.id))!;
     expect(saved.body, 'A人工输入');
-    expect(saved.categoryId, 'category-b');
     expect(saved.dayKey, '2026-10-09');
     expect(noteTagIds(saved.tags), {'keep', 'remote'});
     expect(editor.draft.tags, {'keep', 'remote'});
   });
 
-  test('用户标签增删按打开时基线合并B新增，保留明确本机类别日期选择', () async {
+  test('用户标签增删按打开时基线合并B新增，保留明确本机日期选择', () async {
     await seedTaxonomies();
     // 标签基线包含用户将移除的身份。
     final NoteEntryRecord initial = (await repository.save(
@@ -192,22 +183,15 @@ void main() {
         body: '初始正文',
         dayKey: '2026-10-10',
         baseRevision: '',
-        categoryId: 'category-a',
         tags: {'keep', 'remove'},
       ),
     ))!;
     await editor.open(initial.id);
-    editor.edit(
-      tags: {'keep', 'local'},
-      categoryId: 'category-a',
-      dayKey: '2026-10-12',
-    );
+    editor.edit(tags: {'keep', 'local'}, dayKey: '2026-10-12');
     await (database.update(
       database.noteEntries,
     )..where((row) => row.id.equals(initial.id))).write(
       const NoteEntriesCompanion(
-        categoryId: Value('category-b'),
-        categoryName: Value('category-b'),
         dayKey: Value('2026-10-09'),
         tags: Value('["keep","remove","remote"]'),
       ),
@@ -216,7 +200,6 @@ void main() {
     // 本机移除remove、新增local，B新增remote仍在。
     final NoteEntryRecord saved = (await repository.find(initial.id))!;
     expect(noteTagIds(saved.tags), {'keep', 'local', 'remote'});
-    expect(saved.categoryId, 'category-a');
     expect(saved.dayKey, '2026-10-12');
   });
 
@@ -285,7 +268,7 @@ void main() {
   test('空白草稿只改元数据不留档，重新进入创建独立空白身份', () async {
     // 入口草稿身份。
     final String initialId = editor.draft.id;
-    editor.edit(dayKey: '2026-10-01', categoryId: 'category', tags: {'tag'});
+    editor.edit(dayKey: '2026-10-01', tags: {'tag'});
     await editor.flush();
     expect(await database.select(database.noteEntries).get(), isEmpty);
     expect(await database.select(database.noteVersions).get(), isEmpty);

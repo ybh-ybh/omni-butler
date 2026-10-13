@@ -264,10 +264,7 @@ void main() {
     }
 
     await source.database.transaction(() async {
-      for (final MapEntry<String, String> identity in {
-        categoryId: 'category',
-        tagId: 'tag',
-      }.entries) {
+      for (final MapEntry<String, String> identity in {tagId: 'tag'}.entries) {
         await source.database
             .into(source.database.taxonomyEntries)
             .insert(
@@ -320,7 +317,6 @@ void main() {
         body: edited.body,
         dayKey: edited.dayKey,
         baseRevision: edited.revision,
-        categoryId: categoryId,
         tags: {tagId},
       ),
     ))!;
@@ -337,7 +333,6 @@ void main() {
         body: classified.body,
         dayKey: classified.dayKey,
         baseRevision: classified.revision,
-        categoryId: categoryId,
         tags: {tagId},
       ),
       id: segmentId,
@@ -376,7 +371,6 @@ void main() {
             'body': classified.body,
             'dayKey': classified.dayKey,
             'revision': classified.revision,
-            'categoryName': '测试category',
             'tags': [tagId],
             'deletedAt': null,
             'audioCount': 1,

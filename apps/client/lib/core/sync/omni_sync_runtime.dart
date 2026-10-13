@@ -45,6 +45,8 @@ class OmniSyncRuntime {
     'banner_settings',
     'attachments',
     'note_audio_local_files',
+    'note_local_drafts',
+    'note_draft_audio_segments',
   ];
 
   /// PowerSync 底层数据库。
@@ -336,7 +338,10 @@ class OmniSyncRuntime {
       }
       for (final String table in SyncSnapshot.tableNames) {
         // 原音本机状态单独按文件校验恢复，不携带旧源识别任务或共享备份路径。
-        if (table == 'note_audio_local_files') continue;
+        if (table == 'note_audio_local_files' ||
+            table == 'note_draft_audio_segments') {
+          continue;
+        }
         if (!useLocalData &&
             table != 'banner_settings' &&
             table != 'attachments') {
@@ -399,6 +404,7 @@ class OmniSyncRuntime {
     await ensureSyncClientId(powerSync);
     await _installRawTableTriggers();
     await restoreLocalNoteAudio(snapshot);
+    if (useLocalData) await restoreLocalDraftAudio(snapshot);
   }
 
   /// 在完整下行后恢复同业务类型、同记录 ID 的本机图片，不上传附件。
@@ -537,6 +543,55 @@ class OmniSyncRuntime {
         'INSERT OR REPLACE INTO note_audio_local_files '
         '(id, local_path, upload_state, recognition_state, consent) VALUES (?, ?, ?, ?, ?)',
         <Object?>[source['id'], localPath, 'pending', 'idle', 0],
+      );
+    }
+  }
+
+  /// 草稿原音只恢复到采用本机数据的候选库，不共享备份文件路径。
+  Future<void> restoreLocalDraftAudio(SyncSnapshot snapshot) async {
+    // 当前候选数据源的独立草稿原音目录。
+    final Directory directory = Directory(
+      path.join(path.dirname(databasePath), 'note_draft_audio_live'),
+    );
+    for (final Map<String, Object?> source
+        in snapshot.tables['note_draft_audio_segments'] ??
+            <Map<String, Object?>>[]) {
+      // 没有所属草稿时不恢复孤儿原音。
+      final Map<String, Object?>? draft = await powerSync.getOptional(
+        'SELECT id FROM note_local_drafts WHERE id = ?',
+        <Object?>[source['draft_id']],
+      );
+      if (draft == null) continue;
+      // 保留缺失状态，禁止把损坏文件冒充可用原音。
+      String? localPath;
+      if (await isMigrationNoteAudioValid(
+        source['local_path'] as String?,
+        source,
+      )) {
+        await directory.create(recursive: true);
+        final String fileName =
+            '${sha256.convert(utf8.encode(source['id'].toString()))}.audio';
+        final File copy = await File(source['local_path']! as String)
+            .copy(path.join(directory.path, fileName));
+        if (!await isMigrationNoteAudioValid(copy.path, source)) {
+          throw const FileSystemException('草稿原音恢复校验失败');
+        }
+        localPath = copy.path;
+      }
+      // 列来自固定本机表定义，快照不能控制 SQL 标识符。
+      final Set<String> columns =
+          (await powerSync.getAll(
+                'PRAGMA table_info(note_draft_audio_segments)',
+              ))
+              .map((Map<String, Object?> column) => column['name']! as String)
+              .toSet();
+      if (source.keys.any((String key) => !columns.contains(key))) {
+        throw const FormatException('草稿原音快照包含未知字段');
+      }
+      final Map<String, Object?> row = {...source, 'local_path': localPath};
+      await powerSync.execute(
+        'INSERT OR REPLACE INTO note_draft_audio_segments (${row.keys.map((String key) => '"$key"').join(', ')}) VALUES (${List<String>.filled(row.length, '?').join(', ')})',
+        row.values.toList(growable: false),
       );
     }
   }

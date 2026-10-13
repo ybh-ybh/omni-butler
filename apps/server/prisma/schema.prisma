@@ -60,8 +60,6 @@ model NoteEntry {
   dayKey String @map("day_key") @db.VarChar(10)
   /// 创建时区名称与当时UTC偏移，旧行明确标记为未知而不伪造地区。
   creationTimezone String @default("legacy:unknown") @map("creation_timezone") @db.VarChar(128)
-  categoryId String? @map("category_id") @db.Uuid
-  categoryName String? @map("category_name") @db.VarChar(80)
   tags String @default("[]")
   revision String @db.Uuid
   createdAt DateTime @map("created_at") @db.Timestamptz(3)

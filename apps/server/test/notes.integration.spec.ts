@@ -19,7 +19,7 @@ import { SpeechProviderError, SpeechRecognitionProvider } from '../src/notes/spe
 import { PrismaModule } from '../src/prisma/prisma.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { SyncModule } from '../src/sync/sync.module';
-import { SyncService } from '../src/sync/sync.service';
+import { canonicalize, SyncService } from '../src/sync/sync.service';
 import type { SyncOperationDto } from '../src/sync/dto/sync-operation.dto';
 
 /// 只读取显式隔离数据库，默认测试不能接触用户数据。
@@ -130,7 +130,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
   });
 
   /// 用实际 token 请求 HTTP，undefined JSON 不添加无关 body。
-  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '3', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
+  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '4', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
   /// 构造稳定真实同步操作。
   function batch(operations: SyncOperationDto[]): { clientId: string; transactionId: string; operations: SyncOperationDto[] } { return { clientId: randomUUID(), transactionId: randomUUID(), operations }; }
   /// 构造可回听的测试 WAV，仅测试存储不向厂商发送此合成文件。
@@ -153,7 +153,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
     // 固定时刻只用于业务事实。
     const timestamp = new Date().toISOString();
     // 两个完整业务行符合迁移严格列协议。
-    const operations: SyncOperationDto[] = [{ op: 'PUT', table: 'note_entries', id: noteId, data: { body: '用户已经编辑的正文', day_key: '2026-10-11', creation_timezone: 'Asia/Shanghai|+08:00', category_id: null, category_name: null, tags: '[]', revision, created_at: timestamp, updated_at: timestamp, deleted_at: null } }, { op: 'PUT', table: 'note_audio_segments', id: segmentId, data: { note_id: noteId, sort_order: 0, duration_ms: 1000, mime: 'audio/wav', sha256, byte_size: bytes.length, transcript: null, created_at: timestamp, updated_at: timestamp, deleted_at: null } }];
+    const operations: SyncOperationDto[] = [{ op: 'PUT', table: 'note_entries', id: noteId, data: { body: '用户已经编辑的正文', day_key: '2026-10-11', creation_timezone: 'Asia/Shanghai|+08:00', tags: '[]', revision, created_at: timestamp, updated_at: timestamp, deleted_at: null } }, { op: 'PUT', table: 'note_audio_segments', id: segmentId, data: { note_id: noteId, sort_order: 0, duration_ms: 1000, mime: 'audio/wav', sha256, byte_size: bytes.length, transcript: null, created_at: timestamp, updated_at: timestamp, deleted_at: null } }];
     await sync.applyBatch(user.sub, batch(operations)); return { noteId, segmentId, revision, bytes, sha256, operations };
   }
   /// 发真实 multipart 原音。
@@ -345,7 +345,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
     await sync.applyBatch(user.sub, batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { day_key: '2026-10-10' } }]));
     expect((await prisma.noteEntry.findUnique({ where: { id: sample.noteId } }))?.dayKey).toBe('2026-10-11');
   });
-  it('笔记分类使用真实客户端模块名，候选正文不可改但随整篇删除与恢复', async () => {
+  it('旧笔记类别退休后标签继续有效，候选正文随整篇删除与恢复', async () => {
     // 完整业务事实和首版候选正文。
     const sample = await seed();
     // 候选身份与分类身份相互独立。
@@ -361,7 +361,8 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
       ...[categoryId, tagId].map((id, index): SyncOperationDto => ({ op: 'PUT', table: 'taxonomy_entries', id, data: { module: 'notes', kind: index ? 'tag' : 'category', name: index ? '日常' : '日报', color_value: null, sort_order: index, is_enabled: true, created_at: timestamp, updated_at: timestamp, deleted_at: null } })),
       { op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { category_id: categoryId, category_name: '日报', tags: JSON.stringify([tagId]), tags_base: '[]' } },
     ]));
-    expect((await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).categoryId).toBe(categoryId);
+    expect(await prisma.taxonomyEntry.findUnique({ where: { id: categoryId } })).toBeNull();
+    expect((await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).tags).toBe(JSON.stringify([tagId]));
     // 不允许以同步 PATCH 改掉任何原始版本事实。
     for (const data of [{ body: '篡改正文' }, { base_revision: randomUUID() }, { revision: randomUUID() }, { note_id: randomUUID() }, { created_at: timestamp }]) {
       expect((await request('/sync/operations', 'POST', batch([{ op: 'PATCH', table: 'note_versions', id: versionId, data }]))).status).toBe(400);
@@ -376,10 +377,103 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
       expect((await prisma.noteVersion.findUniqueOrThrow({ where: { id: versionId } })).deletedAt?.toISOString() ?? null).toBe(deletedAt);
     }
     expect((await prisma.noteVersion.findUniqueOrThrow({ where: { id: versionId } })).body).toBe('用户已经编辑的正文');
-    // 其他模块的类别不能借同归属越界到笔记。
+    // 迟到类别操作仅保留旧队列意图，不能复活退休类别。
     await sync.applyBatch(user.sub, batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { category_id: null } }]));
     await sync.applyBatch(user.sub, batch([{ op: 'PATCH', table: 'taxonomy_entries', id: categoryId, data: { module: 'todo' } }]));
-    expect((await request('/sync/operations', 'POST', batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { category_id: categoryId } }]))).status).toBe(400);
+    expect((await request('/sync/operations', 'POST', batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { category_id: categoryId } }]))).status).toBe(200);
+  });
+  it('类别增量迁移删列及类别关联，保留笔记事实、标签、其他模块和删除墓碑', async () => {
+    // 本例只在当前隔离测试库中创建专属旧结构。
+    const schema = `notes_categories_${randomUUID().replaceAll('-', '')}`;
+    // 独立连接避免影响应用连接池的默认schema。
+    const upgrade = new Client({ connectionString: databaseUrl });
+    await upgrade.connect();
+    try {
+      await upgrade.query(`CREATE SCHEMA ${schema}`);
+      await upgrade.query(`SET search_path TO ${schema},public`);
+      await upgrade.query('CREATE TABLE taxonomy_entries (LIKE public.taxonomy_entries INCLUDING ALL)');
+      await upgrade.query('ALTER TABLE taxonomy_entries DROP CONSTRAINT taxonomy_notes_category_retired');
+      await upgrade.query('CREATE TABLE record_taxonomy_links (LIKE public.record_taxonomy_links INCLUDING ALL)');
+      await upgrade.query('ALTER TABLE record_taxonomy_links ADD FOREIGN KEY(user_id,taxonomy_id) REFERENCES taxonomy_entries(user_id,id) ON DELETE CASCADE');
+      await upgrade.query('CREATE TABLE note_entries (LIKE public.note_entries INCLUDING ALL)');
+      await upgrade.query('ALTER TABLE note_entries ADD category_id UUID, ADD category_name VARCHAR(80)');
+      await upgrade.query('CREATE TABLE sync_tombstones (LIKE public.sync_tombstones INCLUDING ALL)');
+      // 与正式数据库相同的删除触发器同时覆盖外键级联。
+      for (const table of ['taxonomy_entries', 'record_taxonomy_links']) {
+        await upgrade.query(`CREATE TRIGGER sync_deletion_tombstone AFTER DELETE ON ${table} FOR EACH ROW EXECUTE FUNCTION public.remember_sync_deletion()`);
+      }
+      // 活动类别、已删类别、笔记标签和三个其他模块类别各有独立身份。
+      const ids = Array.from({ length: 6 }, () => randomUUID());
+      // 各身份对应的原业务模块及种类。
+      const kinds = [['notes', 'category'], ['notes', 'category'], ['notes', 'tag'], ['inventory', 'category'], ['membership', 'category'], ['timeline', 'category']];
+      for (let index = 0; index < ids.length; index += 1) {
+        await upgrade.query('INSERT INTO taxonomy_entries(id,user_id,module,kind,name,color_value,sort_order,is_enabled,created_at,updated_at,deleted_at) VALUES($1,$2,$3,$4,$5,123,0,true,now(),now(),$6)', [ids[index], user.sub, kinds[index]![0], kinds[index]![1], `保留或退休${index}`, index === 1 ? new Date() : null]);
+      }
+      // 笔记主体及关联在迁移前完整存在。
+      const noteId = randomUUID();
+      await upgrade.query("INSERT INTO note_entries(id,user_id,body,day_key,tags,revision,created_at,updated_at,category_id,category_name) VALUES($1,$2,'保留正文','2026-10-12',$3,$4,now(),now(),$5,'退休名称')", [noteId, user.sub, JSON.stringify([ids[2]]), randomUUID(), ids[0]]);
+      // 一条旧类别关联和一条有效标签关联用于验证精确级联。
+      const links = [randomUUID(), randomUUID()];
+      for (let index = 0; index < links.length; index += 1) {
+        await upgrade.query("INSERT INTO record_taxonomy_links(id,user_id,module,record_id,taxonomy_id,created_at) VALUES($1,$2,'notes',$3,$4,now())", [links[index], user.sub, noteId, ids[index === 0 ? 0 : 2]]);
+      }
+      // 迁移前已排除退休字段的笔记事实必须逐字段保持一致。
+      const beforeNote = await upgrade.query("SELECT to_jsonb(note_entries)-'category_id'-'category_name' AS data FROM note_entries");
+      // 当前仍有效的分类标签必须逐字段保持一致。
+      const beforeTaxonomy = await upgrade.query("SELECT * FROM taxonomy_entries WHERE NOT(module='notes' AND kind='category') ORDER BY id");
+      await upgrade.query(readFileSync(join(__dirname, '../prisma/migrations/20261012000000_remove_note_categories/migration.sql'), 'utf8'));
+      expect((await upgrade.query('SELECT to_jsonb(note_entries) AS data FROM note_entries')).rows).toEqual(beforeNote.rows);
+      expect((await upgrade.query('SELECT * FROM taxonomy_entries ORDER BY id')).rows).toEqual(beforeTaxonomy.rows);
+      expect((await upgrade.query('SELECT id FROM record_taxonomy_links')).rows).toEqual([{ id: links[1] }]);
+      expect((await upgrade.query('SELECT record_id FROM sync_tombstones ORDER BY record_id')).rows.map((row: { record_id: string }) => row.record_id)).toEqual([ids[0], ids[1], links[0]].sort());
+      await expect(upgrade.query("INSERT INTO taxonomy_entries(id,user_id,module,kind,name,color_value,created_at,updated_at) VALUES($1,$2,'notes','category','拒绝',123,now(),now())", [randomUUID(), user.sub])).rejects.toThrow();
+    } finally {
+      await upgrade.query('SET search_path TO public');
+      await upgrade.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      await upgrade.end();
+    }
+  });
+  it('旧离线类别队列写墓碑，迟到局部更新和关联不复活且其他模块继续同步', async () => {
+    // 正式笔记和有效标签保持现有正文、版本和原音。
+    const sample = await seed();
+    // 一条退休类别、一条旧类别关联及一条有效物品类别。
+    const [categoryId, linkId, inventoryCategoryId] = [randomUUID(), randomUUID(), randomUUID()];
+    // 有效笔记标签必须经过原有基线合并协议。
+    const [tagId] = await seedTags(1);
+    // 原始混合事务在重试前后保持完全相同。
+    const pending = batch([
+      { op: 'PUT', table: 'taxonomy_entries', id: categoryId, data: { module: 'notes', kind: 'category', name: '离线类别' } },
+      { op: 'PATCH', table: 'taxonomy_entries', id: categoryId, data: { name: '离线重命名' } },
+      { op: 'PUT', table: 'record_taxonomy_links', id: linkId, data: { module: 'notes', record_id: sample.noteId, taxonomy_id: categoryId, created_at: new Date().toISOString() } },
+      { op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { category_id: categoryId, category_name: '离线重命名', tags: JSON.stringify([tagId]), tags_base: '[]' } },
+      { op: 'PUT', table: 'taxonomy_entries', id: inventoryCategoryId, data: { module: 'inventory', kind: 'category', name: '保留物品类别', color_value: 123, created_at: new Date().toISOString(), updated_at: new Date().toISOString() } },
+    ]);
+    // 首次真实HTTP上传后的负载仍与调用前一致。
+    const original = JSON.stringify(pending);
+    expect((await request('/sync/operations', 'POST', pending)).status).toBe(200);
+    expect(JSON.stringify(pending)).toBe(original);
+    expect(await (await request('/sync/operations', 'POST', pending)).json()).toMatchObject({ replayed: true });
+    expect(await prisma.taxonomyEntry.findUnique({ where: { id: categoryId } })).toBeNull();
+    expect(await prisma.recordTaxonomyLink.findUnique({ where: { id: linkId } })).toBeNull();
+    expect(await prisma.syncTombstone.count({ where: { userId: user.sub, recordId: { in: [categoryId, linkId] } } })).toBe(2);
+    expect((await prisma.taxonomyEntry.findUniqueOrThrow({ where: { id: inventoryCategoryId } })).name).toBe('保留物品类别');
+    expect(await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).toMatchObject({ body: '用户已经编辑的正文', tags: JSON.stringify([tagId]) });
+    expect((await request('/sync/operations', 'POST', batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { category_id: categoryId, category_name: '仅退休字段' } }]))).status).toBe(200);
+    expect((await request('/sync/operations', 'POST', batch([{ op: 'PATCH', table: 'taxonomy_entries', id: categoryId, data: { name: '迟到更新' } }, { op: 'PATCH', table: 'record_taxonomy_links', id: linkId, data: { deleted_at: null } }]))).status).toBe(200);
+    expect((await request('/sync/operations', 'POST', batch([{ op: 'PUT', table: 'taxonomy_entries', id: tagId!, data: { module: 'notes', kind: 'category', name: '身份碰撞' } }]))).status).toBe(409);
+    expect((await prisma.taxonomyEntry.findUniqueOrThrow({ where: { id: tagId } })).kind).toBe('tag');
+  });
+  it('跨升级重放旧服务端回执沿用原始摘要且不重新执行退休事务', async () => {
+    // 当前笔记已经代表服务器升级后的完整有效状态。
+    const sample = await seed();
+    // 该事务在旧服务器已提交，客户端尚未收到确认。
+    const legacy = batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { category_id: randomUUID(), category_name: '旧服务端已保存的类别' } }]);
+    await prisma.syncReceipt.create({ data: { userId: user.sub, clientId: legacy.clientId, transactionId: legacy.transactionId, payloadHash: createHash('sha256').update(JSON.stringify(canonicalize(legacy.operations))).digest('hex'), applied: 1, ignored: 0 } });
+    expect(await (await request('/sync/operations', 'POST', legacy)).json()).toEqual({ applied: 1, ignored: 0, replayed: true });
+    expect((await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).body).toBe('用户已经编辑的正文');
+    // 相同事务身份改变类别旧内容仍必须拒绝，不能削弱原幂等协议。
+    const changed = { ...legacy, operations: [{ ...legacy.operations[0]!, data: { category_name: '不同旧内容' } }] };
+    expect((await request('/sync/operations', 'POST', changed)).status).toBe(409);
   });
   it('离线双设备标签按基线增删合并，保留并发新增和移除且回执重放不再次应用', async () => {
     // 同一笔记与三个同归属标签。
@@ -462,9 +556,9 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
       // 真实 HTTP 路径验证 DTO、设备鉴权、事务幂等与 PostgreSQL 类型转换。
       const response = await request('/sync/operations', 'POST', transaction);
       // 失败保留具体事务和响应，不能将同步队列受阻伪装成通过。
-      const result = await response.json() as { applied: number; replayed: boolean; message?: string };
+      const result = await response.json() as { applied: number; ignored: number; replayed: boolean; message?: string };
       expect({ transactionId: transaction.transactionId, status: response.status, error: result.message }).toEqual({ transactionId: transaction.transactionId, status: 200, error: undefined });
-      expect(result.applied).toBe(transaction.operations.length);
+      expect(result.applied + result.ignored).toBe(transaction.operations.length);
       expect(await (await request('/sync/operations', 'POST', transaction)).json()).toMatchObject({ replayed: true });
       if (transaction.operations.some((operation) => operation.table === 'note_audio_segments' && operation.op === 'PUT')) {
         // 附件元数据提交之后才能上传私有文件。
@@ -477,7 +571,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
         expect((await request(`/notes/audio/${fixture.segmentId}/file`)).status).toBe(200);
       }
     }
-    expect(await prisma.noteEntry.findUniqueOrThrow({ where: { id: fixture.noteId } })).toMatchObject({ body: fixture.expected.body, revision: fixture.expected.revision, categoryId: fixture.categoryId, categoryName: fixture.expected.categoryName, tags: JSON.stringify(fixture.expected.tags), deletedAt: null });
+    expect(await prisma.noteEntry.findUniqueOrThrow({ where: { id: fixture.noteId } })).toMatchObject({ body: fixture.expected.body, revision: fixture.expected.revision, tags: JSON.stringify(fixture.expected.tags), deletedAt: null });
     expect(await prisma.noteAudioSegment.count()).toBe(1); expect(await prisma.noteVersion.count()).toBe(fixture.expected.versionCount);
     expect((await notes.download(user.sub, fixture.segmentId)).bytes).toEqual(bytes);
   });

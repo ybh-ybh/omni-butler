@@ -82,6 +82,10 @@ class TaxonomyRepository {
     required TaxonomyModule module,
     required TaxonomyKind kind,
   }) async* {
+    if (module == TaxonomyModule.notes && kind != TaxonomyKind.tag) {
+      yield const [];
+      return;
+    }
     await _ensureDefaults();
     // 分类标签查询。
     final query = _database.select(_database.taxonomyEntries)
@@ -100,6 +104,10 @@ class TaxonomyRepository {
 
   /// 保存新增或编辑后的分类标签。
   Future<void> save(TaxonomyDraft draft) async {
+    if (draft.module == TaxonomyModule.notes &&
+        draft.kind != TaxonomyKind.tag) {
+      throw const FormatException('笔记仅支持标签');
+    }
     // 清理后的名称。
     final String name = draft.name.trim();
     if (name.isEmpty) {
@@ -252,15 +260,6 @@ class TaxonomyRepository {
           newName,
           now,
           draft.id!,
-        );
-      case (TaxonomyModule.notes, TaxonomyKind.category):
-        await (_database.update(
-          _database.noteEntries,
-        )..where((table) => table.categoryId.equals(draft.id!))).write(
-          NoteEntriesCompanion(
-            categoryName: Value(newName),
-            updatedAt: Value(now),
-          ),
         );
       case _:
         break;

@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/foundation.dart';
 import 'package:omni_butler/core/auth/auth_providers.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
@@ -61,6 +62,7 @@ final noteEditorProvider = Provider<NoteEditorController>((ref) {
   final NoteEditorController editor = NoteEditorController(
     ref.watch(noteRepositoryProvider),
     ref.watch(noteRecorderProvider),
+    explicitCommit: defaultTargetPlatform == TargetPlatform.windows,
   );
   ref.onDispose(editor.dispose);
   return editor;
@@ -149,7 +151,7 @@ final noteAudioTransferProvider = Provider<NoteAudioTransferService?>((ref) {
     hasUnpersistedEdits: (id) {
       // 编辑器正文与供应商响应互相独立，未保存内容不会被覆盖。
       final NoteEditorController editor = ref.read(noteEditorProvider);
-      return editor.draft.id == id && (editor.dirty || editor.conflicted);
+      return editor.hasUncommittedDraft(id);
     },
   );
   // 数据迁移等待在途音频请求结束。

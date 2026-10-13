@@ -1,14 +1,18 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart';
+import 'package:omni_butler/features/notes/audio/note_audio_export_service.dart';
+import 'package:omni_butler/app/theme/note_composer_style.dart';
 import 'package:omni_butler/features/notes/presentation/note_audio_card.dart';
 import 'package:omni_butler/shared/ui/omni_button.dart';
 
@@ -273,6 +277,272 @@ void main() {
   tearDown(() async {
     await player.dispose();
     await directory.delete(recursive: true);
+  });
+
+  testWidgets('紧凑音频条展开动画、原文、下载副本及悬停交互', (tester) async {
+    // 原音与下载目标均隔离于临时目录，不打开系统弹窗。
+    final String path = '${directory.path}/original.wav';
+    // 保存边界捕捉真实元数据与字节。
+    final File downloaded = File('${directory.path}/downloaded.wav');
+    // 重新识别只记录显式点击，不访问网络。
+    int recognizes = 0;
+    await tester.runAsync(() => File(path).writeAsBytes(List.filled(144, 0)));
+    await tester.pumpWidget(
+      _app(
+        NoteAudioCard(
+          compact: true,
+          segment: _segment('compact', transcript: '首次原始音频文字'),
+          local: _local('compact', path: path, candidate: '后来的候选文字'),
+          player: player,
+          onRecognize: () => recognizes++,
+          onCancel: () => fail('紧凑条不提供取消识别'),
+          onInsert: (_) => fail('展开不能插入或修改正文'),
+          recordingActive: false,
+          exporter: NoteAudioExportService(
+            saveFile:
+                ({
+                  required String fileName,
+                  required Uint8List bytes,
+                  required String mimeType,
+                }) async {
+                  expect(fileName, '笔记录音-2026-10-11T00-00-00-1.wav');
+                  expect(mimeType, 'audio/wav');
+                  await downloaded.writeAsBytes(bytes);
+                  return downloaded.uri;
+                },
+          ),
+        ),
+      ),
+    );
+    await _settle(tester);
+    // 常态只显示播放、进度、时长和更多，隐藏内容不能接收点击。
+    final Finder bar = find.byKey(const ValueKey('note-audio-bar-compact'));
+    final double collapsed = tester.getSize(bar).height;
+    expect(collapsed, 48);
+    expect(find.text('00:12'), findsOneWidget);
+    expect(find.text('下载').hitTestable(), findsNothing);
+    await tester.tap(find.text('更多'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 70));
+    // 动画中途真实高度应介于两端之间。
+    final double middle = tester.getSize(bar).height;
+    expect(middle, greaterThan(collapsed));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(bar).height, greaterThan(middle));
+    expect(find.text('后来的候选文字'), findsNothing);
+    // 原始文字使用截图的小号灰色，操作仅保留两个。
+    final SelectableText transcript = tester.widget(
+      find.byKey(const ValueKey('note-audio-transcript-compact')),
+    );
+    expect(transcript.data, '首次原始音频文字');
+    expect(transcript.style!.fontSize, 12);
+    expect(transcript.style!.color, NoteComposerStyle.muted);
+    expect(find.text('AI 转写'), findsNothing);
+    await tester.tap(find.text('重新识别'));
+    expect(recognizes, 1);
+    // 原生文字按钮的实际样式和鼠标区域都需提供悬停反馈。
+    final Finder download = find.widgetWithText(TextButton, '下载');
+    final TextButton button = tester.widget(download);
+    final OmniColors colors = OmniColors.of(tester.element(download));
+    expect(
+      button.style!.backgroundColor!.resolve({WidgetState.hovered}),
+      colors.mist,
+    );
+    expect(
+      button.style!.mouseCursor!.resolve({WidgetState.hovered}),
+      SystemMouseCursors.click,
+    );
+    final TestGesture mouse = await tester.createGesture(
+      kind: ui.PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(download));
+    await tester.pumpAndSettle();
+    expect(
+      RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
+      SystemMouseCursors.click,
+    );
+    await tester.tap(download);
+    await _settle(tester);
+    expect(await tester.runAsync(downloaded.readAsBytes), List.filled(144, 0));
+    expect(
+      await tester.runAsync(() => File(path).readAsBytes()),
+      List.filled(144, 0),
+    );
+    await tester.tap(find.text('收起'));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(bar).height, collapsed);
+    expect(find.text('下载').hitTestable(), findsNothing);
+    await mouse.removePointer();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('编辑紧凑录音显示插入和删除，候选优先且冻结禁止修改', (tester) async {
+    // 操作由回调验证，原音和网络不被实际修改。
+    String? inserted;
+    int deleted = 0;
+
+    /// 同一音频在可编辑和冻结状态复用。
+    Widget card(bool enabled) => _app(
+      NoteAudioCard(
+        compact: true,
+        editing: true,
+        editEnabled: enabled,
+        segment: _segment('edit', transcript: '原始文字'),
+        local: _local('edit', candidate: '识别候选'),
+        player: player,
+        recordingActive: false,
+        onRecognize: () {},
+        onCancel: () {},
+        onInsert: (text) => inserted = text,
+        onDelete: () => deleted++,
+      ),
+    );
+    await tester.pumpWidget(card(true));
+    await _settle(tester);
+    await tester.tap(find.text('更多'));
+    await tester.pumpAndSettle();
+    expect(find.text('原始文字'), findsOneWidget);
+    await tester.tap(find.text('插入正文'));
+    expect(inserted, '识别候选');
+    await tester.tap(find.text('删除录音'));
+    expect(deleted, 1);
+    await tester.pumpWidget(card(false));
+    await _settle(tester);
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, '插入正文'))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, '删除录音'))
+          .onPressed,
+      isNull,
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('紧凑音频支持播放暂停、进度跳转且未知识别回执禁止重复任务', (tester) async {
+    // 一致性校验通过的临时原音。
+    final String path = '${directory.path}/compact.wav';
+    await tester.runAsync(() => File(path).writeAsBytes(List.filled(144, 0)));
+    await tester.pumpWidget(
+      _app(
+        NoteAudioCard(
+          compact: true,
+          segment: _segment('play'),
+          local: _local('play', path: path, status: 'submissionUnknown'),
+          player: player,
+          recordingActive: false,
+          onRecognize: () => fail('未知回执不能重复提交'),
+          onCancel: () {},
+          onInsert: (_) {},
+        ),
+      ),
+    );
+    await _settle(tester);
+    await tester.tap(find.byTooltip('播放录音'));
+    await _settle(tester);
+    expect(player.operations, ['play:$path']);
+    // 进度控制复用播放器身份保护，不能跳转其他片段。
+    final Slider slider = tester.widget(find.byType(Slider));
+    slider.onChangeEnd!(4000);
+    await _settle(tester);
+    expect(player.operations.last, 'seek:4000');
+    await tester.tap(find.byTooltip('暂停回听'));
+    await _settle(tester);
+    await tester.tap(find.byTooltip('继续回听'));
+    await _settle(tester);
+    expect(player.operations, containsAllInOrder(['pause', 'resume']));
+    await tester.tap(find.text('更多'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, '重新识别'))
+          .onPressed,
+      isNull,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('紧凑音频在窄窗和大字号不溢出，缺失原音禁用下载', (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      _app(
+        NoteAudioCard(
+          compact: true,
+          editing: true,
+          onDelete: () {},
+          segment: _segment('narrow', transcript: '原始音频文字' * 30),
+          local: null,
+          player: player,
+          recordingActive: false,
+          onRecognize: () {},
+          onCancel: () {},
+          onInsert: (_) {},
+        ),
+        scale: 2,
+      ),
+    );
+    await _settle(tester);
+    await tester.tap(find.text('更多'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, '下载'))
+          .onPressed,
+      isNull,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  test('原音下载重新校验摘要，篡改与取消均不影响原件', () async {
+    // 导出服务只处理本例临时目录中的文件。
+    final File original = File('${directory.path}/export.wav');
+    await original.writeAsBytes(List.filled(144, 0));
+    // 取消保存的系统边界不写任何文件。
+    int saves = 0;
+    final NoteAudioExportService exporter = NoteAudioExportService(
+      saveFile:
+          ({
+            required String fileName,
+            required Uint8List bytes,
+            required String mimeType,
+          }) async {
+            saves++;
+            return null;
+          },
+    );
+    expect(
+      await exporter.export(
+        _segment('export'),
+        _local('export', path: original.path),
+      ),
+      isNull,
+    );
+    expect(saves, 1);
+    expect(await original.readAsBytes(), List.filled(144, 0));
+    await original.writeAsBytes(List.filled(144, 1));
+    await expectLater(
+      exporter.export(
+        _segment('export'),
+        _local('export', path: original.path),
+      ),
+      throwsStateError,
+    );
+    expect(saves, 1);
+    await expectLater(
+      exporter.export(_segment('export'), null),
+      throwsStateError,
+    );
+    expect(await original.readAsBytes(), List.filled(144, 1));
   });
 
   test('共享回听服务串行切换音源，迟到的旧段拖动不作用于新段', () async {

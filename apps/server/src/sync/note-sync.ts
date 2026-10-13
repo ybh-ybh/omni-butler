@@ -88,7 +88,7 @@ export async function normalizeNoteOperation(transaction: Prisma.TransactionClie
   return { ...operation, data };
 }
 
-/// 全事务最终检查总时长以及笔记分类标签的归属和类型。
+/// 全事务最终检查总时长以及笔记标签的归属和类型。
 export async function reconcileNotes(transaction: Prisma.TransactionClient, userId: string): Promise<void> {
   // 快照迁移不走单行归一化，仍以事务最终状态统一限制标签数量。
   const invalidTagCount = await transaction.$queryRaw<Array<{ id: string }>>`
@@ -101,14 +101,6 @@ export async function reconcileNotes(transaction: Prisma.TransactionClient, user
     GROUP BY note_id HAVING SUM(duration_ms)>3600000 LIMIT 1
   `;
   if (invalidDuration.length) throw new BadRequestException('单篇笔记录音累计不能超过 60 分钟');
-  // 分类名称允许保留已删除类别的历史文本，但引用必须是同模块同归属。
-  const invalidCategory = await transaction.$queryRaw<Array<{ id: string }>>`
-    SELECT note.id FROM note_entries note LEFT JOIN taxonomy_entries category
-    ON category.id=note.category_id AND category.user_id=note.user_id
-    WHERE note.user_id=${userId}::uuid AND note.category_id IS NOT NULL
-    AND (category.id IS NULL OR category.module<>'notes' OR category.kind<>'category') LIMIT 1
-  `;
-  if (invalidCategory.length) throw new BadRequestException('笔记类别必须属于同一归属的笔记类别');
   // JSON 标签必须关联同归属的笔记标签；已删除标签仍可离线保留到客户端清理。
   const invalidTag = await transaction.$queryRaw<Array<{ id: string }>>`
     SELECT note.id FROM note_entries note CROSS JOIN LATERAL jsonb_array_elements_text(note.tags::jsonb) tag(value)

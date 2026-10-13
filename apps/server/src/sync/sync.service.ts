@@ -14,6 +14,7 @@ import {
 } from './sync-consistency';
 import { SyncSqlBuilder } from './sync-sql.builder';
 import { normalizeNoteOperation, validateNoteTagOperation } from './note-sync';
+import { isRetiredNoteCategory, retireNoteCategoryOperation } from './note-category-retirement';
 
 /// 同步操作引用的业务父表，用于处理永久删除后的迟到写入。
 const parentReferences: Readonly<Record<string, Record<string, string>>> = {
@@ -63,7 +64,9 @@ export class SyncService {
   async applyBatch(userId: string, batch: SyncBatchDto): Promise<SyncResult> {
     // 写入之前校验全部表和列，避免忽略路径绕过白名单。
     for (const operation of batch.operations) {
-      this.sqlBuilder.build(validateNoteTagOperation(operation), userId);
+      // 执行副本丢弃已退休类别，原始负载保持用于旧回执重放。
+      const retired = retireNoteCategoryOperation(operation);
+      if (retired !== null) this.sqlBuilder.build(validateNoteTagOperation(retired), userId);
     }
     // 操作摘要用于拒绝复用事务身份提交不同内容。
     const payloadHash = createHash('sha256')
@@ -109,7 +112,23 @@ export class SyncService {
         // 当前事务忽略的已删除或重复创建数量。
         let ignored = 0;
         // 保留客户端原始事务顺序。
-        for (const operation of batch.operations) {
+        for (const original of batch.operations) {
+          // 旧类别操作只在当前事务的执行副本中退休。
+          const operation = retireNoteCategoryOperation(original);
+          if (operation === null) {
+            ignored += 1;
+            continue;
+          }
+          if (isRetiredNoteCategory(original)) {
+            // 身份碰撞不能让退休的旧 PUT 删除同 ID 的有效标签或其他模块类别。
+            const current = await transaction.taxonomyEntry.findFirst({
+              where: { userId, id: original.id },
+              select: { module: true, kind: true },
+            });
+            if (current && (current.module !== 'notes' || current.kind !== 'category')) {
+              throw new ConflictException('退休笔记类别的身份与有效分类标签冲突');
+            }
+          }
           if (operation.table === 'daily_quote_selections') {
             // 日签需持久合并旧身份，并将删除解释为取消当日选择。
             const affected = await this.applyDailyQuoteOperation(

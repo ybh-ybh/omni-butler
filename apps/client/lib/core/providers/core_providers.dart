@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
+import 'package:omni_butler/features/notes/data/note_repository.dart';
 import 'package:omni_butler/core/attachments/attachment_repository.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
@@ -412,20 +413,9 @@ final Provider<RecycleBinRepository> recycleBinRepositoryProvider =
             ? null
             : (id) async {
                 // 独立另存的有效原音仍引用同一物理文件，不能随原笔记清理。
-                final List<NoteAudioSegmentRecord> audio = await database
-                    .select(database.noteAudioSegments)
-                    .get();
-                final List<NoteAudioLocalFileRecord> files = await database
-                    .select(database.noteAudioLocalFiles)
-                    .get();
-                final Set<String> referenced = audio
-                    .map((segment) => segment.id)
-                    .toSet();
-                final Set<String> protectedPaths = files
-                    .where((file) => referenced.contains(file.id))
-                    .map((file) => file.localPath)
-                    .whereType<String>()
-                    .toSet();
+                final Set<String> protectedPaths = await NoteRepository(
+                  database,
+                ).protectedAudioPaths();
                 await recorder.discardPendingForNote(
                   id,
                   protectedPaths: protectedPaths,
@@ -441,5 +431,15 @@ final StreamProvider<List<RecycleBinItem>> recycleBinItemsProvider =
       final RecycleBinRepository repository = ref.watch(
         recycleBinRepositoryProvider,
       );
-      return repository.watchItems();
+      return repository.watchItems(scope: RecycleBinScope.general);
+    });
+
+/// 笔记回收站独立查询，清空不会波及其他模块。
+final StreamProvider<List<RecycleBinItem>> noteRecycleBinItemsProvider =
+    StreamProvider<List<RecycleBinItem>>((Ref ref) {
+      // 同一数据源中的回收站仓储。
+      final RecycleBinRepository repository = ref.watch(
+        recycleBinRepositoryProvider,
+      );
+      return repository.watchItems(scope: RecycleBinScope.notes);
     });

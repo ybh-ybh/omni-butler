@@ -3302,22 +3302,33 @@ class _EventHistoryEmpty extends StatelessWidget {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Icon(Icons.history_toggle_off_rounded, color: colors.muted, size: 32),
-          const SizedBox(height: OmniSpacing.sm),
-          Text('还没有完成记录', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: OmniSpacing.xxs),
-          Text(
-            '完成或补记一次后，这里会形成事件节奏。',
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall
-                ?.copyWith(color: colors.muted),
-          ),
-          const SizedBox(height: OmniSpacing.md),
-          OmniButton(label: '补记第一次', icon: Icons.add_rounded, onPressed: onAdd),
-        ],
+      // 统一按钮热区后，短弹窗空态仍须允许滚动而不是溢出。
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(
+              Icons.history_toggle_off_rounded,
+              color: colors.muted,
+              size: 32,
+            ),
+            const SizedBox(height: OmniSpacing.sm),
+            Text('还没有完成记录', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: OmniSpacing.xxs),
+            Text(
+              '完成或补记一次后，这里会形成事件节奏。',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: colors.muted),
+            ),
+            const SizedBox(height: OmniSpacing.md),
+            OmniButton(
+              label: '补记第一次',
+              icon: Icons.add_rounded,
+              onPressed: onAdd,
+            ),
+          ],
+        ),
       ),
     );
   }

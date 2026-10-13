@@ -143,7 +143,13 @@ void main() {
             expect(find.text('删除的数据保留 30 天，超过保留期自动永久删除'), findsOneWidget);
             // 分组标题顺序与业务固定顺序一致。
             double previousTop = -1;
-            for (final RecycleEntityType type in RecycleEntityType.values) {
+            expect(
+              find.byKey(const ValueKey<String>('recycle-group-note')),
+              findsNothing,
+            );
+            for (final RecycleEntityType type in RecycleEntityType.values.where(
+              (type) => type != RecycleEntityType.note,
+            )) {
               // 分组键对应真实独立卡片。
               final Finder group = find.byKey(
                 ValueKey<String>('recycle-group-${type.name}'),
@@ -193,7 +199,10 @@ void main() {
                 closeTo(tester.getTopRight(firstGroup).dx, 0.1),
               );
               // 每一类记录的两项操作均在右下角，顺序保持恢复、永久删除。
-              for (final RecycleEntityType type in RecycleEntityType.values) {
+              for (final RecycleEntityType type
+                  in RecycleEntityType.values.where(
+                    (type) => type != RecycleEntityType.note,
+                  )) {
                 // 对应本轮种子的行、恢复和永久删除操作。
                 final Finder row = find.byKey(
                   ValueKey<String>('recycle-item-${type.name}-${type.name}'),
@@ -268,8 +277,17 @@ void main() {
             expect(
               await fixture.container
                   .read(recycleBinRepositoryProvider)
-                  .loadItems(),
+                  .loadItems(scope: RecycleBinScope.general),
               isEmpty,
+            );
+            // 设置中的清空保留笔记专属回收站记录。
+            expect(
+              (await fixture.container
+                      .read(recycleBinRepositoryProvider)
+                      .loadItems(scope: RecycleBinScope.notes))
+                  .single
+                  .id,
+              'note',
             );
             expect(tester.takeException(), isNull);
           } finally {
@@ -443,10 +461,10 @@ class _DelayedRecycleRepository extends RecycleBinRepository {
 
   /// 等闸门放行后执行真实删除。
   @override
-  Future<int> empty() async {
+  Future<int> empty({RecycleBinScope scope = RecycleBinScope.all}) async {
     calls++;
     await gate.future;
-    return super.empty();
+    return super.empty(scope: scope);
   }
 }
 

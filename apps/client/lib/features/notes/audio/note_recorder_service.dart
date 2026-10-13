@@ -167,114 +167,117 @@ class NoteRecorderService {
   }
 
   /// 用户主动开始录音，remaining 由持久化笔记累计时长计算。
-  Future<void> start(String noteId, {Duration remaining = noteLimit}) =>
-      _serial(() async {
-        await initialize();
-        if (state.isActive) throw StateError('已有录音进行中，请先结束当前录音');
-        if (noteId.trim().isEmpty) throw ArgumentError('笔记标识不能为空');
-        // 取每段上限、每篇总额和剩余额度的最小值。
-        final limit = Duration(
-          microseconds: min(
-            segmentLimit.inMicroseconds,
-            min(noteLimit.inMicroseconds, remaining.inMicroseconds),
+  Future<void> start(
+    String noteId, {
+    Duration remaining = noteLimit,
+    String? draftId,
+  }) => _serial(() async {
+    await initialize();
+    if (state.isActive) throw StateError('已有录音进行中，请先结束当前录音');
+    if (noteId.trim().isEmpty) throw ArgumentError('笔记标识不能为空');
+    // 取每段上限、每篇总额和剩余额度的最小值。
+    final limit = Duration(
+      microseconds: min(
+        segmentLimit.inMicroseconds,
+        min(noteLimit.inMicroseconds, remaining.inMicroseconds),
+      ),
+    );
+    if (limit <= Duration.zero) throw StateError('这篇笔记录音已达到 60 分钟上限');
+    _publish(
+      NoteRecordingState(
+        phase: NoteRecordingPhase.starting,
+        noteId: noteId,
+        draftId: draftId,
+        limit: limit,
+      ),
+    );
+    try {
+      await player.stop();
+      // 按开始时刻生成不可变的片段标识。
+      final id = const Uuid().v4();
+      // 稳定的私有文件目录。
+      final directory = await _directoryResolver();
+      // 同目录原件路径，不使用外部可写公共目录。
+      final path = p.join(directory.path, '$id.wav');
+      // 开始瞬间固定本机时区，恢复不能冒用恢复时的设备时区。
+      final DateTime startedAt = DateTime.now();
+      // 未确认清单在真正开始采集前写盘。
+      final session = <String, dynamic>{
+        'id': id,
+        'noteId': noteId,
+        'draftId': ?draftId,
+        'path': path,
+        'startedAt': startedAt.toUtc().toIso8601String(),
+        'creationTimezone': _creationTimezone(startedAt),
+        'limitMs': limit.inMilliseconds,
+      };
+      await File(p.join(directory.path, '$id.pending.json'))
+          .writeAsString(jsonEncode(session), flush: true);
+      _session = session;
+      _audioBytes = 0;
+      _maxBytes =
+          limit.inMicroseconds * NoteWav.bytesPerSecond ~/ 1000000 ~/ 2 * 2;
+      _stopping = false;
+      _lastPacket = DateTime.now();
+      if (_android) {
+        await _channel.invokeMethod<void>('start', session);
+      } else {
+        if (!await _ensureRecorder().hasPermission()) {
+          throw StateError('麦克风权限未开启，请在系统设置允许录音');
+        }
+        _file = await File(path).open(mode: FileMode.write);
+        await _file!.writeFrom(NoteWav.header(0));
+        await _file!.flush();
+        // Windows 流模式让文件逐步落盘，而不依赖结束时编码封装。
+        final stream = await _ensureRecorder().startStream(
+          const RecordConfig(
+            encoder: AudioEncoder.pcm16bits,
+            sampleRate: NoteWav.sampleRate,
+            numChannels: 1,
           ),
         );
-        if (limit <= Duration.zero) throw StateError('这篇笔记录音已达到 60 分钟上限');
+        _audioSubscription = stream.listen(
+          _writeAudio,
+          onError: (Object error) =>
+              unawaited(_serial(() => _stop('麦克风采集失败：$error'))),
+          onDone: () {
+            if (state.isActive && !_stopping) {
+              unawaited(_serial(() => _stop('麦克风采集已中断')));
+            }
+          },
+        );
         _publish(
           NoteRecordingState(
-            phase: NoteRecordingPhase.starting,
+            phase: NoteRecordingPhase.recording,
             noteId: noteId,
+            draftId: draftId,
+            recordingId: id,
             limit: limit,
           ),
         );
-        try {
-          await player.stop();
-          // 按开始时刻生成不可变的片段标识。
-          final id = const Uuid().v4();
-          // 稳定的私有文件目录。
-          final directory = await _directoryResolver();
-          // 同目录原件路径，不使用外部可写公共目录。
-          final path = p.join(directory.path, '$id.wav');
-          // 开始瞬间固定本机时区，恢复不能冒用恢复时的设备时区。
-          final DateTime startedAt = DateTime.now();
-          // 未确认清单在真正开始采集前写盘。
-          final session = <String, dynamic>{
-            'id': id,
-            'noteId': noteId,
-            'path': path,
-            'startedAt': startedAt.toUtc().toIso8601String(),
-            'creationTimezone': _creationTimezone(startedAt),
-            'limitMs': limit.inMilliseconds,
-          };
-          await File(p.join(directory.path, '$id.pending.json'))
-              .writeAsString(jsonEncode(session), flush: true);
-          _session = session;
-          _audioBytes = 0;
-          _maxBytes =
-              limit.inMicroseconds * NoteWav.bytesPerSecond ~/ 1000000 ~/ 2 * 2;
-          _stopping = false;
-          _lastPacket = DateTime.now();
-          if (_android) {
-            await _channel.invokeMethod<void>('start', session);
-          } else {
-            if (!await _ensureRecorder().hasPermission()) {
-              throw StateError('麦克风权限未开启，请在系统设置允许录音');
-            }
-            _file = await File(path).open(mode: FileMode.write);
-            await _file!.writeFrom(NoteWav.header(0));
-            await _file!.flush();
-            // Windows 流模式让文件逐步落盘，而不依赖结束时编码封装。
-            final stream = await _ensureRecorder().startStream(
-              const RecordConfig(
-                encoder: AudioEncoder.pcm16bits,
-                sampleRate: NoteWav.sampleRate,
-                numChannels: 1,
-              ),
-            );
-            _audioSubscription = stream.listen(
-              _writeAudio,
-              onError: (Object error) =>
-                  unawaited(_serial(() => _stop('麦克风采集失败：$error'))),
-              onDone: () {
-                if (state.isActive && !_stopping) {
-                  unawaited(_serial(() => _stop('麦克风采集已中断')));
-                }
-              },
-            );
-            _publish(
-              NoteRecordingState(
-                phase: NoteRecordingPhase.recording,
-                noteId: noteId,
-                recordingId: id,
-                limit: limit,
-              ),
-            );
-            _watchdog?.cancel();
-            _watchdog = Timer.periodic(const Duration(seconds: 1), (_) {
-              if (state.phase == NoteRecordingPhase.recording &&
-                  !_stopping &&
-                  DateTime.now().difference(_lastPacket) >
-                      const Duration(seconds: 5)) {
-                _stopping = true;
-                unawaited(_serial(() => _stop('设备休眠或麦克风采集停滞，已保存可用原音')));
-              }
-            });
+        _watchdog?.cancel();
+        _watchdog = Timer.periodic(const Duration(seconds: 1), (_) {
+          if (state.phase == NoteRecordingPhase.recording &&
+              !_stopping &&
+              DateTime.now().difference(_lastPacket) >
+                  const Duration(seconds: 5)) {
+            _stopping = true;
+            unawaited(_serial(() => _stop('设备休眠或麦克风采集停滞，已保存可用原音')));
           }
-        } catch (error) {
-          // 启动失败也保留可能已有的原音供下次恢复。
-          if (_file != null) {
-            await _file!.close();
-            _file = null;
-          }
-          _publish(
-            NoteRecordingState(
-              phase: NoteRecordingPhase.failed,
-              error: '$error',
-            ),
-          );
-          rethrow;
-        }
-      });
+        });
+      }
+    } catch (error) {
+      // 启动失败也保留可能已有的原音供下次恢复。
+      if (_file != null) {
+        await _file!.close();
+        _file = null;
+      }
+      _publish(
+        NoteRecordingState(phase: NoteRecordingPhase.failed, error: '$error'),
+      );
+      rethrow;
+    }
+  });
 
   /// 暂停采集，原生及插件均停止增加采样字节。
   Future<void> pause() => _serial(() async {
@@ -423,6 +426,7 @@ class NoteRecorderService {
         NoteRecordingState(
           phase: phase,
           noteId: event['noteId'] as String?,
+          draftId: event['draftId'] as String?,
           recordingId: event['id'] as String?,
           duration: Duration(
             milliseconds: (event['durationMs'] as num?)?.toInt() ?? 0,
@@ -451,6 +455,7 @@ class NoteRecorderService {
     final result = NoteRecordingResult(
       id: id,
       noteId: value['noteId'] as String,
+      draftId: value['draftId'] as String?,
       path: value['path'] as String,
       duration: Duration(milliseconds: durationMs),
       startedAt: DateTime.parse(value['startedAt'] as String),
@@ -467,6 +472,7 @@ class NoteRecorderService {
   NoteRecordingState _snapshot(NoteRecordingPhase phase) => NoteRecordingState(
     phase: phase,
     noteId: _session?['noteId'] as String?,
+    draftId: _session?['draftId'] as String?,
     recordingId: _session?['id'] as String?,
     duration: Duration(
       microseconds: _audioBytes * 1000000 ~/ NoteWav.bytesPerSecond,
@@ -504,12 +510,20 @@ class NoteRecorderService {
         if (session['id'] == state.recordingId) continue;
         // 永久删除标记先于原件清理落盘，失败原件不能通过恢复复活。
         final String noteId = session['noteId'] as String;
-        final File marker = _deletionMarker(directory, noteId);
+        final String? draftId = session['draftId'] as String?;
+        // 草稿取消只保护对应代次，不禁止同篇笔记以后再次录音。
+        final String deletedOwner =
+            draftId != null &&
+                await _deletionMarker(directory, 'draft:$draftId').exists()
+            ? 'draft:$draftId'
+            : noteId;
+        // 正式删除和本机取消共用可靠的清单清理。
+        final File marker = _deletionMarker(directory, deletedOwner);
         if (await marker.exists()) {
           // 标记损坏时保守保留文件，但仍禁止恢复该笔记。
           final Set<String>? protected = await _readProtectedPaths(
             marker,
-            noteId,
+            deletedOwner,
           );
           if (protected != null) {
             await _discardManifest(entry, session, directory, protected);
@@ -528,6 +542,7 @@ class NoteRecorderService {
           NoteRecordingResult(
             id: session['id'] as String,
             noteId: session['noteId'] as String,
+            draftId: draftId,
             path: path,
             duration: duration,
             startedAt: DateTime.parse(session['startedAt'] as String),
@@ -553,6 +568,7 @@ class NoteRecorderService {
   Future<void> discardPendingForNote(
     String noteId, {
     Set<String> protectedPaths = const {},
+    String? draftId,
   }) => _serial(() async {
     if (noteId.trim().isEmpty) throw ArgumentError('笔记标识不能为空');
     // 当前数据源私有目录，不初始化任何音频设备或事件通道。
@@ -579,7 +595,11 @@ class NoteRecorderService {
         // 清单内容损坏或跨目录时不记录可删原件。
         final Map<String, dynamic> session =
             jsonDecode(await entry.readAsString()) as Map<String, dynamic>;
-        if (session['noteId'] != noteId) continue;
+        if (draftId == null
+            ? session['noteId'] != noteId
+            : session['draftId'] != draftId) {
+          continue;
+        }
         // 只有当前source同目录的绝对路径才进入删除标记。
         final String? path = _ownedAudioPath(directory, session['path']);
         if (path == null) continue;
@@ -620,6 +640,16 @@ class NoteRecorderService {
     }
     if (failure != null) throw failure;
   });
+
+  /// 取消草稿只清理该代次的清单，不能写整篇笔记的永久删除事实。
+  Future<void> discardPendingForDraft(
+    String draftId, {
+    Set<String> protectedPaths = const {},
+  }) => discardPendingForNote(
+    'draft:$draftId',
+    draftId: draftId,
+    protectedPaths: protectedPaths,
+  );
 
   /// 完成流与恢复流共用永久删除门禁，只访问当前数据源磁盘标记。
   Future<bool> isPermanentlyDiscarded(String noteId) async {

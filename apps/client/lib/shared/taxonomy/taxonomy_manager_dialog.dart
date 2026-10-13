@@ -122,7 +122,7 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
         TaxonomyKind.location => '物品位置',
       },
       TaxonomyModule.membership => '会员分类',
-      TaxonomyModule.notes => widget.kind == TaxonomyKind.tag ? '笔记标签' : '笔记类别',
+      TaxonomyModule.notes => '笔记标签',
     };
   }
 

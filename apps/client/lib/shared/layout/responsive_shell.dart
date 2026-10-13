@@ -15,6 +15,7 @@ import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
+import 'package:omni_butler/features/notes/presentation/note_search_focus.dart';
 import 'package:omni_butler/shared/search/global_search_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:powersync/powersync.dart' show SyncStatus;
@@ -302,7 +303,12 @@ class ResponsiveShell extends ConsumerWidget {
           ),
           _SearchIntent: CallbackAction<_SearchIntent>(
             onInvoke: (_SearchIntent intent) {
-              _showSearch(context);
+              if (Theme.of(context).platform == TargetPlatform.windows &&
+                  location == '/notes') {
+                ref.read(noteSearchFocusProvider).requestFocus();
+              } else {
+                _showSearch(context);
+              }
               return null;
             },
           ),
@@ -319,6 +325,10 @@ class ResponsiveShell extends ConsumerWidget {
               final bool isDesktopPlatform = OmniBreakpoint.isDesktopPlatform(
                 Theme.of(context).platform,
               );
+              // Windows 笔记自行提供侧栏与顶栏，外层只保留图标轨。
+              final bool windowsNotes =
+                  Theme.of(context).platform == TargetPlatform.windows &&
+                  location == '/notes';
               // 当前是否为展开布局。
               final bool isExpanded = OmniBreakpoint.isExpanded(
                 constraints.maxWidth,
@@ -348,7 +358,7 @@ class ResponsiveShell extends ConsumerWidget {
                 backgroundColor: colors.canvas,
                 body: Row(
                   children: <Widget>[
-                    if (isExpanded)
+                    if (isExpanded && !windowsNotes)
                       _ExpandedSidebar(
                         location: location,
                         destinations: desktopDestinations,
@@ -379,7 +389,7 @@ class ResponsiveShell extends ConsumerWidget {
                     Expanded(
                       child: Column(
                         children: <Widget>[
-                          const _TopBar(),
+                          if (!windowsNotes) const _TopBar(),
                           Expanded(child: child),
                         ],
                       ),

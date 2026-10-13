@@ -223,7 +223,7 @@ class SyncConnectionCoordinator {
               'syncKey': syncKey,
               'migrationId': id,
               'expectedOwnerId': preview.ownerId,
-              'snapshotVersion': SyncSnapshot.version,
+              'snapshotVersion': SyncSnapshot.migrationProtocolVersion,
               'operations': snapshot.operations,
               'omittedAudioIds': omittedAudioIds,
             }),
@@ -236,12 +236,16 @@ class SyncConnectionCoordinator {
       }
       // 原音文件体的预算覆盖独立备份与新库副本，不包含任何识别密钥。
       final int audioBytes =
-          (snapshot.tables['note_audio_segments'] ?? <Map<String, Object?>>[])
-              .fold(
-                0,
-                (int total, Map<String, Object?> row) =>
-                    total + ((row['byte_size'] as num?)?.toInt() ?? 0),
-              );
+          [
+            ...snapshot.tables['note_audio_segments'] ??
+                <Map<String, Object?>>[],
+            ...snapshot.tables['note_draft_audio_segments'] ??
+                <Map<String, Object?>>[],
+          ].fold(
+            0,
+            (int total, Map<String, Object?> row) =>
+                total + ((row['byte_size'] as num?)?.toInt() ?? 0),
+          );
       // 快照文件也保留原始本机字段，不保存密钥。
       List<int> snapshotBytes = utf8.encode(jsonEncode(snapshot.toJson()));
       // 为快照、候选数据和 SQLite 日志留出额外空间；实际写入仍须成功。

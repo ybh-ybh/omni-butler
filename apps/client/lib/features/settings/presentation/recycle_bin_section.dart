@@ -9,8 +9,11 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 分业务显示的回收站，集中管理异步操作与错误状态。
 class RecycleBinSection extends ConsumerStatefulWidget {
+  /// 当前页面能展示和清空的业务范围。
+  final RecycleBinScope scope;
+
   /// 创建回收站内容。
-  const RecycleBinSection({super.key});
+  const RecycleBinSection({this.scope = RecycleBinScope.general, super.key});
 
   /// 创建回收站交互状态。
   @override
@@ -33,7 +36,9 @@ class _RecycleBinSectionState extends ConsumerState<RecycleBinSection> {
   Widget build(BuildContext context) {
     // 当前回收站查询状态。
     final AsyncValue<List<RecycleBinItem>> items = ref.watch(
-      recycleBinItemsProvider,
+      widget.scope == RecycleBinScope.notes
+          ? noteRecycleBinItemsProvider
+          : recycleBinItemsProvider,
     );
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
@@ -130,7 +135,9 @@ class _RecycleBinSectionState extends ConsumerState<RecycleBinSection> {
                 trailing: OmniButton(
                   label: '重试',
                   variant: OmniButtonVariant.text,
-                  onPressed: () => ref.invalidate(recycleBinItemsProvider),
+                  onPressed: () => widget.scope == RecycleBinScope.notes
+                      ? ref.invalidate(noteRecycleBinItemsProvider)
+                      : ref.invalidate(recycleBinItemsProvider),
                 ),
               ),
             ],
@@ -242,21 +249,25 @@ class _RecycleBinSectionState extends ConsumerState<RecycleBinSection> {
   Future<void> _delete(RecycleBinItem item) => _run(
     operation: 'delete-${item.type.name}-${item.id}',
     confirmationTitle: '永久删除？',
-    confirmationMessage: '“${item.title}”及其从属记录删除后无法恢复。',
+    confirmationMessage: item.type == RecycleEntityType.note
+        ? '“${item.title}”及其原音、版本和未完成草稿删除后无法恢复。'
+        : '“${item.title}”及其从属记录删除后无法恢复。',
     confirmLabel: '永久删除',
     execute: () =>
         ref.read(recycleBinRepositoryProvider).permanentlyDelete(item),
     success: '“${item.title}”已永久删除',
   );
 
-  /// 全局清空仅在用户确认后重新读取并删除全部软删除数据。
+  /// 清空只重新读取并删除当前回收站范围内的软删除数据。
   Future<void> _empty() => _run(
     operation: 'empty',
     confirmationTitle: '清空回收站？',
-    confirmationMessage: '将永久删除回收站中所有业务数据及其从属记录，删除后无法恢复。',
+    confirmationMessage: widget.scope == RecycleBinScope.notes
+        ? '将永久删除笔记回收站中的全部笔记、原音、版本和未完成草稿，删除后无法恢复。'
+        : '将永久删除当前回收站中的全部记录及其从属数据，删除后无法恢复。',
     confirmLabel: '清空回收站',
     execute: () async {
-      await ref.read(recycleBinRepositoryProvider).empty();
+      await ref.read(recycleBinRepositoryProvider).empty(scope: widget.scope);
     },
     success: '回收站已清空',
   );

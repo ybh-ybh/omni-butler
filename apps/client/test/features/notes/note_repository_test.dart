@@ -88,23 +88,9 @@ void main() {
         mime: 'audio/wav',
       );
 
-  test('首次创建时刻时区不可变，修改正文日期类别不重写原始创建信息', () async {
+  test('首次创建时刻时区不可变，修改正文日期不重写原始创建信息', () async {
     // 从其他时区恢复的真实开始时刻。
     final DateTime started = DateTime.utc(2026, 10, 10, 23, 59);
-    // 有效类别用于排除失效分类被忽略的干扰。
-    await database
-        .into(database.taxonomyEntries)
-        .insert(
-          TaxonomyEntriesCompanion.insert(
-            id: 'category',
-            module: 'notes',
-            kind: 'category',
-            name: '日常',
-            colorValue: 0,
-            createdAt: started,
-            updatedAt: started,
-          ),
-        );
     final NoteEntryRecord created = (await repository.save(
       NoteDraft(
         id: 'created',
@@ -123,13 +109,11 @@ void main() {
         body: '改过的正文',
         dayKey: '2026-10-01',
         baseRevision: created.revision,
-        categoryId: 'category',
         createdAt: DateTime.utc(2026, 10, 12),
         creationTimezone: 'UTC|+00:00',
       ),
     ))!;
     expect(edited.dayKey, '2026-10-01');
-    expect(edited.categoryId, 'category');
     expect(edited.createdAt.toUtc(), started);
     expect(edited.creationTimezone, 'JST|+09:00');
     // 原音段记录实际开始而非回调完成时刻。
@@ -216,7 +200,6 @@ void main() {
           body: ' \n ',
           dayKey: '2026-10-09',
           baseRevision: '',
-          categoryId: 'category',
           tags: {'tag'},
         ),
       ),

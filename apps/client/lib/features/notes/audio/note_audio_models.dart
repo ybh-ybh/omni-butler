@@ -7,6 +7,7 @@ class NoteRecordingResult {
   const NoteRecordingResult({
     required this.id,
     required this.noteId,
+    this.draftId,
     required this.path,
     required this.duration,
     required this.startedAt,
@@ -20,6 +21,9 @@ class NoteRecordingResult {
 
   /// 录音开始时绑定的笔记，浏览其他页不会更换。
   final String noteId;
+
+  /// Windows 未发布录音所属的草稿代次；Android 和旧清单为空。
+  final String? draftId;
 
   /// 私有目录中可播放的绝对路径。
   final String path;
@@ -46,6 +50,7 @@ class NoteRecordingState {
   const NoteRecordingState({
     this.phase = NoteRecordingPhase.idle,
     this.noteId,
+    this.draftId,
     this.recordingId,
     this.duration = Duration.zero,
     this.limit = Duration.zero,
@@ -57,6 +62,9 @@ class NoteRecordingState {
 
   /// 当前绑定的笔记。
   final String? noteId;
+
+  /// 当前未发布录音的独立草稿代次。
+  final String? draftId;
 
   /// 当前绑定的片段。
   final String? recordingId;

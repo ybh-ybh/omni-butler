@@ -50,6 +50,18 @@ class RecycleBinItem {
   });
 }
 
+/// 回收站查询和清空范围，过期清理始终使用全部模块。
+enum RecycleBinScope {
+  /// 全部模块，用于基础设施和兼容调用。
+  all,
+
+  /// 设置中的通用回收站，不包含笔记。
+  general,
+
+  /// 笔记专属回收站。
+  notes,
+}
+
 /// 跨模块统一回收站仓储。
 class RecycleBinRepository {
   /// 本地数据库。
@@ -69,10 +81,14 @@ class RecycleBinRepository {
   });
 
   /// 读取全部顶层软删除记录。
-  Future<List<RecycleBinItem>> loadItems() => _loadItems(grouped: true);
+  Future<List<RecycleBinItem>> loadItems({
+    RecycleBinScope scope = RecycleBinScope.all,
+  }) => _loadItems(grouped: true, scope: scope);
 
   /// 监听各业务表，事务读取保证分组来自同一数据库快照。
-  Stream<List<RecycleBinItem>> watchItems() {
+  Stream<List<RecycleBinItem>> watchItems({
+    RecycleBinScope scope = RecycleBinScope.all,
+  }) {
     return _database
         .customSelect(
           'SELECT COUNT(*) FROM todo_items UNION ALL '
@@ -93,11 +109,14 @@ class RecycleBinRepository {
           },
         )
         .watch()
-        .asyncMap((_) => _database.transaction(loadItems));
+        .asyncMap((_) => _database.transaction(() => loadItems(scope: scope)));
   }
 
   /// 按展示或清理用途读取软删除记录；清理不隐藏任何子项。
-  Future<List<RecycleBinItem>> _loadItems({required bool grouped}) async {
+  Future<List<RecycleBinItem>> _loadItems({
+    required bool grouped,
+    RecycleBinScope scope = RecycleBinScope.all,
+  }) async {
     // 合并后的回收站记录。
     final List<RecycleBinItem> items = <RecycleBinItem>[];
     // 已删除待办。
@@ -231,7 +250,15 @@ class RecycleBinRepository {
       (RecycleBinItem left, RecycleBinItem right) =>
           right.deletedAt.compareTo(left.deletedAt),
     );
-    return items;
+    return items
+        .where(
+          (RecycleBinItem item) =>
+              scope == RecycleBinScope.all ||
+              (scope == RecycleBinScope.notes
+                  ? item.type == RecycleEntityType.note
+                  : item.type != RecycleEntityType.note),
+        )
+        .toList(growable: false);
   }
 
   /// 恢复一条顶层业务记录。
@@ -410,7 +437,8 @@ class RecycleBinRepository {
   }
 
   /// 原子清空回收站，不依赖界面是否展示了从属记录。
-  Future<int> empty() => _deleteBatch();
+  Future<int> empty({RecycleBinScope scope = RecycleBinScope.all}) =>
+      _deleteBatch(scope: scope);
 
   /// 解除仍有效子项的父关联，避免父项级联删除活动或尚未过期的数据。
   Future<void> _preserveChildren(
@@ -461,12 +489,18 @@ class RecycleBinRepository {
   }
 
   /// 在一个事务中读取并复核全部候选记录，失败时整体回滚。
-  Future<int> _deleteBatch({DateTime? cutoff}) async {
+  Future<int> _deleteBatch({
+    DateTime? cutoff,
+    RecycleBinScope scope = RecycleBinScope.all,
+  }) async {
     // 文件清理只能在整个批量事务提交后执行。
     final List<String> deletedNotes = [];
     final int result = await _database.transaction(() async {
       // 当前数据库中全部已删除业务记录。
-      final List<RecycleBinItem> items = await _loadItems(grouped: false);
+      final List<RecycleBinItem> items = await _loadItems(
+        grouped: false,
+        scope: scope,
+      );
       // 实际处理的业务记录数，已由父项级联删除的子项不重复计数。
       int count = 0;
       for (final RecycleBinItem item in items) {

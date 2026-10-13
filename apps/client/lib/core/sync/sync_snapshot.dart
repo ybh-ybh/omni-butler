@@ -3,7 +3,10 @@ import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 /// 不携带同步检查点、客户端身份或设备密钥的完整业务快照。
 class SyncSnapshot {
   /// 当前快照持久化格式版本。
-  static const int version = 3;
+  static const int version = 4;
+
+  /// 服务端换服协议独立于本机备份格式，草稿不进入请求。
+  static const int migrationProtocolVersion = 3;
 
   /// 包含所有业务表及本机附件、横幅设置的原始 SQLite 行。
   final Map<String, List<Map<String, Object?>>> tables;
@@ -17,6 +20,7 @@ class SyncSnapshot {
   /// 从迁移控制文件恢复快照，拒绝不支持的格式和未知表。
   factory SyncSnapshot.fromJson(Map<String, dynamic> json) {
     if (json['version'] != version &&
+        json['version'] != 3 &&
         json['version'] != 2 &&
         json['version'] != 1) {
       throw const FormatException('不支持的迁移快照版本');
@@ -53,10 +57,29 @@ class SyncSnapshot {
         encoded.putIfAbsent(table, () => <dynamic>[]);
       }
     }
+    if (json['version'] != version) {
+      encoded.putIfAbsent('note_local_drafts', () => <dynamic>[]);
+      encoded.putIfAbsent('note_draft_audio_segments', () => <dynamic>[]);
+    }
     if (encoded.keys.any((String table) => !tableNames.contains(table)) ||
         tableNames.any((String table) => !encoded.containsKey(table))) {
       throw const FormatException('迁移快照业务表不完整');
     }
+    // 只在内存副本移除退休类别，不修改历史备份文件及其摘要。
+    final Set<Object?> retiredIds = (encoded['taxonomy_entries'] as List)
+        .where(
+          (dynamic row) =>
+              row['module'] == 'notes' && row['kind'] == 'category',
+        )
+        .map((dynamic row) => row['id'])
+        .toSet();
+    encoded['taxonomy_entries'] = (encoded['taxonomy_entries'] as List)
+        .where((dynamic row) => !retiredIds.contains(row['id']))
+        .toList();
+    encoded['record_taxonomy_links'] =
+        (encoded['record_taxonomy_links'] as List)
+            .where((dynamic row) => !retiredIds.contains(row['taxonomy_id']))
+            .toList();
     return SyncSnapshot(
       tables: <String, List<Map<String, Object?>>>{
         for (final String table in tableNames)
@@ -68,6 +91,8 @@ class SyncSnapshot {
                 );
                 if (table == 'events') restored.remove('description');
                 if (table == 'note_entries') {
+                  restored.remove('category_id');
+                  restored.remove('category_name');
                   restored.putIfAbsent(
                     'creation_timezone',
                     () => 'legacy:unknown',
@@ -87,6 +112,8 @@ class SyncSnapshot {
     'banner_settings',
     'attachments',
     'note_audio_local_files',
+    'note_local_drafts',
+    'note_draft_audio_segments',
   ];
 
   /// 按同步白名单生成服务器可接受的完整 PUT 列表。

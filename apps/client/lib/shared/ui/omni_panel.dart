@@ -64,6 +64,9 @@ class OmniPanel extends StatelessWidget {
   /// 是否使用没有边框、圆角及独立底色的平铺外观。
   final bool flat;
 
+  /// 是否绘制面板描边；关闭时仍保留原有底色与圆角。
+  final bool showBorder;
+
   /// 创建统一内容面板。
   const OmniPanel({
     required this.child,
@@ -73,6 +76,7 @@ class OmniPanel extends StatelessWidget {
     this.onTap,
     this.clipBehavior = Clip.antiAlias,
     this.flat = false,
+    this.showBorder = true,
     super.key,
   });
 
@@ -164,7 +168,9 @@ class OmniPanel extends StatelessWidget {
           ? null
           : RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(OmniRadius.panel),
-              side: BorderSide(color: colors.line),
+              side: showBorder
+                  ? BorderSide(color: colors.line)
+                  : BorderSide.none,
             ),
       child: InkWell(
         onTap: onTap,

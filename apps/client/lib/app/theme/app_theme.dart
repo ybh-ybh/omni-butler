@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_chrome_colors.dart';
 import 'package:omni_butler/app/theme/app_theme_palette.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/app/theme/omni_icon_button_shape.dart';
 
 /// 安卓条目按下反馈共用的中性灰，独立于业务和品牌色。
 abstract final class OmniPressColors {
@@ -501,11 +502,36 @@ abstract final class AppTheme {
       iconButtonTheme: IconButtonThemeData(
         style: ButtonStyle(
           visualDensity: VisualDensity.standard,
-          minimumSize: WidgetStatePropertyAll<Size>(Size.square(controlHeight)),
+          minimumSize: WidgetStatePropertyAll<Size>(
+            Size.square(
+              defaultTargetPlatform == TargetPlatform.windows
+                  ? OmniSize.iconButton
+                  : controlHeight,
+            ),
+          ),
+          maximumSize: defaultTargetPlatform == TargetPlatform.windows
+              ? const WidgetStatePropertyAll<Size>(
+                  Size.square(OmniSize.iconButton),
+                )
+              : null,
+          fixedSize: defaultTargetPlatform == TargetPlatform.windows
+              ? const WidgetStatePropertyAll<Size>(
+                  Size.square(OmniSize.iconButton),
+                )
+              : null,
+          padding: defaultTargetPlatform == TargetPlatform.windows
+              ? const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+                  EdgeInsets.zero,
+                )
+              : null,
           iconSize: const WidgetStatePropertyAll<double>(OmniSize.icon),
           foregroundColor: WidgetStateProperty.resolveWith<Color?>(
             (Set<WidgetState> states) => states.contains(WidgetState.disabled)
                 ? colors.muted.withValues(alpha: 0.45)
+                : defaultTargetPlatform == TargetPlatform.windows &&
+                      (states.contains(WidgetState.hovered) ||
+                          states.contains(WidgetState.focused))
+                ? colors.ink
                 : colors.muted,
           ),
           backgroundColor: WidgetStateProperty.resolveWith<Color?>((
@@ -519,7 +545,11 @@ abstract final class AppTheme {
             }
             return Colors.transparent;
           }),
-          shape: WidgetStatePropertyAll<OutlinedBorder>(controlShape),
+          shape: WidgetStatePropertyAll<OutlinedBorder>(
+            defaultTargetPlatform == TargetPlatform.windows
+                ? const OmniIconButtonShape()
+                : controlShape,
+          ),
         ),
       ),
       checkboxTheme: CheckboxThemeData(

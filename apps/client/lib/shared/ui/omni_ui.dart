@@ -4,6 +4,7 @@ export 'omni_dropdown.dart';
 export 'omni_expandable_bottom_sheet.dart';
 export 'omni_fullscreen_form.dart';
 export 'omni_icon_button.dart';
+export 'omni_hover_reveal.dart';
 export 'omni_input.dart';
 export 'omni_message.dart';
 export 'omni_overlay.dart';

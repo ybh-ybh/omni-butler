@@ -21,6 +21,9 @@ add_executable(${BINARY_NAME} WIN32
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
 
+# 并行编译通过 MSVC 服务串行写入调试数据库，避免 C1041 文件锁冲突。
+target_compile_options(${BINARY_NAME} PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/FS>")
+
 # Add preprocessor definitions for the build version.
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MAJOR=${FLUTTER_VERSION_MAJOR}")

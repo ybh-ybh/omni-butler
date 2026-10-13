@@ -25,6 +25,7 @@ class _FailingDiscard implements NoteRecorderService {
   @override
   Future<void> discardPendingForNote(
     String noteId, {
+    String? draftId,
     Set<String> protectedPaths = const {},
   }) async => throw const FileSystemException('模拟磁盘写标记失败');
 

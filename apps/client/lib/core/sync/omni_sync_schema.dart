@@ -212,8 +212,6 @@ final Schema omniSyncSchema = Schema(
         'body',
         'day_key',
         'creation_timezone',
-        'category_id',
-        'category_name',
         'tags',
         'revision',
         'created_at',

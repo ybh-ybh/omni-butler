@@ -222,7 +222,6 @@ class GlobalSearchRepository {
     for (final NoteEntryRecord record in notes) {
       if (_matches(keyword, <String?>[
         record.body,
-        names[record.categoryId] ?? record.categoryName,
         ..._tagNames(record.tags, names),
         ...audio
             .where(
@@ -237,7 +236,7 @@ class GlobalSearchRepository {
             title: record.body.trim().isEmpty
                 ? '语音笔记'
                 : record.body.trim().split('\n').first,
-            subtitle: '${record.dayKey} · ${record.categoryName ?? '未分类'}',
+            subtitle: record.dayKey,
             route: '/notes?id=${Uri.encodeQueryComponent(record.id)}',
           ),
         );

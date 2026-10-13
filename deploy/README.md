@@ -45,6 +45,12 @@ POWERSYNC_PUBLIC_URL=http://192.168.1.10:9080
 
 如果之前在终端设置过同名端口变量，请清除它们或打开一个未设置这些变量的新终端；终端环境变量的优先级高于 `.env`。
 
+## 笔记类别退休与Windows草稿升级
+
+2026-10-12 起同步结构为4，笔记不再含类别。部署前备份PostgreSQL、MinIO原音/凭证卷以及客户端本机数据和草稿原音。先部署 `20261012000000_remove_note_categories`、对应API与 `powersync/sync-config.yaml`，确认迁移和同步可用后再升级Windows/Android客户端；不要删除数据库或PowerSync卷。迁移仅退休notes/category及其关联和note_entries的类别列，其他模块类别保持完整。
+
+旧待上传请求保留原事务身份与原始负载摘要，服务端只在执行副本适配退休类别，避免响应丢失后的重试冲突；新版不得重新创建笔记类别。客户端SQLite19新增草稿本机表，本机备份格式4与服务器迁移协议3分离，草稿和原音不上传服务器迁移暂存；采用服务器数据换服时旧草稿留在旧数据源和备份。本轮只验证隔离数据库，不操作正式部署。
+
 ## 删除事件说明的升级
 
 2026-10-11 起事件仅保留 `notes`（备注），删除 `events.description`（事件说明）及其旧内容。先更新服务端代码和 PowerSync 查询配置，在部署目录执行 `docker compose up -d --build --wait`，应用 `20261011000000_remove_event_description` 增量迁移；再升级所有客户端。本地 SQLite 会自动升级至 v16，保留备注、事件主体及完成历史。新客户端会过滤旧上传队列及旧迁移快照中的事件说明，避免访问已删除列。不要删除数据库或 Docker 卷。
@@ -309,11 +315,11 @@ docker compose stop
 
 ## 数据与备份
 
-笔记正文和原音元数据要求客户端、服务器同步结构 v3 一起升级。服务商密钥只配置在部署 `.env`：设置 `NOTE_ASR_PROVIDER=tencent`、`TENCENT_ASR_SECRET_ID`、`TENCENT_ASR_SECRET_KEY`；普通文本和本地录音不需要这些密钥。腾讯 API 3.0 不使用 APP_ID 参与签名。云端识别在用户授权后才提交。
+笔记正文和原音元数据要求客户端、服务器同步结构 v4 配套升级（类别退休，服务器迁移协议仍为3）。服务商密钥只配置在部署 `.env`：设置 `NOTE_ASR_PROVIDER=tencent`、`TENCENT_ASR_SECRET_ID`、`TENCENT_ASR_SECRET_KEY`；普通文本和本地录音不需要这些密钥。腾讯 API 3.0 不使用 APP_ID 参与签名。云端识别在用户授权后才提交。
 
 长录音识别使用 `PUBLIC_BASE_URL=https://自己的域名` 推导的 API 地址，或高级覆盖 `NOTE_ASR_PUBLIC_URL=https://自己的域名/omni-butler/api/v1`，该 HTTPS 地址必须能被腾讯访问。服务器签发绑定任务的短期私有原音链接；腾讯本地文件方式上限为 5MB，超过该大小且未配置公网地址时会明确提示。Nginx 的 API `location` 需设置 `client_max_body_size 128m;` 和 `proxy_read_timeout 120s;`，允许完整原音与迁移暂存上传。
 
-笔记新增原音及迁移暂存音频统一进入 MinIO 私有桶 `omni-butler-note-audio`，不再使用服务器音频目录或 `note-audio-data` 挂载。存储失败保留重试和清理回执，不回退写磁盘。客户端继续保留本机录音及缓存，支持离线使用。完整迁移先以部署同步密钥暂存原音，快照 v3 在同一事务验证并接管完整资产；只有用户明确确认缺失文件后才能使用省略清单。回收站保留 30 天，永久删除经持久文件清理队列执行。参见[原音接口与识别说明](../apps/server/src/notes/README.md)。
+笔记新增原音及迁移暂存音频统一进入 MinIO 私有桶 `omni-butler-note-audio`，不再使用服务器音频目录或 `note-audio-data` 挂载。存储失败保留重试和清理回执，不回退写磁盘。客户端继续保留本机录音及缓存，支持离线使用。完整迁移先以部署同步密钥暂存原音，服务器迁移协议 v3 在同一事务验证并接管正式原音资产；只有用户明确确认缺失文件后才能使用省略清单。回收站保留 30 天，永久删除经持久文件清理队列执行。参见[原音接口与识别说明](../apps/server/src/notes/README.md)。
 
 本次升级针对尚未部署笔记功能的服务器，无历史服务器原音迁移。若其他部署已使用磁盘原音，必须先制定并验证迁移方案，不能直接移除旧文件。
 

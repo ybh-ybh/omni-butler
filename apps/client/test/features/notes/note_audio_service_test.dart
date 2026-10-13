@@ -245,6 +245,26 @@ void main() {
     expect(await directory.list().isEmpty, isTrue);
   });
 
+  test('Windows草稿代次写入真实清单并随完成恢复保留，取消不删除整篇身份', () async {
+    await service.start('same-note', draftId: 'draft-one');
+    expect(service.state.draftId, 'draft-one');
+    device.samples.add(Uint8List(NoteWav.bytesPerSecond));
+    await service.states.firstWhere(
+      (state) => state.duration == const Duration(seconds: 1),
+    );
+    // 完成结果和恢复清单都必须携带同一代次。
+    final NoteRecordingResult result = (await service.stop())!;
+    expect(result.draftId, 'draft-one');
+    expect((await service.recoverPending()).single.draftId, 'draft-one');
+    await service.discardPendingForDraft('draft-one');
+    expect(await File(result.path).exists(), isFalse);
+    expect(await service.isPermanentlyDiscarded('same-note'), isFalse);
+    expect(await service.recoverPending(), isEmpty);
+    await service.start('same-note', draftId: 'draft-two');
+    expect(service.state.draftId, 'draft-two');
+    expect(service.state.noteId, 'same-note');
+  });
+
   test('同一设备的活动录音不能改挂另一篇笔记', () async {
     await service.start('original');
     await expectLater(service.start('different'), throwsStateError);

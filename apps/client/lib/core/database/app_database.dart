@@ -703,6 +703,8 @@ class MembershipPayments extends Table {
     NoteVersions,
     NoteAudioSegments,
     NoteAudioLocalFiles,
+    NoteLocalDrafts,
+    NoteDraftAudioSegments,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -739,7 +741,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 18;
+  int get schemaVersion => 19;
 
   /// 创建数据库并从旧版本安全升级。
   @override
@@ -945,6 +947,20 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
             noteAudioLocalFiles.candidateTranscript,
           );
         }
+      }
+      if (from < 19) {
+        // 新定义重建笔记，仅移除退休类别列，保留正文、标签、版本和原音。
+        if (from >= 17) await migrator.alterTable(TableMigration(noteEntries));
+        // 类别删除只作用于笔记模块；先清关联，避免遗留无效引用。
+        await customStatement(
+          "DELETE FROM record_taxonomy_links WHERE taxonomy_id IN (SELECT id FROM taxonomy_entries WHERE module = 'notes' AND kind = 'category')",
+        );
+        await customStatement(
+          "DELETE FROM taxonomy_entries WHERE module = 'notes' AND kind = 'category'",
+        );
+        await migrator.createTable(noteLocalDrafts);
+        await migrator.createTable(noteDraftAudioSegments);
+        await _createNoteIndexes();
       }
     },
   );

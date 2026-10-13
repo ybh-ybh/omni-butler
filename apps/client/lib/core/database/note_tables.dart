@@ -12,12 +12,6 @@ class NoteEntries extends Table {
   /// 不随时区漂移的归档自然日。
   TextColumn get dayKey => text()();
 
-  /// 可选自定义类别身份。
-  TextColumn get categoryId => text().nullable()();
-
-  /// 删除类别后仍保留的历史名称。
-  TextColumn get categoryName => text().nullable()();
-
   /// 多标签身份的 JSON 数组。
   TextColumn get tags => text().withDefault(const Constant('[]'))();
 
@@ -142,6 +136,98 @@ class NoteAudioLocalFiles extends Table {
 
   /// 重新转写的本机候选，不覆盖共享原始转写。
   TextColumn get candidateTranscript => text().nullable()();
+
+  /// 主键。
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+/// 仅本机的未发布输入；独立身份隔离取消前后的录音代次。
+@DataClassName('NoteLocalDraftRecord')
+class NoteLocalDrafts extends Table {
+  /// 草稿代次身份。
+  TextColumn get id => text()();
+
+  /// 最终笔记身份。
+  TextColumn get noteId => text()();
+
+  /// 未提交正文。
+  TextColumn get body => text().withDefault(const Constant(''))();
+
+  /// 归档自然日。
+  TextColumn get dayKey => text()();
+
+  /// 编辑起点版本。
+  TextColumn get baseRevision => text()();
+
+  /// 当前标签身份数组。
+  TextColumn get tags => text().withDefault(const Constant('[]'))();
+
+  /// 打开时标签身份数组，用于合并远端整理变化。
+  TextColumn get originalTags => text().nullable()();
+
+  /// 首次有效输入或录音时刻。
+  DateTimeColumn get createdAt => dateTime().nullable()();
+
+  /// 创建时设备时区。
+  TextColumn get creationTimezone => text().nullable()();
+
+  /// 是否明确修改归档日。
+  BoolColumn get dateEdited => boolean().withDefault(const Constant(false))();
+
+  /// 是否尚未发布为正式笔记。
+  BoolColumn get isNew => boolean().withDefault(const Constant(true))();
+
+  /// 取消后的持久标记，防止迟到原音复活草稿。
+  BoolColumn get discarded => boolean().withDefault(const Constant(false))();
+
+  /// 等待正式提交的转写插入标记。
+  TextColumn get pendingInsertions =>
+      text().withDefault(const Constant('{}'))();
+
+  /// 最近暂存时刻。
+  DateTimeColumn get updatedAt => dateTime()();
+
+  /// 主键。
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+/// 草稿新增原音，发布前不进入正式音频传输和同步。
+@DataClassName('NoteDraftAudioSegmentRecord')
+class NoteDraftAudioSegments extends Table {
+  /// 稳定片段身份。
+  TextColumn get id => text()();
+
+  /// 录音所属草稿代次。
+  TextColumn get draftId => text()();
+
+  /// 最终笔记身份。
+  TextColumn get noteId => text()();
+
+  /// 本机原音路径。
+  TextColumn get localPath => text().nullable()();
+
+  /// 有效采样时长。
+  IntColumn get durationMs => integer()();
+
+  /// 原音类型。
+  TextColumn get mime => text()();
+
+  /// 文件完整性摘要。
+  TextColumn get sha256 => text()();
+
+  /// 文件字节长度。
+  IntColumn get byteSize => integer()();
+
+  /// 开始采集时刻。
+  DateTimeColumn get startedAt => dateTime()();
+
+  /// 发布后是否允许转写。
+  BoolColumn get consent => boolean().withDefault(const Constant(false))();
+
+  /// 同篇录音顺序。
+  IntColumn get sortOrder => integer()();
 
   /// 主键。
   @override
