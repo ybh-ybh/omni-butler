@@ -1,8 +1,12 @@
 # Windows 笔记重构交付与验证
 
-更新：2026-10-13。需求以 [笔记 PRD v2.8](../../../spec/笔记功能PRD.md) 为准，本轮没有部署正式服务、操作真实用户数据库或启动新的付费转写。
+更新：2026-10-14。需求以 [笔记 PRD v2.9](../../../spec/笔记功能PRD.md) 为准，本轮没有部署正式服务、操作真实用户数据库或启动新的付费转写。
 
 ## 实现
+
+v2.9 Windows输入框去掉管理标签按钮，侧栏原排序入口改为管理标签，沿用现有新增／改名／删除／拖动排序管理器。输入标签使用与物品筛选一致的紧凑圆角、描边和无勾选外观，保留多选和笔记主题色。已选常驻；未选通过井号显示或隐藏，220ms高度、透明度与轻微缩放可反向打断；隐藏立即停用命中、焦点和读屏。当前草稿和正式关联继续使用原有保存协议，Android呈现不变。
+
+AXTree修复采用Windows提示锚点隔离与笔记动态区域固定父节点：`OmniWindowsSemanticsBoundary`覆盖共享图标／菜单和笔记输入按钮，热图提示也使用同一边界。保留读屏及提示，不禁用语义或吞日志。依据本机Flutter 3.47.2源码和原生验证；[上游同类问题](https://github.com/flutter/flutter/issues/182444)及[机制讨论](https://github.com/flutter/flutter/pull/190344)可供参考。本轮没有修改或升级Flutter SDK。
 
 v2.8正文超过两行时添加灰色展开／收起入口，悬停主题蓝字与手形指针、无背景；约220ms连续高度动画，所有笔记只有一个完整阅读展开身份，与双击编辑分离。编辑进入时收起其他正文，阅读另一篇时先暂存当前编辑。
 
@@ -10,7 +14,7 @@ v2.8正文超过两行时添加灰色展开／收起入口，悬停主题蓝字�
 
 笔记侧栏每个标签和回收站与“全部笔记”统一实际行高，默认视觉40dp、行间4dp；移除叠加在菜单36dp热区上的纵向留白，名称单行省略。窄窗、长名称、1.6倍字号及悬停／折叠状态保持一致行高，右侧菜单点击区沿用。
 
-收缩历史笔记取消边框描边，圆角、主题底色和内边距保持一致；只在此处使用OmniPanel.showBorder=false，其余面板默认外观和展开输入框边框沿用原逻辑。
+收缩历史笔记取消边框描边，圆角、主题底色和内边距保持一致；只在此处使用OmniPanel.showBorder=false，其余面板默认外观沿用原逻辑。历史笔记编辑时主题色边框常驻，点击搜索等区域失焦后也保持，直到取消或结束编辑。
 
 v2.7收缩卡片按音频参考截图补齐浅灰播放条：播放／暂停、细进度线、MM:SS时长及更多；约220ms向下展开灰色12dp原始转写，仅保留重新识别和下载。每张历史卡片读取自身有效原音，播放与原件SHA核查复用现有服务，重新识别沿用授权与未知回执保护；下载用现有file_picker保存校验后的WAV副本，取消不改动原件。创建时间改为灰色10dp，操作菜单灰色至主题正文色悬停；菜单、播放与文字操作显式手形指针，文字操作悬停浅灰圆角背景。Android保留完整音频管理布局，Windows历史编辑使用上述v2.8音频条。
 
@@ -18,7 +22,7 @@ v2.7收缩卡片按音频参考截图补齐浅灰播放条：播放／暂停、�
 
 Windows 页面采用统计／8–12周热图／标签／回收站侧栏、新建草稿与单列卡片，双击原地展开，搜索位于右上角。侧栏默认264dp，拖动范围220–340dp，对应8–12列；分隔线仅分隔热区悬停显示浅灰、按下立即显示主题色，上下各留24dp空白，闲置透明。全侧栏含底部空白悬停显示隐藏按钮，隐藏后主区标题左侧显示恢复入口，当前草稿、筛选和宽度保留。三项统计分别左／中／右对齐，月份使用完整中文，移除近13周说明。首行派生标题，摘要最多两行。Ctrl+F 从正文或导航轨都聚焦笔记搜索；普通编辑保留筛选，外部定位清除遮挡条件。可用宽度不足900dp使用抽屉，减少动画时跳过卡片动画。
 
-标签区域悬停显示排序、搜索和篇数，标题悬停强调并显示折叠箭头；标签搜索只筛选标签名称，关闭或Escape恢复全部。排序支持默认／名称／数量，保留持久化顺序。标签行悬停显示只有删除／改名的菜单，改名使用紧凑Omni弹窗，删除仅解除关联并移除失效筛选。热图提示恢复为`YYYY-MM-DD·N 篇笔记`。
+标签区域悬停显示管理、搜索和篇数，标题悬停强调并显示折叠箭头；标签搜索只筛选标签名称，关闭或Escape恢复全部。管理器提供新增、重命名、删除和持久化拖动排序，移除侧栏临时排序菜单。标签行悬停显示只有删除／改名的菜单，改名使用紧凑Omni弹窗，删除仅解除关联并移除失效筛选。热图提示恢复为`YYYY-MM-DD·N 篇笔记`。
 
 按补充视频统一悬停入口120ms原位淡入／淡出，保留占位与子树，中途反向连续，隐藏立即排除点击／焦点／语义；减少动画即时切换。Windows共享普通图标、Popup菜单及原生主题图标采用28dp圆角方形背景、36dp布局及热区、18dp字形、零内边距，灰色在图标自身悬停／焦点时转正文色，保留业务颜色及嵌入约束，Android仍48dp。标签标题无灰底，左边缘对齐回收站图标；列表220ms向下展开／向上收起、中途反向连续，减少动画即时切换，窄栏大字号工具换行保持四字标题完整；搜索为36dp高、12dp圆角浅灰填充且无焦点描边，两侧图标在输入框内；三个点字形、方形背景和行内容实际中心一致，选中标签使用浅主题底色。
 
@@ -27,6 +31,11 @@ Windows 文字与原音只写本机草稿，发布／保存才原子提升为正
 笔记类别只在notes模块退休。回收站查询／清空支持general、notes、all；到期清理覆盖all。SQLite19、同步schema4、本机快照4、服务器迁移协议3分别管理；旧队列身份及原始负载摘要不改，服务端执行副本兼容退休类别。草稿原音备份和换服复制使用独立校验文件，选择服务器数据不会混入旧源草稿。
 
 ## 验证
+
+- v2.9专项155项全部通过（70秒），包括新建草稿预选常驻、多选显隐、反向与减少动画、隐藏语义排除、显式发布关联、侧栏管理／查询／改名删除及共享控件回归。最终静态分析无问题，样式仍44项受控例外；日志`build/notes-tags-ax-regression.log`、`build/notes-tags-ax-analyze.log`、`build/notes-tags-ax-style.log`。
+- 原生Windows辅助功能桥已通过WM_GETOBJECT开启：相邻Tooltip负向对照20轮产生136条同类AXTree错误，使用边界后20轮0条；生产NotesPage多篇长文、标签与正文显隐、提示、编辑／取消、侧栏折叠、视口裁剪20轮0条。均有`PROBE_NATIVE_AX_ACTIVE:true`及`PROBE_COMPLETE`，同时检查stdout、stderr；不是仅以程序退出判断通过。日志`build/notes-ax-anchors-before.*.log`、`notes-ax-anchors-after.*.log`、`notes-ax-notes-after.*.log`。全部数据为进程内存与私有mock偏好，不读用户笔记，不启用设备或识别。
+- 全客户端1022项通过、5项外部跳过、6项失败（132秒）。未修改HEAD `dc47339`在隔离目录复现相同6项：4项待办固定提醒时间在2026-10-14已过期，物品／会员2项旧Golden失败均为相同按钮边缘641px差异。本轮未更新无关截图或待办逻辑；日志`build/notes-tags-ax-all-client.log`与`build/notes-tags-ax-head-baseline.log`。
+- 最终生产入口Debug通过（44.7秒），Release通过（61.0秒），恢复为`lib/main.dart`；两个常规构建均不含探针入口。日志`build/notes-tags-ax-debug.log`与`build/notes-tags-ax-release.log`，产物仍在`build/windows/x64/runner/Debug`和`Release`。没有关闭用户客户端或操作真实数据库。
 
 - 发布／麦克风图标微调：字形24dp→20dp，按钮仍48×30dp；输入四态生产回归1项、静态分析通过，最新Windows Release成功（56.9秒）。日志`build/notes-action-icon-test.log`、`build/notes-action-icon-analyze.log`、`build/notes-action-icon-release.log`。
 
@@ -102,3 +111,21 @@ Android真机后台／锁屏／来电、实际30／60分钟录音和公网HTTPS�
 先访问首页再进入笔记，同时动态启用减少动画、字号1.6并缩窗至700×480，仍会触发未改动的 `home_page.dart:358` 中零时长AnimatedSize布局断言。已通过RenderObject祖先链定位到HomePage／_HomeDashboard；诊断保存在 `build/notes-motion-diagnostic.txt`。本轮未扩大修改首页，笔记减少动画冷启动以及独立字号／尺寸变化均通过。
 
 部署须先备份数据库及全部原音，再发布PostgreSQL增量迁移、API和PowerSync配置，验证后升级两端客户端；详见 [部署说明](../../../deploy/README.md)。
+
+### 原生无障碍回归入口
+
+`tool/notes_windows_accessibility_probe.dart`仅用于Windows内存数据验证，创建并退出自己的窗口。构建前确认Debug运行目录没有被占用，或复制生成的bundle到独立目录后运行；不要终止用户进程。运行探针后应以`--target lib/main.dart`恢复常规构建。
+
+```powershell
+flutter build windows --debug --no-pub --target tool/notes_windows_accessibility_probe.dart
+# 以下在探针bundle所在目录执行，负向对照预期出现原生AXTree错误。
+.\omni_butler.exe --anchors-only --unguarded
+.\omni_butler.exe --anchors-only
+.\omni_butler.exe
+# 回到apps/client目录后恢复生产入口。
+flutter build windows --debug --no-pub --target lib/main.dart
+```
+
+必须捕捉stderr检查`Failed to update ui::AXTree`和其他框架异常，并确认stdout有原生桥已启用及完成标记。单纯`ensureSemantics`只生成Dart语义树，不能代替Windows辅助功能桥验证。
+
+v2.9中文预览在`build/notes-tags-picker-preview`：`windows-composer-selected-tags.png`、`windows-composer-tags-expanded.png`及`windows-tags-management.png`，已核对选中常驻、弹出选项及侧栏管理入口。

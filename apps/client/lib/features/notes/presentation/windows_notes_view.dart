@@ -129,9 +129,11 @@ class _NoteHeatmapCellState extends State<_NoteHeatmapCell> {
       ),
     );
     return active
-        ? Tooltip(
-            message: '${widget.dayKey} · ${widget.count} 篇笔记',
-            child: cell,
+        ? OmniWindowsSemanticsBoundary(
+            child: Tooltip(
+              message: '${widget.dayKey} · ${widget.count} 篇笔记',
+              child: cell,
+            ),
           )
         : cell;
   }
@@ -999,111 +1001,118 @@ extension _WindowsNotesView on _NotesPageState {
     return GestureDetector(
       key: ValueKey('note-card-${note.id}'),
       onDoubleTap: expanded ? null : () => _open(note.id),
-      child: _noteCardSize(
-        expanded
-            ? _noteEditorSurface(editor, taxonomy, segments, local, recording)
-            : OmniPanel(
-                showBorder: false,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '${businessDayKey(created)} ${created.hour.toString().padLeft(2, '0')}:${created.minute.toString().padLeft(2, '0')}',
-                            key: ValueKey('note-created-${note.id}'),
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  fontSize: 10,
-                                  color:
-                                      Theme.of(context).brightness ==
-                                          Brightness.light
-                                      ? NoteComposerStyle.muted
-                                      : colors.muted,
-                                ),
+      // 稳定卡片语义父节点，展开及裁剪只更新其内部孩子。
+      child: Semantics(
+        key: ValueKey('note-card-region-${note.id}'),
+        container: true,
+        explicitChildNodes: true,
+        child: _noteCardSize(
+          expanded
+              ? _noteEditorSurface(editor, taxonomy, segments, local, recording)
+              : OmniPanel(
+                  showBorder: false,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${businessDayKey(created)} ${created.hour.toString().padLeft(2, '0')}:${created.minute.toString().padLeft(2, '0')}',
+                              key: ValueKey('note-created-${note.id}'),
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    fontSize: 10,
+                                    color:
+                                        Theme.of(context).brightness ==
+                                            Brightness.light
+                                        ? NoteComposerStyle.muted
+                                        : colors.muted,
+                                  ),
+                            ),
+                          ),
+                          OmniPopupMenuButton<String>(
+                            key: ValueKey('note-menu-${note.id}'),
+                            mouseCursor: SystemMouseCursors.click,
+                            tooltip: '笔记操作',
+                            icon: const Icon(Icons.more_horiz),
+                            onSelected: (action) async {
+                              if (action == 'edit') {
+                                await _open(note.id);
+                              }
+                              if (action == 'copy') {
+                                await Clipboard.setData(
+                                  ClipboardData(text: note.body),
+                                );
+                              }
+                              if (action == 'versions') {
+                                await _open(note.id);
+                                if (mounted && editor.draft.id == note.id) {
+                                  await _showVersions(editor);
+                                }
+                              }
+                              if (action == 'delete') {
+                                await _deleteHistoryNote(note.id, editor);
+                              }
+                            },
+                            itemBuilder: (_) => [
+                              OmniPopupMenuItem(
+                                value: 'edit',
+                                label: '编辑',
+                                icon: Icons.edit_outlined,
+                              ),
+                              OmniPopupMenuItem(
+                                value: 'copy',
+                                label: '复制正文',
+                                icon: Icons.copy_outlined,
+                              ),
+                              OmniPopupMenuItem(
+                                value: 'versions',
+                                label: '版本记录',
+                                icon: Icons.restore,
+                              ),
+                              OmniPopupMenuItem(
+                                value: 'delete',
+                                label: '移入回收站',
+                                icon: Icons.delete_outline,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      if (preview.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: OmniSpacing.xs),
+                          child: _noteBodyPreview(note, preview),
+                        ),
+                      for (final segment in audio)
+                        Padding(
+                          padding: const EdgeInsets.only(top: OmniSpacing.sm),
+                          child: NoteAudioCard(
+                            key: ValueKey('note-history-audio-${segment.id}'),
+                            compact: true,
+                            segment: segment,
+                            local: local
+                                .where((file) => file.id == segment.id)
+                                .firstOrNull,
+                            player: ref.read(noteAudioPlayerProvider),
+                            recordingActive: recording.isActive,
+                            onRecognize: () => _recognize(segment),
+                            onCancel: () => _cancelRecognition(segment),
+                            onInsert: (text) =>
+                                _insertTranscript(segment, text),
                           ),
                         ),
-                        OmniPopupMenuButton<String>(
-                          key: ValueKey('note-menu-${note.id}'),
-                          mouseCursor: SystemMouseCursors.click,
-                          tooltip: '笔记操作',
-                          icon: const Icon(Icons.more_horiz),
-                          onSelected: (action) async {
-                            if (action == 'edit') {
-                              await _open(note.id);
-                            }
-                            if (action == 'copy') {
-                              await Clipboard.setData(
-                                ClipboardData(text: note.body),
-                              );
-                            }
-                            if (action == 'versions') {
-                              await _open(note.id);
-                              if (mounted && editor.draft.id == note.id) {
-                                await _showVersions(editor);
-                              }
-                            }
-                            if (action == 'delete') {
-                              await _deleteHistoryNote(note.id, editor);
-                            }
-                          },
-                          itemBuilder: (_) => [
-                            OmniPopupMenuItem(
-                              value: 'edit',
-                              label: '编辑',
-                              icon: Icons.edit_outlined,
-                            ),
-                            OmniPopupMenuItem(
-                              value: 'copy',
-                              label: '复制正文',
-                              icon: Icons.copy_outlined,
-                            ),
-                            OmniPopupMenuItem(
-                              value: 'versions',
-                              label: '版本记录',
-                              icon: Icons.restore,
-                            ),
-                            OmniPopupMenuItem(
-                              value: 'delete',
-                              label: '移入回收站',
-                              icon: Icons.delete_outline,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    if (preview.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: OmniSpacing.xs),
-                        child: _noteBodyPreview(note, preview),
-                      ),
-                    for (final segment in audio)
-                      Padding(
-                        padding: const EdgeInsets.only(top: OmniSpacing.sm),
-                        child: NoteAudioCard(
-                          key: ValueKey('note-history-audio-${segment.id}'),
-                          compact: true,
-                          segment: segment,
-                          local: local
-                              .where((file) => file.id == segment.id)
-                              .firstOrNull,
-                          player: ref.read(noteAudioPlayerProvider),
-                          recordingActive: recording.isActive,
-                          onRecognize: () => _recognize(segment),
-                          onCancel: () => _cancelRecognition(segment),
-                          onInsert: (text) => _insertTranscript(segment, text),
-                        ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
+        ),
       ),
     );
   }
@@ -1130,39 +1139,47 @@ extension _WindowsNotesView on _NotesPageState {
     final OmniColors colors = OmniColors.of(context);
     // 浅色截图需要更淡的常态轮廓。
     final bool light = Theme.of(context).brightness == Brightness.light;
-    return TextFieldTapRegion(
-      child: Focus(
-        onFocusChange: (focused) =>
-            _updateWindows(() => _composerFocused = focused),
-        child: DecoratedBox(
-          key: const ValueKey('note-composer-surface'),
-          decoration: BoxDecoration(
-            color: colors.paper,
-            borderRadius: BorderRadius.circular(OmniRadius.dialog),
-            border: Border.all(
-              color: _composerFocused
-                  ? colors.brand
-                  : light
-                  ? NoteComposerStyle.border
-                  : colors.line,
+    // 历史笔记编辑期间常驻主题色轮廓，失焦不会隐藏编辑状态。
+    final bool editing = _expandedNoteId == editor.draft.id;
+    // 输入框与动态工具在固定语义容器内更新，避免同时重挂多层节点。
+    return Semantics(
+      key: ValueKey('note-editor-region-${editor.draft.id}'),
+      container: true,
+      explicitChildNodes: true,
+      child: TextFieldTapRegion(
+        child: Focus(
+          onFocusChange: (focused) =>
+              _updateWindows(() => _composerFocused = focused),
+          child: DecoratedBox(
+            key: const ValueKey('note-composer-surface'),
+            decoration: BoxDecoration(
+              color: colors.paper,
+              borderRadius: BorderRadius.circular(OmniRadius.dialog),
+              border: Border.all(
+                color: _composerFocused || editing
+                    ? colors.brand
+                    : light
+                    ? NoteComposerStyle.border
+                    : colors.line,
+              ),
+              boxShadow: _composerFocused
+                  ? [
+                      BoxShadow(
+                        color: colors.ink.withValues(alpha: 0.08),
+                        blurRadius: OmniSpacing.sm,
+                        offset: const Offset(0, OmniSpacing.xxs),
+                      ),
+                    ]
+                  : const [],
             ),
-            boxShadow: _composerFocused
-                ? [
-                    BoxShadow(
-                      color: colors.ink.withValues(alpha: 0.08),
-                      blurRadius: OmniSpacing.sm,
-                      offset: const Offset(0, OmniSpacing.xxs),
-                    ),
-                  ]
-                : const [],
-          ),
-          child: _editorPanel(
-            editor,
-            taxonomy,
-            segments,
-            local,
-            recording,
-            inline: true,
+            child: _editorPanel(
+              editor,
+              taxonomy,
+              segments,
+              local,
+              recording,
+              inline: true,
+            ),
           ),
         ),
       ),

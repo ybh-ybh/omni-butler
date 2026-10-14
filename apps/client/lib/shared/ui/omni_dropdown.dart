@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+
+import 'omni_windows_semantics_boundary.dart';
+
 import 'package:omni_butler/shared/ui/omni_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -204,7 +207,8 @@ class OmniPopupMenuButton<T> extends StatelessWidget {
   /// 构建从按钮下方展开的紧凑菜单。
   @override
   Widget build(BuildContext context) {
-    return PopupMenuButton<T>(
+    // 菜单提示与其他图标的浮层锚点保持独立。
+    final Widget button = PopupMenuButton<T>(
       initialValue: initialValue,
       onOpened: onOpened,
       onSelected: onSelected,
@@ -249,6 +253,7 @@ class OmniPopupMenuButton<T> extends StatelessWidget {
       itemBuilder: itemBuilder,
       child: child,
     );
+    return OmniWindowsSemanticsBoundary(child: button);
   }
 }
 

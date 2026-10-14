@@ -289,7 +289,7 @@ void main() {
       find.byKey(ValueKey('note-heatmap-${businessDayKey(DateTime.now())}')),
     );
     await _settle(tester);
-    await tester.tap(find.text('复盘').first);
+    await tester.tap(find.byKey(const ValueKey('notes-tag-review')));
     await _settle(tester);
     expect(find.byKey(const ValueKey('note-card-target')), findsOneWidget);
     expect(find.byKey(const ValueKey('note-card-weekly-note')), findsNothing);
@@ -689,7 +689,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Windows 标签排序计数不受草稿、回收站和主区搜索影响', (tester) async {
+  testWidgets('Windows 侧栏管理标签入口保留计数、草稿与独立筛选', (tester) async {
     // 删除一篇正式记录后按活动笔记数量排序。
     final _App app = await _mount(
       tester,
@@ -728,38 +728,16 @@ void main() {
           .data,
       '2',
     );
-    await tester.tap(find.byTooltip('排序标签').hitTestable());
+    expect(find.byTooltip('排序标签'), findsNothing);
+    await tester.tap(find.byTooltip('管理标签').hitTestable());
     await _settle(tester);
-    await tester.tap(find.text('按笔记数量'));
+    expect(find.text('笔记标签'), findsOneWidget);
+    expect(find.text('新增标签'), findsOneWidget);
+    await _capture(tester, app, 'windows-tags-management');
+    await tester.tap(find.byTooltip('关闭').hitTestable());
     await _settle(tester);
-    expect(
-      tester.getTopLeft(find.byKey(const ValueKey('notes-tag-review'))).dy,
-      lessThan(
-        tester.getTopLeft(find.byKey(const ValueKey('notes-tag-work'))).dy,
-      ),
-    );
-    await mouse.moveTo(
-      tester.getCenter(find.byKey(const ValueKey('notes-tags-toggle'))),
-    );
-    await tester.pump();
-    await tester.tap(find.byTooltip('排序标签').hitTestable());
-    await _settle(tester);
-    await tester.tap(find.text('按名称'));
-    await _settle(tester);
-    expect(
-      tester.getTopLeft(find.byKey(const ValueKey('notes-tag-review'))).dy,
-      lessThan(
-        tester.getTopLeft(find.byKey(const ValueKey('notes-tag-work'))).dy,
-      ),
-    );
-    await mouse.moveTo(
-      tester.getCenter(find.byKey(const ValueKey('notes-tags-toggle'))),
-    );
-    await tester.pump();
-    await tester.tap(find.byTooltip('排序标签').hitTestable());
-    await _settle(tester);
-    await tester.tap(find.text('默认顺序'));
-    await _settle(tester);
+    expect(tester.widget<TextField>(_body()).controller!.text, '未发布新笔记');
+    expect(find.widgetWithText(TextField, '搜索笔记 · Ctrl+F'), findsOneWidget);
     expect(
       tester.getTopLeft(find.byKey(const ValueKey('notes-tag-work'))).dy,
       lessThan(
@@ -828,7 +806,13 @@ void main() {
     );
     await tester.tap(find.byTooltip('关闭').hitTestable());
     await _settle(tester);
-    expect(find.text('工作'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('notes-tag-work')),
+        matching: find.text('工作'),
+      ),
+      findsOneWidget,
+    );
     await mouse.moveTo(
       tester.getCenter(find.byKey(const ValueKey('notes-tag-work'))),
     );
@@ -853,7 +837,13 @@ void main() {
     await _capture(tester, app, 'windows-tags-rename');
     await tester.tap(find.text('保存'));
     await _settle(tester);
-    expect(find.text('项目灵感'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('notes-tag-work')),
+        matching: find.text('项目灵感'),
+      ),
+      findsOneWidget,
+    );
     await tester.tap(find.byKey(const ValueKey('notes-tag-work')));
     await _settle(tester);
     await mouse.moveTo(
@@ -1074,7 +1064,10 @@ void main() {
     await tester.tap(tag);
     await _settle(tester);
     expect(tester.widget<TextField>(_body()).focusNode!.hasFocus, isTrue);
-    expect(find.text('管理标签'), findsOneWidget);
+    expect(
+      find.descendant(of: surface, matching: find.text('管理标签')),
+      findsNothing,
+    );
     await tester.tap(tag);
     await _settle(tester);
     // 中文、组合字符和 emoji 按用户看到的字符计数。
@@ -1239,6 +1232,125 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  for (final bool reduceMotion in [false, true]) {
+    testWidgets('Windows 输入标签常驻、弹出反向动画及选择保存：减少动画$reduceMotion', (tester) async {
+      // 显式打开读屏，检查隐藏标签不进入语义树。
+      final SemanticsHandle semantics = tester.ensureSemantics();
+      try {
+        tester.platformDispatcher.accessibilityFeaturesTestValue =
+            FakeAccessibilityFeatures(disableAnimations: reduceMotion);
+        addTearDown(
+          tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
+        );
+        // 顶部草稿预选工作标签，正式笔记统计不受影响。
+        final _App app = await _mount(
+          tester,
+          platform: TargetPlatform.windows,
+          seed: true,
+          initialLocation: '/notes',
+          prepareDatabase: (database) async {
+            await NoteLocalDraftRepository(NoteRepository(database)).save(
+              id: 'tag-picker-draft',
+              isNew: true,
+              draft: NoteDraft(
+                id: 'tag-picker-note',
+                body: '标签选择测试正文',
+                dayKey: businessDayKey(DateTime.now()),
+                baseRevision: '',
+                tags: {'work'},
+              ),
+            );
+          },
+        );
+        // 已选常驻，未选同时禁止命中、焦点与读屏。
+        final Finder selected = find.byKey(
+          const ValueKey('note-selected-tag-work'),
+        );
+        final Finder available = find.byKey(
+          const ValueKey('note-available-tag-review'),
+        );
+        final Finder region = find.byKey(const ValueKey('note-composer-tags'));
+        final Finder expansion = find.byKey(
+          const ValueKey('note-composer-tags-expansion'),
+        );
+        final Finder toggle = find.byKey(const ValueKey('note-composer-tag'));
+        expect(selected.hitTestable(), findsOneWidget);
+        expect(available.hitTestable(), findsNothing);
+        expect(_semanticLabels(tester.getSemantics(region)), contains('工作'));
+        expect(
+          _semanticLabels(tester.getSemantics(region)),
+          isNot(contains('复盘')),
+        );
+        expect(tester.getSize(expansion).height, 0);
+        await _capture(tester, app, 'windows-composer-selected-tags');
+        // 展开和中途收起均延续当前呈现高度。
+        await tester.tap(toggle);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 70));
+        final double middle = tester.getSize(expansion).height;
+        expect(middle, greaterThan(0));
+        if (!reduceMotion) {
+          await tester.tap(toggle);
+          await tester.pump();
+          expect(available.hitTestable(), findsNothing);
+          expect(
+            _semanticLabels(tester.getSemantics(region)),
+            isNot(contains('复盘')),
+          );
+          expect(tester.getSize(expansion).height, closeTo(middle, 0.01));
+          await tester.pump(const Duration(milliseconds: 60));
+          expect(tester.getSize(expansion).height, lessThan(middle));
+          await tester.tap(toggle);
+          await tester.pump();
+        }
+        await _settle(tester);
+        expect(available.hitTestable(), findsOneWidget);
+        expect(_semanticLabels(tester.getSemantics(region)), contains('复盘'));
+        await _capture(tester, app, 'windows-composer-tags-expanded');
+        await tester.tap(available);
+        await _settle(tester, elapsed: const Duration(milliseconds: 700));
+        expect(app.container.read(noteEditorProvider).draft.tags, {
+          'work',
+          'review',
+        });
+        await tester.tap(toggle);
+        await _settle(tester);
+        expect(
+          find.byKey(const ValueKey('note-selected-tag-review')).hitTestable(),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('note-available-tag-unused')).hitTestable(),
+          findsNothing,
+        );
+        // 样式与物品标签筛选一致，只将语义操作色用于笔记主题。
+        final FilterChip chip = tester.widget(
+          find.descendant(of: selected, matching: find.byType(FilterChip)),
+        );
+        final OmniColors colors = OmniColors.of(tester.element(selected));
+        expect(chip.showCheckmark, isFalse);
+        expect(chip.visualDensity, VisualDensity.compact);
+        expect(chip.selectedColor, colors.brand.withValues(alpha: 0.12));
+        expect(chip.side!.color, colors.brand.withValues(alpha: 0.42));
+        expect(chip.labelStyle!.fontWeight, FontWeight.w600);
+        await tester.tap(find.byKey(const ValueKey('note-commit')));
+        await _settle(tester);
+        final NoteEntryRecord? saved = await tester.runAsync<NoteEntryRecord?>(
+          () => NoteRepository(app.database).find('tag-picker-note'),
+        );
+        expect(noteTagIds(saved!.tags), {'work', 'review'});
+        expect(
+          find.byKey(const ValueKey('note-selected-tag-work')),
+          findsNothing,
+        );
+        await _dispose(tester, app);
+        expect(tester.takeException(), isNull);
+      } finally {
+        semantics.dispose();
+      }
+    });
+  }
+
   testWidgets('Windows 历史菜单保留版本记录入口', (tester) async {
     // 精简输入工具不应失去已有正式版本。
     final _App app = await _mount(
@@ -1303,6 +1415,19 @@ void main() {
     expect(find.text('取消'), findsOneWidget);
     await tester.enterText(_body(), '尚未确认的修改');
     await _settle(tester, elapsed: const Duration(milliseconds: 700));
+    // 编辑中的历史笔记失去正文和工具焦点后，仍显示主题色边框。
+    final Finder surface = find.byKey(const ValueKey('note-composer-surface'));
+    await tester.tap(find.widgetWithText(TextField, '搜索笔记 · Ctrl+F'));
+    await _settle(tester);
+    expect(tester.widget<TextField>(_body()).focusNode!.hasFocus, isFalse);
+    expect(find.byKey(const ValueKey('note-composer-count')), findsNothing);
+    expect(
+      (tester.widget<DecoratedBox>(surface).decoration as BoxDecoration)
+          .border!
+          .top
+          .color,
+      OmniColors.of(tester.element(surface)).brand,
+    );
     await _capture(tester, app, 'windows-expanded-edit');
     await tester.ensureVisible(find.text('写新笔记'));
     await tester.tap(find.text('写新笔记'));
@@ -1378,7 +1503,7 @@ void main() {
     );
     await _navigate(tester, app, '/notes');
     await tester.enterText(_body(), '隐藏侧栏时仍保留的草稿');
-    await tester.tap(find.text('复盘').first);
+    await tester.tap(find.byKey(const ValueKey('notes-tag-review')));
     await _settle(tester);
     // 导航区及底部空白都属于侧栏，均应显示隐藏入口。
     final TestGesture mouse = await tester.createGesture(
@@ -1628,9 +1753,9 @@ void main() {
       );
     }
     expect(find.byKey(const ValueKey('notes-sidebar')), findsOneWidget);
-    await tester.ensureVisible(find.text('复盘').first);
+    await tester.ensureVisible(find.byKey(const ValueKey('notes-tag-review')));
     await _settle(tester);
-    await tester.tap(find.text('复盘').first);
+    await tester.tap(find.byKey(const ValueKey('notes-tag-review')));
     await _settle(tester);
     expect(find.text('# 复盘'), findsOneWidget);
     tester.view.physicalSize = const Size(1280, 900);
@@ -2417,6 +2542,17 @@ void main() {
     await _dispose(tester, app);
     expect(tester.takeException(), isNull);
   });
+}
+
+/// 收集容器内真实可访问标签，不把保留但隐藏的控件算作可见。
+Set<String> _semanticLabels(SemanticsNode node) {
+  // 当前语义子树提供的读屏文本。
+  final Set<String> labels = {node.getSemanticsData().label};
+  node.visitChildren((child) {
+    labels.addAll(_semanticLabels(child));
+    return true;
+  });
+  return labels;
 }
 
 /// 交替刷新真实文件读取和测试时钟，排空SHA流并释放Windows原件句柄。

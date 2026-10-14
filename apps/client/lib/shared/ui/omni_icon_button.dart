@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+
+import 'omni_windows_semantics_boundary.dart';
+
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/omni_icon_button_shape.dart';
@@ -143,7 +146,8 @@ class OmniIconButton extends StatelessWidget {
               ),
             ),
           );
-    return IconButton(
+    // Windows提示锚点单独成树，避免在列表条目中合并。
+    final Widget button = IconButton(
       icon: icon,
       onPressed: onPressed,
       tooltip: tooltip,
@@ -159,5 +163,6 @@ class OmniIconButton extends StatelessWidget {
       autofocus: autofocus,
       hoverColor: hoverColor,
     );
+    return OmniWindowsSemanticsBoundary(child: button);
   }
 }

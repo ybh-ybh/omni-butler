@@ -27,10 +27,13 @@ import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:omni_butler/shared/ui/omni_note_composer_button.dart';
 import 'package:omni_butler/shared/ui/omni_note_audio_controls.dart';
+import 'package:omni_butler/shared/ui/omni_taxonomy_chip.dart';
+import 'package:omni_butler/shared/ui/omni_windows_semantics_boundary.dart';
 import 'package:uuid/uuid.dart';
 
 part 'windows_notes_view.dart';
 part 'windows_note_tags.dart';
+part 'windows_note_tag_picker.dart';
 part 'windows_note_body.dart';
 
 /// 含已删除名称的笔记分类流，历史名称不能丢失。
@@ -927,7 +930,16 @@ class _NotesPageState extends ConsumerState<NotesPage>
                 ),
               ),
           if (!inline) const Divider(),
-          if (!inline || _showTagEditor)
+          if (inline)
+            _NoteComposerTagPicker(
+              editor: editor,
+              tags: taxonomy
+                  .where((item) => item.kind == 'tag' && item.deletedAt == null)
+                  .toList(),
+              expanded: _showTagEditor,
+              blocked: _committing,
+            )
+          else ...[
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -945,7 +957,6 @@ class _NotesPageState extends ConsumerState<NotesPage>
                 ),
               ],
             ),
-          if (!inline || _showTagEditor)
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -971,6 +982,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
                   )
                   .toList(),
             ),
+          ],
           if (inline) ...[
             const SizedBox(height: OmniSpacing.sm),
             _draftAudio(editor),

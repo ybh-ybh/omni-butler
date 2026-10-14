@@ -60,9 +60,6 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
   /// 菜单开启后保留对应行的操作入口。
   String? _menuTag;
 
-  /// 会话内显示排序，不修改用户原有顺序。
-  String _sort = 'default';
-
   /// 释放本区域的输入与焦点资源。
   @override
   void dispose() {
@@ -135,7 +132,7 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
     }
   }
 
-  /// 构建悬停工具、搜索输入和排序后的平铺标签。
+  /// 构建管理入口、搜索输入及平铺标签。
   @override
   Widget build(BuildContext context) {
     // 篇数只汇总正式活动笔记，与草稿和主区筛选无关。
@@ -151,63 +148,60 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
     final List<TaxonomyEntry> tags = widget.tags
         .where((tag) => tag.name.toLowerCase().contains(query))
         .toList();
-    if (_sort != 'default') {
-      tags.sort((a, b) {
-        // 数量相同按名称排序，避免出现不稳定的行顺序。
-        final int countOrder = _sort == 'count'
-            ? (counts[b.id] ?? 0).compareTo(counts[a.id] ?? 0)
-            : 0;
-        return countOrder != 0 ? countOrder : a.name.compareTo(b.name);
-      });
-    }
-    return MouseRegion(
-      key: const ValueKey('notes-tags-section'),
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (_searching) _searchHeader() else _header(),
-          ClipRect(
-            child: TweenAnimationBuilder<double>(
-              key: const ValueKey('notes-tags-expansion'),
-              tween: Tween<double>(begin: 1, end: _collapsed ? 0 : 1),
-              duration: OmniMotion.duration(context, OmniMotion.panel),
-              curve: OmniMotion.standardCurve,
-              builder: (_, progress, child) => Align(
-                alignment: Alignment.topCenter,
-                heightFactor: progress,
-                child: child,
-              ),
-              child: IgnorePointer(
-                ignoring: _collapsed,
-                child: ExcludeFocus(
-                  excluding: _collapsed,
-                  child: ExcludeSemantics(
+    // 侧栏标签保留固定父节点，折叠和悬停不把孩子挂回整个滚动页。
+    return Semantics(
+      key: const ValueKey('notes-tags-region'),
+      container: true,
+      explicitChildNodes: true,
+      child: MouseRegion(
+        key: const ValueKey('notes-tags-section'),
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_searching) _searchHeader() else _header(),
+            ClipRect(
+              child: TweenAnimationBuilder<double>(
+                key: const ValueKey('notes-tags-expansion'),
+                tween: Tween<double>(begin: 1, end: _collapsed ? 0 : 1),
+                duration: OmniMotion.duration(context, OmniMotion.panel),
+                curve: OmniMotion.standardCurve,
+                builder: (_, progress, child) => Align(
+                  alignment: Alignment.topCenter,
+                  heightFactor: progress,
+                  child: child,
+                ),
+                child: IgnorePointer(
+                  ignoring: _collapsed,
+                  child: ExcludeFocus(
                     excluding: _collapsed,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (tags.isEmpty && !_searching)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              vertical: OmniSpacing.sm,
+                    child: ExcludeSemantics(
+                      excluding: _collapsed,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (tags.isEmpty && !_searching)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: OmniSpacing.sm,
+                              ),
+                              child: Text(
+                                '还没有标签',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
                             ),
-                            child: Text(
-                              '还没有标签',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ),
-                        for (final TaxonomyEntry tag in tags)
-                          _tagRow(tag, counts[tag.id] ?? 0),
-                      ],
+                          for (final TaxonomyEntry tag in tags)
+                            _tagRow(tag, counts[tag.id] ?? 0),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -315,31 +309,14 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
           icon: const Icon(Icons.search, size: OmniSize.icon),
           onPressed: () => _toggleSearch(true),
         ),
-        SizedBox(
-          width: OmniSize.iconButton,
-          height: OmniSize.iconButton,
-          child: OmniPopupMenuButton<String>(
-            tooltip: '排序标签',
-            icon: const Icon(Icons.sort, size: OmniSize.icon),
-            initialValue: _sort,
-            onSelected: (value) => setState(() => _sort = value),
-            itemBuilder: (_) => [
-              OmniPopupMenuItem(
-                value: 'default',
-                label: '默认顺序',
-                icon: Icons.format_list_bulleted,
-              ),
-              OmniPopupMenuItem(
-                value: 'name',
-                label: '按名称',
-                icon: Icons.sort_by_alpha,
-              ),
-              OmniPopupMenuItem(
-                value: 'count',
-                label: '按笔记数量',
-                icon: Icons.numbers,
-              ),
-            ],
+        OmniIconButton(
+          key: const ValueKey('notes-tags-manage'),
+          tooltip: '管理标签',
+          icon: const Icon(Icons.sell_outlined, size: OmniSize.icon),
+          onPressed: () => TaxonomyManagerDialog.show(
+            context,
+            module: TaxonomyModule.notes,
+            kind: TaxonomyKind.tag,
           ),
         ),
       ],
@@ -421,6 +398,9 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
       child: Padding(
         padding: const EdgeInsets.only(bottom: OmniSpacing.xxs),
         child: Semantics(
+          key: ValueKey('notes-tag-region-${tag.id}'),
+          container: true,
+          explicitChildNodes: true,
           selected: selected,
           child: DecoratedBox(
             decoration: BoxDecoration(
