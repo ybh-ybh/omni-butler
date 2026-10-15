@@ -11,6 +11,16 @@ describe('SyncSqlBuilder', () => {
   /// 固定记录标识。
   const recordId = 'ea78cdfc-4368-45e9-b541-2adb46a0c136';
 
+  it('笔记图片只开放关联和排序字段，拒绝路径及非整数顺序', () => {
+    // 合法子记录按图片身份创建，而非覆盖整篇图片数组。
+    const operation: SyncOperationDto = { op: 'PUT', table: 'note_images', id: recordId, data: { note_id: userId, sort_order: 0 } };
+    expect(builder.build(operation, userId).sql).toContain('INSERT INTO "note_images"');
+    for (const order of [-1, 0.5, '0', null]) {
+      expect(() => builder.build({ ...operation, data: { ...operation.data, sort_order: order } }, userId)).toThrow(BadRequestException);
+    }
+    expect(() => builder.build({ ...operation, data: { local_path: 'private/file.png' } }, userId)).toThrow(BadRequestException);
+  });
+
   it('PUT 强制使用当前用户且重复创建不覆盖既有记录', () => {
     // 测试同步操作。
     const operation: SyncOperationDto = {

@@ -467,7 +467,10 @@ void main() {
       initialValue: 'delete',
       onSelected: (String value) => selection = value,
     );
-    await tester.tap(find.byTooltip('操作菜单'));
+    // 真实键盘入口先通过 Tab 聚焦，鼠标打开不应主动抢焦点。
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();

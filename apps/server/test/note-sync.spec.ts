@@ -4,6 +4,15 @@ import type { SyncOperationDto } from '../src/sync/dto/sync-operation.dto';
 
 /// 单行协议验证补充真实HTTP用例，直接冻结输入防止辅助字段破坏回执摘要。
 describe('笔记标签归一化', () => {
+  it('图片只可修改排序和删除状态，不可改绑到另一篇笔记', async () => {
+    // 服务端已保存图片对应的原笔记。
+    const transaction = { noteImage: { findFirst: jest.fn().mockResolvedValue({ noteId: 'original' }) } } as unknown as Prisma.TransactionClient;
+    // 合法删除差量不会读取或覆盖其他图片。
+    const removal: SyncOperationDto = { op: 'PATCH', table: 'note_images', id: 'image', data: { deleted_at: '2026-10-15T12:00:00Z' } };
+    expect(await normalizeNoteOperation(transaction, 'owner', removal)).toEqual(removal);
+    await expect(normalizeNoteOperation(transaction, 'owner', { ...removal, data: { note_id: 'other' } })).rejects.toMatchObject({ status: 400 });
+    expect(await normalizeNoteOperation(transaction, 'owner', { ...removal, data: { note_id: 'original', sort_order: 2 } })).toMatchObject({ data: { sort_order: 2 } });
+  });
   it('仅修改副本并规范排序UUID，保留原始请求的tags_base', async () => {
     // 三个稳定身份用于明确本地增删与服务器新增。
     const ids = ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002', 'abcdef00-0000-4000-8000-000000000003'];

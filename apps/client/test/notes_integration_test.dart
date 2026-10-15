@@ -412,6 +412,21 @@ void main() {
     expect(await search.search('会议素材'), isEmpty);
   });
 
+  test('格式之间的连续可见词组可以搜索，标题不泄漏Markdown标记', () async {
+    await seedNote();
+    await (source.database.update(
+      source.database.noteEntries,
+    )..where((table) => table.id.equals('note'))).write(
+      const NoteEntriesCompanion(body: Value('**项目**<u>进度</u>\n- ==已完成==清单')),
+    );
+    // 真实搜索按解析结果匹配，不能分别剥几个正则标记蒙混通过。
+    final GlobalSearchRepository search = GlobalSearchRepository(
+      source.database,
+    );
+    expect((await search.search('项目进度')).single.title, '项目进度');
+    expect((await search.search('已完成清单')).single.route, '/notes?id=note');
+  });
+
   test('笔记回收站恢复绑定原音与历史版本，永久删除保留有效其他业务', () async {
     await seedNote();
     await (source.database.update(source.database.noteEntries)

@@ -250,7 +250,19 @@ class SyncConnectionCoordinator {
       List<int> snapshotBytes = utf8.encode(jsonEncode(snapshot.toJson()));
       // 为快照、候选数据和 SQLite 日志留出额外空间；实际写入仍须成功。
       final int needed =
-          snapshotBytes.length * 4 + audioBytes * 2 + 64 * 1024 * 1024;
+          snapshotBytes.length * 4 +
+          audioBytes * 2 +
+          [
+                ...snapshot.tables['attachments'] ?? <Map<String, Object?>>[],
+                ...snapshot.tables['note_draft_images'] ??
+                    <Map<String, Object?>>[],
+              ].fold<int>(
+                0,
+                (total, row) =>
+                    total + ((row['size_bytes'] as num?)?.toInt() ?? 0),
+              ) *
+              2 +
+          64 * 1024 * 1024;
       if (await freeBytes(directory.path) < needed) {
         throw const ApiFailure('本机剩余空间不足，无法安全保存迁移备份');
       }
@@ -262,10 +274,16 @@ class SyncConnectionCoordinator {
         snapshot,
         Directory(path.join(work.path, 'note_audio_backup')),
       );
-      // 原音在复制期间发生变化时必须重新确认，不能擅自扩大缺失清单。
-      final List<String> backupMissing = await findMissingMigrationNoteAudio(
+      // 图片沿用当前备份拥有的资产目录，现有安全清理边界同时覆盖图片。
+      snapshot = await backupMigrationNoteImages(
         snapshot,
+        Directory(path.join(work.path, 'note_audio_backup')),
       );
+      // 原音在复制期间发生变化时必须重新确认，不能擅自扩大缺失清单。
+      final List<String> backupMissing = [
+        ...await findMissingMigrationNoteAudio(snapshot),
+        ...await findMissingMigrationImages(snapshot),
+      ];
       if (backupMissing.any(
         (String missing) => !preview.missingImages.contains(missing),
       )) {

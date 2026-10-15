@@ -22,7 +22,7 @@ import type { ImageRemoveDto, ImageUploadDto } from './image.dto';
 /// 单张图片的明确上限。
 export const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
 /// 客户端能够同步的业务图片类型。
-export type ImageBusinessType = 'inventoryImage' | 'membershipImage';
+export type ImageBusinessType = 'inventoryImage' | 'membershipImage' | 'noteImage';
 /// 不暴露内部对象键的图片元数据。
 export type ImageMetadata = Omit<BusinessImage, 'userId' | 'objectKey'>;
 /// 图片变更的稳定回执。
@@ -51,10 +51,11 @@ export class ImagesService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   /// 提供无需额外客户端配置的能力发现。
-  capabilities(): { enabled: boolean; maxBytes: number } {
+  capabilities(): { enabled: boolean; maxBytes: number; supportedBusinessTypes: ImageBusinessType[] } {
     return {
       enabled: this.config.get<boolean>('IMAGE_SYNC_ENABLED') === true,
       maxBytes: IMAGE_MAX_BYTES,
+      supportedBusinessTypes: ['inventoryImage', 'membershipImage', 'noteImage'],
     };
   }
 
@@ -73,7 +74,7 @@ export class ImagesService implements OnModuleInit, OnModuleDestroy {
     id: string,
   ): asserts type is ImageBusinessType {
     if (
-      !['inventoryImage', 'membershipImage'].includes(type) ||
+      !['inventoryImage', 'membershipImage', 'noteImage'].includes(type) ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
         id,
       )
@@ -105,15 +106,19 @@ export class ImagesService implements OnModuleInit, OnModuleDestroy {
     type: ImageBusinessType,
     id: string,
   ): Promise<void> {
-    // 固定两种参数化 SQL，不拼接客户端表名。
+    // 固定三种参数化 SQL；笔记每张图片使用独立子记录身份。
     const rows =
       type === 'inventoryImage'
         ? await transaction.$queryRaw<
             { id: string }[]
           >`SELECT id FROM inventory_items WHERE user_id = ${user.sub}::uuid AND id = ${id}::uuid FOR UPDATE`
+        : type === 'membershipImage'
+        ? await transaction.$queryRaw<
+            { id: string }[]
+          >`SELECT id FROM memberships WHERE user_id = ${user.sub}::uuid AND id = ${id}::uuid FOR UPDATE`
         : await transaction.$queryRaw<
             { id: string }[]
-          >`SELECT id FROM memberships WHERE user_id = ${user.sub}::uuid AND id = ${id}::uuid FOR UPDATE`;
+          >`SELECT id FROM note_images WHERE user_id = ${user.sub}::uuid AND id = ${id}::uuid FOR UPDATE`;
     if (!rows.length)
       throw new NotFoundException({
         code: 'IMAGE_RECORD_NOT_FOUND',

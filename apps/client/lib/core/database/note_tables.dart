@@ -1,5 +1,66 @@
 import 'package:drift/drift.dart';
 
+/// 可同步的笔记图片关联；原件由独立图片接口传输。
+@DataClassName('NoteImageRecord')
+class NoteImages extends Table {
+  /// 独立图片身份，同时作为图片服务的业务身份。
+  TextColumn get id => text()();
+
+  /// 所属笔记身份。
+  TextColumn get noteId => text()();
+
+  /// 同篇稳定显示顺序。
+  IntColumn get sortOrder => integer()();
+
+  /// 图片加入时间。
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// 最近修改时间。
+  DateTimeColumn get updatedAt => dateTime()();
+
+  /// 随整篇进入回收站，保留原件。
+  DateTimeColumn get deletedAt => dateTime().nullable()();
+
+  /// 图片主键。
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+/// 仅本机的待发布图片，不提前进入业务同步或图片上传。
+@DataClassName('NoteDraftImageRecord')
+class NoteDraftImages extends Table {
+  /// 发布后继续使用的图片身份。
+  TextColumn get id => text()();
+
+  /// 草稿代次，阻止取消后的迟到回调。
+  TextColumn get draftId => text()();
+
+  /// 最终所属笔记。
+  TextColumn get noteId => text()();
+
+  /// 应用私有原件路径。
+  TextColumn get localPath => text().nullable()();
+
+  /// 真实图片格式。
+  TextColumn get mimeType => text()();
+
+  /// 完整文件摘要。
+  TextColumn get sha256 => text()();
+
+  /// 文件字节数。
+  IntColumn get sizeBytes => integer()();
+
+  /// 草稿内加入顺序。
+  IntColumn get sortOrder => integer()();
+
+  /// 原始选择时刻。
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// 图片主键。
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
 /// 笔记正文；自然日与真实创建时间分别保存。
 @DataClassName('NoteEntryRecord')
 class NoteEntries extends Table {

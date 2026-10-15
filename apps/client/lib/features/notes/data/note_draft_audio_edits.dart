@@ -8,6 +8,9 @@ class NoteDraftAudioEdits {
   /// 保存前暂存的片段删除，取消不会影响正式原音。
   final Set<String> deletions;
 
+  /// 保存前暂存的图片删除，与音频保持独立身份集合。
+  final Set<String> imageDeletions;
+
   /// 本机专用的删除元数据键，不进入同步协议。
   static const String _deletionKey = 'deletedAudioIds';
 
@@ -15,6 +18,7 @@ class NoteDraftAudioEdits {
   const NoteDraftAudioEdits({
     this.insertions = const {},
     this.deletions = const {},
+    this.imageDeletions = const {},
   });
 
   /// 旧JSON的所有布尔标记保持原含义，新增数组只用于暂存删除。
@@ -32,6 +36,9 @@ class NoteDraftAudioEdits {
       deletions: removed is List
           ? removed.whereType<String>().toSet()
           : const {},
+      imageDeletions: values['deletedImageIds'] is List
+          ? (values['deletedImageIds'] as List).whereType<String>().toSet()
+          : const {},
     );
   }
 
@@ -39,5 +46,7 @@ class NoteDraftAudioEdits {
   String toJson() => jsonEncode({
     ...insertions,
     if (deletions.isNotEmpty) _deletionKey: deletions.toList()..sort(),
+    if (imageDeletions.isNotEmpty)
+      'deletedImageIds': imageDeletions.toList()..sort(),
   });
 }

@@ -231,6 +231,13 @@ final Schema omniSyncSchema = Schema(
       'created_at',
       'deleted_at',
     ]),
+    _rawTable('note_images', <String>[
+      'note_id',
+      'sort_order',
+      'created_at',
+      'updated_at',
+      'deleted_at',
+    ]),
     _rawTable('note_audio_segments', <String>[
       'note_id',
       'sort_order',

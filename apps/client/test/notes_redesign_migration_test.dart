@@ -15,6 +15,53 @@ import 'support/recycle_bin_fixture.dart';
 /// 覆盖真实升级、旧快照、独立回收站和本机录音备份的业务边界。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('v19文件增加多图和本机图片草稿表，原笔记和正文版本不改变', () async {
+    // 真实旧版文件只移除本次新增表，不触碰用户数据库。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_notes_v19_',
+    );
+    final File file = File('${directory.path}/old.sqlite');
+    AppDatabase database = AppDatabase.forTesting(NativeDatabase(file));
+    final DateTime now = DateTime(2026, 10, 15);
+    try {
+      await database
+          .into(database.noteEntries)
+          .insert(
+            NoteEntriesCompanion.insert(
+              id: 'kept-note',
+              body: const Value('保持原正文'),
+              dayKey: '2026-10-15',
+              revision: 'kept-revision',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+      await database.customStatement('DROP TABLE note_images');
+      await database.customStatement('DROP TABLE note_draft_images');
+      await database.customStatement('PRAGMA user_version = 19');
+      await database.close();
+      database = AppDatabase.forTesting(NativeDatabase(file));
+      expect(
+        (await database.select(database.noteEntries).get()).single.revision,
+        'kept-revision',
+      );
+      expect(
+        (await database.select(database.noteEntries).get()).single.body,
+        '保持原正文',
+      );
+      expect(await database.select(database.noteImages).get(), isEmpty);
+      expect(await database.select(database.noteDraftImages).get(), isEmpty);
+      expect(
+        (await database.customSelect('PRAGMA user_version').getSingle())
+            .read<int>('user_version'),
+        20,
+      );
+    } finally {
+      await database.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('v18文件升级仅移除笔记类别，正文标签和其他模块分类完整保留', () async {
     // 独占的旧库测试目录。
     final Directory directory = await Directory.systemTemp.createTemp(
@@ -168,7 +215,7 @@ void main() {
     );
     expect(restored.tables['record_taxonomy_links'], isEmpty);
     expect(restored.tables['note_local_drafts'], isEmpty);
-    expect(SyncSnapshot.version, 4);
+    expect(SyncSnapshot.version, 5);
     expect(SyncSnapshot.migrationProtocolVersion, 3);
   });
 

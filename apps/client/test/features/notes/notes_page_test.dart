@@ -3,6 +3,12 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:crypto/crypto.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
+import 'package:omni_butler/features/notes/data/note_editor_controller.dart';
+import 'package:omni_butler/features/notes/data/note_image_repository.dart';
+import 'package:omni_butler/features/notes/presentation/note_rich_editor.dart';
+import 'package:omni_butler/features/notes/presentation/note_markdown_text.dart';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:drift/drift.dart' hide Column, isNull, isNotNull;
@@ -36,6 +42,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 全应用路径回归：所有音频接口都由替身接管。
 void main() {
   statisticsPageTests();
+  editorToolbarTests();
   test('热力图八至十二周跨年保持每列七天及周一起点', () {
     // 跨年第二周，最后一列包含当前日之后的未来格。
     // 所有支持宽度均保持当前周在最右侧。
@@ -100,7 +107,7 @@ void main() {
     // 首次真正进入后使用实际编辑器自动保存。
     await _navigate(tester, app, '/notes');
     final String originalId = app.container.read(noteEditorProvider).draft.id;
-    await tester.enterText(_body(), '今天完成笔记功能，明天继续验证。');
+    await _enterBody(tester, '今天完成笔记功能，明天继续验证。');
     await _settle(tester, elapsed: const Duration(milliseconds: 700));
     expect(
       (await tester.runAsync(
@@ -131,7 +138,7 @@ void main() {
     await _navigate(tester, app, '/home');
     await _navigate(tester, app, '/notes');
     expect(app.container.read(noteEditorProvider).draft.id, isNot(originalId));
-    expect(tester.widget<TextField>(_body()).controller!.text, isEmpty);
+    expect(_bodyText(tester), isEmpty);
     expect(
       (await tester.runAsync(
         () => NoteRepository(app.database).find(originalId),
@@ -217,7 +224,7 @@ void main() {
       findsNWidgets(63),
     );
     // 摘要仅是标题之后的正文，并按视觉行裁切。
-    final Text preview = tester.widget<Text>(
+    final NoteMarkdownText preview = tester.widget<NoteMarkdownText>(
       find.byKey(const ValueKey('note-preview-target')),
     );
     expect(
@@ -234,7 +241,7 @@ void main() {
             .height,
       ),
     );
-    expect(preview.data, isNot(contains('今日日报目标')));
+    expect(preview.source, isNot(contains('今日日报目标')));
     await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
@@ -259,7 +266,7 @@ void main() {
       startsWith(createdDay),
     );
     // 草稿落盘后仍不进入正式统计。
-    await tester.enterText(_body(), '未发布的想法');
+    await _enterBody(tester, '未发布的想法');
     await _settle(tester, elapsed: const Duration(milliseconds: 700));
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('note-count'))).data,
@@ -322,7 +329,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 60));
     await tester.tap(filteredCard);
     await _settle(tester);
-    await tester.enterText(_body(), '筛选内保存标题\n修改后的正文');
+    await _enterBody(tester, '筛选内保存标题\n修改后的正文');
     await tester.ensureVisible(find.byKey(const ValueKey('note-commit')));
     await tester.tap(find.byKey(const ValueKey('note-commit')));
     await _settle(tester);
@@ -413,7 +420,7 @@ void main() {
     // 搜索打开时自动展开列表，不影响主区草稿、筛选及正式统计。
     await tester.tap(find.byTooltip('搜索标签').hitTestable());
     await _settle(tester);
-    await tester.enterText(_body(), '标签搜索期间未发布的正文');
+    await _enterBody(tester, '标签搜索期间未发布的正文');
     await tester.enterText(
       find.byKey(const ValueKey('notes-tags-search')),
       '复',
@@ -457,7 +464,7 @@ void main() {
       findsNothing,
     );
     expect(find.byKey(const ValueKey('notes-tag-unused')), findsOneWidget);
-    expect(tester.widget<TextField>(_body()).controller!.text, '标签搜索期间未发布的正文');
+    expect(_bodyText(tester), '标签搜索期间未发布的正文');
     await mouse.moveTo(
       tester.getCenter(find.byKey(const ValueKey('notes-tags-toggle'))),
     );
@@ -701,7 +708,7 @@ void main() {
     await tester.runAsync(
       () => NoteRepository(app.database).softDelete('yesterday'),
     );
-    await tester.enterText(_body(), '未发布新笔记');
+    await _enterBody(tester, '未发布新笔记');
     await tester.enterText(
       find.widgetWithText(TextField, '搜索笔记 · Ctrl+F'),
       '不存在',
@@ -737,7 +744,7 @@ void main() {
     await _capture(tester, app, 'windows-tags-management');
     await tester.tap(find.byTooltip('关闭').hitTestable());
     await _settle(tester);
-    expect(tester.widget<TextField>(_body()).controller!.text, '未发布新笔记');
+    expect(_bodyText(tester), '未发布新笔记');
     expect(find.widgetWithText(TextField, '搜索笔记 · Ctrl+F'), findsOneWidget);
     expect(
       tester.getTopLeft(find.byKey(const ValueKey('notes-tag-work'))).dy,
@@ -758,7 +765,7 @@ void main() {
       seed: true,
     );
     await _navigate(tester, app, '/notes');
-    await tester.enterText(_body(), '标签操作期间保留的草稿');
+    await _enterBody(tester, '标签操作期间保留的草稿');
     // 操作前正式正文及版本身份。
     final NoteEntryRecord original = (await tester.runAsync<NoteEntryRecord?>(
       () => NoteRepository(app.database).find('target'),
@@ -878,7 +885,7 @@ void main() {
       '3',
     );
     expect(find.byKey(const ValueKey('note-card-weekly-note')), findsOneWidget);
-    expect(tester.widget<TextField>(_body()).controller!.text, '标签操作期间保留的草稿');
+    expect(_bodyText(tester), '标签操作期间保留的草稿');
     // 操作后正式数据用于验证解除关联边界。
     final NoteEntryRecord after = (await tester.runAsync<NoteEntryRecord?>(
       () => NoteRepository(app.database).find('target'),
@@ -955,7 +962,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Windows 输入卡片四种状态、无悬停底色和图标发布', (tester) async {
+  testWidgets('Windows 输入卡片四种状态、工具悬停反馈和图标发布', (tester) async {
     // 使用生产根应用验证聚焦和实际底部布局。
     final _App app = await _mount(
       tester,
@@ -973,7 +980,7 @@ void main() {
         of: surface,
         matching: find.byType(OmniNoteComposerButton),
       ),
-      findsNWidgets(2),
+      findsNWidgets(6),
     );
     expect(
       find.descendant(of: surface, matching: find.byType(Divider)),
@@ -1003,10 +1010,9 @@ void main() {
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(_body()));
     await _settle(tester);
-    expect(tester.widget<TextField>(_body()).decoration!.filled, isFalse);
     expect(
-      tester.widget<TextField>(_body()).decoration!.hoverColor,
-      Colors.transparent,
+      tester.widget<NoteRichEditor>(_body()).style!.color,
+      NoteComposerStyle.ink,
     );
     expect(
       (tester.widget<DecoratedBox>(surface).decoration as BoxDecoration)
@@ -1035,7 +1041,7 @@ void main() {
       OmniColors.of(tester.element(surface)).brand,
     );
     await _capture(tester, app, 'windows-composer-focused-empty');
-    await tester.enterText(_body(), '玩儿玩儿2');
+    await _enterBody(tester, '玩儿玩儿2');
     await _settle(tester);
     expect(
       tester
@@ -1064,7 +1070,7 @@ void main() {
     // 点击卡片内工具不应被正文误判为外部点击。
     await tester.tap(tag);
     await _settle(tester);
-    expect(tester.widget<TextField>(_body()).focusNode!.hasFocus, isTrue);
+    expect(_bodyHasFocus(tester), isTrue);
     expect(
       find.descendant(of: surface, matching: find.text('管理标签')),
       findsNothing,
@@ -1072,7 +1078,7 @@ void main() {
     await tester.tap(tag);
     await _settle(tester);
     // 中文、组合字符和 emoji 按用户看到的字符计数。
-    await tester.enterText(_body(), '中👨‍👩‍👧‍👦e\u0301');
+    await _enterBody(tester, '中👨‍👩‍👧‍👦e\u0301');
     await _settle(tester);
     expect(
       tester
@@ -1080,7 +1086,7 @@ void main() {
           .data,
       '3',
     );
-    await tester.enterText(_body(), '玩儿玩儿2');
+    await _enterBody(tester, '玩儿玩儿2');
     await tester.tap(find.widgetWithText(TextField, '搜索笔记 · Ctrl+F'));
     await _settle(tester);
     expect(find.byKey(const ValueKey('note-composer-count')), findsNothing);
@@ -1091,13 +1097,15 @@ void main() {
           .color,
       NoteComposerStyle.border,
     );
+    await mouse.moveTo(tester.getCenter(tag));
+    await _settle(tester);
     expect(
-      _composerButton(
-        tester,
-        tag,
-      ).style!.foregroundColor!.resolve({WidgetState.hovered}),
-      NoteComposerStyle.idleTool,
+      _composerButton(tester, tag).style!.foregroundColor!.resolve({}),
+      OmniColors.of(tester.element(surface)).ink,
     );
+    // 离开悬停后颜色恢复空闲层级。
+    await mouse.moveTo(Offset.zero);
+    await _settle(tester);
     expect(
       _composerButton(tester, action).style!.backgroundColor!.resolve({}),
       OmniColors.of(tester.element(surface)).brand,
@@ -1105,7 +1113,7 @@ void main() {
     await _capture(tester, app, 'windows-composer-blurred-text');
     await tester.tap(action);
     await _settle(tester);
-    expect(tester.widget<TextField>(_body()).controller!.text, isEmpty);
+    expect(_bodyText(tester), isEmpty);
     expect(
       (await tester.runAsync(
         () => app.database.select(app.database.noteEntries).get(),
@@ -1200,7 +1208,7 @@ void main() {
         );
       },
     );
-    expect(tester.widget<TextField>(_body()).controller!.text, isEmpty);
+    expect(_bodyText(tester), isEmpty);
     expect(find.byTooltip('发布'), findsOneWidget);
     expect(find.byTooltip('开始录音'), findsNothing);
     expect(find.textContaining('草稿录音 ·'), findsOneWidget);
@@ -1510,7 +1518,7 @@ void main() {
       seed: true,
     );
     await _navigate(tester, app, '/notes');
-    await tester.enterText(_body(), '新的标题\n正文第一行\n正文第二行\n正文第三行');
+    await _enterBody(tester, '新的标题\n正文第一行\n正文第二行\n正文第三行');
     await _settle(tester, elapsed: const Duration(milliseconds: 700));
     await tester.ensureVisible(find.byKey(const ValueKey('note-commit')));
     await tester.tap(find.byKey(const ValueKey('note-commit')));
@@ -1535,13 +1543,13 @@ void main() {
     expect(find.byKey(const ValueKey('notes-composer-entry')), findsOneWidget);
     expect(find.byTooltip('保存'), findsOneWidget);
     expect(find.text('取消'), findsOneWidget);
-    await tester.enterText(_body(), '尚未确认的修改');
+    await _enterBody(tester, '尚未确认的修改');
     await _settle(tester, elapsed: const Duration(milliseconds: 700));
     // 编辑中的历史笔记失去正文和工具焦点后，仍显示主题色边框。
     final Finder surface = find.byKey(const ValueKey('note-composer-surface'));
     await tester.tap(find.widgetWithText(TextField, '搜索笔记 · Ctrl+F'));
     await _settle(tester);
-    expect(tester.widget<TextField>(_body()).focusNode!.hasFocus, isFalse);
+    expect(_bodyHasFocus(tester), isFalse);
     expect(find.byKey(const ValueKey('note-composer-count')), findsNothing);
     expect(
       (tester.widget<DecoratedBox>(surface).decoration as BoxDecoration)
@@ -1583,10 +1591,7 @@ void main() {
     await _settle(tester);
     app.container.read(appRouterProvider).go('/notes?id=target');
     await _settle(tester);
-    expect(
-      tester.widget<TextField>(_body()).controller!.text,
-      startsWith('今日日报目标'),
-    );
+    expect(_bodyText(tester), startsWith('今日日报目标'));
     expect(
       tester
           .widget<TextField>(find.widgetWithText(TextField, '搜索笔记 · Ctrl+F'))
@@ -1596,22 +1601,22 @@ void main() {
     );
     app.container.read(appRouterProvider).go('/notes?id=yesterday');
     await _settle(tester);
-    expect(tester.widget<TextField>(_body()).controller!.text, '昨日日报');
+    expect(_bodyText(tester), '昨日日报');
     app.container.read(appRouterProvider).go('/notes?id=target');
     await _settle(tester);
     // 在尚未发布的人工修改存在时，删除仍及时冻结且保留正文。
-    await tester.enterText(_body(), '删除前尚未发布的修改');
+    await _enterBody(tester, '删除前尚未发布的修改');
     await tester.runAsync(
       () => NoteRepository(app.database).softDelete('target'),
     );
     await _settle(tester);
-    expect(tester.widget<TextField>(_body()).readOnly, isTrue);
-    expect(tester.widget<TextField>(_body()).controller!.text, '删除前尚未发布的修改');
+    expect(_bodyReadOnly(tester), isTrue);
+    expect(_bodyText(tester), '删除前尚未发布的修改');
     // 同篇恢复后继续编辑原草稿，不覆盖人工内容。
     await tester.runAsync(() => NoteRepository(app.database).restore('target'));
     await _settle(tester);
-    expect(tester.widget<TextField>(_body()).readOnly, isFalse);
-    expect(tester.widget<TextField>(_body()).controller!.text, '删除前尚未发布的修改');
+    expect(_bodyReadOnly(tester), isFalse);
+    expect(_bodyText(tester), '删除前尚未发布的修改');
     await _dispose(tester, app);
     expect(tester.takeException(), isNull);
   });
@@ -1624,7 +1629,7 @@ void main() {
       seed: true,
     );
     await _navigate(tester, app, '/notes');
-    await tester.enterText(_body(), '隐藏侧栏时仍保留的草稿');
+    await _enterBody(tester, '隐藏侧栏时仍保留的草稿');
     await tester.tap(find.byKey(const ValueKey('notes-tag-review')));
     await _settle(tester);
     // 导航区及底部空白都属于侧栏，均应显示隐藏入口。
@@ -1664,7 +1669,7 @@ void main() {
     expect(find.byKey(const ValueKey('notes-sidebar-divider')), findsNothing);
     expect(find.byTooltip('显示侧边栏'), findsOneWidget);
     expect(find.text('# 复盘'), findsOneWidget);
-    expect(tester.widget<TextField>(_body()).controller!.text, '隐藏侧栏时仍保留的草稿');
+    expect(_bodyText(tester), '隐藏侧栏时仍保留的草稿');
     await _capture(tester, app, 'windows-sidebar-hidden');
     await tester.tap(find.byTooltip('显示侧边栏'));
     await _settle(tester);
@@ -1685,7 +1690,7 @@ void main() {
       seed: true,
     );
     await _navigate(tester, app, '/notes');
-    await tester.enterText(_body(), '调整侧栏宽度时保留输入');
+    await _enterBody(tester, '调整侧栏宽度时保留输入');
     // 拖动入口与实际侧栏尺寸。
     final Finder divider = find.byKey(const ValueKey('notes-sidebar-divider'));
     // 热力图的日格，不包含月份标签。
@@ -1781,7 +1786,7 @@ void main() {
       find.byKey(ValueKey('note-heatmap-${businessDayKey(DateTime.now())}')),
       findsOneWidget,
     );
-    expect(tester.widget<TextField>(_body()).controller!.text, '调整侧栏宽度时保留输入');
+    expect(_bodyText(tester), '调整侧栏宽度时保留输入');
     await _capture(tester, app, 'windows-sidebar-min');
     tester.platformDispatcher.textScaleFactorTestValue = 1.6;
     await _settle(tester);
@@ -1904,12 +1909,10 @@ void main() {
       seed: true,
     );
     await _navigate(tester, app, '/notes');
-    await tester.enterText(_body(), '侧栏动画中保留的正文');
+    await _enterBody(tester, '侧栏动画中保留的正文');
     await _settle(tester);
     // 同一编辑控制器不能在过渡中被替换。
-    final TextEditingController body = tester
-        .widget<TextField>(_body())
-        .controller!;
+    final Object body = _bodyEditingController(tester);
     // 主区的左右端点及动效占位。
     final Finder main = find.byKey(const ValueKey('notes-main-scroll'));
     // 完整侧栏占位包含拖动热区。
@@ -1945,8 +1948,8 @@ void main() {
     await _capture(tester, app, 'windows-sidebar-reopening');
     await _settle(tester);
     expect(tester.getTopLeft(main).dx, expandedLeft);
-    expect(tester.widget<TextField>(_body()).controller, same(body));
-    expect(body.text, '侧栏动画中保留的正文');
+    expect(_bodyEditingController(tester), same(body));
+    expect(_bodyText(tester), '侧栏动画中保留的正文');
     // 完整收起后内容立即不可聚焦或点击。
     await mouse.moveTo(
       tester.getCenter(find.byKey(const ValueKey('notes-sidebar-overview'))),
@@ -2277,10 +2280,7 @@ void main() {
           seed: true,
         );
         await _navigate(tester, app, '/notes');
-        await tester.enterText(
-          _body(),
-          '记录此刻的想法\n\n今天完成了第一轮验证。把临时想法写下来，之后再整理成日报或周报。',
-        );
+        await _enterBody(tester, '记录此刻的想法\n\n今天完成了第一轮验证。把临时想法写下来，之后再整理成日报或周报。');
         await _settle(tester, elapsed: const Duration(milliseconds: 700));
         await _capture(tester, app, '${platform.name}-$theme');
         expect(app.recorder.starts, 0);
@@ -2310,10 +2310,7 @@ void main() {
           colors.brand,
         );
         expect(tester.getSize(action), const Size(48, 30));
-        await tester.enterText(
-          _body(),
-          '记录此刻的想法\n\n今天完成了第一轮验证。把临时想法写下来，之后再整理成日报或周报。',
-        );
+        await _enterBody(tester, '记录此刻的想法\n\n今天完成了第一轮验证。把临时想法写下来，之后再整理成日报或周报。');
         await _settle(tester, elapsed: const Duration(milliseconds: 700));
         expect(
           _composerButton(tester, action).style!.backgroundColor!.resolve({}),
@@ -2401,7 +2398,7 @@ void main() {
     await tester.pumpAndSettle();
     final double opened = tester.getSize(expansion).height;
     expect(opened, greaterThan(middle));
-    expect(tester.widget<TextField>(_body()).controller!.text, isEmpty);
+    expect(_bodyText(tester), isEmpty);
     await _capture(tester, app, 'windows-body-expanded');
     // 再次点击逐帧收起，而不是直接移除正文。
     await tester.tap(toggle);
@@ -2676,7 +2673,7 @@ void statisticsPageTests() {
       seed: true,
       initialLocation: '/notes',
     );
-    await tester.enterText(_body(), '尚未发布的统计测试草稿');
+    await _enterBody(tester, '尚未发布的统计测试草稿');
     await _settle(tester);
     // 原有标签和搜索会排除昨天，弹窗选日必须清除它们。
     await tester.tap(find.byKey(const ValueKey('notes-tag-review')));
@@ -2778,7 +2775,7 @@ void statisticsPageTests() {
           .text,
       isEmpty,
     );
-    expect(tester.widget<TextField>(_body()).controller!.text, '尚未发布的统计测试草稿');
+    expect(_bodyText(tester), '尚未发布的统计测试草稿');
     await _capture(tester, app, 'windows-statistics-filtered-day');
     await tester.tap(find.text('全部笔记'));
     await _settle(tester);
@@ -2801,7 +2798,7 @@ void statisticsPageTests() {
     await tester.pump(const Duration(milliseconds: 60));
     await tester.tap(find.byKey(const ValueKey('note-card-target')));
     await _settle(tester);
-    await tester.enterText(_body(), '保留这篇尚未保存的历史编辑');
+    await _enterBody(tester, '保留这篇尚未保存的历史编辑');
     await _settle(tester);
     tester.view.physicalSize = const Size(700, 720);
     await _settle(tester);
@@ -2910,13 +2907,642 @@ Future<void> _waitOriginalAudio(WidgetTester tester) async {
   expect(find.byTooltip('正在检查原音'), findsNothing);
 }
 
-/// 定位正文，避免误输入应用的搜索框。
-Finder _body() => find.byWidgetPredicate(
-  (widget) =>
-      widget is TextField &&
-      (widget.decoration?.hintText?.startsWith('记下此刻') == true ||
-          widget.decoration?.hintText == '现在的想法是...'),
-);
+/// 新增编辑栏按生产页面验证选择、弹层和图片发布。
+void editorToolbarTests() {
+  testWidgets('Windows历史笔记明暗hover不改变整卡背景且仍可双击编辑', (tester) async {
+    // 真实生产数据同时包含普通卡片与带标签、音频的卡片。
+    for (final String theme in <String>['light', 'dark']) {
+      // 每种主题使用独立内存应用与真实绘制边界。
+      final _App app = await _mount(
+        tester,
+        platform: TargetPlatform.windows,
+        initialLocation: '/notes',
+        theme: theme,
+        seed: true,
+      );
+      // 同一鼠标重复进出，检查墨水层合成后的实际像素。
+      final TestGesture mouse = await tester.createGesture(
+        kind: ui.PointerDeviceKind.mouse,
+      );
+      await mouse.addPointer(location: Offset.zero);
+      // 普通卡片与带标签、音频卡片都必须保持自身表面色。
+      for (final String id in <String>['weekly-note', 'target']) {
+        // 通过卡片稳定身份定位，避免音频子控件干扰采样。
+        final Finder card = find.byKey(ValueKey('note-card-$id'));
+        await tester.ensureVisible(card);
+        await _settle(tester);
+        await mouse.moveTo(Offset.zero);
+        await _settle(tester);
+        // 卡片底部留白避开文字、边框及音频背景。
+        final Offset sample = tester.getBottomLeft(card) + const Offset(8, -8);
+        // 鼠标进入之前的实际卡片颜色。
+        final Color before = await _pixelAt(tester, app, sample);
+        await mouse.moveTo(tester.getTopLeft(card) + const Offset(80, 20));
+        await _settle(tester);
+        expect(await _pixelAt(tester, app, sample), before);
+        await mouse.moveTo(Offset.zero);
+        await _settle(tester);
+        expect(await _pixelAt(tester, app, sample), before);
+      }
+      // 双击入口仍在，读屏可见编辑器且能取消回到同一卡片。
+      // 时间行双击避开音频进度条及行内操作，原生探针另测真实鼠标双击。
+      final Offset editPoint =
+          tester.getTopLeft(find.byKey(const ValueKey('note-card-target'))) +
+          const Offset(80, 20);
+      await mouse.removePointer();
+      // 双击仲裁要求两次点击分配不同指针，不能复用被挂起的手势竞技场。
+      for (int click = 0; click < 2; click++) {
+        await tester.tapAt(editPoint);
+        await tester.pump(const Duration(milliseconds: 65));
+      }
+      await _settle(tester);
+      expect(find.byKey(const ValueKey('note-rich-editor')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('note-edit-cancel')));
+      await _settle(tester);
+      expect(find.byKey(const ValueKey('note-card-target')), findsOneWidget);
+      await _dispose(tester, app);
+    }
+  });
+  for (final String theme in ['light', 'dark']) {
+    testWidgets('Windows编辑栏：$theme 工具悬停真实像素与鼠标原位点击保持浅灰背景', (tester) async {
+      // 读取实际合成像素，覆盖Ink透明度导致点击后变黑的历史问题。
+      final _App app = await _mount(
+        tester,
+        platform: TargetPlatform.windows,
+        initialLocation: '/notes',
+        theme: theme,
+      );
+      // 真实鼠标移动和按下释放均使用同一坐标。
+      final TestGesture mouse = await tester.createGesture(
+        kind: ui.PointerDeviceKind.mouse,
+      );
+      await mouse.addPointer(location: Offset.zero);
+      // 当前井号按钮的中间位置。
+      final Finder tag = find.byKey(const ValueKey('note-composer-tag'));
+      // 左侧空白采样点避开图标和圆角。
+      final Offset pixel = tester.getTopLeft(tag) + const Offset(6, 18);
+      // 合成期望保留精确主题RGB及量化后的透明度。
+      final OmniColors colors = OmniColors.of(tester.element(tag));
+      // 实际图层绘制的弱灰色背景。
+      final Color expected = Color.alphaBlend(
+        colors.ink.withValues(alpha: 0.05),
+        colors.paper,
+      );
+      await mouse.moveTo(tester.getCenter(tag));
+      await _settle(tester);
+      expect(
+        (await _pixelAt(tester, app, pixel)).toARGB32(),
+        expected.toARGB32(),
+      );
+      expect(
+        _composerButton(tester, tag).style!.foregroundColor!.resolve({}),
+        colors.ink,
+      );
+      await mouse.down(tester.getCenter(tag));
+      await mouse.up();
+      await _settle(tester);
+      expect(
+        (await _pixelAt(tester, app, pixel)).toARGB32(),
+        expected.toARGB32(),
+      );
+      await _capture(tester, app, 'windows-toolbar-hover-$theme');
+      await mouse.moveTo(Offset.zero);
+      await _settle(tester);
+      expect(
+        (await _pixelAt(tester, app, pixel)).toARGB32(),
+        colors.paper.toARGB32(),
+      );
+      await mouse.removePointer();
+      await _dispose(tester, app);
+      expect(tester.takeException(), isNull);
+    });
+  }
+  for (final String theme in ['light', 'dark']) {
+    testWidgets('Windows编辑栏：$theme 鼠标打开Aa不默认高亮加粗，键盘焦点与悬停分别显示', (tester) async {
+      // 通过生产页面和真实鼠标复现首项自动聚焦的误选外观。
+      final _App app = await _mount(
+        tester,
+        platform: TargetPlatform.windows,
+        initialLocation: '/notes',
+        theme: theme,
+      );
+      await _enterBody(tester, '普通文本');
+      // 格式动作使用可见文字选区，打开菜单本身不能更改正文。
+      final NoteRichEditorController rich = tester
+          .widget<NoteRichEditor>(_body())
+          .controller;
+      rich.selection = const TextSelection(baseOffset: 0, extentOffset: 2);
+      // 同一鼠标始终停在Aa入口，避免触摸模式掩盖焦点背景。
+      final TestGesture mouse = await tester.createGesture(
+        kind: ui.PointerDeviceKind.mouse,
+      );
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(tester.getCenter(find.byTooltip('文本格式')));
+      await mouse.down(tester.getCenter(find.byTooltip('文本格式')));
+      await mouse.up();
+      await _settle(tester);
+      // 菜单三项的背景必须先保持普通面板颜色。
+      final Finder bold = find.byKey(const ValueKey('note-format-bold'));
+      // Tab后应显示真实键盘焦点，而不是永久禁用焦点提示。
+      final Finder underline = find.byKey(
+        const ValueKey('note-format-underline'),
+      );
+      // 鼠标重新移入时只高亮当前指针所在的按钮。
+      final Finder highlight = find.byKey(
+        const ValueKey('note-format-highlight'),
+      );
+      // 使用实际菜单主题和RGBA采样核对外观。
+      final OmniColors colors = OmniColors.of(tester.element(bold));
+      // 图标左侧留白避开字形及圆角，读取真实合成后的底色。
+      Future<int> background(Finder button) async => (await _pixelAt(
+        tester,
+        app,
+        tester.getTopLeft(button) + const Offset(6, 18),
+      )).toARGB32();
+      // 悬停和键盘导航采用相同的浅灰反馈。
+      final int activeBackground = Color.alphaBlend(
+        colors.ink.withValues(alpha: 0.05),
+        colors.paper,
+      ).toARGB32();
+      expect(rich.isBold, isFalse);
+      expect(app.container.read(noteEditorProvider).draft.body, '普通文本');
+      for (final Finder button in [bold, underline, highlight]) {
+        expect(await background(button), colors.paper.toARGB32());
+        expect(
+          _composerButton(tester, button).style!.foregroundColor!.resolve({}),
+          colors.muted,
+        );
+      }
+      await _capture(tester, app, 'windows-format-menu-no-default-$theme');
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await _settle(tester);
+      expect(await background(underline), activeBackground);
+      expect(await background(bold), colors.paper.toARGB32());
+      expect(rich.isBold, isFalse);
+      await mouse.moveTo(tester.getCenter(highlight));
+      await _settle(tester);
+      expect(await background(highlight), activeBackground);
+      expect(await background(underline), colors.paper.toARGB32());
+      await mouse.moveTo(tester.getCenter(bold));
+      await mouse.down(tester.getCenter(bold));
+      await mouse.up();
+      await _settle(tester);
+      expect(find.byKey(const ValueKey('note-format-bold')), findsNothing);
+      expect(app.container.read(noteEditorProvider).draft.body, '**普通**文本');
+      expect(_bodyHasFocus(tester), isTrue);
+      expect(
+        rich.selection,
+        const TextSelection(baseOffset: 0, extentOffset: 2),
+      );
+      await mouse.removePointer();
+      await _dispose(tester, app);
+      expect(tester.takeException(), isNull);
+    });
+  }
+  testWidgets('Windows编辑栏：深色窄窗大字号与减少动画保持格式和工具可用', (tester) async {
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    // 用生产页面验证新增工具在有限宽度下按完整组换行。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      initialLocation: '/notes',
+      theme: 'dark',
+      scale: 1.6,
+    );
+    tester.view.physicalSize = const Size(640, 900);
+    app.container
+        .read(noteEditorProvider)
+        .edit(body: '**加粗**\n<u>下划线</u>\n==高亮==\n- 单层列表\n1. 有序列表');
+    await _settle(tester);
+    expect(
+      find.byKey(const ValueKey('note-composer-image')).hitTestable(),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('note-composer-ordered-list')).hitTestable(),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    await _capture(tester, app, 'windows-toolbar-dark-narrow');
+    await _dispose(tester, app);
+  });
+  testWidgets('Windows编辑栏：阅读保留非列表缩进，格式草稿菜单不泄漏标记', (tester) async {
+    // 以真实持久内容验证阅读层不会通过trim改变格式语义。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      initialLocation: '/notes',
+      prepareDatabase: (database) async {
+        await NoteRepository(database).save(
+          const NoteDraft(
+            id: 'indented',
+            body: '  - 普通标题\n  1. 普通正文',
+            dayKey: '2026-10-15',
+            baseRevision: '',
+          ),
+        );
+      },
+    );
+    expect(find.text('  - 普通标题'), findsOneWidget);
+    expect(find.text('  1. 普通正文'), findsOneWidget);
+    expect(find.text('•'), findsNothing);
+    // 只读菜单同样由受限解析器处理格式。
+    app.container.read(noteEditorProvider).edit(body: '**草稿加粗**');
+    await _settle(tester);
+    await tester.tap(find.byTooltip('本机草稿'));
+    await _settle(tester);
+    expect(
+      find.descendant(
+        of: find.byType(OmniDialogScaffold),
+        matching: find.text('草稿加粗'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('**草稿加粗**'), findsNothing);
+    await tester.tap(find.byTooltip('关闭').hitTestable());
+    await _settle(tester);
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('Windows编辑栏：选区快捷键与Aa弹层保留选区并按Markdown发布', (tester) async {
+    // 保留真实路由、草稿和发布过程。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      initialLocation: '/notes',
+    );
+    await _enterBody(tester, '加粗下划线高亮普通');
+    // 选区偏移属于可见文档，Markdown标记不参与偏移。
+    final NoteRichEditorController rich = tester
+        .widget<NoteRichEditor>(_body())
+        .controller;
+    rich.selection = const TextSelection(baseOffset: 0, extentOffset: 2);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await _settle(tester);
+    expect(
+      app.container.read(noteEditorProvider).draft.body,
+      startsWith('**加粗**'),
+    );
+    rich.selection = const TextSelection(baseOffset: 2, extentOffset: 5);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyU);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await _settle(tester);
+    expect(
+      app.container.read(noteEditorProvider).draft.body,
+      contains('<u>下划线</u>'),
+    );
+    rich.selection = const TextSelection(baseOffset: 5, extentOffset: 7);
+    await tester.tap(find.byTooltip('文本格式'));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('note-format-bold')), findsOneWidget);
+    // 弹层仍属于编辑会话，打开期间保留主题色轮廓和聚焦工具色。
+    final Finder surface = find.byKey(const ValueKey('note-composer-surface'));
+    expect(
+      (tester.widget<DecoratedBox>(surface).decoration as BoxDecoration)
+          .border!
+          .top
+          .color,
+      OmniColors.of(tester.element(surface)).brand,
+    );
+    await _capture(tester, app, 'windows-toolbar-format-menu');
+    await tester.tap(find.byKey(const ValueKey('note-format-highlight')));
+    await _settle(tester);
+    expect(_bodyHasFocus(tester), isTrue);
+    expect(rich.selection, const TextSelection(baseOffset: 5, extentOffset: 7));
+    expect(
+      app.container.read(noteEditorProvider).draft.body,
+      contains('==高亮=='),
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('note-composer-count')))
+          .data,
+      '9',
+    );
+    await _capture(tester, app, 'windows-toolbar-formats');
+    await tester.tap(find.byKey(const ValueKey('note-commit')));
+    await _settle(tester);
+    // 正式正文仍可复制为Markdown，没有保存Quill私有JSON。
+    final List<NoteEntryRecord> notes = (await tester.runAsync(
+      () => app.database.select(app.database.noteEntries).get(),
+    ))!;
+    expect(notes.single.body, '**加粗**<u>下划线</u>==高亮==普通');
+    expect(find.text('加粗下划线高亮普通'), findsOneWidget);
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Windows编辑栏：列表作用选中多行并保持首项完整阅读，Aa可Escape关闭', (tester) async {
+    // 列表与标题派生共用正式正文。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      initialLocation: '/notes',
+    );
+    await _enterBody(tester, '第一项\n第二项');
+    // 包含两行的真实可见选区。
+    final NoteRichEditorController rich = tester
+        .widget<NoteRichEditor>(_body())
+        .controller;
+    rich.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: rich.plainText.length,
+    );
+    await tester.tap(find.byKey(const ValueKey('note-composer-bullet-list')));
+    await _settle(tester);
+    expect(app.container.read(noteEditorProvider).draft.body, '- 第一项\n- 第二项');
+    await tester.tap(find.byKey(const ValueKey('note-composer-ordered-list')));
+    await _settle(tester);
+    expect(app.container.read(noteEditorProvider).draft.body, '1. 第一项\n2. 第二项');
+    await tester.tap(find.byTooltip('文本格式'));
+    await _settle(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('note-format-bold')), findsNothing);
+    expect(_bodyHasFocus(tester), isTrue);
+    await tester.tap(find.byKey(const ValueKey('note-commit')));
+    await _settle(tester);
+    expect(find.text('1.'), findsOneWidget);
+    expect(find.text('2.'), findsOneWidget);
+    expect(find.text('第一项'), findsOneWidget);
+    await _capture(tester, app, 'windows-toolbar-lists');
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Windows编辑栏：按钮多选图片后显示缩略图，纯图发布并可放大，末图删除隐藏整区', (tester) async {
+    // 所有测试图片和私有副本仅写临时目录。
+    final Directory directory = Directory.systemTemp.createTempSync(
+      'notes-toolbar-images-',
+    );
+    // 两张不同内容的真实PNG避免用伪图片蒙混校验。
+    final List<File> files = [];
+    for (int index = 0; index < 2; index++) {
+      // 临时PNG原件，导入后将复制到测试私有目录。
+      final File file = File('${directory.path}/source-$index.png');
+      file.writeAsBytesSync(
+        img.encodePng(
+          img.fill(
+            img.Image(width: 8 + index, height: 8),
+            color: img.ColorRgb8(140 + index * 50, 190, 220 - index * 40),
+          ),
+        ),
+      );
+      files.add(file);
+    }
+    // 只替换系统文件选择边界，草稿、校验和事务均使用生产实现。
+    final FilePickerPlatform previous = FilePickerPlatform.instance;
+    // 可观察的多选文件结果。
+    final _NoteImagePicker picker = _NoteImagePicker(files);
+    FilePickerPlatform.instance = picker;
+    addTearDown(() async {
+      FilePickerPlatform.instance = previous;
+      await tester.runAsync(() => directory.delete(recursive: true));
+    });
+    // 应用注入独立原件目录，禁止写入真实用户数据。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      initialLocation: '/notes',
+      imageDirectory: () async => directory,
+    );
+    expect(find.byKey(const ValueKey('note-image-strip')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('note-composer-image')));
+    // 图片校验在isolate中执行，真实I/O与测试帧交替排空。
+    for (int attempt = 0; attempt < 100; attempt++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+      if (app.container.read(noteEditorProvider).hasImages &&
+          !app.container.read(noteEditorProvider).imageAdding) {
+        break;
+      }
+    }
+    await _settle(tester);
+    expect(picker.calls, 1);
+    expect(picker.extensions, ['png', 'jpg', 'jpeg', 'webp']);
+    expect(find.byKey(const ValueKey('note-image-add')), findsOneWidget);
+    expect(find.byTooltip('移除图片'), findsNWidgets(2));
+    expect(find.byTooltip('发布'), findsOneWidget);
+    // 截图前等待两张真实位图均解码完成，避免把未上屏的图片当作空白样式。
+    for (int attempt = 0; attempt < 50; attempt++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+      if (find
+              .descendant(
+                of: find.byKey(const ValueKey('note-image-strip')),
+                matching: find.byWidgetPredicate(
+                  (widget) => widget is RawImage && widget.image != null,
+                ),
+              )
+              .evaluate()
+              .length ==
+          2) {
+        break;
+      }
+    }
+    await _capture(tester, app, 'windows-toolbar-images');
+    await tester.tap(find.byTooltip('本机草稿'));
+    await _settle(tester);
+    expect(find.text('图片草稿'), findsOneWidget);
+    expect(find.text('录音草稿'), findsNothing);
+    await tester.tap(find.byTooltip('关闭').hitTestable());
+    await _settle(tester);
+    await tester.tap(find.byTooltip('移除图片').first);
+    await _settle(tester);
+    expect(find.byTooltip('移除图片'), findsOneWidget);
+    await tester.tap(find.byTooltip('移除图片'));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('note-image-strip')), findsNothing);
+    // 再次选图可以发布纯图正文。
+    await tester.tap(find.byKey(const ValueKey('note-composer-image')));
+    for (int attempt = 0; attempt < 100; attempt++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+      if (app.container.read(noteEditorProvider).hasImages &&
+          !app.container.read(noteEditorProvider).imageAdding) {
+        break;
+      }
+    }
+    await _settle(tester);
+    await tester.tap(find.byKey(const ValueKey('note-commit')));
+    // 提交需校验真实图片SHA，不能只推进假时钟等待加载指示器停止。
+    for (int attempt = 0; attempt < 100; attempt++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+      if (!app.container.read(noteEditorProvider).committing) break;
+    }
+    await _settle(tester);
+    expect(find.text('图片笔记'), findsOneWidget);
+    // 正式图片出现在阅读卡片，而非已重置的新建草稿。
+    final List<NoteImageRecord> images = (await tester.runAsync(
+      () => (app.database.select(
+        app.database.noteImages,
+      )..where((table) => table.deletedAt.isNull())).get(),
+    ))!;
+    expect(images, hasLength(2));
+    await tester.tap(find.byKey(ValueKey('note-image-${images.first.id}')));
+    // 卡片整行支持双击编辑，单击图片先排空该手势仲裁窗口。
+    await tester.pump(const Duration(milliseconds: 350));
+    await _settle(tester);
+    expect(find.text('查看图片'), findsOneWidget);
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+    await tester.tap(find.byTooltip('关闭').hitTestable());
+    await _settle(tester);
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+}
+
+/// 从生产页面当前绘制结果采样，避免只检查样式配置。
+Future<Color> _pixelAt(WidgetTester tester, _App app, Offset point) async {
+  // 已绘制的整页边界，不读取桌面或用户窗口。
+  final RenderRepaintBoundary boundary =
+      app.boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+  return (await tester.runAsync(() async {
+    // 测试像素比固定为1，与布局坐标相同。
+    final ui.Image image = await boundary.toImage();
+    try {
+      // 原始RGBA顺序避免PNG编码影响采样。
+      final ByteData bytes = (await image.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      ))!;
+      // 当前目标像素的字节位置。
+      final int offset =
+          (point.dy.floor() * image.width + point.dx.floor()) * 4;
+      return Color.fromARGB(
+        bytes.getUint8(offset + 3),
+        bytes.getUint8(offset),
+        bytes.getUint8(offset + 1),
+        bytes.getUint8(offset + 2),
+      );
+    } finally {
+      image.dispose();
+    }
+  }))!;
+}
+
+/// 文件选择器返回固定测试原件，不打开系统窗口。
+class _NoteImagePicker extends FilePickerPlatform {
+  /// 本轮两个真实测试文件。
+  final List<File> files;
+
+  /// 记录系统选择入口是否实际被调用。
+  int calls = 0;
+
+  /// 记录生产入口传入的格式约束。
+  List<String>? extensions;
+
+  /// 创建多选边界替身。
+  _NoteImagePicker(this.files);
+
+  /// 保留插件签名，只替换外部文件对话框。
+  @override
+  Future<List<PlatformFile>> pickFiles({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    int compressionQuality = 0,
+    AndroidOptions androidOptions = const AndroidOptions(),
+    DarwinOptions darwinOptions = const DarwinOptions(),
+    WindowsOptions windowsOptions = const WindowsOptions(),
+    LinuxOptions linuxOptions = const LinuxOptions(),
+    WebOptions webOptions = const WebOptions(),
+  }) async {
+    calls++;
+    extensions = allowedExtensions;
+    return [for (final File file in files) _NotePickedFile(file)];
+  }
+}
+
+/// 选择器在本次测试只需交付真实文件身份，其余读取交给生产仓储。
+final class _NotePickedFile extends PlatformFile {
+  /// 临时原件所在位置。
+  final File file;
+
+  /// 构造固定系统选择结果。
+  _NotePickedFile(this.file);
+
+  /// 保持原文件名。
+  @override
+  String get name => file.uri.pathSegments.last;
+
+  /// 使用真实本机URI，父类据此提供path。
+  @override
+  Uri get uri => file.uri;
+
+  /// 未被本功能调用的插件能力不做伪实现。
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// 定位两端实际正文，避免误输入应用搜索框。
+Finder _body() {
+  if (find.byType(NoteRichEditor).evaluate().isNotEmpty) {
+    return find.byType(NoteRichEditor);
+  }
+  return find.byWidgetPredicate(
+    (widget) =>
+        widget is TextField &&
+        widget.decoration?.hintText?.startsWith('记下此刻') == true,
+  );
+}
+
+/// 业务回归直接编辑可见文档，原生输入与快捷键由专门组件测试覆盖。
+Future<void> _enterBody(WidgetTester tester, String text) async {
+  if (find.byType(NoteRichEditor).evaluate().isEmpty) {
+    await tester.enterText(_body(), text);
+    return;
+  }
+  // 通过真实富文本控制器触发正文编辑和草稿通知。
+  final NoteRichEditor widget = tester.widget<NoteRichEditor>(_body());
+  widget.focusNode.requestFocus();
+  widget.controller.quillController.replaceText(
+    0,
+    widget.controller.plainText.length,
+    text,
+    TextSelection.collapsed(offset: text.length),
+  );
+  await tester.pump();
+}
+
+/// 读取用户可见的正文，去掉富文本内部文档终止换行。
+String _bodyText(WidgetTester tester) =>
+    find.byType(NoteRichEditor).evaluate().isNotEmpty
+    ? tester.widget<NoteRichEditor>(_body()).controller.plainText
+    : tester.widget<TextField>(_body()).controller!.text;
+
+/// 两端正文共享同一焦点语义。
+bool _bodyHasFocus(WidgetTester tester) =>
+    find.byType(NoteRichEditor).evaluate().isNotEmpty
+    ? tester.widget<NoteRichEditor>(_body()).focusNode.hasFocus
+    : tester.widget<TextField>(_body()).focusNode!.hasFocus;
+
+/// 冻结笔记保留内容并阻止用户继续写入。
+bool _bodyReadOnly(WidgetTester tester) =>
+    find.byType(NoteRichEditor).evaluate().isNotEmpty
+    ? tester.widget<NoteRichEditor>(_body()).readOnly
+    : tester.widget<TextField>(_body()).readOnly;
+
+/// 侧栏动效不应更换当前编辑会话。
+Object _bodyEditingController(WidgetTester tester) =>
+    find.byType(NoteRichEditor).evaluate().isNotEmpty
+    ? tester.widget<NoteRichEditor>(_body()).controller
+    : tester.widget<TextField>(_body()).controller!;
 
 /// 读取实际交给 Flutter 的按钮样式，避免只检查包装组件配置。
 IconButton _composerButton(WidgetTester tester, Finder button) =>
@@ -2984,6 +3610,7 @@ Future<_App> _mount(
   String initialLocation = '/home',
   bool allowRecording = false,
   Future<void> Function(AppDatabase)? prepareDatabase,
+  Future<Directory> Function()? imageDirectory,
 }) async {
   debugDefaultTargetPlatformOverride = platform;
   tester.view.physicalSize = Size(
@@ -3013,6 +3640,18 @@ Future<_App> _mount(
       sharedPreferencesProvider.overrideWithValue(preferences),
       appDatabaseProvider.overrideWithValue(database),
       noteRecorderProvider.overrideWithValue(recorder),
+      if (imageDirectory != null)
+        noteEditorProvider.overrideWith(
+          (ref) => NoteEditorController(
+            ref.watch(noteRepositoryProvider),
+            ref.watch(noteRecorderProvider),
+            explicitCommit: platform == TargetPlatform.windows,
+            imageRepository: NoteImageRepository(
+              database,
+              directoryProvider: imageDirectory,
+            ),
+          ),
+        ),
       noteAudioPlayerProvider.overrideWithValue(_Player()),
     ],
   );

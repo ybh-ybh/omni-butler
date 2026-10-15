@@ -4,12 +4,15 @@ import 'dart:io';
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
+import 'package:omni_butler/core/attachments/image_sync_store.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
 import 'package:omni_butler/features/notes/audio/note_wav.dart';
 import 'package:omni_butler/features/notes/data/note_editor_controller.dart';
 import 'package:omni_butler/features/notes/data/note_local_draft_repository.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
+import 'package:omni_butler/features/notes/data/note_image_repository.dart';
 
 /// 只交付测试私有目录中的真实 WAV，不启动麦克风。
 class _DraftRecorder implements NoteRecorderService {
@@ -184,8 +187,16 @@ void main() {
     database = AppDatabase.forTesting(NativeDatabase.memory());
     repository = NoteRepository(database);
     recorder = _DraftRecorder();
-    editor = NoteEditorController(repository, recorder, explicitCommit: true);
     directory = await Directory.systemTemp.createTemp('note-local-draft-');
+    editor = NoteEditorController(
+      repository,
+      recorder,
+      explicitCommit: true,
+      imageRepository: NoteImageRepository(
+        database,
+        directoryProvider: () async => directory,
+      ),
+    );
   });
   tearDown(() async {
     editor.dispose();
@@ -254,6 +265,138 @@ void main() {
     await editor.open(note.id);
     return note;
   }
+
+  /// 选择器返回的真实小图，不访问用户图片。
+  Future<String> imageFile(String name) async {
+    final File file = File('${directory.path}/$name.png');
+    await file.writeAsBytes(img.encodePng(img.Image(width: 3, height: 2)));
+    return file.path;
+  }
+
+  test('多图先存本机草稿，纯图片发布原子创建两图及MinIO待传操作', () async {
+    final String noteId = editor.draft.id;
+    final String draftId = editor.draftId!;
+    await editor.addImages([
+      await imageFile('first'),
+      await imageFile('second'),
+    ]);
+    expect(await database.select(database.noteEntries).get(), isEmpty);
+    expect(await database.select(database.noteImages).get(), isEmpty);
+    expect(await database.select(database.attachments).get(), isEmpty);
+    expect(await editor.images.staged(draftId), hasLength(2));
+    expect(
+      await database
+          .customSelect(
+            "SELECT * FROM image_sync_metadata WHERE id LIKE 'intent:%'",
+          )
+          .get(),
+      isEmpty,
+    );
+    expect(await editor.commit(), NoteCommitResult.committed);
+    final NoteEntryRecord note = (await repository.find(noteId))!;
+    expect(note.body, isEmpty);
+    final List<NoteImageRecord> pictures = await editor.images.published(
+      noteId,
+    );
+    expect(pictures, hasLength(2));
+    expect(pictures.map((item) => item.sortOrder), [0, 1]);
+    for (final NoteImageRecord picture in pictures) {
+      expect(
+        await ImageSyncStore(database).read('intent:noteImage:${picture.id}'),
+        isNotNull,
+      );
+    }
+    expect(await database.select(database.noteDraftImages).get(), isEmpty);
+  });
+
+  test('只改图片保留正文版本，取消撤销删除，保存差量保留并发新增图', () async {
+    final String noteId = editor.draft.id;
+    await editor.addImages([await imageFile('base')]);
+    await editor.commit();
+    final NoteEntryRecord original = (await repository.find(noteId))!;
+    await editor.open(noteId);
+    final String firstId = (await editor.images.published(noteId)).single.id;
+    await editor.images.watch(noteId, draftId: editor.draftId).first;
+    await Future<void>.delayed(Duration.zero);
+    await editor.removeImage(firstId);
+    await editor.cancel();
+    expect(await editor.images.published(noteId), hasLength(1));
+    await editor.addImages([await imageFile('added')]);
+    await Future<void>.delayed(Duration.zero);
+    await editor.removeImage(firstId);
+    final DateTime now = DateTime.now();
+    await database
+        .into(database.noteImages)
+        .insert(
+          NoteImagesCompanion.insert(
+            id: 'peer-image',
+            noteId: noteId,
+            sortOrder: 1,
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    expect(await editor.commit(), NoteCommitResult.committed);
+    final List<NoteImageRecord> pictures = await editor.images.published(
+      noteId,
+    );
+    expect(pictures, hasLength(2));
+    expect(pictures.any((item) => item.id == 'peer-image'), isTrue);
+    expect(pictures.any((item) => item.id == firstId), isFalse);
+    expect((await repository.find(noteId))!.revision, original.revision);
+  });
+
+  test('版本选择只改正文，Android式保存与另存保留图片且原篇删除不损坏副本', () async {
+    final String noteId = editor.draft.id;
+    editor.edit(body: '初始正文');
+    await editor.addImages([await imageFile('shared')]);
+    await editor.commit();
+    await editor.open(noteId);
+    await editor.useVersion('选中的正文版本');
+    await editor.commit();
+    final NoteEntryRecord note = (await repository.find(noteId))!;
+    await repository.save(
+      NoteDraft(
+        id: noteId,
+        body: 'Android 修改',
+        dayKey: note.dayKey,
+        baseRevision: note.revision,
+      ),
+    );
+    expect(await editor.images.published(noteId), hasLength(1));
+    final NoteEntryRecord copy = await repository.saveAsNew(
+      NoteDraft(
+        id: noteId,
+        body: '副本',
+        dayKey: note.dayKey,
+        baseRevision: note.revision,
+      ),
+    );
+    final NoteImageRecord copied = (await editor.images.published(copy.id))
+        .single;
+    final Attachment cache = (await editor.images.attachment(copied.id))!;
+    expect(copied.id, isNot((await editor.images.published(noteId)).single.id));
+    await repository.permanentlyDelete(noteId);
+    await repository.purgeOrphanFiles();
+    expect(await File(cache.localPath!).exists(), isTrue);
+    expect(await editor.images.published(copy.id), hasLength(1));
+  });
+
+  test('缺图提交保留草稿，取消墓碑阻止迟到选图复活', () async {
+    final String noteId = editor.draft.id;
+    final String draftId = editor.draftId!;
+    final String source = await imageFile('missing');
+    await editor.addImages([source]);
+    final NoteDraftImageRecord staged = (await editor.images.staged(draftId))
+        .single;
+    await File(staged.localPath!).delete();
+    expect(await editor.commit(), NoteCommitResult.failed);
+    expect(await repository.find(noteId), isNull);
+    expect(await editor.images.staged(draftId), hasLength(1));
+    await editor.cancel();
+    expect(await editor.images.stage(draftId, noteId, source), isFalse);
+    expect(await editor.images.staged(draftId), isEmpty);
+  });
 
   test('删除原音仅存草稿，重启恢复删除标记，取消恢复正文与原件', () async {
     // 正式音频、共享原件和本机草稿分别验证。

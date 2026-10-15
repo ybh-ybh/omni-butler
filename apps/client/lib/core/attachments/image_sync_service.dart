@@ -210,6 +210,12 @@ class ImageSyncService {
         _publish(const ImageSyncState(enabled: false));
         return;
       }
+      // 旧服务器未声明类型时只处理原有主图，笔记图片保留本机等待升级。
+      final Set<String> supportedTypes =
+          (capabilities.data?['supportedBusinessTypes'] as List?)
+              ?.whereType<String>()
+              .toSet() ??
+          {'inventoryImage', 'membershipImage'};
       // 服务端上限与客户端上限取更小值。
       final int maxBytes =
           ((capabilities.data?['maxBytes'] as int?) ?? 20971520).clamp(
@@ -236,7 +242,9 @@ class ImageSyncService {
       final List<QueryRow> records = await database
           .customSelect(
             "SELECT 'inventoryImage' AS type,id,image_attachment_id AS attachment_id,image_local_path AS local_path FROM inventory_items "
-            "UNION ALL SELECT 'membershipImage',id,image_attachment_id,image_local_path FROM memberships",
+            "UNION ALL SELECT 'membershipImage',id,image_attachment_id,image_local_path FROM memberships "
+            "UNION ALL SELECT 'noteImage',n.id,a.id,a.local_path FROM note_images n "
+            "LEFT JOIN attachments a ON a.business_type='noteImage' AND a.business_id=n.id AND a.deleted_at IS NULL",
           )
           .get();
       for (final QueryRow record in records) {
@@ -245,6 +253,7 @@ class ImageSyncService {
         final String type = record.read<String>('type');
         final String id = record.read<String>('id');
         final String key = '$type:$id';
+        if (!supportedTypes.contains(type)) continue;
         // 兼容仅保存本机路径、尚无附件 ID 的历史业务图片。
         if (remote[key] == null &&
             record.readNullable<String>('attachment_id') == null &&
@@ -316,6 +325,7 @@ class ImageSyncService {
             });
           }
         } on DioException catch (error) {
+          await _markFailed(type, id, '图片传输失败，将自动重试');
           if (error.response?.statusCode == 409 && intent != null) {
             // CAS 冲突后下次清单刷新取服务器版本，保留旧本机文件供恢复。
             await _removeIfCurrent(key, intent);
@@ -323,10 +333,12 @@ class ImageSyncService {
           failed += 1;
           lastError = '图片传输失败，将自动重试（${error.response?.statusCode ?? '网络不可用'}）';
         } on FileSystemException {
+          await _markFailed(type, id, '图片文件在本机缺失');
           missing += 1;
           lastError = '部分图片文件在本机缺失，业务数据不受影响';
         } catch (error) {
           _check();
+          await _markFailed(type, id, '图片传输失败，将自动重试');
           failed += 1;
           lastError = error.toString();
         }
@@ -354,6 +366,23 @@ class ImageSyncService {
         );
       }
     }
+  }
+
+  /// 上传或清除一个业务图片，所有重试沿用持久操作 ID。
+  Future<void> _markFailed(String type, String id, String message) async {
+    _check();
+    await (database.update(database.attachments)..where(
+          (table) =>
+              table.businessType.equals(type) &
+              table.businessId.equals(id) &
+              table.deletedAt.isNull(),
+        ))
+        .write(
+          AttachmentsCompanion(
+            uploadState: const Value('failed'),
+            lastError: Value(message),
+          ),
+        );
   }
 
   /// 上传或清除一个业务图片，所有重试沿用持久操作 ID。
@@ -455,7 +484,9 @@ class ImageSyncService {
   /// 读取当前业务行，类型只能来自本机固定枚举。
   Future<QueryRow?> _record(String type, String id) => database
       .customSelect(
-        'SELECT image_attachment_id AS attachment_id,image_local_path AS local_path FROM ${type == 'inventoryImage' ? 'inventory_items' : 'memberships'} WHERE id=?',
+        type == 'noteImage'
+            ? "SELECT a.id AS attachment_id,a.local_path FROM note_images n LEFT JOIN attachments a ON a.business_type='noteImage' AND a.business_id=n.id AND a.deleted_at IS NULL WHERE n.id=?"
+            : 'SELECT image_attachment_id AS attachment_id,image_local_path AS local_path FROM ${type == 'inventoryImage' ? 'inventory_items' : 'memberships'} WHERE id=?',
         variables: <Variable<Object>>[Variable<String>(id)],
       )
       .getSingleOrNull();
@@ -480,12 +511,33 @@ class ImageSyncService {
           AttachmentsCompanion(deletedAt: Value<DateTime>(DateTime.now())),
         );
     if (attachmentId != null) {
+      if (type == 'noteImage') {
+        // 新设备先登记稳定缓存身份，下载完成前允许缺失本机路径。
+        final DateTime now = DateTime.now();
+        await database
+            .into(database.attachments)
+            .insert(
+              AttachmentsCompanion.insert(
+                id: attachmentId,
+                businessType: type,
+                businessId: id,
+                localPath: Value(localPath),
+                createdAt: now,
+                updatedAt: now,
+              ),
+              mode: InsertMode.insertOrIgnore,
+            );
+      }
       await (database.update(
         database.attachments,
       )..where((Attachments table) => table.id.equals(attachmentId))).write(
-        const AttachmentsCompanion(
-          deletedAt: Value<DateTime?>(null),
-          uploadState: Value<String>('synced'),
+        AttachmentsCompanion(
+          deletedAt: const Value<DateTime?>(null),
+          localPath: type == 'noteImage'
+              ? Value(localPath)
+              : const Value.absent(),
+          uploadState: Value<String>(localPath == null ? 'pending' : 'synced'),
+          lastError: const Value(null),
         ),
       );
     }
@@ -498,7 +550,7 @@ class ImageSyncService {
           imageLocalPath: Value<String?>(localPath),
         ),
       );
-    } else {
+    } else if (type == 'membershipImage') {
       await (database.update(
         database.memberships,
       )..where((Memberships table) => table.id.equals(id))).write(
@@ -557,6 +609,8 @@ class ImageSyncService {
     final File target = File(
       path.join(directory.path, '${const Uuid().v4()}.image'),
     );
+    // 删除笔记或切换会话后不遗留无人引用的下载原件。
+    bool retained = false;
     try {
       // 使用流式响应，按字节计数强制限制内存与落盘大小。
       final Response<ResponseBody> response = await _request<ResponseBody>(
@@ -588,14 +642,14 @@ class ImageSyncService {
       }
       _check();
       await temporary.rename(target.path);
-      await database.transaction(() async {
+      retained = await database.transaction(() async {
         _check();
         // 下载期间的新图片选择优先于旧响应。
         final QueryRow? current = await _record(type, id);
         if (current == null ||
             current.readNullable<String>('attachment_id') != attachmentId ||
             await _store.read('intent:$key') != null) {
-          return;
+          return false;
         }
         // 缓存登记与业务路径一次提交。
         final DateTime now = DateTime.now();
@@ -617,9 +671,11 @@ class ImageSyncService {
               ),
             );
         await _link(type, id, attachmentId, target.path);
+        return true;
       });
     } finally {
       if (await temporary.exists()) await temporary.delete();
+      if (!retained && await target.exists()) await target.delete();
     }
   }
 }

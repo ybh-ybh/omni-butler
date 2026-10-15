@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+
 import 'package:drift/drift.dart' show Value, driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -72,6 +74,137 @@ void main() {
           updatedAt: now,
         ),
       );
+
+  test('笔记图片备份与候选缓存各自拥有原件，缺图明确报告且草稿仅本机恢复', () async {
+    // 真实文件和摘要验证备份路径隔离，避免仅测试元数据形状。
+    final File image = File('${directory.path}/note.png');
+    await image.writeAsBytes([1, 2, 3, 4]);
+    final String digest = sha256.convert([1, 2, 3, 4]).toString();
+    await source.database
+        .into(source.database.noteEntries)
+        .insert(
+          NoteEntriesCompanion.insert(
+            id: 'note',
+            dayKey: '2026-10-15',
+            revision: 'rev',
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    await source.database
+        .into(source.database.noteImages)
+        .insert(
+          NoteImagesCompanion.insert(
+            id: 'image',
+            noteId: 'note',
+            sortOrder: 0,
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    await source.database
+        .into(source.database.attachments)
+        .insert(
+          AttachmentsCompanion.insert(
+            id: 'cache',
+            businessType: 'noteImage',
+            businessId: 'image',
+            localPath: Value(image.path),
+            mimeType: const Value('image/png'),
+            sha256: Value(digest),
+            sizeBytes: const Value(4),
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    await source.database
+        .into(source.database.noteLocalDrafts)
+        .insert(
+          NoteLocalDraftsCompanion.insert(
+            id: 'draft',
+            noteId: 'new-note',
+            dayKey: '2026-10-15',
+            baseRevision: '',
+            updatedAt: now,
+          ),
+        );
+    await source.database
+        .into(source.database.noteDraftImages)
+        .insert(
+          NoteDraftImagesCompanion.insert(
+            id: 'draft-image',
+            draftId: 'draft',
+            noteId: 'new-note',
+            localPath: Value(image.path),
+            mimeType: 'image/png',
+            sha256: digest,
+            sizeBytes: 4,
+            sortOrder: 0,
+            createdAt: now,
+          ),
+        );
+    await source.freezeWrites();
+    final SyncSnapshot initial = await source.exportSnapshot();
+    final Directory backupDirectory = Directory('${directory.path}/backup');
+    final SyncSnapshot backup = await backupMigrationNoteImages(
+      initial,
+      backupDirectory,
+    );
+    expect(await findMissingMigrationImages(backup), isEmpty);
+    expect(
+      backup.tables['attachments']!.single['local_path'],
+      isNot(image.path),
+    );
+    await Directory('${directory.path}/candidate').create();
+    final OmniSyncRuntime candidate = await OmniSyncRuntime.createCandidate(
+      auth,
+      '${directory.path}/candidate/candidate.sqlite',
+      backup,
+      'B',
+      mergeInitial: true,
+      useLocalData: true,
+    );
+    candidates.add(candidate);
+    // 真实持久CRUD只包含正式关联，不含路径缓存和草稿图片。
+    final CrudTransaction? upload = await candidate.powerSync
+        .getNextCrudTransaction();
+    expect(upload!.crud.map((item) => item.table), contains('note_images'));
+    expect(
+      upload.crud.map((item) => item.table),
+      isNot(contains('note_draft_images')),
+    );
+    expect(
+      upload.crud.map((item) => item.table),
+      isNot(contains('attachments')),
+    );
+    final Attachment cache =
+        (await candidate.database.select(candidate.database.attachments).get())
+            .single;
+    final NoteDraftImageRecord draftImage =
+        (await candidate.database
+                .select(candidate.database.noteDraftImages)
+                .get())
+            .single;
+    expect(
+      cache.localPath,
+      isNot(backup.tables['attachments']!.single['local_path']),
+    );
+    await backupDirectory.delete(recursive: true);
+    await image.delete();
+    expect(await File(cache.localPath!).readAsBytes(), [1, 2, 3, 4]);
+    expect(await File(draftImage.localPath!).readAsBytes(), [1, 2, 3, 4]);
+    expect(
+      (await candidate.exportSnapshot()).operations.any(
+        (item) => item['table'] == 'note_draft_images',
+      ),
+      isFalse,
+    );
+    await File(cache.localPath!).delete();
+    expect(
+      await findMissingMigrationImages(await candidate.exportSnapshot()),
+      contains('笔记图片：note / image'),
+    );
+  });
 
   test('旧事件快照删除说明后仍可恢复备注和事件主体', () async {
     await source.database
@@ -245,7 +378,7 @@ void main() {
     expect(snapshot.deletedCount, 1);
     expect(snapshot.pendingOperations, 1);
     expect(snapshot.tables.keys, unorderedEquals(SyncSnapshot.tableNames));
-    expect(snapshot.tables, hasLength(20));
+    expect(snapshot.tables, hasLength(22));
     expect(snapshot.operations.single['data'], isNot(contains('sync_state')));
     for (final bool merge in <bool>[true, false]) {
       // 两种保留本机的策略均从全新候选库开始。

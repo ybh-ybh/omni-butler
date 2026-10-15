@@ -15,6 +15,9 @@ streams:
         SELECT id, note_id, sort_order, duration_ms, mime, sha256, byte_size,
         transcript, created_at, updated_at, deleted_at FROM note_audio_segments WHERE user_id = auth.user_id()
       - >-
+        SELECT id, note_id, sort_order, created_at, updated_at, deleted_at
+        FROM note_images WHERE user_id = auth.user_id()
+      - >-
         SELECT id, parent_id, title, task_type, progress_unit, description, scheduled_date, due_at, priority_quadrant,
         is_completed, completed_at, reminder_at, repeat_rule,
         repeat_series_id, sort_order, created_at, updated_at, deleted_at

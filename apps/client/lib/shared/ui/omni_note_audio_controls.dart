@@ -155,6 +155,18 @@ class OmniNoteAudioSeekBar extends StatelessWidget {
   Widget build(BuildContext context) {
     // 轨道使用中性灰色，播放进度和圆点保持可见。
     final OmniColors colors = OmniColors.of(context);
+    // 保留原生滑块的键盘、进度值和读屏操作，不替换为自绘进度线。
+    final Widget slider = Slider(
+      value: value,
+      max: total,
+      onChanged: onChanged,
+      onChangeEnd: onChangeEnd,
+      padding: EdgeInsets.zero,
+      mouseCursor: onChanged == null
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.click,
+      semanticFormatterCallback: (position) => '${(position / 1000).round()}秒',
+    );
     return Semantics(
       label: label,
       child: SizedBox(
@@ -175,18 +187,15 @@ class OmniNoteAudioSeekBar extends StatelessWidget {
             overlayShape: SliderComponentShape.noOverlay,
             trackShape: const RectangularSliderTrackShape(),
           ),
-          child: Slider(
-            value: value,
-            max: total,
-            onChanged: onChanged,
-            onChangeEnd: onChangeEnd,
-            padding: EdgeInsets.zero,
-            mouseCursor: onChanged == null
-                ? SystemMouseCursors.basic
-                : SystemMouseCursors.click,
-            semanticFormatterCallback: (position) =>
-                '${(position / 1000).round()}秒',
-          ),
+          // Windows 卡片切换时让 Slider 的浮层语义留在同一局部子树，
+          // 避免窗口级 OverlayPortal 序列化已被卡片裁剪移除的孤立节点。
+          child: Theme.of(context).platform == TargetPlatform.windows
+              ? Overlay.wrap(
+                  alwaysSizeToContent: true,
+                  clipBehavior: Clip.none,
+                  child: slider,
+                )
+              : slider,
         ),
       ),
     );

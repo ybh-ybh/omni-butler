@@ -129,8 +129,34 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
     if (directory) rmSync(directory, { recursive: true, force: true });
   });
 
+  it('两设备图片增删按独立身份合并，正文保存和迟到写入不丢图或复活', async () => {
+    // 完整笔记主体不要求存在图片文件即可先同步业务身份。
+    const sample = await seed();
+    await sync.applyBatch(user.sub, batch([sample.operations[0]!]));
+    // 第二设备拥有相同owner和独立有效会话。
+    const deviceB = await app.get(AuthService).connect(syncKey);
+    // 并发图片各自携带独立UUID。
+    const imageIds = [randomUUID(), randomUUID()];
+    // 稳定元数据不参与正文revision变更。
+    const timestamp = new Date().toISOString();
+    // 两台设备各自新增，不提交整篇图片数组。
+    const additions: SyncOperationDto[] = imageIds.map((id) => ({ op: 'PUT', table: 'note_images', id, data: { note_id: sample.noteId, sort_order: 0, created_at: timestamp, updated_at: timestamp, deleted_at: null } }));
+    expect((await request('/sync/operations', 'POST', batch([additions[0]!]))).status).toBe(200);
+    expect((await request('/sync/operations', 'POST', batch([additions[1]!]), deviceB.accessToken)).status).toBe(200);
+    expect(await prisma.noteImage.count({ where: { noteId: sample.noteId } })).toBe(2);
+    await sync.applyBatch(user.sub, batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { updated_at: timestamp } }]));
+    expect(await prisma.noteImage.count({ where: { noteId: sample.noteId } })).toBe(2);
+    expect((await request('/sync/operations', 'POST', batch([{ op: 'PATCH', table: 'note_images', id: imageIds[0]!, data: { note_id: randomUUID() } }]))).status).toBe(400);
+    await sync.applyBatch(user.sub, batch([{ op: 'DELETE', table: 'note_images', id: imageIds[0]! }]));
+    expect(await prisma.noteImage.findMany({ where: { noteId: sample.noteId }, select: { id: true } })).toEqual([{ id: imageIds[1] }]);
+    await sync.applyBatch(user.sub, batch([{ op: 'DELETE', table: 'note_entries', id: sample.noteId }]));
+    expect(await prisma.noteImage.count({ where: { noteId: sample.noteId } })).toBe(0);
+    expect((await sync.applyBatch(user.sub, batch([additions[1]!]))).ignored).toBe(1);
+    expect(await prisma.noteImage.count({ where: { noteId: sample.noteId } })).toBe(0);
+  });
+
   /// 用实际 token 请求 HTTP，undefined JSON 不添加无关 body。
-  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '4', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
+  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '5', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
   /// 构造稳定真实同步操作。
   function batch(operations: SyncOperationDto[]): { clientId: string; transactionId: string; operations: SyncOperationDto[] } { return { clientId: randomUUID(), transactionId: randomUUID(), operations }; }
   /// 构造可回听的测试 WAV，仅测试存储不向厂商发送此合成文件。

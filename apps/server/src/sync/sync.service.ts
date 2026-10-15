@@ -20,6 +20,7 @@ import { isRetiredNoteCategory, retireNoteCategoryOperation } from './note-categ
 const parentReferences: Readonly<Record<string, Record<string, string>>> = {
   note_versions: { note_id: 'note_entries' },
   note_audio_segments: { note_id: 'note_entries' },
+  note_images: { note_id: 'note_entries' },
   todo_items: { parent_id: 'todo_items' },
   todo_progress_steps: { todo_id: 'todo_items' },
   record_taxonomy_links: { taxonomy_id: 'taxonomy_entries' },

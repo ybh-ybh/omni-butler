@@ -72,6 +72,9 @@ class OmniPanel extends StatelessWidget {
   /// 是否绘制面板描边；关闭时仍保留原有底色与圆角。
   final bool showBorder;
 
+  /// 可选悬停墨水颜色；阅读笔记使用透明色保持卡片表面稳定。
+  final Color? hoverColor;
+
   /// 创建统一内容面板。
   const OmniPanel({
     required this.child,
@@ -83,6 +86,7 @@ class OmniPanel extends StatelessWidget {
     this.clipBehavior = Clip.antiAlias,
     this.flat = false,
     this.showBorder = true,
+    this.hoverColor,
     super.key,
   });
 
@@ -181,7 +185,7 @@ class OmniPanel extends StatelessWidget {
       child: OmniInkWell(
         onTap: onTap,
         onDoubleTap: onDoubleTap,
-        hoverColor: colors.ink.withValues(alpha: 0.04),
+        hoverColor: hoverColor ?? colors.ink.withValues(alpha: 0.04),
         highlightColor: colors.ink.withValues(alpha: 0.08),
         focusColor: colors.brand.withValues(alpha: 0.12),
         child: header == null

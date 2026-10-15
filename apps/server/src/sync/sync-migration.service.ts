@@ -25,6 +25,7 @@ const limits = { maxOperations: 100000, maxBytes: 33554432 } as const;
 const references: Record<string, Record<string, string>> = {
   note_versions: { note_id: 'note_entries' },
   note_audio_segments: { note_id: 'note_entries' },
+  note_images: { note_id: 'note_entries' },
   todo_items: { parent_id: 'todo_items' },
   todo_progress_steps: { todo_id: 'todo_items' },
   daily_quote_selections: { quote_id: 'quotes' },
@@ -100,7 +101,7 @@ export class SyncMigrationService {
           );
           counts[table] = Number(rows[0]!.count);
           // 步骤只随任务展示，不能作为独立回收站记录计数。
-          if (table !== 'todo_progress_steps') {
+          if (table !== 'todo_progress_steps' && table !== 'note_images') {
             deletedCount += Number(rows[0]!.deleted);
           }
         }

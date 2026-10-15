@@ -28,6 +28,8 @@ void main() {
   late AuthRepository auth;
   // 内存服务端功能开关。
   late bool enabled;
+  // 缺字段模拟旧服务端；新服务端显式声明笔记图片能力。
+  List<String>? supportedTypes;
   // 服务端当前图片映射。
   late Map<String, Map<String, dynamic>> images;
   // 服务端已接收的请求。
@@ -42,9 +44,10 @@ void main() {
     String? attachmentId = 'remote-image',
     String revision = 'revision-1',
     String type = 'inventoryImage',
+    String businessId = 'record-1',
   }) => <String, dynamic>{
     'businessType': type,
-    'businessId': 'record-1',
+    'businessId': businessId,
     'attachmentId': attachmentId,
     'revision': revision,
     'sha256': attachmentId == null ? null : sha256.convert(bytes).toString(),
@@ -56,13 +59,14 @@ void main() {
   Future<Attachment> attach({
     AttachmentBusinessType type = AttachmentBusinessType.inventoryImage,
     List<int> content = bytes,
+    String businessId = 'record-1',
   }) async {
     // 选择器交付的源文件。
     final File source = File('${directory.path}/source.png');
     await source.writeAsBytes(content);
     return repository.attachLocalFile(
       businessType: type,
-      businessId: 'record-1',
+      businessId: businessId,
       sourcePath: source.path,
       mimeType: 'image/png',
     );
@@ -76,6 +80,7 @@ void main() {
       directoryProvider: () async => directory,
     );
     enabled = true;
+    supportedTypes = null;
     images = <String, Map<String, dynamic>>{};
     requests = <RequestOptions>[];
     beforeResponse = null;
@@ -111,6 +116,7 @@ void main() {
                       response = <String, dynamic>{
                         'enabled': enabled,
                         'maxBytes': 20971520,
+                        'supportedBusinessTypes': ?supportedTypes,
                       };
                     } else if (request.path == '/images') {
                       response = <String, dynamic>{
@@ -121,6 +127,8 @@ void main() {
                     } else {
                       // 本轮写入目标的业务类型。
                       final String type = request.path.split('/')[2];
+                      // 同篇多个图片槽拥有独立业务身份。
+                      final String businessId = request.path.split('/')[3];
                       // 解析真实 multipart 表单中的协议字段。
                       final Map<String, dynamic> fields =
                           request.data is FormData
@@ -133,8 +141,9 @@ void main() {
                         type: type,
                         attachmentId: fields['attachmentId'] as String?,
                         revision: 'revision-${requests.length}',
+                        businessId: businessId,
                       );
-                      images['$type:record-1'] = image;
+                      images['$type:$businessId'] = image;
                       response = <String, dynamic>{
                         'status': 'applied',
                         'image': image,
@@ -190,6 +199,89 @@ void main() {
     await service.stop();
     await database.close();
     await directory.delete(recursive: true);
+  });
+
+  /// 固定图片子记录已随正文先完成业务同步。
+  Future<void> noteImage(String id, int order) async {
+    final DateTime now = DateTime.now();
+    await database
+        .into(database.noteImages)
+        .insert(
+          NoteImagesCompanion.insert(
+            id: id,
+            noteId: 'note',
+            sortOrder: order,
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+  }
+
+  test('笔记双图独立补传，旧服务端能力缺省不发送不支持的图片请求', () async {
+    await noteImage('record-1', 0);
+    await noteImage('record-2', 1);
+    await attach(type: AttachmentBusinessType.noteImage);
+    await attach(
+      type: AttachmentBusinessType.noteImage,
+      businessId: 'record-2',
+    );
+    await service.runOnce();
+    expect(
+      requests.where((item) => item.path.startsWith('/images/noteImage/')),
+      isEmpty,
+    );
+    expect(
+      await ImageSyncStore(database).read('intent:noteImage:record-1'),
+      isNotNull,
+    );
+    supportedTypes = ['inventoryImage', 'membershipImage', 'noteImage'];
+    await service.runOnce();
+    expect(
+      images.keys,
+      containsAll(['noteImage:record-1', 'noteImage:record-2']),
+    );
+    expect(
+      await ImageSyncStore(database).read('intent:noteImage:record-1'),
+      isNull,
+    );
+    expect(
+      await ImageSyncStore(database).read('intent:noteImage:record-2'),
+      isNull,
+    );
+    expect((await database.select(database.noteImages).get()), hasLength(2));
+  });
+
+  test('新设备从MinIO接口下载两张笔记图片，缓存关联不会覆盖同篇其他图片', () async {
+    supportedTypes = ['inventoryImage', 'membershipImage', 'noteImage'];
+    await noteImage('record-1', 0);
+    await noteImage('record-2', 1);
+    images['noteImage:record-1'] = remote(
+      type: 'noteImage',
+      attachmentId: 'one',
+    );
+    images['noteImage:record-2'] = remote(
+      type: 'noteImage',
+      businessId: 'record-2',
+      attachmentId: 'two',
+    );
+    await service.runOnce();
+    final List<Attachment> caches = await database
+        .select(database.attachments)
+        .get();
+    expect(caches, hasLength(2));
+    for (final Attachment cache in caches) {
+      expect(cache.businessType, 'noteImage');
+      expect(cache.uploadState, 'synced');
+      expect(await File(cache.localPath!).readAsBytes(), bytes);
+    }
+    final int downloaded = requests
+        .where((item) => item.path.endsWith('/file'))
+        .length;
+    await service.runOnce();
+    expect(
+      requests.where((item) => item.path.endsWith('/file')),
+      hasLength(downloaded),
+    );
   });
 
   test('关闭时保留本机操作，开启后自动补传且首页背景不传', () async {

@@ -48,6 +48,18 @@
 
 ## 可重复执行
 
+### 2026-10-15 三个点取消后的卡片底色
+
+Windows 菜单按钮不再在打开前无条件 `requestFocus`，改由 Navigator 恢复打开前的焦点。鼠标打开并点击遮罩取消后，不会凭空给祖先 `OmniPanel` 留下品牌色焦点墨水；Tab 聚焦后用 Enter 打开、Escape 关闭仍恢复触发器。未关闭焦点样式或无障碍，也没有在回调后调用全局 unfocus。
+
+`omni_menu_focus_test.dart` 检查明暗、图标／自定义入口、连续两次鼠标取消后的真实 RGBA 像素和已有输入焦点，并检查选择后业务弹窗的焦点及唯一回调。完整测试在隔离副本恢复旧代码后再次复现像素差异，见 `build/menu-dismiss-focus-fix/regression-before-final.log`；修后共享菜单／点击反馈／Windows 和 Android 入口／事件布局共 74 项通过，见 `shared-final.log`，笔记页原有回归也全部通过，见 `regression-after.log`（其中新像素测试初版未等待父卡双击仲裁，修正等待后在 `shared-final.log` 通过）。
+
+事件历史截图仅 14×14 区域的 124 个图标像素变化，已检查为取消菜单后正常灰色字形替代此前强制焦点深色字形，仅更新该基线。检查图为 `build/menu-dismiss-focus-fix/event-golden-review.png`。静态分析无问题，样式检查29项受控例外通过。
+
+独立原生窗口明暗各三次“笔记三个点→外部关闭”的实际 RGBA 像素严格等于打开前：浅色 `0xffffffff`、深色 `0x242529ff`；截图及 `results.json` 保存在 `build/menu-dismiss-focus-fix/native-light`、`native-dark`。两轮均开启原生 AX、退出0、errors为空，键盘恢复／菜单选择／右键反馈／嵌套与笔记双击轨迹全部通过，无AXTree错误。探针等待父卡原有双击仲裁，不修改生产手势时机；不操作个人数据。
+
+正式入口 `lib/main.dart` 的 Windows Release 构建成功（63.7秒），日志 `build/menu-dismiss-focus-fix/release-build.log`；产物 `build/windows/x64/runner/Release/omni_butler.exe`。正在运行的用户 Debug 实例保持运行。
+
 在 `apps/client` 运行 `dart tool/check_ui_style.dart`、`flutter analyze --no-pub` 和上述测试。Windows 动效探针以 `tool/windows_interaction_probe.dart` 为入口，使用 `OMNI_INTERACTION_PROBE_OUTPUT` 指定证据目录，`OMNI_INTERACTION_PROBE_DARK=true` 指定深色；采样清单 `frames.ffconcat` 可用 FFmpeg 编码视频。已有 `tool/notes_windows_accessibility_probe.dart` 继续用于真实笔记动态语义二十轮回归。
 
 此轮覆盖源码入口、自动交互和独立原生运行时；不把隔离演示扩大解释为所有生产业务数据状态的人工验收，也不以 Windows 验证代替 Android 实体设备手感验证。

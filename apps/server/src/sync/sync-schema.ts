@@ -1,7 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 
-/// 笔记类别已物理删除，所有同步参与者必须使用无类别的数据结构。
-export const syncSchemaVersion = 4;
+/// 笔记图片子记录参与同步，所有参与者必须理解附件身份和生命周期。
+export const syncSchemaVersion = 5;
 
 /// 在写入和签发下行凭证前阻止旧客户端解释新版任务。
 export function requireSyncSchemaVersion(version: string | undefined): void {

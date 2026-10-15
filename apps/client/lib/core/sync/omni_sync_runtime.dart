@@ -47,6 +47,7 @@ class OmniSyncRuntime {
     'note_audio_local_files',
     'note_local_drafts',
     'note_draft_audio_segments',
+    'note_draft_images',
   ];
 
   /// PowerSync 底层数据库。
@@ -339,7 +340,8 @@ class OmniSyncRuntime {
       for (final String table in SyncSnapshot.tableNames) {
         // 原音本机状态单独按文件校验恢复，不携带旧源识别任务或共享备份路径。
         if (table == 'note_audio_local_files' ||
-            table == 'note_draft_audio_segments') {
+            table == 'note_draft_audio_segments' ||
+            table == 'note_draft_images') {
           continue;
         }
         if (!useLocalData &&
@@ -405,6 +407,7 @@ class OmniSyncRuntime {
     await _installRawTableTriggers();
     await restoreLocalNoteAudio(snapshot);
     if (useLocalData) await restoreLocalDraftAudio(snapshot);
+    await restoreLocalNoteImages(snapshot, includeDrafts: useLocalData);
   }
 
   /// 在完整下行后恢复同业务类型、同记录 ID 的本机图片，不上传附件。
@@ -425,6 +428,7 @@ class OmniSyncRuntime {
               .toSet();
       for (final Map<String, Object?> attachment
           in snapshot.tables['attachments'] ?? <Map<String, Object?>>[]) {
+        if (attachment['business_type'] == 'noteImage') continue;
         // 只将存在同业务身份的图片恢复到采用服务器数据的候选库。
         final String? table = imageTables[attachment['business_type']];
         if (matchingOnly && attachment['business_type'] != 'quoteBanner') {
@@ -504,6 +508,78 @@ class OmniSyncRuntime {
         }
       }
     });
+    await restoreLocalNoteImages(snapshot);
+  }
+
+  /// 笔记图片恢复为候选库独占副本，不共享旧库或迁移备份文件。
+  Future<void> restoreLocalNoteImages(
+    SyncSnapshot snapshot, {
+    bool includeDrafts = false,
+  }) async {
+    // 候选源按自身路径隔离，取消草稿只清理该源拥有的文件。
+    final Directory directory = Directory(
+      path.join(path.dirname(databasePath), 'note_images_live'),
+    );
+    for (final String table in [
+      'attachments',
+      if (includeDrafts) 'note_draft_images',
+    ]) {
+      // 字段白名单来自本机 schema，快照不得注入 SQL 列名。
+      final Set<String> columns = (await powerSync.getAll(
+        'PRAGMA table_info("$table")',
+      )).map((row) => row['name']! as String).toSet();
+      for (final Map<String, Object?> source
+          in snapshot.tables[table] ?? <Map<String, Object?>>[]) {
+        if (table == 'attachments' && source['business_type'] != 'noteImage') {
+          continue;
+        }
+        if (source.keys.any((key) => !columns.contains(key))) {
+          throw const FormatException('笔记图片快照包含未知字段');
+        }
+        // 采用服务器数据时，只恢复仍存在同一业务身份的图片。
+        final Map<String, Object?>? owner = await powerSync.getOptional(
+          table == 'attachments'
+              ? 'SELECT id FROM note_images WHERE id=?'
+              : 'SELECT id FROM note_local_drafts WHERE id=? AND discarded=0',
+          [source[table == 'attachments' ? 'business_id' : 'draft_id']],
+        );
+        // 缺失或孤儿缓存保留空路径，不让候选库清理旧源的文件。
+        String? localPath;
+        if (owner != null && await isMigrationNoteImageValid(source)) {
+          await directory.create(recursive: true);
+          // 业务身份摘要保证文件名不能越过候选目录。
+          final String name =
+              '$table-${sha256.convert(utf8.encode(source['id'].toString()))}.image';
+          // 本轮活动缓存与只读备份使用不同物理路径。
+          final String target = path.join(directory.path, name);
+          if (!path.equals(
+            path.absolute(source['local_path']! as String),
+            path.absolute(target),
+          )) {
+            await File(source['local_path']! as String).copy(target);
+          }
+          if (!await isMigrationNoteImageValid({
+            ...source,
+            'local_path': target,
+          })) {
+            throw const FileSystemException('笔记图片恢复校验失败');
+          }
+          localPath = target;
+        }
+        if (owner == null && table == 'note_draft_images') continue;
+        // 旧服务器操作身份和错误不跨数据源继承。
+        final Map<String, Object?> row = {
+          ...source,
+          'local_path': localPath,
+          if (table == 'attachments') 'upload_state': 'localOnly',
+          if (table == 'attachments') 'last_error': null,
+        };
+        await powerSync.execute(
+          'INSERT OR REPLACE INTO "$table" (${row.keys.map((key) => '"$key"').join(', ')}) VALUES (${List.filled(row.length, '?').join(', ')})',
+          row.values.toList(),
+        );
+      }
+    }
   }
 
   /// 只恢复同身份、同摘要的原音，并将文件与旧快照备份隔离。

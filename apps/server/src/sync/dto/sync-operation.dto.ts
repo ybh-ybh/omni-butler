@@ -32,6 +32,7 @@ export class SyncOperationDto {
     'note_entries',
     'note_versions',
     'note_audio_segments',
+    'note_images',
   ])
   table!: string;
 

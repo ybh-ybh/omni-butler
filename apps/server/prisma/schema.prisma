@@ -46,6 +46,8 @@ model SyncOwner {
   noteEntries          NoteEntry[]
   noteVersions         NoteVersion[]
   noteAudioSegments    NoteAudioSegment[]
+  /// 每张笔记图片独立同步，文件沿用 BusinessImage 私有对象存储。
+  noteImages           NoteImage[]
   noteAudioAssets      NoteAudioAsset[]
   noteRecognitionJobs  NoteRecognitionJob[]
 
@@ -68,9 +70,25 @@ model NoteEntry {
   user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
   versions NoteVersion[]
   audioSegments NoteAudioSegment[]
+  images NoteImage[]
   @@unique([userId, id])
   @@index([userId, dayKey])
   @@map("note_entries")
+}
+
+/// 笔记多图的独立身份与排序，文件元数据通过图片服务同步。
+model NoteImage {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  noteId String @map("note_id") @db.Uuid
+  sortOrder Int @map("sort_order")
+  createdAt DateTime @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  note NoteEntry @relation(fields: [userId, noteId], references: [userId, id], onDelete: Cascade)
+  @@index([userId, noteId, sortOrder])
+  @@map("note_images")
 }
 
 /// 不可变正文候选；base_revision 不匹配时也完整保留。

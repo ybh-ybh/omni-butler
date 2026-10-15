@@ -308,7 +308,7 @@ extension _WindowsNotesView on _NotesPageState {
                                               ),
                                               Text(
                                                 all.isEmpty
-                                                    ? '文字和录音会先保存在本机草稿，发布后出现在这里。'
+                                                    ? '文字、图片和录音会先保存在本机草稿，发布后出现在这里。'
                                                     : '调整日期、标签或搜索词，再试一次。',
                                                 textAlign: TextAlign.center,
                                               ),
@@ -967,26 +967,46 @@ extension _WindowsNotesView on _NotesPageState {
 
   /// 首个非空行作为标题，其后的正文保留原始换行。
   (String, String) _notePreview(NoteEntryRecord note) {
+    // 列表首项必须和后续列表一起渲染，不能被派生成独立标题。
+    if (NoteMarkdown.startsWithList(note.body)) {
+      return ('', _displayNoteBody(note.body));
+    }
     // 空行不会产生空标题。
     final List<String> lines = note.body.split('\n');
     // 第一个有内容的正文行。
     final int index = lines.indexWhere((line) => line.trim().isNotEmpty);
     return index < 0
         ? (
-            ref
-                        .read(_allNoteAudioProvider)
-                        .value
-                        ?.any(
-                          (audio) =>
-                              audio.noteId == note.id &&
-                              audio.deletedAt == null,
-                        ) ==
-                    true
+            (ref.watch(_allNoteImagesProvider).value ?? []).any(
+                  (image) => image.noteId == note.id && image.deletedAt == null,
+                )
+                ? '图片笔记'
+                : ref
+                          .read(_allNoteAudioProvider)
+                          .value
+                          ?.any(
+                            (audio) =>
+                                audio.noteId == note.id &&
+                                audio.deletedAt == null,
+                          ) ==
+                      true
                 ? '语音笔记'
                 : '内容已清空',
             '',
           )
-        : (lines[index].trim(), lines.skip(index + 1).join('\n').trim());
+        : (lines[index], _displayNoteBody(lines.skip(index + 1).join('\n')));
+  }
+
+  /// 摘要仅移除外围空白行，不改变会影响 Markdown 解释的行首空格。
+  String _displayNoteBody(String source) {
+    // 原始行文本保持字面内容，包括非列表缩进。
+    final List<String> lines = source.split('\n');
+    // 首个有内容的行，空白正文直接隐藏。
+    final int first = lines.indexWhere((line) => line.trim().isNotEmpty);
+    if (first < 0) return '';
+    // 末个有内容的行之前保留全部换行。
+    final int last = lines.lastIndexWhere((line) => line.trim().isNotEmpty);
+    return lines.sublist(first, last + 1).join('\n');
   }
 
   /// 历史卡片保留标题及两行正文，并提供独立的原音展开入口。
@@ -1031,6 +1051,7 @@ extension _WindowsNotesView on _NotesPageState {
               : OmniPanel(
                   onDoubleTap: () => _open(note.id),
                   showBorder: false,
+                  hoverColor: Colors.transparent,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1101,17 +1122,19 @@ extension _WindowsNotesView on _NotesPageState {
                           ),
                         ],
                       ),
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
+                      if (title.isNotEmpty)
+                        NoteMarkdownText(
+                          source: title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
                       if (preview.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: OmniSpacing.xs),
                           child: _noteBodyPreview(note, preview),
                         ),
+                      _historyImages(note.id, editor),
                       for (final segment in audio)
                         Padding(
                           padding: const EdgeInsets.only(top: OmniSpacing.sm),
@@ -1177,13 +1200,13 @@ extension _WindowsNotesView on _NotesPageState {
               color: colors.paper,
               borderRadius: BorderRadius.circular(OmniRadius.dialog),
               border: Border.all(
-                color: _composerFocused || editing
+                color: _composerFocused || _formatMenuOpen || editing
                     ? colors.brand
                     : light
                     ? NoteComposerStyle.border
                     : colors.line,
               ),
-              boxShadow: _composerFocused
+              boxShadow: _composerFocused || _formatMenuOpen
                   ? [
                       BoxShadow(
                         color: colors.ink.withValues(alpha: 0.08),
@@ -1233,6 +1256,7 @@ extension _WindowsNotesView on _NotesPageState {
         final bool hasContent =
             _expandedNoteId == editor.draft.id ||
             editor.draft.body.trim().isNotEmpty ||
+            editor.hasImages ||
             segments.any(
               (segment) =>
                   segment.deletedAt == null &&
@@ -1247,12 +1271,12 @@ extension _WindowsNotesView on _NotesPageState {
         final OmniColors colors = OmniColors.of(context);
         // 浅色外观匹配参考图中的正文与工具颜色。
         final bool light = Theme.of(context).brightness == Brightness.light;
-        // 非聚焦标签始终极浅灰，鼠标悬停不将其变成深色。
+        // 非聚焦工具保留浅灰，单个按钮悬停后独立加深。
         final Color toolColor = light
-            ? (_composerFocused
+            ? (_composerFocused || _formatMenuOpen
                   ? NoteComposerStyle.muted
                   : NoteComposerStyle.idleTool)
-            : (_composerFocused
+            : (_composerFocused || _formatMenuOpen
                   ? colors.muted
                   : colors.muted.withValues(alpha: 0.2));
         // 发布和录音均使用当前主题色，不因是否有正文变成灰色。
@@ -1284,71 +1308,154 @@ extension _WindowsNotesView on _NotesPageState {
                   onPressed: editable ? () => _perform(editor.recover) : null,
                 ),
               ),
-            Row(
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              runSpacing: OmniSpacing.xxs,
               children: [
-                OmniNoteComposerButton(
-                  key: const ValueKey('note-composer-tag'),
-                  tooltip: '选择标签',
-                  icon: const Icon(Icons.tag),
-                  foreground: toolColor,
-                  onPressed: editable
-                      ? () => _updateWindows(
-                          () => _showTagEditor = !_showTagEditor,
-                        )
-                      : null,
-                ),
-                const Spacer(),
-                if (_composerFocused) ...[
-                  Text(
-                    '${editor.draft.body.characters.length}',
-                    key: const ValueKey('note-composer-count'),
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: light ? NoteComposerStyle.muted : colors.muted,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    OmniNoteComposerButton(
+                      key: const ValueKey('note-composer-tag'),
+                      tooltip: '选择标签',
+                      icon: const Icon(Icons.tag),
+                      foreground: toolColor,
+                      hoverForeground: colors.ink,
+                      hoverBackground: colors.ink.withValues(alpha: 0.05),
+                      onPressed: editable
+                          ? () => _updateWindows(
+                              () => _showTagEditor = !_showTagEditor,
+                            )
+                          : null,
                     ),
-                  ),
-                  const SizedBox(width: OmniSpacing.sm),
-                ],
-                if (_expandedNoteId == editor.draft.id) ...[
-                  OmniNoteAudioLink(
-                    key: const ValueKey('note-edit-cancel'),
-                    label: '取消',
-                    color: light ? NoteComposerStyle.muted : colors.muted,
-                    hoverForeground: colors.brand,
-                    showHoverBackground: false,
-                    onPressed: _committing || editor.committing
-                        ? null
-                        : () => _cancelEdit(editor),
-                  ),
-                  const SizedBox(width: OmniSpacing.xs),
-                ],
-                OmniNoteComposerButton(
-                  key: const ValueKey('note-commit'),
-                  tooltip: action,
-                  size: NoteComposerStyle.actionSize,
-                  background: background,
-                  foreground: Colors.white,
-                  overlay: colors.ink.withValues(alpha: 0.05),
-                  // 发布与麦克风字形缩为20dp，保留按钮尺寸和提交指示。
-                  icon:
-                      _committing ||
-                          editor.committing ||
-                          editor.recordingStarting
-                      ? const SizedBox.square(
-                          dimension: OmniSize.icon,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
+                    OmniNoteComposerButton(
+                      key: const ValueKey('note-composer-image'),
+                      tooltip: '插入图片',
+                      icon: const Icon(Icons.image_outlined),
+                      foreground: toolColor,
+                      hoverForeground: colors.ink,
+                      hoverBackground: colors.ink.withValues(alpha: 0.05),
+                      onPressed:
+                          editable && !_pickingImages && !editor.imageAdding
+                          ? () => unawaited(_pickNoteImages(editor))
+                          : null,
+                    ),
+                    SizedBox(
+                      height: 16,
+                      child: VerticalDivider(
+                        width: OmniSpacing.sm,
+                        color: colors.line,
+                      ),
+                    ),
+                    OmniNoteComposerButton(
+                      key: _formatAnchor,
+                      tooltip: '文本格式',
+                      icon: Builder(
+                        builder: (context) => Text(
+                          'Aa',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: IconTheme.of(context).color,
                           ),
-                        )
-                      : Icon(
-                          hasContent ? Icons.send : Icons.mic_none,
-                          size: OmniSpacing.lg,
                         ),
-                  onPressed: !enabled
-                      ? null
-                      : hasContent
-                      ? () => _finishEdit(editor)
-                      : () => _perform(editor.startRecording),
+                      ),
+                      foreground: toolColor,
+                      hoverForeground: colors.ink,
+                      hoverBackground: colors.ink.withValues(alpha: 0.05),
+                      selected: _formatMenuOpen,
+                      onPressed: editable
+                          ? () => unawaited(_showNoteFormats(editor))
+                          : null,
+                    ),
+                    OmniNoteComposerButton(
+                      key: const ValueKey('note-composer-bullet-list'),
+                      tooltip: '无序列表',
+                      icon: const Icon(Icons.format_list_bulleted),
+                      foreground: toolColor,
+                      hoverForeground: colors.ink,
+                      hoverBackground: colors.ink.withValues(alpha: 0.05),
+                      selected: _richBody.isBulletList,
+                      onPressed: editable
+                          ? () {
+                              _richBody.toggleList(false);
+                              _focus.requestFocus();
+                            }
+                          : null,
+                    ),
+                    OmniNoteComposerButton(
+                      key: const ValueKey('note-composer-ordered-list'),
+                      tooltip: '有序列表',
+                      icon: const Icon(Icons.format_list_numbered),
+                      foreground: toolColor,
+                      hoverForeground: colors.ink,
+                      hoverBackground: colors.ink.withValues(alpha: 0.05),
+                      selected: _richBody.isOrderedList,
+                      onPressed: editable
+                          ? () {
+                              _richBody.toggleList(true);
+                              _focus.requestFocus();
+                            }
+                          : null,
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_composerFocused || _formatMenuOpen) ...[
+                      Text(
+                        '${NoteMarkdown.plainText(editor.draft.body).characters.length}',
+                        key: const ValueKey('note-composer-count'),
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: light ? NoteComposerStyle.muted : colors.muted,
+                        ),
+                      ),
+                      const SizedBox(width: OmniSpacing.sm),
+                    ],
+                    if (_expandedNoteId == editor.draft.id) ...[
+                      OmniNoteAudioLink(
+                        key: const ValueKey('note-edit-cancel'),
+                        label: '取消',
+                        color: light ? NoteComposerStyle.muted : colors.muted,
+                        hoverForeground: colors.brand,
+                        showHoverBackground: false,
+                        onPressed: _committing || editor.committing
+                            ? null
+                            : () => _cancelEdit(editor),
+                      ),
+                      const SizedBox(width: OmniSpacing.xs),
+                    ],
+                    OmniNoteComposerButton(
+                      key: const ValueKey('note-commit'),
+                      tooltip: action,
+                      size: NoteComposerStyle.actionSize,
+                      background: background,
+                      foreground: Colors.white,
+                      overlay: colors.ink.withValues(alpha: 0.05),
+                      // 发布与麦克风字形缩为20dp，保留按钮尺寸和提交指示。
+                      icon:
+                          _committing ||
+                              editor.committing ||
+                              editor.recordingStarting
+                          ? const SizedBox.square(
+                              dimension: OmniSize.icon,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Icon(
+                              hasContent ? Icons.send : Icons.mic_none,
+                              size: OmniSpacing.lg,
+                            ),
+                      onPressed: !enabled
+                          ? null
+                          : hasContent
+                          ? () => _finishEdit(editor)
+                          : () => _perform(editor.startRecording),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -1545,6 +1652,21 @@ extension _WindowsNotesView on _NotesPageState {
     await editor.flush();
     // 一次读取可恢复的草稿，关闭菜单时不会改变草稿。
     final List<NoteLocalDraftRecord> drafts = await editor.listLocalDrafts();
+    // 空正文的图片草稿必须可辨识，删除差量不作为有效图片。
+    final Set<String> imageDrafts = {};
+    for (final NoteLocalDraftRecord draft in drafts) {
+      // 同一解析器保留已有插入与音频删除标记。
+      final Set<String> removed = NoteDraftAudioEdits.fromJson(
+        draft.pendingInsertions,
+      ).imageDeletions;
+      // 草稿新增和正式图片共同决定派生名称。
+      final List<NoteImageView> images = await editor.images
+          .watch(draft.noteId, draftId: draft.id)
+          .first;
+      if (images.any((image) => !removed.contains(image.id))) {
+        imageDrafts.add(draft.id);
+      }
+    }
     if (!mounted) return;
     await showOmniDialog<void>(
       context: context,
@@ -1566,10 +1688,12 @@ extension _WindowsNotesView on _NotesPageState {
                   children: [
                     for (final NoteLocalDraftRecord draft in drafts)
                       OmniListRow(
-                        title: Text(
-                          draft.body.trim().isEmpty
-                              ? '录音草稿'
-                              : draft.body.trim().split('\n').first,
+                        title: NoteMarkdownText(
+                          source: draft.body.trim().isEmpty
+                              ? imageDrafts.contains(draft.id)
+                                    ? '图片草稿'
+                                    : '录音草稿'
+                              : _displayNoteBody(draft.body).split('\n').first,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -1610,7 +1734,7 @@ extension _WindowsNotesView on _NotesPageState {
         final bool confirmed = await showOmniConfirmDialog(
           context,
           title: '移入笔记回收站？',
-          message: '这篇笔记的正文、原音和转写将保留 30 天。',
+          message: '这篇笔记的正文、图片、原音和转写将保留 30 天。',
           confirmLabel: '移入回收站',
           danger: true,
         );

@@ -7,6 +7,7 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_models.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
 import 'package:omni_butler/features/notes/data/note_draft_audio_edits.dart';
+import 'package:omni_butler/features/notes/data/note_image_repository.dart';
 
 /// 显式提交发现其他设备已改动，正式记录保持不变。
 class NoteLocalDraftConflict implements Exception {
@@ -85,6 +86,7 @@ class NoteLocalDraftRepository {
     required bool isNew,
     Map<String, bool> pendingInsertions = const {},
     Set<String> pendingAudioDeletions = const {},
+    Set<String> pendingImageDeletions = const {},
   }) => database.transaction(() async {
     // 已取消草稿不能被迟到的自动保存重新激活。
     final NoteLocalDraftRecord? previous = await find(id);
@@ -114,6 +116,7 @@ class NoteLocalDraftRepository {
               NoteDraftAudioEdits(
                 insertions: pendingInsertions,
                 deletions: pendingAudioDeletions,
+                imageDeletions: pendingImageDeletions,
               ).toJson(),
             ),
             updatedAt: DateTime.now(),
@@ -203,6 +206,10 @@ class NoteLocalDraftRepository {
     if (local == null || local.discarded) throw StateError('草稿不存在或已取消');
     // 原件预检失败时正式笔记完全不变。
     final List<NoteDraftAudioSegmentRecord> allStaged = await audio(id);
+    // 新增图片和原音共享一次发布事务。
+    final NoteImageRepository images = NoteImageRepository(database);
+    // 固定预检范围，事务内复查避免漏掉迟到文件。
+    final List<NoteDraftImageRecord> allImages = await images.staged(id);
     // 删除元数据只来自当前草稿，正式归属在事务内再次校验。
     final NoteDraftAudioEdits audioEdits = NoteDraftAudioEdits.fromJson(
       local.pendingInsertions,
@@ -210,6 +217,13 @@ class NoteLocalDraftRepository {
     final List<NoteDraftAudioSegmentRecord> staged = allStaged
         .where((item) => !audioEdits.deletions.contains(item.id))
         .toList();
+    // 待删除的新图不提升，保留孤儿记录供提交后清理。
+    final List<NoteDraftImageRecord> stagedImages = allImages
+        .where((item) => !audioEdits.imageDeletions.contains(item.id))
+        .toList();
+    for (final NoteDraftImageRecord item in stagedImages) {
+      await images.verify(item.localPath, item.sizeBytes, item.sha256);
+    }
     for (final NoteDraftAudioSegmentRecord item in staged) {
       // 本机草稿拥有的原音。
       final File? file = item.localPath == null ? null : File(item.localPath!);
@@ -229,6 +243,12 @@ class NoteLocalDraftRepository {
       }
       // 原音预检期间有新增片段时整体重试，不能删除尚未提升的录音。
       final List<NoteDraftAudioSegmentRecord> latestAudio = await audio(id);
+      // 预检期间图片变化必须重试，不能删掉尚未提升的原件。
+      final List<NoteDraftImageRecord> latestImages = await images.staged(id);
+      if (latestImages.length != allImages.length ||
+          !latestImages.every(allImages.contains)) {
+        throw StateError('草稿图片已变化，请重试保存');
+      }
       if (latestAudio.length != allStaged.length ||
           !latestAudio.every((item) => allStaged.contains(item))) {
         throw StateError('草稿原音已变化，请重试保存');
@@ -252,12 +272,18 @@ class NoteLocalDraftRepository {
       final List<NoteAudioSegmentRecord> existing = await (database.select(
         database.noteAudioSegments,
       )..where((table) => table.noteId.equals(local.noteId))).get();
+      // 图片单独参与空白判断，不改变正文版本或覆盖远端图片集合。
+      final List<NoteImageRecord> existingImages = await images.published(
+        local.noteId,
+      );
       // 正式记录只会在此显式提交分支创建。
       final NoteEntryRecord? saved = saveAsNew
           ? await notes.saveAsNew(
               draft,
               hasAdditionalAudio: staged.isNotEmpty,
               excludedAudioIds: audioEdits.deletions,
+              hasAdditionalImages: stagedImages.isNotEmpty,
+              excludedImageIds: audioEdits.imageDeletions,
             )
           : await notes.save(
               draft,
@@ -268,11 +294,34 @@ class NoteLocalDraftRepository {
                         item.deletedAt == null &&
                         !audioEdits.deletions.contains(item.id),
                   ),
+              hasImages:
+                  stagedImages.isNotEmpty ||
+                  existingImages.any(
+                    (item) =>
+                        item.deletedAt == null &&
+                        !audioEdits.imageDeletions.contains(item.id),
+                  ),
             );
       if (saved == null) return null;
       if (saved.body != draft.body) {
         throw const NoteLocalDraftConflict('正文已有其他版本，草稿仍保留');
       }
+      await images.publish(saved.id, stagedImages);
+      if (!saveAsNew) {
+        await images.remove(local.noteId, audioEdits.imageDeletions);
+      }
+      if (stagedImages.isNotEmpty || audioEdits.imageDeletions.isNotEmpty) {
+        // 图片编辑更新展示排序依据，但不生成新的正文版本。
+        await (database.update(database.noteEntries)
+              ..where((table) => table.id.equals(saved.id)))
+            .write(NoteEntriesCompanion(updatedAt: Value(DateTime.now())));
+      }
+      await (database.delete(database.noteDraftImages)..where(
+            (table) =>
+                table.draftId.equals(id) &
+                table.id.isIn(stagedImages.map((item) => item.id)),
+          ))
+          .go();
       // 音频添加沿用已提交的正文基线，不产生额外正文版本。
       final NoteDraft committed = NoteDraft(
         id: saved.id,

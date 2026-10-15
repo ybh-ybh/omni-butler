@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show StringCharacters;
 import 'package:omni_butler/core/database/app_database.dart';
+import 'package:omni_butler/features/notes/markdown/note_markdown.dart';
 
 /// 同一自然周期内的正式笔记统计。
 @immutable
@@ -54,7 +55,9 @@ class NoteStatistics {
           dates[note.dayKey] ?? const NoteStatisticsTotals();
       dates[note.dayKey] = NoteStatisticsTotals(
         count: previous.count + 1,
-        words: previous.words + note.body.characters.length,
+        words:
+            previous.words +
+            NoteMarkdown.plainText(note.body).characters.length,
         days: 1,
       );
     }

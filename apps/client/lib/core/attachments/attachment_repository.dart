@@ -18,6 +18,9 @@ enum AttachmentBusinessType {
 
   /// 会员主图。
   membershipImage,
+
+  /// 一篇笔记中的独立图片，业务身份为图片子记录。
+  noteImage,
 }
 
 /// 附件缓存状态；持久图片操作另存于 ImageSyncStore。
@@ -307,6 +310,9 @@ class AttachmentRepository {
             updatedAt: Value<DateTime>(now),
           ),
         );
+      case AttachmentBusinessType.noteImage:
+        // 图片子记录不保存本机路径，缓存由附件表独立管理。
+        break;
     }
   }
 }

@@ -705,6 +705,8 @@ class MembershipPayments extends Table {
     NoteAudioLocalFiles,
     NoteLocalDrafts,
     NoteDraftAudioSegments,
+    NoteImages,
+    NoteDraftImages,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -741,7 +743,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 19;
+  int get schemaVersion => 20;
 
   /// 创建数据库并从旧版本安全升级。
   @override
@@ -924,6 +926,18 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         await migrator.createTable(noteAudioSegments);
         await migrator.createTable(noteAudioLocalFiles);
         await _createNoteIndexes();
+      }
+      if (from < 20) {
+        // 降版回归和中断升级可已有新表，不重复创建。
+        final Set<String> existingTables = (await customSelect(
+          "SELECT name FROM sqlite_master WHERE type='table'",
+        ).get()).map((row) => row.read<String>('name')).toSet();
+        if (!existingTables.contains('note_images')) {
+          await migrator.createTable(noteImages);
+        }
+        if (!existingTables.contains('note_draft_images')) {
+          await migrator.createTable(noteDraftImages);
+        }
       }
       if (from == 17) {
         // 内部试用版本可能已经具有候选列，逐列检查避免重复升级。

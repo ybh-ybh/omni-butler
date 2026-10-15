@@ -262,6 +262,33 @@ integration('ImagesService 真实 PostgreSQL + MinIO', () => {
     expect(await prisma.imageObjectGarbage.count()).toBe(0);
   });
 
+  it('笔记两张图片独立存入MinIO，软删保留而永久删只回收目标原件', async () => {
+    // 笔记主体与两张图各自拥有稳定身份。
+    const noteId = randomUUID();
+    // 同篇图片不会共享单图槽位。
+    const imageIds = [randomUUID(), randomUUID()];
+    // 同一提交时刻不参与正文版本竞争。
+    const now = new Date();
+    await prisma.noteEntry.create({ data: { id: noteId, userId: user.sub, dayKey: '2026-10-15', revision: randomUUID(), createdAt: now, updatedAt: now } });
+    for (const [sortOrder, id] of imageIds.entries()) {
+      await prisma.noteImage.create({ data: { id, userId: user.sub, noteId, sortOrder, createdAt: now, updatedAt: now } });
+    }
+    // 两张真实对象分别上传，验证第三种业务类型走原存储链路。
+    const first = await service.upload(user, 'noteImage', imageIds[0]!, uploadInput(), bytes);
+    // 第二图拥有独立CAS与清理范围。
+    const second = await service.upload(user, 'noteImage', imageIds[1]!, uploadInput(), bytes);
+    expect(service.capabilities().supportedBusinessTypes).toContain('noteImage');
+    expect((await service.list(user)).items).toHaveLength(2);
+    expect(await service.download(user, 'noteImage', imageIds[1]!, second.image.revision)).toEqual({ bytes, mime: 'image/png' });
+    await prisma.noteImage.update({ where: { id: imageIds[0] }, data: { deletedAt: now } });
+    expect(await service.download(user, 'noteImage', imageIds[0]!, first.image.revision)).toEqual({ bytes, mime: 'image/png' });
+    await prisma.noteImage.delete({ where: { id: imageIds[0] } });
+    expect((await service.list(user)).items).toEqual([second.image]);
+    expect(await prisma.imageObjectGarbage.count()).toBe(1);
+    await expect(service.upload(user, 'noteImage', randomUUID(), uploadInput(), bytes)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.upload({ ...user, sub: randomUUID() }, 'noteImage', imageIds[1]!, uploadInput(), bytes)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
   it('丢失响应后同请求重试不再上传，同 ID 不同内容拒绝', async () => {
     // 可重试操作。
     const input = uploadInput();
@@ -524,6 +551,7 @@ integration('ImagesService 真实 PostgreSQL + MinIO', () => {
     expect(disabled.capabilities()).toEqual({
       enabled: false,
       maxBytes: IMAGE_MAX_BYTES,
+      supportedBusinessTypes: ['inventoryImage', 'membershipImage', 'noteImage'],
     });
     await expect(disabled.list(user)).rejects.toBeInstanceOf(
       ServiceUnavailableException,

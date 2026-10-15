@@ -86,6 +86,7 @@ class _ControlledRepository extends NoteRepository {
   Future<NoteEntryRecord?> save(
     NoteDraft draft, {
     bool hasAudio = false,
+    bool hasImages = false,
   }) async {
     requests.add(draft);
     // 每次请求固定自己的闸门，后续保存不被同一闸门阻塞。
@@ -94,7 +95,7 @@ class _ControlledRepository extends NoteRepository {
     await waiting?.future;
     if (fail) throw StateError('磁盘写入失败');
     if (timingOnly) return null;
-    return super.save(draft, hasAudio: hasAudio);
+    return super.save(draft, hasAudio: hasAudio, hasImages: hasImages);
   }
 }
 

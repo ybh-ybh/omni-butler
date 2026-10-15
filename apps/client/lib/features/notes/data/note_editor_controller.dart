@@ -7,6 +7,7 @@ import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
 import 'package:omni_butler/features/notes/data/note_local_draft_repository.dart';
 import 'package:omni_butler/features/notes/data/note_draft_audio_edits.dart';
+import 'package:omni_butler/features/notes/data/note_image_repository.dart';
 import 'package:uuid/uuid.dart';
 
 /// 显式提交结果，失败或冲突均保留本机草稿。
@@ -25,6 +26,30 @@ class NoteEditorController extends ChangeNotifier {
 
   /// 与正式仓储共享事务的本机草稿存储。
   late final NoteLocalDraftRepository localDrafts;
+
+  /// 图片仓储与编辑器使用同一数据库，页面可以直接订阅展示流。
+  late final NoteImageRepository images;
+
+  /// 当前草稿及正式图片的最新快照。
+  List<NoteImageView> _visibleImages = [];
+
+  /// 当前代次的图片监听，切换笔记后取消旧订阅。
+  StreamSubscription<List<NoteImageView>>? _imageSubscription;
+
+  /// 保存前暂存的图片删除身份。
+  final Set<String> _pendingImageDeletions = {};
+
+  /// 选择图片后的文件复制任务，发布和退出需等待完成。
+  Future<void>? _imageWrites;
+
+  /// 图片复制期间禁用重复选择。
+  bool get imageAdding => _imageWrites != null;
+
+  /// 纯图片草稿可以发布，不依赖正文或原音。
+  bool get hasImages => _visibleImages.any((item) => !isImageRemoved(item.id));
+
+  /// 页面隐藏当前草稿内待删除的图片。
+  bool isImageRemoved(String id) => _pendingImageDeletions.contains(id);
 
   /// 当前本机草稿代次，与最终笔记身份分离。
   String? _draftId;
@@ -137,8 +162,10 @@ class NoteEditorController extends ChangeNotifier {
     this.recorder, {
     this.explicitCommit = false,
     NoteLocalDraftRepository? localDraftRepository,
+    NoteImageRepository? imageRepository,
   }) {
     localDrafts = localDraftRepository ?? NoteLocalDraftRepository(repository);
+    images = imageRepository ?? NoteImageRepository(repository.database);
     _blank();
     if (explicitCommit) {
       _localSubscription = localDrafts.watch().listen((records) {
@@ -184,8 +211,106 @@ class NoteEditorController extends ChangeNotifier {
     _localHasChanges = false;
     _pendingInsertions.clear();
     _pendingAudioDeletions.clear();
+    _pendingImageDeletions.clear();
     frozen = false;
     _generation++;
+    _observeImages();
+  }
+
+  /// 固定订阅身份，旧流晚到时不能污染新卡片的发布状态。
+  void _observeImages() {
+    unawaited(_imageSubscription?.cancel());
+    _visibleImages = [];
+    // 此次订阅对应的正式与草稿身份。
+    final String noteId = draft.id;
+    final String? localId = _draftId;
+    _imageSubscription = images.watch(noteId, draftId: localId).listen((value) {
+      if (draft.id != noteId || _draftId != localId || _closed) return;
+      _visibleImages = value;
+      _notify();
+    });
+  }
+
+  /// 多选逐张暂存，部分失败时已成功的图片仍留在草稿。
+  Future<void> addImages(List<String> paths) async {
+    if (!explicitCommit ||
+        paths.isEmpty ||
+        _imageWrites != null ||
+        committing ||
+        _cancelling ||
+        frozen ||
+        conflicted) {
+      return;
+    }
+    // 当前选择固定归属，异步文件复制不跟随卡片切换。
+    final String localId = _draftId!;
+    // 最终笔记身份不会随草稿代次变化。
+    final String noteId = draft.id;
+    // 发布、取消与退出共享这个在途任务。
+    final Future<void> work = _stageImages(localId, noteId, paths);
+    _imageWrites = work;
+    _notify();
+    try {
+      await work;
+    } catch (failure) {
+      if (_draftId == localId) error = '$failure';
+      rethrow;
+    } finally {
+      if (identical(_imageWrites, work)) _imageWrites = null;
+      _notify();
+    }
+  }
+
+  /// 首次有效图片输入沿用正文的创建时刻与本机草稿流程。
+  Future<void> _stageImages(
+    String localId,
+    String noteId,
+    List<String> paths,
+  ) async {
+    // 空正文也需要先持久化草稿代次，取消才能可靠写墓碑。
+    final DateTime now = DateTime.now();
+    if (draft.createdAt == null) {
+      draft = NoteDraft(
+        id: draft.id,
+        body: draft.body,
+        dayKey: _explicitDay ? draft.dayKey : businessDayKey(now),
+        baseRevision: draft.baseRevision,
+        tags: draft.tags,
+        originalTags: draft.originalTags,
+        dateEdited: draft.dateEdited,
+        createdAt: now,
+        creationTimezone: noteCreationTimezone(now),
+      );
+    }
+    _localHasChanges = true;
+    _localNoteIds.add(noteId);
+    dirty = true;
+    _generation++;
+    await flush();
+    if (dirty) throw StateError(error ?? '草稿暂存失败');
+    for (final String sourcePath in paths) {
+      if (!await images.stage(localId, noteId, sourcePath)) break;
+    }
+  }
+
+  /// 图片删除只改变本机草稿差量，取消恢复全部正式关联。
+  Future<void> removeImage(String id) async {
+    if (!explicitCommit ||
+        committing ||
+        _cancelling ||
+        frozen ||
+        conflicted ||
+        imageAdding) {
+      return;
+    }
+    if (!_visibleImages.any((item) => item.id == id)) return;
+    _pendingImageDeletions.add(id);
+    _localHasChanges = true;
+    _localNoteIds.add(draft.id);
+    dirty = true;
+    _generation++;
+    _notify();
+    await flush();
   }
 
   /// 主动进入入口；在录音时始终返回原笔记。
@@ -289,9 +414,11 @@ class NoteEditorController extends ChangeNotifier {
       _localHasChanges = false;
       _pendingInsertions.clear();
       _pendingAudioDeletions.clear();
+      _pendingImageDeletions.clear();
       frozen = false;
     }
     _generation++;
+    _observeImages();
   }
 
   /// 清洁编辑器可接收转写或同步变化，不覆盖人工未保存输入。
@@ -734,6 +861,7 @@ class NoteEditorController extends ChangeNotifier {
 
   /// 正常退出先刷新正文再结束录音并排空持久化。
   Future<void> shutdown() async {
+    await _imageWrites;
     try {
       await _startingRecording;
     } catch (_) {
@@ -827,11 +955,15 @@ class NoteEditorController extends ChangeNotifier {
     _pendingAudioDeletions
       ..clear()
       ..addAll(audioEdits.deletions);
+    _pendingImageDeletions
+      ..clear()
+      ..addAll(audioEdits.imageDeletions);
     dirty = false;
     conflicted = false;
     error = null;
     saveStatus = '草稿已保留在本机';
     _generation++;
+    _observeImages();
   }
 
   /// 自动保存只写本机表，超长输入也完整保留供用户修正。
@@ -847,6 +979,7 @@ class NoteEditorController extends ChangeNotifier {
         isNew: _isNewDraft,
         pendingInsertions: Map.of(_pendingInsertions),
         pendingAudioDeletions: Set.of(_pendingAudioDeletions),
+        pendingImageDeletions: Set.of(_pendingImageDeletions),
       );
       if (generation == _generation && id == _draftId) {
         dirty = false;
@@ -943,6 +1076,7 @@ class NoteEditorController extends ChangeNotifier {
       }
       // 用户可能已手动结束录音，设备idle不代表原音暂存队列已排空。
       await _audioWrites;
+      await _imageWrites;
       await flush();
       if (dirty) return NoteCommitResult.failed;
       if (!_localHasChanges) return NoteCommitResult.empty;
@@ -1032,6 +1166,7 @@ class NoteEditorController extends ChangeNotifier {
         await recorder.stop();
       }
       await _audioWrites;
+      await _imageWrites;
       // 全部有效共享引用都受保护，取消不能删除另存使用的原件。
       final Set<String> protectedPaths = await repository.protectedAudioPaths();
       await recorder.discardPendingForDraft(id, protectedPaths: protectedPaths);
@@ -1197,6 +1332,7 @@ class NoteEditorController extends ChangeNotifier {
     _deadline?.cancel();
     unawaited(_completed.cancel());
     unawaited(_localSubscription?.cancel());
+    unawaited(_imageSubscription?.cancel());
     super.dispose();
   }
 }

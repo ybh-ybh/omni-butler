@@ -355,3 +355,12 @@ docker compose cp api:/app/keys ./api-keys-backup
 ```
 
 API 文档：局域网为 `http://<服务器IP>:<API端口>/omni-butler/api/v1/docs`，上述公网部署为 `https://butler.example.com/omni-butler/api/v1/docs`。接口细节见 [服务端说明](../apps/server/README.md)。
+
+
+## 2026-10-15 笔记图片与编辑格式升级（schema 5）
+
+新增增量迁移 `20261015000000_note_images`、PowerSync 的 note_images 查询、图片类型 noteImage 与 capabilities.supportedBusinessTypes。Markdown 仍存在 note_entries.body，不迁移或重写历史正文。图片最终进入现有私有 MinIO，沿用图片业务开关 `IMAGE_SYNC_ENABLED=true`；关闭开关保留所有对象及元数据，本机图片保持待传。
+
+升级顺序：先备份数据库和 MinIO 卷、停止客户端写入，再应用新增数据库迁移并更新 API，随后更新 PowerSync 查询，最后升级全部参与同步的客户端。不得清空 PostgreSQL／MinIO／PowerSync 数据卷。Android 本轮仅共享数据结构升级，无新增编辑界面。新旧 schema 不兼容时显示既有升级提示；没有 noteImage 能力的旧服务端不会收到必然失败的图片上传请求。
+
+本机数据库升至20、快照升至5（可读取旧1–4），换服 wire snapshotVersion 保持3。正式图片子记录参与业务快照；本机图片原件、草稿及缓存纳入校验备份和候选源独立文件恢复。使用服务器数据时不混入旧本机草稿。正式部署尚未执行。

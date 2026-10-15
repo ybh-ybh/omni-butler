@@ -3,7 +3,7 @@ import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 /// 不携带同步检查点、客户端身份或设备密钥的完整业务快照。
 class SyncSnapshot {
   /// 当前快照持久化格式版本。
-  static const int version = 4;
+  static const int version = 5;
 
   /// 服务端换服协议独立于本机备份格式，草稿不进入请求。
   static const int migrationProtocolVersion = 3;
@@ -20,6 +20,7 @@ class SyncSnapshot {
   /// 从迁移控制文件恢复快照，拒绝不支持的格式和未知表。
   factory SyncSnapshot.fromJson(Map<String, dynamic> json) {
     if (json['version'] != version &&
+        json['version'] != 4 &&
         json['version'] != 3 &&
         json['version'] != 2 &&
         json['version'] != 1) {
@@ -58,6 +59,8 @@ class SyncSnapshot {
       }
     }
     if (json['version'] != version) {
+      encoded.putIfAbsent('note_images', () => <dynamic>[]);
+      encoded.putIfAbsent('note_draft_images', () => <dynamic>[]);
       encoded.putIfAbsent('note_local_drafts', () => <dynamic>[]);
       encoded.putIfAbsent('note_draft_audio_segments', () => <dynamic>[]);
     }
@@ -114,6 +117,7 @@ class SyncSnapshot {
     'note_audio_local_files',
     'note_local_drafts',
     'note_draft_audio_segments',
+    'note_draft_images',
   ];
 
   /// 按同步白名单生成服务器可接受的完整 PUT 列表。
@@ -151,6 +155,7 @@ class SyncSnapshot {
               'todo_progress_steps',
               'note_versions',
               'note_audio_segments',
+              'note_images',
             }.contains(table.name)
             ? 0
             : (tables[table.name] ?? <Map<String, Object?>>[])

@@ -36,6 +36,11 @@ export function validateNoteTagOperation(operation: SyncOperationDto): SyncOpera
 
 /// 正文修订只在基线匹配时采用；所有并发候选仍完整同步。
 export async function normalizeNoteOperation(transaction: Prisma.TransactionClient, userId: string, operation: SyncOperationDto): Promise<SyncOperationDto> {
+  if (operation.table === 'note_images' && operation.op === 'PATCH' && operation.data?.note_id !== undefined) {
+    // 图片子记录身份不可转移，防止离线操作把同一文件挪到其他笔记。
+    const current = await transaction.noteImage.findFirst({ where: { userId, id: operation.id } });
+    if (current && operation.data.note_id !== current.noteId) throw new BadRequestException('已保存图片不能改变所属笔记');
+  }
   if (operation.table === 'note_versions' && operation.op === 'PATCH' && Object.keys(operation.data ?? {}).some((column) => column !== 'deleted_at')) throw new BadRequestException('正文候选版本只能切换回收站状态，正文与修订身份不可修改');
   if (operation.table === 'note_audio_segments' && operation.op === 'PATCH') {
     // 原音身份和内容摘要不可变，支持转写、排序与回收站状态同步。

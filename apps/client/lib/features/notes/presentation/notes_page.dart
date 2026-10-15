@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:drift/drift.dart' hide Column;
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -19,6 +21,11 @@ import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart'
 import 'package:omni_butler/features/notes/data/note_editor_controller.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
+import 'package:omni_butler/features/notes/data/note_image_repository.dart';
+import 'package:omni_butler/features/notes/data/note_draft_audio_edits.dart';
+import 'package:omni_butler/features/notes/markdown/note_markdown.dart';
+import 'package:omni_butler/features/notes/presentation/note_rich_editor.dart';
+import 'package:omni_butler/features/notes/presentation/note_markdown_text.dart';
 import 'package:omni_butler/features/notes/presentation/note_audio_card.dart';
 import 'package:omni_butler/features/notes/presentation/note_search_focus.dart';
 import 'package:omni_butler/features/notes/presentation/note_statistic_button.dart';
@@ -38,6 +45,7 @@ part 'windows_notes_view.dart';
 part 'windows_note_tags.dart';
 part 'windows_note_tag_picker.dart';
 part 'windows_note_body.dart';
+part 'windows_note_tools.dart';
 
 /// 含已删除名称的笔记分类流，历史名称不能丢失。
 final _noteTaxonomiesProvider = StreamProvider<List<TaxonomyEntry>>((ref) {
@@ -76,6 +84,18 @@ class _NotesPageState extends ConsumerState<NotesPage>
     with WidgetsBindingObserver {
   /// 正文输入与中文输入法状态。
   final TextEditingController _body = TextEditingController();
+
+  /// Windows 可视文档的选区与撤销记录独立于持久 Markdown。
+  final NoteRichEditorController _richBody = NoteRichEditorController();
+
+  /// 字体弹层始终锚定当前格式按钮。
+  final GlobalKey _formatAnchor = GlobalKey();
+
+  /// 弹层打开期间保持 Aa 的选中反馈。
+  bool _formatMenuOpen = false;
+
+  /// 阻止同时打开多个系统图片选择窗口。
+  bool _pickingImages = false;
 
   /// 历史搜索输入。
   final TextEditingController _search = TextEditingController();
@@ -192,9 +212,15 @@ class _NotesPageState extends ConsumerState<NotesPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _richBody.addListener(_richSelectionChanged);
     _focus.addListener(() {
       if (!_focus.hasFocus) unawaited(_editor?.flush());
     });
+  }
+
+  /// 选区变化只刷新工具状态，不把光标移动当正文编辑。
+  void _richSelectionChanged() {
+    if (mounted) setState(() {});
   }
 
   /// 等实际路由可读取后监听进入事件。
@@ -272,6 +298,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
   void _syncText() {
     // 当前人工或明确选择的正文。
     final String text = _editor?.draft.body ?? '';
+    _richBody.syncMarkdown(text, identity: _editor?.draft.id);
     if (_body.text != text) {
       _body.value = TextEditingValue(
         text: text,
@@ -299,6 +326,8 @@ class _NotesPageState extends ConsumerState<NotesPage>
     unawaited(_editor?.flush());
     _returns?.cancel();
     _body.dispose();
+    _richBody.removeListener(_richSelectionChanged);
+    _richBody.dispose();
     _search.dispose();
     _focus.dispose();
     _notesScroll.dispose();
@@ -397,7 +426,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
     final String keyword = _search.text.trim().toLowerCase();
     if (keyword.isEmpty) return true;
     return [
-      note.body,
+      NoteMarkdown.plainText(note.body),
       ...taxonomies
           .where((item) => tags.contains(item.id))
           .map((item) => item.name),
@@ -791,44 +820,63 @@ class _NotesPageState extends ConsumerState<NotesPage>
                 '检测到 ${editor.pendingRecoveryCount} 段未确认保存的原音，请点击“恢复上次录音”检查。',
               ),
             ),
-          OmniTextField(
-            controller: _body,
-            enabled: !_committing && !editor.committing,
-            readOnly: editor.frozen || editor.conflicted,
-            focusNode: _focus,
-            minLines: inline ? (historyEditing ? 1 : 5) : 9,
-            maxLines: null,
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-              height: inline ? 1.5 : 1.7,
-              color: inline && Theme.of(context).brightness == Brightness.light
-                  ? NoteComposerStyle.ink
-                  : null,
+          if (inline)
+            NoteRichEditor(
+              key: const ValueKey('note-rich-editor'),
+              controller: _richBody,
+              focusNode: _focus,
+              enabled: !_committing && !editor.committing,
+              readOnly: editor.frozen || editor.conflicted,
+              minHeight: historyEditing ? 0 : NoteComposerStyle.bodyHeight,
+              placeholder: '现在的想法是...',
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                height: 1.5,
+                color: Theme.of(context).brightness == Brightness.light
+                    ? NoteComposerStyle.ink
+                    : OmniColors.of(context).ink,
+              ),
+              onChanged: (value) => editor.edit(body: value),
+            )
+          else
+            OmniTextField(
+              controller: _body,
+              enabled: !_committing && !editor.committing,
+              readOnly: editor.frozen || editor.conflicted,
+              focusNode: _focus,
+              minLines: inline ? (historyEditing ? 1 : 5) : 9,
+              maxLines: null,
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                height: inline ? 1.5 : 1.7,
+                color:
+                    inline && Theme.of(context).brightness == Brightness.light
+                    ? NoteComposerStyle.ink
+                    : null,
+              ),
+              decoration: InputDecoration(
+                hintText: inline ? '现在的想法是...' : '记下此刻的想法…',
+                hintStyle: inline
+                    ? TextStyle(
+                        color: Theme.of(context).brightness == Brightness.light
+                            ? NoteComposerStyle.muted
+                            : OmniColors.of(context).muted,
+                      )
+                    : null,
+                filled: inline ? false : null,
+                fillColor: inline ? Colors.transparent : null,
+                hoverColor: inline ? Colors.transparent : null,
+                contentPadding: inline ? EdgeInsets.zero : null,
+                constraints: inline && !historyEditing
+                    ? const BoxConstraints(
+                        minHeight: NoteComposerStyle.bodyHeight,
+                      )
+                    : null,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                disabledBorder: inline ? InputBorder.none : null,
+              ),
+              onChanged: (value) => editor.edit(body: value),
             ),
-            decoration: InputDecoration(
-              hintText: inline ? '现在的想法是...' : '记下此刻的想法…',
-              hintStyle: inline
-                  ? TextStyle(
-                      color: Theme.of(context).brightness == Brightness.light
-                          ? NoteComposerStyle.muted
-                          : OmniColors.of(context).muted,
-                    )
-                  : null,
-              filled: inline ? false : null,
-              fillColor: inline ? Colors.transparent : null,
-              hoverColor: inline ? Colors.transparent : null,
-              contentPadding: inline ? EdgeInsets.zero : null,
-              constraints: inline && !historyEditing
-                  ? const BoxConstraints(
-                      minHeight: NoteComposerStyle.bodyHeight,
-                    )
-                  : null,
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              disabledBorder: inline ? InputBorder.none : null,
-            ),
-            onChanged: (value) => editor.edit(body: value),
-          ),
           if (!inline) const Divider(),
           if (!inline || recording.isActive)
             Wrap(
@@ -992,6 +1040,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
           if (inline) ...[
             const SizedBox(height: OmniSpacing.sm),
             _draftAudio(editor),
+            _editorImages(editor),
             _commitActions(editor, segments, recording),
           ],
         ],
@@ -1019,14 +1068,21 @@ class _NotesPageState extends ConsumerState<NotesPage>
         _inserting.add(segment.id);
         try {
           // 使用用户光标位置，正文替换只发生在明确选中的范围。
-          final TextSelection selection = _body.selection;
-          final int start = selection.isValid
-              ? selection.start.clamp(0, _body.text.length)
-              : _body.text.length;
-          final int end = selection.isValid
-              ? selection.end.clamp(start, _body.text.length)
-              : start;
-          editor.edit(body: _body.text.replaceRange(start, end, text));
+          if (_windows) {
+            _richBody.insertText(text);
+            editor.edit(body: _richBody.markdown);
+          } else {
+            // Android 保留原有纯文本编辑偏移。
+            final TextSelection selection = _body.selection;
+            final int start = selection.isValid
+                ? selection.start.clamp(0, _body.text.length)
+                : _body.text.length;
+            // 有效选区只替换用户明确选择的范围。
+            final int end = selection.isValid
+                ? selection.end.clamp(start, _body.text.length)
+                : start;
+            editor.edit(body: _body.text.replaceRange(start, end, text));
+          }
           if (_windows) {
             // 原始转写与再识别候选分别记录，发布前不消费正式候选。
             final NoteAudioLocalFileRecord? current =
@@ -1195,11 +1251,19 @@ class _NotesPageState extends ConsumerState<NotesPage>
                   children: versions
                       .map(
                         (version) => OmniListTile(
-                          title: Text(
-                            version.body.isEmpty ? '内容已清空' : version.body,
-                            maxLines: 5,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          title: _windows
+                              ? NoteMarkdownText(
+                                  source: version.body.isEmpty
+                                      ? '内容已清空'
+                                      : version.body,
+                                  maxLines: 5,
+                                  overflow: TextOverflow.ellipsis,
+                                )
+                              : Text(
+                                  version.body.isEmpty ? '内容已清空' : version.body,
+                                  maxLines: 5,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                           subtitle: Text('${version.createdAt.toLocal()}'),
                           trailing: OmniIconButton(
                             tooltip: '复制此版本',

@@ -14,6 +14,12 @@ abstract final class NoteComposerStyle {
   /// 非聚焦工具图标仍可操作，但视觉保持极浅灰。
   static const Color idleTool = Color(0xFFEFEFEF);
 
+  /// 笔记高亮的固定浅黄色，与 Markdown codec 的颜色属性一致。
+  static const Color highlight = Color(0xFFFFF59D);
+
+  /// 高亮文字在明暗主题均使用深灰，确保浅黄背景上的可读性。
+  static const Color highlightInk = Color(0xFF494949);
+
   /// 正文留白保持参考图的输入卡片高度。
   static const double bodyHeight = 160;
 

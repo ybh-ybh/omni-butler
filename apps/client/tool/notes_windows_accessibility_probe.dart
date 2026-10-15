@@ -2,12 +2,14 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ffi' as ffi;
+import 'dart:ui' as ui;
 
 import 'package:flutter/src/widgets/_window_win32.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/semantics.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/src/foundation/_features.dart';
 import 'package:flutter/src/widgets/_window.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -19,6 +21,8 @@ import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
 import 'package:omni_butler/features/notes/presentation/notes_page.dart';
+import 'package:omni_butler/features/notes/presentation/note_rich_editor.dart';
+import 'package:omni_butler/features/notes/data/note_editor_controller.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:omni_butler/shared/ui/omni_note_composer_button.dart';
 import 'package:omni_butler/shared/ui/omni_note_audio_controls.dart';
@@ -79,15 +83,14 @@ Widget? findProbeWidget(Key key) {
 }
 
 /// 在稳定卡片语义边界内找到实际面板双击入口，不依赖外层手势类型。
-void editProbeHistoryNote() {
+void editProbeHistoryNote([String id = 'probe-note']) {
   // 当前生产面板提供的唯一编辑动作。
   VoidCallback? activate;
   // 仅在指定历史卡片内部寻找双击入口。
   void visit(Element element, {bool insideCard = false}) {
     // 卡片根现在保持为稳定KeyedSubtree，交互由内部OmniPanel承担。
     final bool inCard =
-        insideCard ||
-        element.widget.key == const ValueKey('note-card-probe-note');
+        insideCard || element.widget.key == ValueKey('note-card-$id');
     // 当前元素可能是负责双击的面板。
     final Widget widget = element.widget;
     if (inCard && widget is OmniPanel && widget.onDoubleTap != null) {
@@ -108,6 +111,7 @@ void activateProbeInput() {
   void visit(Element element) {
     // 当前叶节点的公开控件配置。
     final Widget widget = element.widget;
+    if (widget is NoteRichEditor) widget.focusNode.requestFocus();
     if (widget is TextField && widget.decoration?.hintText == '现在的想法是...') {
       widget.focusNode?.requestFocus();
     }
@@ -177,6 +181,60 @@ void activateProbeTooltip(String message) {
 /// 真实时钟驱动原生语义与动画帧。
 Future<void> pauseProbe([int milliseconds = 280]) =>
     Future.delayed(Duration(milliseconds: milliseconds));
+
+/// 以真实鼠标双击覆盖不同音频／标签组合的卡片替换与视口裁剪。
+Future<void> runHistoryProbeRound(int round, int viewId) async {
+  // 四组数据轮换，确保纯文字和带音频的差异可从原生日志对照。
+  final String id = 'probe-history-${round % 4}';
+  // 正式卡片在原生产滚动视图中定位，不能直接调用编辑回调替代双击。
+  final Element card = statisticsProbeElement(ValueKey('note-card-$id'));
+  await Scrollable.ensureVisible(card, alignment: 0.1);
+  await pauseProbe(120);
+  // 时间行远离右侧菜单和音频内嵌按钮。
+  final RenderBox box = card.findRenderObject()! as RenderBox;
+  // 统一按原布局坐标向当前窗口发送鼠标事件。
+  final Offset point = box.localToGlobal(const Offset(80, 22));
+  // 每轮两个点击使用不同指针，鼠标设备保持一致。
+  for (int click = 0; click < 2; click++) {
+    GestureBinding.instance.handlePointerEvent(
+      PointerDownEvent(
+        viewId: viewId,
+        device: 71,
+        pointer: round * 2 + click + 1,
+        kind: ui.PointerDeviceKind.mouse,
+        buttons: kPrimaryMouseButton,
+        position: point,
+      ),
+    );
+    await pauseProbe(25);
+    GestureBinding.instance.handlePointerEvent(
+      PointerUpEvent(
+        viewId: viewId,
+        device: 71,
+        pointer: round * 2 + click + 1,
+        kind: ui.PointerDeviceKind.mouse,
+        position: point,
+      ),
+    );
+    await pauseProbe(65);
+  }
+  await pauseProbe(360);
+  if (findProbeWidget(const ValueKey('note-edit-cancel')) == null) {
+    throw StateError('双击没有打开历史笔记$id');
+  }
+  activateProbeInput();
+  await pauseProbe(80);
+  (findProbeWidget(
+    const ValueKey('note-composer-tag'),
+  ) as OmniNoteComposerButton).onPressed!();
+  await pauseProbe(100);
+  Tooltip.dismissAllToolTips();
+  (findProbeWidget(
+    const ValueKey('note-edit-cancel'),
+  ) as OmniNoteAudioLink).onPressed!();
+  await pauseProbe(360);
+  stdout.writeln('PROBE_HISTORY:$round:$id');
+}
 
 /// 从探针自身元素树获取稳定业务锚点，不访问用户窗口。
 Element statisticsProbeElement(Key key) {
@@ -249,6 +307,128 @@ Future<void> runStatisticsProbeRound(int round) async {
   await pauseProbe();
 }
 
+/// 使用引擎键盘入口走真实焦点树，不能只修改HardwareKeyboard按键集合。
+void sendEditorProbeKey(
+  LogicalKeyboardKey logical,
+  PhysicalKeyboardKey physical,
+  ui.KeyEventType type,
+) {
+  WidgetsBinding.instance.platformDispatcher.onKeyData?.call(
+    ui.KeyData(
+      timeStamp: Duration.zero,
+      type: type,
+      physical: physical.usbHidUsage,
+      logical: logical.keyId,
+      character: null,
+      synthesized: true,
+    ),
+  );
+}
+
+/// 原生窗口内重复格式、选区、菜单和列表，保持辅助功能桥真实启用。
+Future<void> runEditorProbeRound(NoteEditorController editor, int round) async {
+  editor.edit(body: '中文选区格式与高亮\n第一项\n第二项');
+  await pauseProbe(100);
+  // 本轮真实生产编辑器与可见选区。
+  final NoteRichEditor field =
+      findProbeWidget(const ValueKey('note-rich-editor'))! as NoteRichEditor;
+  field.focusNode.requestFocus();
+  field.controller.selection = const TextSelection(
+    baseOffset: 0,
+    extentOffset: 2,
+  );
+  await pauseProbe(60);
+  sendEditorProbeKey(
+    LogicalKeyboardKey.controlLeft,
+    PhysicalKeyboardKey.controlLeft,
+    ui.KeyEventType.down,
+  );
+  sendEditorProbeKey(
+    LogicalKeyboardKey.keyB,
+    PhysicalKeyboardKey.keyB,
+    ui.KeyEventType.down,
+  );
+  sendEditorProbeKey(
+    LogicalKeyboardKey.keyB,
+    PhysicalKeyboardKey.keyB,
+    ui.KeyEventType.up,
+  );
+  sendEditorProbeKey(
+    LogicalKeyboardKey.controlLeft,
+    PhysicalKeyboardKey.controlLeft,
+    ui.KeyEventType.up,
+  );
+  await pauseProbe(80);
+  if (!editor.draft.body.startsWith('**中文**')) {
+    throw StateError('原生Ctrl+B未格式化选区');
+  }
+  field.controller.selection = const TextSelection(
+    baseOffset: 2,
+    extentOffset: 4,
+  );
+  sendEditorProbeKey(
+    LogicalKeyboardKey.controlLeft,
+    PhysicalKeyboardKey.controlLeft,
+    ui.KeyEventType.down,
+  );
+  sendEditorProbeKey(
+    LogicalKeyboardKey.keyU,
+    PhysicalKeyboardKey.keyU,
+    ui.KeyEventType.down,
+  );
+  sendEditorProbeKey(
+    LogicalKeyboardKey.keyU,
+    PhysicalKeyboardKey.keyU,
+    ui.KeyEventType.up,
+  );
+  sendEditorProbeKey(
+    LogicalKeyboardKey.controlLeft,
+    PhysicalKeyboardKey.controlLeft,
+    ui.KeyEventType.up,
+  );
+  await pauseProbe(80);
+  if (!editor.draft.body.contains('<u>选区</u>')) {
+    throw StateError('原生Ctrl+U未格式化选区');
+  }
+  // 菜单通过真实生产按钮打开，选择高亮后返回正文。
+  OmniNoteComposerButton? formatButton;
+  void findFormat(Element element) {
+    if (element.widget case final OmniNoteComposerButton button
+        when button.tooltip == '文本格式') {
+      formatButton = button;
+    }
+    element.visitChildren(findFormat);
+  }
+
+  WidgetsBinding.instance.rootElement?.visitChildren(findFormat);
+  field.controller.selection = const TextSelection(
+    baseOffset: 4,
+    extentOffset: 6,
+  );
+  formatButton!.onPressed!();
+  await pauseProbe(180);
+  (findProbeWidget(
+    const ValueKey('note-format-highlight'),
+  ) as OmniNoteComposerButton).onPressed!();
+  await pauseProbe(180);
+  if (!editor.draft.body.contains('==格式==') || !field.focusNode.hasFocus) {
+    throw StateError('原生格式弹层丢失选区或焦点');
+  }
+  field.controller.selection = TextSelection(
+    baseOffset: 10,
+    extentOffset: field.controller.plainText.length,
+  );
+  (findProbeWidget(
+    const ValueKey('note-composer-ordered-list'),
+  ) as OmniNoteComposerButton).onPressed!();
+  await pauseProbe(80);
+  (findProbeWidget(
+    const ValueKey('note-composer-bullet-list'),
+  ) as OmniNoteComposerButton).onPressed!();
+  await pauseProbe(80);
+  stdout.writeln('PROBE_EDITOR:$round:${editor.draft.body.contains('- 第一项')}');
+}
+
 /// 仅使用进程内存中的数据复现Windows语义重挂。
 Future<void> main(List<String> arguments) async {
   if (!Platform.isWindows) {
@@ -258,6 +438,20 @@ Future<void> main(List<String> arguments) async {
   final bool anchorsOnly = arguments.contains('--anchors-only');
   // 统计专项只循环新浮层，默认完整场景也包含本轮新增交互。
   final bool statisticsOnly = arguments.contains('--statistics-only');
+  // 编辑专项只操作隔离的生产正文，避免旧统计流程稀释验收证据。
+  final bool editorOnly = arguments.contains('--editor-only');
+  // 历史专项使用四种附件／标签组合和真正的鼠标双击。
+  final bool historyOnly = arguments.contains('--history-only');
+  // 历史回归可切换深色窄窗，增加音频位于视口裁剪边缘的覆盖。
+  final bool dark = arguments.contains('--dark');
+  // 窄窗启用抽屉布局，保持默认探针窗口尺寸不变。
+  final bool narrow = arguments.contains('--narrow');
+  // 实际框架异常必须计入进程退出状态。
+  int frameworkErrors = 0;
+  FlutterError.onError = (details) {
+    frameworkErrors++;
+    stderr.writeln('PROBE_FRAMEWORK_ERROR:$details');
+  };
   final bool unguarded = arguments.contains('--unguarded');
   isWindowingEnabled = true;
   WidgetsFlutterBinding.ensureInitialized();
@@ -302,6 +496,39 @@ Future<void> main(List<String> arguments) async {
       ),
     );
   }
+  if (historyOnly) {
+    // 只在隔离内存库中构造纯文字、标签、音频和两者都有的对照。
+    for (int index = 0; index < 4; index++) {
+      await NoteRepository(database).save(
+        NoteDraft(
+          id: 'probe-history-$index',
+          body: '对照笔记$index\n第一行正文\n第二行正文\n第三行正文',
+          dayKey: '2026-10-15',
+          baseRevision: '',
+          tags: index.isOdd ? {'probe-tag-0', 'probe-tag-1'} : {},
+        ),
+      );
+      if (index < 2) continue;
+      // 多个进度条覆盖同时移除、重新创建与动画边缘裁剪。
+      for (int audio = 0; audio < 2; audio++) {
+        await database
+            .into(database.noteAudioSegments)
+            .insert(
+              NoteAudioSegmentsCompanion.insert(
+                id: 'probe-history-audio-$index-$audio',
+                noteId: 'probe-history-$index',
+                sortOrder: audio,
+                durationMs: 12000,
+                mime: 'audio/wav',
+                sha256: '0' * 64,
+                byteSize: 64,
+                createdAt: now,
+                updatedAt: now,
+              ),
+            );
+      }
+    }
+  }
   // 编辑和页面沿用生产逻辑。
   final ProviderContainer container = ProviderContainer(
     overrides: [
@@ -313,7 +540,7 @@ Future<void> main(List<String> arguments) async {
   await container.read(noteEditorProvider).openComposer();
   // 单窗口开启真实原生辅助功能桥。
   final RegularWindowController window = RegularWindowController(
-    size: const Size(1280, 720),
+    size: narrow ? const Size(780, 900) : const Size(1280, 720),
     title: 'Notes accessibility isolated probe',
   );
   runWidget(
@@ -322,7 +549,9 @@ Future<void> main(List<String> arguments) async {
       child: UncontrolledProviderScope(
         container: container,
         child: MaterialApp(
-          theme: AppTheme.build(brightness: Brightness.light),
+          theme: AppTheme.build(
+            brightness: dark ? Brightness.dark : Brightness.light,
+          ),
           home: anchorsOnly
               ? ProbeTooltipAnchors(guarded: !unguarded)
               : const NotesPage(),
@@ -375,6 +604,14 @@ Future<void> main(List<String> arguments) async {
   int resultCode = 0;
   try {
     for (int round = 0; round < 20; round++) {
+      if (historyOnly) {
+        await runHistoryProbeRound(round, window.rootView.viewId);
+        continue;
+      }
+      if (editorOnly) {
+        await runEditorProbeRound(container.read(noteEditorProvider), round);
+        continue;
+      }
       if (anchorsOnly) {
         stdout.writeln('PROBE_ANCHORS:$round:guarded=${!unguarded}');
         activateProbeTooltip('原生锚点A');
@@ -453,6 +690,6 @@ Future<void> main(List<String> arguments) async {
     window.destroy();
     container.dispose();
     await database.close();
-    exit(resultCode);
+    exit(frameworkErrors == 0 ? resultCode : 1);
   }
 }

@@ -14,6 +14,7 @@ export const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
   note_entries: new Set(['body', 'day_key', 'creation_timezone', 'tags', 'revision', 'created_at', 'updated_at', 'deleted_at']),
   note_versions: new Set(['note_id', 'body', 'base_revision', 'revision', 'created_at', 'deleted_at']),
   note_audio_segments: new Set(['note_id', 'sort_order', 'duration_ms', 'mime', 'sha256', 'byte_size', 'transcript', 'created_at', 'updated_at', 'deleted_at']),
+  note_images: new Set(['note_id', 'sort_order', 'created_at', 'updated_at', 'deleted_at']),
   todo_items: new Set([
     'parent_id',
     'title',
@@ -189,6 +190,9 @@ export class SyncSqlBuilder {
     }
     // 客户端提交的数据。
     const data = { ...operation.data };
+    if (operation.table === 'note_images' && data.sort_order !== undefined && (!Number.isSafeInteger(data.sort_order) || (data.sort_order as number) < 0)) {
+      throw new BadRequestException('笔记图片顺序必须为非负整数');
+    }
     if (operation.table === 'taxonomy_entries' && data.module === 'notes' && data.kind === 'category') {
       throw new BadRequestException('笔记类别已下线，请使用笔记标签');
     }

@@ -57,6 +57,8 @@ dependencies:
   powersync: ^2.4.0
   drift_sqlite_async: ^0.3.1
   image: ^4.9.2
+  # Windows 笔记使用真实富文本选区，持久正文仍为受限 Markdown。
+  flutter_quill: 11.6.0
   # Windows 采集 PCM 流；Android 使用本应用原生前台录音服务。
   record: ^7.1.2
   # 两端播放私有目录中保存的原始录音。

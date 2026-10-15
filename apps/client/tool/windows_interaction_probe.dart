@@ -537,9 +537,21 @@ class _InteractionProbePageState extends State<_InteractionProbePage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text(
-                      '双击进入编辑的笔记卡片',
-                      style: Theme.of(context).textTheme.titleMedium,
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            '双击进入编辑的笔记卡片',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                        ),
+                        OmniPopupMenuButton<String>(
+                          key: const ValueKey<String>('probe-note-menu'),
+                          tooltip: '笔记操作',
+                          itemBuilder: _items,
+                          onSelected: _select,
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 8),
                     const Text('单击只有内容按压反馈；双击沿用原有手势并只执行一次。'),
@@ -552,7 +564,10 @@ class _InteractionProbePageState extends State<_InteractionProbePage> {
                 ),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(
+              key: ValueKey<String>('probe-menu-outside'),
+              height: 20,
+            ),
             Material(
               color: colors.paperSubtle,
               borderRadius: BorderRadius.circular(12),
@@ -811,6 +826,43 @@ class _ProbeDriver {
     _record('assertion-passed', <String, Object?>{'check': message});
   }
 
+  /// 采样笔记卡片底部留白的真实合成像素，包含祖先焦点墨水。
+  Future<int> _noteBackgroundPixel() async {
+    WidgetsBinding.instance.scheduleFrame();
+    await WidgetsBinding.instance.endOfFrame;
+    // 卡片底部内边距不包含文字、图标或描边。
+    final RenderBox card =
+        _element('probe-note').findRenderObject()! as RenderBox;
+    // 图层边界和采样坐标统一为窗口逻辑坐标。
+    final RenderRepaintBoundary boundary =
+        _captureKey.currentContext!.findRenderObject()!
+            as RenderRepaintBoundary;
+    // 真实图层内的留白采样点。
+    final Offset point = boundary.globalToLocal(
+      card.localToGlobal(Offset(card.size.width / 2, card.size.height - 8)),
+    );
+    // 从真实引擎输出中读取 RGBA，而非样式属性。
+    final ui.Image image = await boundary.toImage(pixelRatio: 1);
+    try {
+      // 最终合成像素的字节数据。
+      final bytes = (await image.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      ))!;
+      // 原始 RGBA 值用于关闭前后严格比较。
+      final int rgba = bytes.getUint32(
+        (point.dy.floor() * image.width + point.dx.floor()) * 4,
+      );
+      _record('note-background-pixel', <String, Object?>{
+        'x': point.dx.floor(),
+        'y': point.dy.floor(),
+        'rgba': rgba,
+      });
+      return rgba;
+    } finally {
+      image.dispose();
+    }
+  }
+
   /// 连贯执行按压、嵌套点击、选择、双击、菜单与键盘验收。
   Future<void> run() async {
     GestureBinding.instance.handlePointerEvent(
@@ -869,6 +921,24 @@ class _ProbeDriver {
     await tap('probe-note', settle: 80);
     await tap('probe-note', settle: 400);
     _expect(_pageKey.currentState!._doubleCount == 1, '笔记卡片双击只触发一次');
+    await hover('probe-menu-outside');
+    await capture('05a-note-before-menu');
+    // 打开菜单前已消除鼠标 hover 的真实卡片底色。
+    final int noteBackground = await _noteBackgroundPixel();
+    // 重复鼠标打开及遮罩取消，确认父卡片不保留触发器焦点底色。
+    for (int cycle = 0; cycle < 3; cycle += 1) {
+      // 父卡保留双击识别，先等待原生单击仲裁结束再检查菜单。
+      await tap('probe-note-menu', settle: 400);
+      _expect(_menuVisible, '笔记三个点已打开菜单');
+      await tap('probe-menu-outside');
+      _expect(!_menuVisible, '点击外部已关闭笔记菜单');
+      await capture('05b-note-dismissed-$cycle');
+      _expect(
+        await _noteBackgroundPixel() == noteBackground,
+        '菜单外部取消后卡片实际像素恢复',
+      );
+    }
+    _expect(_pageKey.currentState!._doubleCount == 1, '取消菜单不触发笔记编辑');
     await tap('probe-menu', settle: 0);
     await Future<void>.delayed(const Duration(milliseconds: 50));
     await capture('06-menu-entering');
@@ -902,6 +972,18 @@ class _ProbeDriver {
     await key(PhysicalKeyboardKey.escape, LogicalKeyboardKey.escape);
     _expect(!_menuVisible, 'Escape 已通过实际焦点树关闭菜单');
     await capture('09a-menu-escaped');
+    // 键盘恢复从真实 Tab 入口验证，不能依赖鼠标打开时强行抢焦点。
+    for (int step = 0; step < 24; step += 1) {
+      await key(PhysicalKeyboardKey.tab, LogicalKeyboardKey.tab);
+      if ((_focusSnapshot()['focusAncestors']! as List<String>).contains(
+        const ValueKey<String>('probe-menu').toString(),
+      )) {
+        break;
+      }
+    }
+    await key(PhysicalKeyboardKey.enter, LogicalKeyboardKey.enter);
+    _expect(_menuVisible, 'Tab 聚焦菜单触发器后 Enter 打开菜单');
+    await key(PhysicalKeyboardKey.escape, LogicalKeyboardKey.escape);
     await key(PhysicalKeyboardKey.enter, LogicalKeyboardKey.enter);
     _expect(_menuVisible, '恢复到触发器的焦点可用 Enter 重新打开菜单');
     await capture('09b-menu-keyboard-opened');

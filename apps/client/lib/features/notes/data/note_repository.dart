@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
+import 'package:omni_butler/features/notes/data/note_image_repository.dart';
 import 'package:uuid/uuid.dart';
 
 /// 解码标签身份，旧数据损坏时明确报错而非猜测名称。
@@ -119,6 +120,7 @@ class NoteRepository {
   Future<NoteEntryRecord?> save(
     NoteDraft draft, {
     bool hasAudio = false,
+    bool hasImages = false,
   }) => database.transaction(() async {
     // 当前数据库版本。
     final NoteEntryRecord? previous = await find(draft.id);
@@ -126,7 +128,12 @@ class NoteRepository {
       throw StateError('原笔记已永久删除，当前输入可复制或另存为新笔记');
     }
     if (previous?.deletedAt != null) throw StateError('笔记已在回收站，修改未覆盖原记录');
-    if (previous == null && draft.body.trim().isEmpty && !hasAudio) return null;
+    if (previous == null &&
+        draft.body.trim().isEmpty &&
+        !hasAudio &&
+        !hasImages) {
+      return null;
+    }
     if (draft.body.length > 20000) {
       throw const FormatException('正文最多 20,000 字，请复制保存超出内容');
     }
@@ -349,6 +356,8 @@ class NoteRepository {
     NoteDraft source, {
     bool hasAdditionalAudio = false,
     Set<String> excludedAudioIds = const {},
+    bool hasAdditionalImages = false,
+    Set<String> excludedImageIds = const {},
   }) async {
     // 包括回收站原音，以便删除与离线编辑并发时显式恢复副本。
     final List<NoteAudioSegmentRecord> audio =
@@ -377,7 +386,17 @@ class NoteRepository {
       }
       paths[segment.id] = file.path;
     }
-    if (source.body.trim().isEmpty && audio.isEmpty && !hasAdditionalAudio) {
+    // 图片存在性独立于正文，Android 另存也必须保留正式图片。
+    final NoteImageRepository imageRepository = NoteImageRepository(database);
+    // 当前另存排除用户暂存删除的图片。
+    final List<NoteImageRecord> sourceImages = (await imageRepository.published(
+      source.id,
+    )).where((item) => !excludedImageIds.contains(item.id)).toList();
+    if (source.body.trim().isEmpty &&
+        audio.isEmpty &&
+        !hasAdditionalAudio &&
+        sourceImages.isEmpty &&
+        !hasAdditionalImages) {
       throw StateError('当前没有可另存的正文或原音');
     }
     // 新创建时刻不冒充原记录的创建时刻。
@@ -396,6 +415,7 @@ class NoteRepository {
       final NoteEntryRecord? saved = await save(
         replacement,
         hasAudio: audio.isNotEmpty || hasAdditionalAudio,
+        hasImages: sourceImages.isNotEmpty || hasAdditionalImages,
       );
       if (saved == null) throw StateError('新笔记保存失败');
       for (final NoteAudioSegmentRecord segment in audio) {
@@ -426,6 +446,11 @@ class NoteRepository {
               ),
             );
       }
+      await imageRepository.copy(
+        source.id,
+        saved.id,
+        excluded: excludedImageIds,
+      );
       return saved;
     });
   }
@@ -537,6 +562,14 @@ class NoteRepository {
             updatedAt: Value(DateTime.now()),
           ),
         );
+        await (database.update(
+          database.noteImages,
+        )..where((table) => table.noteId.equals(id))).write(
+          NoteImagesCompanion(
+            deletedAt: Value(deletedAt),
+            updatedAt: Value(DateTime.now()),
+          ),
+        );
       });
 
   /// 永久删除业务记录；文件只在事务提交后由孤儿清理器移除。
@@ -550,6 +583,9 @@ class NoteRepository {
     )..where((table) => table.noteId.equals(id))).go();
     await (database.delete(
       database.noteAudioSegments,
+    )..where((table) => table.noteId.equals(id))).go();
+    await (database.delete(
+      database.noteImages,
     )..where((table) => table.noteId.equals(id))).go();
     await (database.delete(
       database.noteEntries,
@@ -590,6 +626,7 @@ class NoteRepository {
 
   /// 在已提交数据库状态下清理永久删除的文件，失败保留记录以便重试。
   Future<void> purgeOrphanFiles() => database.transaction(() async {
+    await NoteImageRepository(database).purgeOrphans();
     // 引用快照、文件删除与本机行清理持有同一写事务，新增草稿不能夹在检查之间。
     // 本机草稿原件与正式文件共享保护集合，取消不会删掉已另存的引用。
     final Set<String> protectedPaths = await protectedAudioPaths();

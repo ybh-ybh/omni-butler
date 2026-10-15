@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:omni_butler/features/notes/markdown/note_markdown.dart';
+
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 
@@ -219,9 +221,18 @@ class GlobalSearchRepository {
     final Map<String, String> names = {
       for (final TaxonomyEntry entry in taxonomy) entry.id: entry.name,
     };
+    // 纯图片笔记被标签命中时也应使用正确的派生标题。
+    final Set<String> imageNotes =
+        (await (_database.select(
+              _database.noteImages,
+            )..where((table) => table.deletedAt.isNull())).get())
+            .map((image) => image.noteId)
+            .toSet();
     for (final NoteEntryRecord record in notes) {
+      // 全局搜索和标题使用可见文字，格式分隔符不会打断词组。
+      final String visibleBody = NoteMarkdown.plainText(record.body);
       if (_matches(keyword, <String?>[
-        record.body,
+        visibleBody,
         ..._tagNames(record.tags, names),
         ...audio
             .where(
@@ -233,9 +244,11 @@ class GlobalSearchRepository {
           GlobalSearchResult(
             type: GlobalSearchType.note,
             id: record.id,
-            title: record.body.trim().isEmpty
-                ? '语音笔记'
-                : record.body.trim().split('\n').first,
+            title: visibleBody.trim().isEmpty
+                ? imageNotes.contains(record.id)
+                      ? '图片笔记'
+                      : '语音笔记'
+                : visibleBody.trim().split('\n').first,
             subtitle: record.dayKey,
             route: '/notes?id=${Uri.encodeQueryComponent(record.id)}',
           ),

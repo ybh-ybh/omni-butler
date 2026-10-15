@@ -1,8 +1,30 @@
 # Windows 笔记重构交付与验证
 
-更新：2026-10-15。需求以 [笔记 PRD v2.11](../../../spec/笔记功能PRD.md) 为准，本轮没有部署正式服务、操作真实用户数据库或启动新的付费转写。
+更新：2026-10-15。需求以 [笔记 PRD v2.12](../../../spec/笔记功能PRD.md) 为准，本轮没有部署正式服务、操作真实用户数据库或启动新的付费转写。
 
 ## 实现
+
+v2.12（2026-10-15）Windows 使用 Flutter Quill 11.6.0 维护可视选区、输入法与撤销；持久正文仍为受限 Markdown。支持 `**加粗**`、`<u>下划线</u>`、`==高亮==`、单层 `- `／`1. ` 列表及正文范围内 Ctrl+B／Ctrl+U。自有 codec 保留换行和非目标语法，打开和移动选区不重写 body。标题、搜索与统计使用统一可见文字；列表开头不抽走首项，普通标题和两行正文展开沿用。
+
+底部左侧顺序为井号、图片、分隔线、Aa、无序、有序；悬停独立绘制浅灰背景、前景加深，避免 Ink 固定 alpha 黑底。Aa 使用统一窗口内菜单路由，横向三个动作，保留选区、焦点恢复和无障碍。窄窗工具与发布组自然换行。
+
+2026-10-15 Aa 默认高亮修复：首项 B 由菜单自动取得焦点，原按钮把鼠标模式下的焦点也画成选中背景，正文实际未加粗。格式按钮现在遵循共享菜单的最近输入方式：鼠标只显示当前悬停，键盘导航显示当前焦点；保留真实焦点、选区与格式操作。明暗实际像素回归修前均失败、修后通过，9 项编辑栏及15项菜单回归通过；静态分析、样式检查及正式入口 Windows Release 构建通过。证据位于 `build/notes-format-focus-fix/`，预览为 `preview/windows-format-menu-no-default-{light,dark}.png`。
+
+同日按界面反馈收紧 Aa 弹层：三个图标从24dp缩至18dp，移除条目与面板叠加的上下留白，高度52dp降为36dp，宽度116dp；按钮36dp点击区域和与入口8dp间隔保持。9项编辑栏回归、静态分析、样式检查及正式入口Windows Release构建通过，实际明暗预览与日志位于 `build/notes-format-compact/`。
+
+图片按钮多选 PNG／JPEG／WebP，首张后显示 68dp 缩略图、8dp 间隔、右上删除及末尾虚线加号；零图不占位，阅读可放大。草稿文件复制到本机私有目录；正式图片通过现有图片服务最终存入 MinIO，断网保留待传，跨设备下载经长度和 SHA 校验。每图 note_images 独立身份映射 noteImage 业务槽位，保存按增删差量合并，不制造正文版本；纯图可发布，取消／另存／回收站／迟到响应均保护原件。
+
+当前版本为 SQLite 20、同步 schema 5、本机快照 5，换服 wire 协议仍为 3。旧服务端未声明 supportedBusinessTypes 时只接受原有两类图片，笔记图片待升级后补传；所有参与同步的客户端需升级到 schema 5，Android 无新增界面但共享保存不会删除图片。
+
+### v2.12 验证记录
+
+笔记、图片、真实 SQLite 升级、PowerSync 草稿与快照相关 Flutter 回归 245 项通过；最终界面专项 7 项通过，覆盖悬停实际像素、鼠标原位点击、明暗主题、640dp 窄窗、1.6 倍字号、减少动画、快捷键、弹层关闭与焦点、列表、图片导入／删除／纯图发布／放大。文本组件最终 15 项通过，包含 100 项有序列表在大字号与系统缩放下的编号宽度。预览在 `build/notes-toolbar-preview/`，回归日志为 `build/notes-toolbar-regression.log`、`build/notes-toolbar-final-ui.log`。
+
+服务端常规测试 134 项通过，84 项需外部环境的测试跳过；另在独占 PostgreSQL／MinIO 中运行图片集成 17 项、JWT 笔记同步集成 23 项并全部通过，包含两图独立上传／下载／删除及双设备图片增删差量。测试结束已停止隔离存储，没有操作正式部署或真实用户数据。Nest 构建、改动文件 ESLint、Flutter 静态分析和 UI 样式检查通过。
+
+Windows Release 及原生探针验证见下方入口。操作系统中文输入法候选窗与真实两台 Windows 经 PowerSync 的完整人工验收仍待执行；组件测试覆盖中文／emoji／组合输入，真实 MinIO 与模拟双设备 API 集成不能代替这两项人工验收。
+
+原生编辑专项使用 Release 构建 `tool/notes_windows_accessibility_probe.dart` 并带 `--editor-only` 运行，真实启用 Windows 辅助功能桥。最终 20 轮快捷键／格式／列表操作完成，`PROBE_NATIVE_AX_ACTIVE:true`、`PROBE_COMPLETE`，退出码 0，stderr 无框架或 AXTree 错误；随后恢复 `--target lib/main.dart` 构建，最终程序位于 `build/windows/x64/runner/Release/omni_butler.exe`。日志为 `build/notes-toolbar-native.{stdout,stderr}.log` 与 `build/notes-toolbar-release-final.log`。没有终止或覆盖用户正在运行的 Debug 程序。
 
 2026-10-15悬停补充：年份入口去掉hover、按下与焦点底色；月／年均使用手形，未选中项悬停时为深灰背景、选中项保持滑块原色。分段控件提供可选光标及未选中悬停色，使用独立动画背景保留RGB且仅改变alpha，避免切换选中项时InkHighlight残留不透明黑色，其他使用方未启用时沿用原行为。
 
@@ -28,7 +50,7 @@ v2.8正文超过两行时添加灰色展开／收起入口，悬停主题蓝字�
 
 v2.7收缩卡片按音频参考截图补齐浅灰播放条：播放／暂停、细进度线、MM:SS时长及更多；约220ms向下展开灰色12dp原始转写，仅保留重新识别和下载。每张历史卡片读取自身有效原音，播放与原件SHA核查复用现有服务，重新识别沿用授权与未知回执保护；下载用现有file_picker保存校验后的WAV副本，取消不改动原件。创建时间改为灰色10dp，操作菜单灰色至主题正文色悬停；菜单、播放与文字操作显式手形指针，文字操作悬停浅灰圆角背景。Android保留完整音频管理布局，Windows历史编辑使用上述v2.8音频条。
 
-主区输入卡片按四张补充截图改为独立圆角白色表面、浅灰常态边框、聚焦细主题色轮廓和轻阴影，占位“现在的想法是...”；正文无悬停背景和分隔线。左侧只保留`#`，非聚焦极浅灰；右侧48×30dp按钮为20dp白色发布／麦克风图标，有文字／有效原音时主题色发布，空白时主题色麦克风。聚焦显示可见字符数，失焦隐藏；新建卡片无取消按钮、日期或常驻状态／更多工具。正文与工具共享点击区域，点击标签不丢正文焦点。历史编辑使用相同卡片和图标保存，切回新建暂存历史修改。独立`OmniNoteComposerButton`避免普通图标默认内缩轮廓和样式优先级覆盖业务外观，不修改共享普通按钮。深色模式保留主题表面及可读灰色，Android原有编辑呈现与自动保存继续沿用。
+主区输入卡片按四张补充截图改为独立圆角白色表面、浅灰常态边框、聚焦细主题色轮廓和轻阴影，占位“现在的想法是...”；正文无悬停背景和分隔线。左侧工具按上方 v2.12 扩展，非聚焦极浅灰；右侧48×30dp按钮为20dp白色发布／麦克风图标，有文字／有效原音时主题色发布，空白时主题色麦克风。聚焦显示可见字符数，失焦隐藏；新建卡片无取消按钮、日期或常驻状态／更多工具。正文与工具共享点击区域，点击标签不丢正文焦点。历史编辑使用相同卡片和图标保存，切回新建暂存历史修改。独立`OmniNoteComposerButton`避免普通图标默认内缩轮廓和样式优先级覆盖业务外观，不修改共享普通按钮。深色模式保留主题表面及可读灰色，Android原有编辑呈现与自动保存继续沿用。
 
 Windows 页面采用统计／8–12周热图／标签／回收站侧栏、新建草稿与单列卡片，双击原地展开，搜索位于右上角。侧栏默认264dp，拖动范围220–340dp，对应8–12列；分隔线仅分隔热区悬停显示浅灰、按下立即显示主题色，上下各留24dp空白，闲置透明。全侧栏含底部空白悬停显示隐藏按钮，隐藏后主区标题左侧显示恢复入口，当前草稿、筛选和宽度保留。三项统计分别左／中／右对齐，月份使用完整中文，移除近13周说明。首行派生标题，摘要最多两行。Ctrl+F 从正文或导航轨都聚焦笔记搜索；普通编辑保留筛选，外部定位清除遮挡条件。可用宽度不足900dp使用抽屉，减少动画时跳过卡片动画。
 
@@ -38,7 +60,7 @@ Windows 页面采用统计／8–12周热图／标签／回收站侧栏、新建
 
 Windows 文字与原音只写本机草稿，发布／保存才原子提升为正式笔记及版本；Android 保持自动保存。取消或本机永久删除仅留下无正文、标签、基线与时间信息的草稿身份墓碑，阻止迟到事件复活。已补录音结束后延迟暂存、保存中切换、清理与新增草稿交错、录音启动中取消等竞态回归。
 
-笔记类别只在notes模块退休。回收站查询／清空支持general、notes、all；到期清理覆盖all。SQLite19、同步schema4、本机快照4、服务器迁移协议3分别管理；旧队列身份及原始负载摘要不改，服务端执行副本兼容退休类别。草稿原音备份和换服复制使用独立校验文件，选择服务器数据不会混入旧源草稿。
+笔记类别只在notes模块退休。回收站查询／清空支持general、notes、all；到期清理覆盖all。历史 v2.5 基线为 SQLite19／schema4／本机快照4，当前 v2.12 已升为20／5／5，服务器迁移协议3分别管理；旧队列身份及原始负载摘要不改，服务端执行副本兼容退休类别。草稿原音备份和换服复制使用独立校验文件，选择服务器数据不会混入旧源草稿。
 
 ## 验证
 
@@ -159,3 +181,15 @@ flutter build windows --debug --no-pub --target lib/main.dart
 必须捕捉stderr检查`Failed to update ui::AXTree`和其他框架异常，并确认stdout有原生桥已启用及完成标记。单纯`ensureSemantics`只生成Dart语义树，不能代替Windows辅助功能桥验证。
 
 v2.9中文预览在`build/notes-tags-picker-preview`：`windows-composer-selected-tags.png`、`windows-composer-tags-expanded.png`及`windows-tags-management.png`，已核对选中常驻、弹出选项及侧栏管理入口。
+
+### 双击编辑音频与卡片悬停修复（2026-10-15）
+
+带音频历史卡片在阅读／编辑切换时，Material Slider 的窗口级 OverlayPortal 可能序列化孤立语义节点，触发原生 AXTree 更新失败。Windows 的 `OmniNoteAudioSeekBar` 现在通过 `Overlay.wrap(alwaysSizeToContent: true, clipBehavior: Clip.none)` 将浮层留在同一控件子树；保留原生 Slider、24dp 高度、进度读屏和键盘操作。Android 沿用原有结构。相关上游记录见 [Flutter Slider 原生 AXTree 问题](https://github.com/flutter/flutter/issues/190357)，本项目修复以本机前后对照为验收依据。
+
+历史阅读卡片局部使用 `OmniPanel.hoverColor: Colors.transparent`，鼠标进入不改变整卡背景；菜单、音频等内嵌操作的反馈及双击编辑继续保留。
+
+`tool/notes_windows_accessibility_probe.dart --history-only` 使用内存库、无麦克风数据，轮换纯文字／标签／两段音频／标签加音频四组笔记，通过真实鼠标双击20轮，覆盖滚动裁剪、编辑聚焦、标签展开与取消。原生 AX 始终开启：同一轨迹修前371条AXTree错误，修后0条且完成／退出0。证据为 `build/notes-ax-hover-fix/{before,after}.{stdout,stderr}.log`。原生错误不会转成 Dart 异常，必须检查 stderr，不能只检查进程退出码。
+
+`notes_page_test.dart` 新增明暗、普通／音频卡片的实际合成像素检查与双击／取消回归，修前hover白底变灰、修后通过（`hover-before.log`／`final-hover.log`）。`omni_note_audio_seek_bar_test.dart` 两端检查24dp尺寸、唯一滑块语义、键盘和读屏各执行一次，2项通过（`final-seek.log`）。原有笔记／音频／菜单回归98项通过（`regression.log` 中新增用例的初版测试宿主已在上述最终日志修正并通过）。本次不更新视觉基线。
+
+补充 `--history-only --dark --narrow` 的780×900深色窗口20轮同样完成、原生AX开启、0错误（`dark-narrow.*.log`）。合计修后40轮原生鼠标验证通过；`flutter analyze --no-pub`、29项受控样式检查及格式检查通过。正式入口 `lib/main.dart` Windows Release 构建成功（58.7秒，`release-build.log`），产物 `build/windows/x64/runner/Release/omni_butler.exe`；用户正在运行的Debug实例未停止。

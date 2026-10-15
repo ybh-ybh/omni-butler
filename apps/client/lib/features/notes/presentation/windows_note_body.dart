@@ -25,32 +25,34 @@ extension _WindowsNoteBody on _NotesPageState {
     child: LayoutBuilder(
       builder: (context, constraints) {
         // 测量与实际正文使用相同字体、缩放和行宽。
-        final TextStyle? style = Theme.of(context).textTheme.bodyMedium;
+        final TextStyle style =
+            Theme.of(context).textTheme.bodyMedium ??
+            const TextStyle(fontSize: 14);
         // 当前布局方向与用户字号。
         final TextDirection direction = Directionality.of(context);
         final TextScaler scaler = MediaQuery.textScalerOf(context);
         // 两行及完整正文的实际高度，避免切换文本造成收起时突然消失。
-        final TextPainter collapsed = TextPainter(
-          text: TextSpan(text: preview, style: style),
+        final double closedHeight = NoteMarkdownText.measureHeight(
+          preview,
+          maxWidth: constraints.maxWidth,
+          style: style,
           textDirection: direction,
           textScaler: scaler,
           maxLines: 2,
-          ellipsis: '…',
-        )..layout(maxWidth: constraints.maxWidth);
-        final TextPainter full = TextPainter(
-          text: TextSpan(text: preview, style: style),
+        );
+        // 全文按相同的列表缩进和格式字体测量。
+        final double fullHeight = NoteMarkdownText.measureHeight(
+          preview,
+          maxWidth: constraints.maxWidth,
+          style: style,
           textDirection: direction,
           textScaler: scaler,
-        )..layout(maxWidth: constraints.maxWidth);
+        );
         // 超长正文才需要展开，不给已经完整显示的内容添加空操作。
-        final bool overflow = collapsed.didExceedMaxLines;
-        final double closedHeight = collapsed.height;
-        final double fullHeight = full.height;
-        collapsed.dispose();
-        full.dispose();
+        final bool overflow = fullHeight > closedHeight + 0.1;
         if (!overflow) {
-          return Text(
-            preview,
+          return NoteMarkdownText(
+            source: preview,
             key: ValueKey('note-preview-${note.id}'),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
@@ -68,8 +70,8 @@ extension _WindowsNoteBody on _NotesPageState {
               tween: Tween<double>(begin: 0, end: expanded ? 1 : 0),
               duration: OmniMotion.duration(context, OmniMotion.panel),
               curve: OmniMotion.standardCurve,
-              child: Text(
-                preview,
+              child: NoteMarkdownText(
+                source: preview,
                 key: ValueKey('note-preview-${note.id}'),
                 style: style,
               ),

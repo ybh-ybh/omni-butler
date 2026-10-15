@@ -278,7 +278,7 @@ class _OmniWindowsPopupMenuButton<T> extends StatefulWidget {
       _OmniWindowsPopupMenuButtonState<T>();
 }
 
-/// 管理 Windows 菜单生命周期，保留关闭后的触发器焦点。
+/// 管理 Windows 菜单生命周期，由路由恢复打开前的焦点。
 class _OmniWindowsPopupMenuButtonState<T>
     extends State<_OmniWindowsPopupMenuButton<T>> {
   /// 菜单按钮自己的稳定焦点。
@@ -353,7 +353,8 @@ class _OmniWindowsPopupMenuButtonState<T>
     final List<PopupMenuEntry<T>> items = configuration.itemBuilder(context);
     if (items.isEmpty) return;
     _captureAnchor();
-    _focusNode.requestFocus();
+    // 鼠标打开时不强抢焦点，避免关闭后给祖先卡片留下焦点底色。
+    // 键盘激活已有按钮焦点，由 Navigator 在菜单关闭后自动恢复。
     setState(() => _menuOpen = true);
     configuration.onOpened?.call();
     // 取消返回空值，与 PopupMenuButton 原有回调约定一致。
