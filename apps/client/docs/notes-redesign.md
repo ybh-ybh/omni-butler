@@ -1,8 +1,16 @@
 # Windows 笔记重构交付与验证
 
-更新：2026-10-15。需求以 [笔记 PRD v2.10](../../../spec/笔记功能PRD.md) 为准，本轮没有部署正式服务、操作真实用户数据库或启动新的付费转写。
+更新：2026-10-15。需求以 [笔记 PRD v2.11](../../../spec/笔记功能PRD.md) 为准，本轮没有部署正式服务、操作真实用户数据库或启动新的付费转写。
 
 ## 实现
+
+2026-10-15悬停补充：年份入口去掉hover、按下与焦点底色；月／年均使用手形，未选中项悬停时为深灰背景、选中项保持滑块原色。分段控件提供可选光标及未选中悬停色，使用独立动画背景保留RGB且仅改变alpha，避免切换选中项时InkHighlight残留不透明黑色，其他使用方未启用时沿用原行为。
+
+v2.11 三项侧栏统计变为同一个记录统计弹窗入口，120ms文字渐色及右箭头淡入轻移，不改变数字对齐；保留键盘、统一按压和减少动画。弹窗使用窗口内Omni路由，局部居中标题、月年切换、年份菜单及轻模糊遮罩；最大1120×780dp，窄窗和大字号自然改为两列／单列，正文滚动。无分享、更多或统计分析跳转。
+
+日月年统计由`NoteStatistics`从`notesProvider`派生，按dayKey与正文可见字符聚合；纯录音计篇数和天数，字数零，草稿、版本和回收站不计入。当前年月倒序显示月卡，历史年完整十二月；年度三图保留01–12及右侧整数刻度。日期格单独实现：空日主题描边、普通光标、无操作；有效日提示篇数／字数并返回dayKey。页面清除其他条件、退出回收站、关闭抽屉并显示当天全部记录，原编辑与原音状态保留。旧侧栏热图沿用。
+
+年份只列有效年份，默认当前年或最新有记录年份；监听正式流，选中年份消失时回退，真实全空隐藏菜单，加载和失败不误判为空集合。日期读屏说明放在独立Windows语义边界内，与点击动作同属可访问节点，提示避免重复朗读。
 
 v2.10 输入标签合并为单行，超宽横向滚动。选中移到最前，取消回到未选区规范位置，两个分区内均保持管理器原顺序，不写回持久排序。复用原生Flex测量自然宽高并插值实际布局位置，每个标签保留同一语义父节点，避免改序时重挂；读屏及键盘顺序同步。约220ms移位和显隐均可从当前画面反向，减少动画即时更新；已选常驻、未选井号展开及草稿保存协议沿用。
 
@@ -33,6 +41,20 @@ Windows 文字与原音只写本机草稿，发布／保存才原子提升为正
 笔记类别只在notes模块退休。回收站查询／清空支持general、notes、all；到期清理覆盖all。SQLite19、同步schema4、本机快照4、服务器迁移协议3分别管理；旧队列身份及原始负载摘要不改，服务端执行副本兼容退休类别。草稿原音备份和换服复制使用独立校验文件，选择服务器数据不会混入旧源草稿。
 
 ## 验证
+
+2026-10-15点击残留修复：新增“点击后鼠标始终原位”像素断言，修前确实绘制纯黑，证据`build/notes-statistics-click-before.log`。原悬停测试在点击后移开鼠标，未覆盖该状态。自定义hover改为独立动画背景，Ink的hover恒透明；年份局部取消focus／highlight／splash填色，菜单关闭后仍保留真实焦点及键盘行为。明暗双向切换、年份按住／取消／选择后像素回归及共享组件共36项通过，`notes-statistics-click-after.log`；分析无问题、29项样式及格式／diff检查通过。
+
+本次最终原生AX启用并完成20轮，`build/notes-statistics-click-native/{stdout,stderr}.log`无AXTree、框架异常或PROBE_FAILURE，探针已退出。生产Release83.0秒完成，`build/notes-statistics-click-release.log`；隔离副本生产Debug恢复main.dart入口，18.9秒成功，日志`build/notes-statistics-click-debug.log`，两份改动控件及展示源码与工作区一致。未操作用户正在运行的Debug进程。
+
+2026-10-15悬停补充验收：统计弹窗、共享分段及组件展示共34项通过，`build/notes-statistics-hover-tests.log`；新增明暗实际像素采样与真实MouseTracker检查年份无hover底、月年手形、仅未选中项深灰以及切换／移出恢复。分析无问题、29项样式检查通过；生产Release重新构建51.1秒成功，`build/notes-statistics-hover-release.log`。本次局部调整未重跑原生AX，前阶段证据保留。
+
+2026-10-15 v2.11记录统计验收：笔记相关179项全部通过，日志`build/notes-statistics-regression.log`；最终方块几何与纵轴样式调整后，17项弹窗回归和17项生产页面统计回归再次通过，见`notes-statistics-final-{dialog,ui}-tests.log`。覆盖归档跨年／闰日、正文Unicode／空白／纯录音、删除与草稿隔离、年份菜单与实时变化、加载失败重试、真实鼠标／键盘／读屏、筛选清理、抽屉关闭和草稿保留。
+
+六套主题明暗、512×512与1.6字号及减少动画均通过；中文月历、年份菜单和年度预览位于`build/notes-statistics-preview`，24图总览`contact-sheet.png`已审阅。最终静态分析无问题，样式检查29项受控例外通过，新增1项仅用于专用Dialog布局；9个代码文件格式检查及diff检查通过。
+
+Windows原生AX专项20轮完成，`PROBE_NATIVE_AX_ACTIVE:true`、`PROBE_COMPLETE`，没有AXTree错误、框架异常或PROBE_FAILURE；证据`build/notes-statistics-native/final-{stdout,stderr}.log`。探针使用内存数据库与录音替身，循环月历提示、年份菜单、月年切换及选择／关闭，不访问生产数据；进程已退出。
+
+生产入口Windows Release构建55.2秒成功，`build/windows/x64/runner/Release`；用户运行中的Debug目录被占用，生产Debug改在`D:/ob-stats-1015`隔离源码副本构建，27.5秒成功，产物`D:/ob-stats-1015/build/windows/x64/runner/Debug`。6份本轮生产／探针源码SHA256与工作区一致；两份最终构建日志见`build/notes-statistics-{debug,release}-build.log`。原生探针保存在隔离副本的`native-final`，生产Debug已恢复`lib/main.dart`入口。
 
 2026-10-15 v2.10：134项笔记回归通过（`build/notes-tag-row-regression.log`）；新增普通／减少动画的单行排序、70ms中途取消、精确归位、语义节点身份及700dp／1.6字号长标签横滚回归通过。静态分析无问题，UI样式检查28项受控例外通过。原生探针增加选中／中途取消标签，真实Windows辅助功能桥已启用，20轮完成、AXTree错误0、无PROBE_FAILURE（`build/notes-tag-row-native/{stdout,stderr}.log`）。生产Debug 17.6秒、Release 56.0秒构建完成，入口均为`lib/main.dart`；探针仅保留在独立build/notes-tag-row-native目录。
 
@@ -90,6 +112,8 @@ flutter build windows --release --no-pub
 服务端常规复验（在apps/server执行）：`npm test`、`npm run build`。数据库集成必须指向独占测试PostgreSQL，不能将真实业务数据库地址用于测试。
 
 ## 中文预览
+
+v2.11预览：`build/notes-statistics-preview/windows-statistics-{palette}-{light|dark}-{month|menu|year}.png`为生产页面与虚构正式笔记数据；`windows-statistics-filtered-day.png`验证选日后仅显示当天记录且草稿保留。月／年各12图汇总在`contact-sheet.png`。
 
 v2.10生产根应用预览在`apps/client/build/notes-tag-row-preview`：`windows-tags-single-row.png`、`windows-tags-selected-first.png`、`windows-tags-single-row-narrow.png`，已核对单行、选中前置及长名称横滚。
 

@@ -23,6 +23,12 @@ class OmniSlidingSegmentedControl<T> extends StatelessWidget {
   /// 是否嵌入由上层提供外框的组合控件。
   final bool embedded;
 
+  /// 可选的入口光标；未指定时保留控件原有平台行为。
+  final MouseCursor? mouseCursor;
+
+  /// 可选的未选中项悬停底色，指定后选中项不叠加悬停底色。
+  final Color? unselectedHoverColor;
+
   /// 选项标签构建回调。
   final String Function(T option) labelBuilder;
 
@@ -45,6 +51,8 @@ class OmniSlidingSegmentedControl<T> extends StatelessWidget {
     required this.onChanged,
     this.height = 36,
     this.embedded = false,
+    this.mouseCursor,
+    this.unselectedHoverColor,
     this.indicatorIndex,
     this.itemBuilder,
     this.itemKeyBuilder,
@@ -105,51 +113,125 @@ class OmniSlidingSegmentedControl<T> extends StatelessWidget {
               ),
             ),
           ),
-          Row(
-            children: <Widget>[
-              for (final T option in options)
-                Expanded(
-                  child: Builder(
-                    builder: (BuildContext context) {
-                      // 当前选项是否已经选中。
-                      final bool isSelected = option == selected;
-                      // 当前选项的可见内容。
-                      final Widget item =
-                          itemBuilder?.call(context, option, isSelected) ??
-                          Text(
-                            labelBuilder(option),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.labelMedium
-                                ?.copyWith(
-                                  color: isSelected
-                                      ? scheme.onPrimaryContainer
-                                      : scheme.onSurfaceVariant,
-                                  fontWeight: isSelected
-                                      ? FontWeight.w600
-                                      : FontWeight.w400,
-                                ),
+          Builder(
+            builder: (context) {
+              // 选项保留既有热区，自定义悬停层独立于Ink状态。
+              final Widget optionsRow = Row(
+                children: <Widget>[
+                  for (final T option in options)
+                    Expanded(
+                      child: Builder(
+                        builder: (BuildContext context) {
+                          // 当前选项是否已经选中。
+                          final bool isSelected = option == selected;
+                          // 当前选项的可见内容。
+                          final Widget item =
+                              itemBuilder?.call(context, option, isSelected) ??
+                              Text(
+                                labelBuilder(option),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.labelMedium
+                                    ?.copyWith(
+                                      color: isSelected
+                                          ? scheme.onPrimaryContainer
+                                          : scheme.onSurfaceVariant,
+                                      fontWeight: isSelected
+                                          ? FontWeight.w600
+                                          : FontWeight.w400,
+                                    ),
+                              );
+                          // 稳定保留原有语义、键盘焦点与唯一点击识别器。
+                          final Widget button = Semantics(
+                            button: true,
+                            selected: isSelected,
+                            label: labelBuilder(option),
+                            child: OmniInkWell(
+                              key: itemKeyBuilder?.call(option),
+                              mouseCursor: mouseCursor,
+                              hoverColor: unselectedHoverColor == null
+                                  ? null
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(
+                                OmniRadius.control,
+                              ),
+                              onTap: () => onChanged(option),
+                              child: Center(child: item),
+                            ),
                           );
-                      return Semantics(
-                        button: true,
-                        selected: isSelected,
-                        label: labelBuilder(option),
-                        child: OmniInkWell(
-                          key: itemKeyBuilder?.call(option),
-                          borderRadius: BorderRadius.circular(
-                            OmniRadius.control,
-                          ),
-                          onTap: () => onChanged(option),
-                          child: Center(child: item),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-            ],
+                          return unselectedHoverColor == null
+                              ? button
+                              : _OmniSegmentHoverSurface(
+                                  selected: isSelected,
+                                  color: unselectedHoverColor!,
+                                  child: button,
+                                );
+                        },
+                      ),
+                    ),
+                ],
+              );
+              return optionsRow;
+            },
           ),
         ],
       ),
     );
   }
+}
+
+/// 自定义悬停背景不依赖InkHighlight创建时固定的alpha，切换选中时不会变黑。
+class _OmniSegmentHoverSurface extends StatefulWidget {
+  /// 创建不改变按钮热区及焦点身份的背景层。
+  const _OmniSegmentHoverSurface({
+    required this.selected,
+    required this.color,
+    required this.child,
+  });
+
+  /// 选中项始终让出滑块自身的表面。
+  final bool selected;
+
+  /// 未选中项的悬停底色，退场保留其RGB。
+  final Color color;
+
+  /// 原有按钮及内容按压反馈。
+  final Widget child;
+
+  /// 创建仅属于当前选项的指针状态。
+  @override
+  State<_OmniSegmentHoverSurface> createState() =>
+      _OmniSegmentHoverSurfaceState();
+}
+
+/// 只淡入淡出背景，按钮内容和命中区域不随悬停改变。
+class _OmniSegmentHoverSurfaceState extends State<_OmniSegmentHoverSurface> {
+  /// 指针是否仍停留在当前选项上。
+  bool _hovered = false;
+
+  /// 构建位于轨道上方且不消费手势的背景。
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: Stack(
+      children: [
+        Positioned.fill(
+          child: IgnorePointer(
+            child: AnimatedContainer(
+              duration: OmniMotion.duration(context, OmniMotion.fast),
+              curve: OmniMotion.standardCurve,
+              decoration: BoxDecoration(
+                color: _hovered && !widget.selected
+                    ? widget.color
+                    : widget.color.withValues(alpha: 0),
+                borderRadius: BorderRadius.circular(OmniRadius.control),
+              ),
+            ),
+          ),
+        ),
+        widget.child,
+      ],
+    ),
+  );
 }

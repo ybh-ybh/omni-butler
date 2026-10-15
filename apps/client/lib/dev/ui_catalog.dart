@@ -450,6 +450,11 @@ class _CatalogExamplesState extends State<_CatalogExamples> {
                       selected: _segment,
                       width: constraints.maxWidth,
                       height: OmniDensity.controlHeight(context, large: true),
+                      mouseCursor: SystemMouseCursors.click,
+                      unselectedHoverColor: Color.alphaBlend(
+                        OmniColors.of(context).ink.withValues(alpha: 0.12),
+                        OmniColors.of(context).mist,
+                      ),
                       labelBuilder: (String value) => value,
                       onChanged: (String value) =>
                           setState(() => _segment = value),

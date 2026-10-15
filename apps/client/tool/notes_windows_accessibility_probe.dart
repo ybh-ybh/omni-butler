@@ -19,10 +19,10 @@ import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
 import 'package:omni_butler/features/notes/presentation/notes_page.dart';
+import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:omni_butler/shared/ui/omni_note_composer_button.dart';
 import 'package:omni_butler/shared/ui/omni_note_audio_controls.dart';
 import 'package:omni_butler/shared/ui/omni_windows_semantics_boundary.dart';
-import 'package:omni_butler/shared/ui/omni_panel.dart';
 import 'package:omni_butler/shared/ui/omni_taxonomy_chip.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -178,6 +178,77 @@ void activateProbeTooltip(String message) {
 Future<void> pauseProbe([int milliseconds = 280]) =>
     Future.delayed(Duration(milliseconds: milliseconds));
 
+/// 从探针自身元素树获取稳定业务锚点，不访问用户窗口。
+Element statisticsProbeElement(Key key) {
+  // 本次查找的确切元素。
+  Element? found;
+  // 只遍历当前进程挂载的生产页面。
+  void visit(Element element) {
+    if (element.widget.key == key) found = element;
+    element.visitChildren(visit);
+  }
+
+  WidgetsBinding.instance.rootElement?.visitChildren(visit);
+  if (found == null) throw StateError('统计探针未找到$key');
+  return found!;
+}
+
+/// 激活锚点内已有的生产手势，不添加探针专用业务路径。
+void activateStatisticsProbe(Key key) {
+  // 目标锚点以内的首个有效点击动作。
+  VoidCallback? action;
+  // 统一控件内部仍保留原有唯一InkWell识别器。
+  void visit(Element element) {
+    if (action != null) return;
+    // 当前控件可能直接暴露点击回调。
+    final Widget widget = element.widget;
+    if (widget is InkWell && widget.onTap != null) action = widget.onTap;
+    if (widget is OmniIconButton) action = widget.onPressed;
+    element.visitChildren(visit);
+  }
+
+  visit(statisticsProbeElement(key));
+  if (action == null) throw StateError('统计探针锚点没有点击动作$key');
+  action!();
+}
+
+/// 原生AX启用时反复覆盖提示、年份菜单、两种图表和选日返回。
+Future<void> runStatisticsProbeRound(int round) async {
+  activateStatisticsProbe(const ValueKey('notes-statistic-note-count'));
+  await pauseProbe();
+  // 年份和日期使用探针自己的固定正式数据。
+  final Element menu = statisticsProbeElement(
+    const ValueKey('notes-statistics-year-menu'),
+  );
+  // 月历日期锚点外的提示会创建独立浮层。
+  void showTooltip(Element element) {
+    if (element.widget case Tooltip(message: final String message)
+        when message.contains('笔记·') && element is StatefulElement) {
+      (element.state as TooltipState).ensureTooltipVisible();
+    }
+    element.visitChildren(showTooltip);
+  }
+
+  statisticsProbeElement(const ValueKey('notes-statistics-dialog'))
+      .visitChildren(showTooltip);
+  await pauseProbe(90);
+  Tooltip.dismissAllToolTips();
+  activateStatisticsProbe(const ValueKey('notes-statistics-year-menu'));
+  await pauseProbe(180);
+  Navigator.of(menu).pop(2026);
+  await pauseProbe(180);
+  activateStatisticsProbe(const ValueKey('notes-statistics-year-view'));
+  await pauseProbe();
+  activateStatisticsProbe(const ValueKey('notes-statistics-month-view'));
+  await pauseProbe();
+  if (round.isEven) {
+    activateStatisticsProbe(const ValueKey('notes-statistics-day-2026-10-14'));
+  } else {
+    activateStatisticsProbe(const ValueKey('notes-statistics-close'));
+  }
+  await pauseProbe();
+}
+
 /// 仅使用进程内存中的数据复现Windows语义重挂。
 Future<void> main(List<String> arguments) async {
   if (!Platform.isWindows) {
@@ -185,6 +256,8 @@ Future<void> main(List<String> arguments) async {
   }
   // 明确选择锚点对照或生产笔记场景。
   final bool anchorsOnly = arguments.contains('--anchors-only');
+  // 统计专项只循环新浮层，默认完整场景也包含本轮新增交互。
+  final bool statisticsOnly = arguments.contains('--statistics-only');
   final bool unguarded = arguments.contains('--unguarded');
   isWindowingEnabled = true;
   WidgetsFlutterBinding.ensureInitialized();
@@ -313,6 +386,8 @@ Future<void> main(List<String> arguments) async {
         continue;
       }
       stdout.writeln('PROBE_ROUND:$round');
+      await runStatisticsProbeRound(round);
+      if (statisticsOnly) continue;
       activateProbeInput();
       await pauseProbe(60);
       // 模拟真实侧栏悬停，引入菜单、计数与提示浮层。

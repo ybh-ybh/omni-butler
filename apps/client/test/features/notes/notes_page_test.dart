@@ -35,6 +35,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 全应用路径回归：所有音频接口都由替身接管。
 void main() {
+  statisticsPageTests();
   test('热力图八至十二周跨年保持每列七天及周一起点', () {
     // 跨年第二周，最后一列包含当前日之后的未来格。
     // 所有支持宽度均保持当前周在最右侧。
@@ -2663,6 +2664,227 @@ void main() {
     await _dispose(tester, app);
     expect(tester.takeException(), isNull);
   });
+}
+
+/// 统计弹窗的生产页面回归，复用真实数据库、编辑器和路由。
+void statisticsPageTests() {
+  testWidgets('Windows 三个统计入口连续悬停打开同一弹窗，选日清空筛选且保留草稿', (tester) async {
+    // 数据和编辑状态均使用生产链路。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      seed: true,
+      initialLocation: '/notes',
+    );
+    await tester.enterText(_body(), '尚未发布的统计测试草稿');
+    await _settle(tester);
+    // 原有标签和搜索会排除昨天，弹窗选日必须清除它们。
+    await tester.tap(find.byKey(const ValueKey('notes-tag-review')));
+    await tester.enterText(
+      find.byKey(const ValueKey('notes-search')),
+      '不会匹配的查询',
+    );
+    await _settle(tester);
+    // 悬停真实中间帧不能只检查动画目标值。
+    final TestGesture mouse = await tester.createGesture(
+      kind: ui.PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer(location: Offset.zero);
+    // 统计入口的完整点击范围。
+    final Finder entry = find.byKey(
+      const ValueKey('notes-statistic-note-count'),
+    );
+    // 动画前数字的真实布局锚点。
+    final Offset original = tester.getTopLeft(
+      find.byKey(const ValueKey('note-count')),
+    );
+    await mouse.moveTo(tester.getCenter(entry));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(
+      tester
+          .widget<Opacity>(
+            find.byKey(const ValueKey('notes-statistic-arrow-note-count')),
+          )
+          .opacity,
+      allOf(greaterThan(0), lessThan(1)),
+    );
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('note-count'))),
+      original,
+    );
+    expect(
+      RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
+      SystemMouseCursors.click,
+    );
+    // 中途反向保持连续，最终正确收回箭头。
+    final double before = tester
+        .widget<Opacity>(
+          find.byKey(const ValueKey('notes-statistic-arrow-note-count')),
+        )
+        .opacity;
+    await mouse.moveTo(Offset.zero);
+    await tester.pump();
+    expect(
+      tester
+          .widget<Opacity>(
+            find.byKey(const ValueKey('notes-statistic-arrow-note-count')),
+          )
+          .opacity,
+      closeTo(before, 0.001),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<Opacity>(
+            find.byKey(const ValueKey('notes-statistic-arrow-note-count')),
+          )
+          .opacity,
+      0,
+    );
+    // 三项入口均为相同统计弹窗，取消不改变已有筛选或草稿。
+    for (final String key in ['note-count', 'tag-count', 'day-count']) {
+      await tester.tap(find.byKey(ValueKey('notes-statistic-$key')));
+      await _settle(tester);
+      expect(
+        find.byKey(const ValueKey('notes-statistics-dialog')),
+        findsOneWidget,
+      );
+      await _capture(tester, app, 'windows-statistics-$key-month');
+      await tester.tap(find.byKey(const ValueKey('notes-statistics-close')));
+      await _settle(tester);
+      expect(find.text('没有符合条件的笔记'), findsOneWidget);
+    }
+    await tester.tap(entry);
+    await _settle(tester);
+    // 选择与当前标签和搜索均不匹配的昨天。
+    final String day = businessDayKey(
+      DateTime.now().subtract(const Duration(days: 1)),
+    );
+    // 弹窗中对应归档日期的有效方块。
+    final Finder cell = find.byKey(ValueKey('notes-statistics-day-$day'));
+    await tester.ensureVisible(cell);
+    await tester.pumpAndSettle();
+    await tester.tap(cell);
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('notes-statistics-dialog')), findsNothing);
+    expect(find.byKey(const ValueKey('note-card-yesterday')), findsOneWidget);
+    expect(find.byKey(const ValueKey('note-card-target')), findsNothing);
+    expect(find.byKey(const ValueKey('note-card-weekly-note')), findsNothing);
+    expect(
+      tester
+          .widget<OmniTextField>(find.byKey(const ValueKey('notes-search')))
+          .controller!
+          .text,
+      isEmpty,
+    );
+    expect(tester.widget<TextField>(_body()).controller!.text, '尚未发布的统计测试草稿');
+    await _capture(tester, app, 'windows-statistics-filtered-day');
+    await tester.tap(find.text('全部笔记'));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('note-card-target')), findsOneWidget);
+    await mouse.removePointer();
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Windows 抽屉统计选日关闭导航并保留历史编辑草稿', (tester) async {
+    // 当前配色下的生产笔记页面与隔离数据。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      seed: true,
+      initialLocation: '/notes',
+    );
+    // 历史编辑来自双击生产卡片，切日期不能取消或发布。
+    await tester.tap(find.byKey(const ValueKey('note-card-target')));
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tap(find.byKey(const ValueKey('note-card-target')));
+    await _settle(tester);
+    await tester.enterText(_body(), '保留这篇尚未保存的历史编辑');
+    await _settle(tester);
+    tester.view.physicalSize = const Size(700, 720);
+    await _settle(tester);
+    await tester.tap(find.byTooltip('笔记导航'));
+    await _settle(tester);
+    await tester.tap(find.byKey(const ValueKey('notes-statistic-day-count')));
+    await _settle(tester);
+    // 选择与当前标签和搜索均不匹配的昨天。
+    final String day = businessDayKey(
+      DateTime.now().subtract(const Duration(days: 1)),
+    );
+    // 弹窗中对应归档日期的有效方块。
+    final Finder cell = find.byKey(ValueKey('notes-statistics-day-$day'));
+    await tester.ensureVisible(cell);
+    await tester.pumpAndSettle();
+    await tester.tap(cell);
+    await _settle(tester);
+    // 生产笔记页抽屉宿主。
+    final ScaffoldState scaffold = tester.state<ScaffoldState>(
+      find
+          .descendant(
+            of: find.byType(NotesPage),
+            matching: find.byType(Scaffold),
+          )
+          .first,
+    );
+    expect(scaffold.isDrawerOpen, isFalse);
+    expect(
+      find.byKey(const ValueKey('note-card-yesterday')).hitTestable(),
+      findsOneWidget,
+    );
+    expect(app.container.read(noteEditorProvider).draft.body, '保留这篇尚未保存的历史编辑');
+    expect(app.container.read(noteEditorProvider).draft.id, 'target');
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final AppThemePalette palette in AppThemePalette.values) {
+    for (final String theme in ['light', 'dark']) {
+      testWidgets('Windows 统计中文预览 ${palette.id} $theme', (tester) async {
+        // 当前配色下的生产笔记页面与隔离数据。
+        final _App app = await _mount(
+          tester,
+          platform: TargetPlatform.windows,
+          seed: true,
+          initialLocation: '/notes',
+          theme: theme,
+          palette: palette,
+        );
+        await tester.tap(
+          find.byKey(const ValueKey('notes-statistic-note-count')),
+        );
+        await _settle(tester);
+        await _capture(
+          tester,
+          app,
+          'windows-statistics-${palette.id}-$theme-month',
+        );
+        await tester.tap(
+          find.byKey(const ValueKey('notes-statistics-year-menu')),
+        );
+        await _settle(tester);
+        await _capture(
+          tester,
+          app,
+          'windows-statistics-${palette.id}-$theme-menu',
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await _settle(tester);
+        await tester.tap(
+          find.byKey(const ValueKey('notes-statistics-year-view')),
+        );
+        await _settle(tester);
+        await _capture(
+          tester,
+          app,
+          'windows-statistics-${palette.id}-$theme-year',
+        );
+        await _dispose(tester, app);
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
 }
 
 /// 收集容器内真实可访问标签，不把保留但隐藏的控件算作可见。

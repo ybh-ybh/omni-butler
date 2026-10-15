@@ -732,20 +732,40 @@ extension _WindowsNotesView on _NotesPageState {
     String key,
     CrossAxisAlignment alignment,
   ) => Expanded(
-    child: Column(
-      crossAxisAlignment: alignment,
-      children: [
-        Text(
-          count,
-          key: ValueKey(key),
-          style: Theme.of(context).textTheme.headlineSmall
-              ?.copyWith(color: OmniColors.of(context).muted),
-        ),
-        const SizedBox(height: OmniSpacing.xxs),
-        Text(label, style: Theme.of(context).textTheme.bodySmall),
-      ],
+    child: NoteStatisticButton(
+      count: count,
+      label: label,
+      countKey: key,
+      alignment: alignment,
+      onTap: _showNoteStatistics,
     ),
   );
+
+  /// 弹窗选日明确切换至当天全部笔记，保留当前编辑器和原音状态。
+  Future<void> _showNoteStatistics() async {
+    if (_statisticsOpen) return;
+    _statisticsOpen = true;
+    try {
+      // 路由只返回业务日期，不直接修改页面的过滤条件。
+      final String? dayKey = await showNoteStatisticsDialog(context);
+      if (!mounted || dayKey == null) return;
+      _updateWindows(() {
+        _selectedDay = dayKey;
+        _recycle = false;
+        _tagFilter.clear();
+        _search.clear();
+        _untagged = false;
+        _range = 'all';
+        _customRange = null;
+        _closeNoteDrawer();
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _notesScroll.hasClients) _notesScroll.jumpTo(0);
+      });
+    } finally {
+      _statisticsOpen = false;
+    }
+  }
 
   /// 平铺的统一按钮保留键盘激活与选中语义。
   Widget _noteNavigation(

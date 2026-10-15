@@ -21,6 +21,8 @@ import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
 import 'package:omni_butler/features/notes/presentation/note_audio_card.dart';
 import 'package:omni_butler/features/notes/presentation/note_search_focus.dart';
+import 'package:omni_butler/features/notes/presentation/note_statistic_button.dart';
+import 'package:omni_butler/features/notes/presentation/windows_note_statistics_dialog.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
 import 'package:omni_butler/features/settings/presentation/recycle_bin_section.dart';
 import 'package:omni_butler/shared/search/global_search_dialog.dart';
@@ -140,6 +142,9 @@ class _NotesPageState extends ConsumerState<NotesPage>
 
   /// 当前热力图选择的自然日。
   String? _selectedDay;
+
+  /// 阻止连续点击统计入口叠加弹窗。
+  bool _statisticsOpen = false;
 
   /// 笔记内独立回收站视图。
   bool _recycle = false;
