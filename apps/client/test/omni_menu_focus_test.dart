@@ -36,6 +36,83 @@ Future<int> _pixel(
 
 /// 验证鼠标不抢焦点、键盘恢复和后续业务弹窗的实际行为。
 void main() {
+  testWidgets('二级菜单取消恢复原输入焦点且叶子弹窗保持焦点', (tester) async {
+    // 菜单打开前的真实输入焦点。
+    final FocusNode inputFocus = FocusNode();
+    // 叶子选择后新业务弹窗的焦点。
+    final FocusNode dialogFocus = FocusNode();
+    // 父项展开和取消不能增加业务回调次数。
+    int selections = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.build(brightness: Brightness.light)
+            .copyWith(platform: TargetPlatform.windows),
+        home: Scaffold(
+          body: Column(
+            children: <Widget>[
+              TextField(focusNode: inputFocus, onTapOutside: (_) {}),
+              Builder(
+                builder: (context) => OmniPopupMenuButton<String>(
+                  tooltip: '二级业务菜单',
+                  itemBuilder: (_) => <PopupMenuEntry<String>>[
+                    OmniPopupMenuItem<String>.submenu(
+                      label: '删除标签',
+                      danger: true,
+                      children: <PopupMenuEntry<String>>[
+                        OmniPopupMenuItem<String>(
+                          value: 'deleteAll',
+                          label: '删除标签和笔记',
+                          icon: null,
+                          danger: true,
+                        ),
+                      ],
+                    ),
+                  ],
+                  onSelected: (_) {
+                    selections += 1;
+                    showDialog<void>(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        content: TextField(
+                          autofocus: true,
+                          focusNode: dialogFocus,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    inputFocus.requestFocus();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('二级业务菜单'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除标签'));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(20, 400));
+    await tester.pumpAndSettle();
+    expect(inputFocus.hasPrimaryFocus, isTrue);
+    expect(selections, 0);
+    await tester.tap(find.byTooltip('二级业务菜单'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除标签'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除标签和笔记'));
+    await tester.pumpAndSettle();
+    expect(dialogFocus.hasPrimaryFocus, isTrue);
+    expect(selections, 1);
+    expect(find.text('删除标签'), findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    inputFocus.dispose();
+    dialogFocus.dispose();
+  });
+
   testWidgets('鼠标关闭卡片菜单后明暗底色不残留且不抢原输入焦点', (tester) async {
     // 明暗主题及两种菜单触发器都复用相同的焦点恢复规则。
     for (final Brightness brightness in Brightness.values) {

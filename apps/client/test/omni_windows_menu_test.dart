@@ -1,5 +1,5 @@
 import 'dart:math' as math;
-import 'dart:ui' show PointerDeviceKind;
+import 'dart:ui' show PointerDeviceKind, SemanticsRole, Tristate;
 
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
@@ -19,6 +19,53 @@ const ValueKey<String> _surfaceKey = ValueKey<String>(
 
 /// 测试中稳定定位面板的绘制缩放。
 const ValueKey<String> _scaleKey = ValueKey<String>('omni-windows-menu-scale');
+
+/// 二级面板独立定位，同时保证主菜单没有被替换。
+const ValueKey<String> _submenuSurfaceKey = ValueKey<String>(
+  'omni-windows-submenu-surface',
+);
+
+/// 构建带禁用子项的真实二级菜单，用于验证焦点和一次返回契约。
+List<PopupMenuEntry<String>> _submenuItems(BuildContext context) =>
+    <PopupMenuEntry<String>>[
+      OmniPopupMenuItem<String>(
+        value: 'pin',
+        label: '置顶',
+        icon: Icons.push_pin_outlined,
+      ),
+      OmniPopupMenuItem<String>(
+        value: 'rename',
+        label: '编辑名称',
+        icon: Icons.edit_outlined,
+      ),
+      const PopupMenuDivider(height: 8),
+      OmniPopupMenuItem<String>.submenu(
+        label: '删除标签',
+        icon: Icons.delete_outline,
+        danger: true,
+        children: <PopupMenuEntry<String>>[
+          const OmniPopupMenuItem<String>.custom(
+            value: 'unlink',
+            danger: true,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: Text('仅删除标签'),
+          ),
+          const OmniPopupMenuItem<String>.custom(
+            value: 'disabled',
+            danger: true,
+            enabled: false,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: Text('不可用子项'),
+          ),
+          const OmniPopupMenuItem<String>.custom(
+            value: 'deleteAll',
+            danger: true,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: Text('删除标签和笔记'),
+          ),
+        ],
+      ),
+    ];
 
 /// 构建正常、危险、禁用三个操作，保证测试使用真实菜单项实现。
 List<PopupMenuEntry<String>> _defaultItems(BuildContext context) =>
@@ -54,6 +101,7 @@ Future<void> _pumpMenu(
   Brightness brightness = Brightness.light,
   AppThemePalette palette = AppThemePalette.classicBlue,
   double textScale = 1,
+  BoxConstraints? menuConstraints,
 }) => tester.pumpWidget(
   MaterialApp(
     theme: AppTheme.build(
@@ -75,6 +123,7 @@ Future<void> _pumpMenu(
           tooltip: '操作菜单',
           itemBuilder: itemBuilder,
           onSelected: onSelected,
+          menuConstraints: menuConstraints,
         ),
       ),
     ),
@@ -164,6 +213,292 @@ Widget _customTriggerRow(String prefix, Widget trigger) => Row(
 
 /// 验证 Windows 菜单的整体动效、行状态与导航契约。
 void main() {
+  testWidgets('二级菜单悬停和跨间隙保持展开且叶子只返回一次', (tester) async {
+    // 每次选择只允许触发一次叶子业务回调。
+    final List<String> selections = <String>[];
+    await _pumpMenu(
+      tester,
+      alignment: Alignment.topLeft,
+      menuConstraints: const BoxConstraints.tightFor(width: 240),
+      itemBuilder: _submenuItems,
+      onSelected: selections.add,
+    );
+    await tester.tap(find.byTooltip('操作菜单'));
+    await tester.pumpAndSettle();
+    // 使用真实鼠标跨越父项、间隙和子面板。
+    final TestGesture mouse = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(find.text('删除标签')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(_surfaceKey), findsOneWidget);
+    expect(find.byKey(_submenuSurfaceKey), findsOneWidget);
+    expect(selections, isEmpty);
+    // 二级面板继承调用方宽度，并与父面板相隔四像素。
+    final Rect main = tester.getRect(find.byKey(_surfaceKey));
+    final Rect submenu = tester.getRect(find.byKey(_submenuSurfaceKey));
+    expect(main.width, 240);
+    expect(submenu.width, 240);
+    expect(submenu.left - main.right, 4);
+    // 展开位置对齐真实父行，不按固定行数推断。
+    final Rect parent = tester.getRect(
+      find.ancestor(
+        of: find.text('删除标签'),
+        matching: find.byType(OmniPopupMenuItem<String>),
+      ),
+    );
+    expect(submenu.top, parent.top);
+    await mouse.moveTo(Offset(main.right + 2, parent.center.dy));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.byKey(_submenuSurfaceKey), findsOneWidget);
+    await mouse.moveTo(tester.getCenter(find.text('仅删除标签')));
+    await tester.pumpAndSettle();
+    expect(_rowColor(tester, '删除标签')!.a, greaterThan(0));
+    await mouse.down(tester.getCenter(find.text('仅删除标签')));
+    await mouse.up();
+    await tester.pumpAndSettle();
+    expect(selections, <String>['unlink']);
+    expect(find.byKey(_surfaceKey), findsNothing);
+    expect(find.byKey(_submenuSurfaceKey), findsNothing);
+    await mouse.removePointer();
+  });
+
+  testWidgets('二级菜单点击保持主菜单且切换父行和外部点击正确关闭', (tester) async {
+    // 父项展开和取消不能提交叶子值。
+    final List<String> selections = <String>[];
+    await _pumpMenu(
+      tester,
+      itemBuilder: _submenuItems,
+      onSelected: selections.add,
+    );
+    await tester.tap(find.byTooltip('操作菜单'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除标签'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(_surfaceKey), findsOneWidget);
+    expect(find.byKey(_submenuSurfaceKey), findsOneWidget);
+    // 子项不可用时仍应吸收点击，不能穿透至路由遮罩。
+    await tester.tap(find.text('不可用子项'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(_submenuSurfaceKey), findsOneWidget);
+    // 回到另一父菜单行后只收起二级面板。
+    final TestGesture mouse = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(find.text('编辑名称')));
+    await tester.pump();
+    expect(find.byKey(_submenuSurfaceKey), findsOneWidget);
+    expect(find.text('仅删除标签').hitTestable(), findsNothing);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_submenuSurfaceKey), findsNothing);
+    expect(find.byKey(_surfaceKey), findsOneWidget);
+    await mouse.moveTo(tester.getCenter(find.text('删除标签')));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+    expect(find.byKey(_submenuSurfaceKey), findsNothing);
+    expect(find.byKey(_surfaceKey), findsNothing);
+    expect(selections, isEmpty);
+    await mouse.removePointer();
+  });
+
+  testWidgets('二级菜单方向键与两级Escape恢复真实键盘入口', (tester) async {
+    // 验证键盘最终返回的叶子值。
+    String? selected;
+    await _pumpMenu(
+      tester,
+      itemBuilder: _submenuItems,
+      onSelected: (value) => selected = value,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    expect(_rowColor(tester, '仅删除标签')!.a, greaterThan(0));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_submenuSurfaceKey), findsNothing);
+    expect(_rowColor(tester, '删除标签')!.a, greaterThan(0));
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_submenuSurfaceKey), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_surfaceKey), findsOneWidget);
+    expect(find.byKey(_submenuSurfaceKey), findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_surfaceKey), findsNothing);
+    // 原触发器仍持有焦点，可以直接重新打开并选择。
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    // Tab 在子面板内循环并跳过不可用项。
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(_rowColor(tester, '删除标签和笔记')!.a, greaterThan(0));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(_rowColor(tester, '仅删除标签')!.a, greaterThan(0));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(selected, 'deleteAll');
+  });
+
+  testWidgets('二级菜单退场中键盘重开聚焦首项且再次关闭废弃延迟焦点', (tester) async {
+    // 方向键和激活键都必须支持零等待及退场三十毫秒后的反向打开。
+    for (final LogicalKeyboardKey reopenKey in <LogicalKeyboardKey>[
+      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.enter,
+    ]) {
+      // 零等待验证刚进入退场的帧，三十毫秒验证已绘制部分退场的帧。
+      for (final Duration delay in <Duration>[
+        Duration.zero,
+        const Duration(milliseconds: 30),
+      ]) {
+        // 实际业务返回值用于识别焦点是否真正到达叶子。
+        final List<String> selections = <String>[];
+        await _pumpMenu(
+          tester,
+          itemBuilder: _submenuItems,
+          onSelected: selections.add,
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+        await tester.pump();
+        await tester.pump(delay);
+        expect(find.byKey(_submenuSurfaceKey), findsOneWidget);
+        await tester.sendKeyEvent(reopenKey);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(selections, <String>['unlink']);
+        expect(find.byKey(_surfaceKey), findsNothing);
+
+        // 重开后尚未执行延迟焦点便再次关闭，旧请求不能覆盖后续父行导航。
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+        await tester.pump();
+        await tester.pump(delay);
+        await tester.sendKeyEvent(reopenKey);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+        await tester.pumpAndSettle();
+        expect(find.byKey(_submenuSurfaceKey), findsNothing);
+        expect(_rowColor(tester, '编辑名称')!.a, greaterThan(0));
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(selections, <String>['unlink', 'rename']);
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    }
+  });
+
+  testWidgets('二级菜单明暗大字号边界翻转并响应缩窗及触发器卸载', (tester) async {
+    // 明暗主题均验证实际面板几何和语义，而非仅检查约束属性。
+    for (final Brightness brightness in Brightness.values) {
+      await _pumpMenu(
+        tester,
+        itemBuilder: _submenuItems,
+        alignment: Alignment.bottomRight,
+        brightness: brightness,
+        textScale: 1.6,
+        menuConstraints: const BoxConstraints.tightFor(width: 240),
+      );
+      await tester.tap(find.byTooltip('操作菜单'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('删除标签'));
+      await tester.pumpAndSettle();
+      // 右边界触发器使二级面板向左展开。
+      final Rect main = tester.getRect(find.byKey(_surfaceKey));
+      final Rect submenu = tester.getRect(find.byKey(_submenuSurfaceKey));
+      expect(main.left - submenu.right, 4);
+      expect(submenu.bottom, lessThanOrEqualTo(592));
+      // 缩小窗口时两块面板均须完整钳制在安全范围内。
+      tester.view.physicalSize = const Size(360, 480);
+      await tester.pumpAndSettle();
+      for (final ValueKey<String> key in <ValueKey<String>>[
+        _surfaceKey,
+        _submenuSurfaceKey,
+      ]) {
+        // 每个面板都保持独立可见边界。
+        final Rect bounds = tester.getRect(find.byKey(key));
+        expect(bounds.left, greaterThanOrEqualTo(8));
+        expect(bounds.right, lessThanOrEqualTo(352));
+        expect(bounds.top, greaterThanOrEqualTo(8));
+        expect(bounds.bottom, lessThanOrEqualTo(472));
+      }
+      // 卸载触发器后使用缓存锚点，不从失效元素读取渲染对象。
+      await _pumpMenu(tester, platform: TargetPlatform.android);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.tapAt(const Offset(2, 2));
+      await tester.pumpAndSettle();
+      tester.view.resetPhysicalSize();
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('二级菜单展开语义和减少动画正确', (tester) async {
+    // 真实语义句柄在测试体结束前释放，避免框架句柄检查时机冲突。
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    try {
+      await _pumpMenu(tester, itemBuilder: _submenuItems, reduceMotion: true);
+      await tester.tap(find.byTooltip('操作菜单'));
+      await tester.pump();
+      expect(
+        tester.getSemantics(find.text('删除标签')).flagsCollection.isExpanded,
+        Tristate.isFalse,
+      );
+      await tester.tap(find.text('删除标签'));
+      await tester.pump();
+      expect(
+        tester.getSemantics(find.text('删除标签')).flagsCollection.isExpanded,
+        Tristate.isTrue,
+      );
+      expect(
+        tester.getSemantics(find.text('仅删除标签')).getSemanticsData().role,
+        SemanticsRole.menuItem,
+      );
+      expect(
+        tester
+            .widget<ScaleTransition>(
+              find.byKey(const ValueKey<String>('omni-windows-submenu-scale')),
+            )
+            .scale
+            .value,
+        1,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(find.byKey(_submenuSurfaceKey), findsNothing);
+      expect(find.byKey(_surfaceKey), findsOneWidget);
+      expect(
+        tester.getSemantics(find.text('删除标签')).flagsCollection.isExpanded,
+        Tristate.isFalse,
+      );
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   testWidgets('菜单项右键按住只压缩内容且不选择或关闭菜单', (tester) async {
     // 右键不能改变原有业务返回值。
     String? selection;

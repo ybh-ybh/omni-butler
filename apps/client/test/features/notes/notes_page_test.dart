@@ -43,6 +43,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   statisticsPageTests();
   editorToolbarTests();
+  noteTagActionTests();
   test('热力图八至十二周跨年保持每列七天及周一起点', () {
     // 跨年第二周，最后一列包含当前日之后的未来格。
     // 所有支持宽度均保持当前周在最右侧。
@@ -789,9 +790,9 @@ void main() {
     expect(find.text('编辑名称'), findsOneWidget);
     expect(
       find.byWidgetPredicate((widget) => widget is PopupMenuItem<String>),
-      findsNWidgets(2),
+      findsNWidgets(3),
     );
-    expect(find.text('置顶'), findsNothing);
+    expect(find.text('置顶'), findsOneWidget);
     await _capture(tester, app, 'windows-tags-menu');
     await tester.tap(find.text('编辑名称'));
     await _settle(tester);
@@ -862,6 +863,8 @@ void main() {
     await _settle(tester);
     await tester.tap(find.text('删除标签'));
     await _settle(tester);
+    await tester.tap(find.text('仅删除标签'));
+    await _settle(tester);
     await tester.tap(find.text('取消').hitTestable());
     await _settle(tester);
     expect(find.byKey(const ValueKey('notes-tag-work')), findsOneWidget);
@@ -872,6 +875,8 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('notes-tag-menu-work')));
     await _settle(tester);
     await tester.tap(find.text('删除标签'));
+    await _settle(tester);
+    await tester.tap(find.text('仅删除标签'));
     await _settle(tester);
     await tester.tap(find.text('删除').hitTestable());
     await _settle(tester);
@@ -2664,6 +2669,265 @@ void main() {
 }
 
 /// 统计弹窗的生产页面回归，复用真实数据库、编辑器和路由。
+/// 置顶快捷入口与两种删除使用真实侧栏、仓储和编辑会话回归。
+void noteTagActionTests() {
+  for (final String theme in ['light', 'dark']) {
+    testWidgets('Windows 标签置顶双分区及搜索折叠保持独立：$theme', (tester) async {
+      // 两个主题都使用实际笔记数据，重复展示不能影响统计。
+      final _App app = await _mount(
+        tester,
+        platform: TargetPlatform.windows,
+        theme: theme,
+        seed: true,
+      );
+      await _navigate(tester, app, '/notes');
+      // 真实鼠标用于验证两个分区的悬停和菜单互不串联。
+      final TestGesture mouse = await tester.createGesture(
+        kind: ui.PointerDeviceKind.mouse,
+      );
+      await mouse.addPointer(location: Offset.zero);
+      expect(find.text('置顶标签'), findsNothing);
+      await _openNoteTagMenu(tester, mouse, 'work');
+      await tester.tap(find.text('置顶'));
+      await _settle(tester);
+      expect(find.text('置顶标签'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('notes-tag-pinned-work')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('notes-tag-work')), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const ValueKey('tag-count'))).data,
+        '3',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const ValueKey('note-count'))).data,
+        '3',
+      );
+      await tester.tap(find.byKey(const ValueKey('notes-tag-pinned-work')));
+      await _settle(tester);
+      expect(find.byKey(const ValueKey('note-card-target')), findsOneWidget);
+      expect(find.byKey(const ValueKey('note-card-weekly-note')), findsNothing);
+      for (final String id in ['work', 'pinned-work']) {
+        // 同一筛选状态在两处入口都保持选中。
+        final Semantics region = tester.widget(
+          find.byKey(ValueKey('notes-tag-region-$id')),
+        );
+        expect(region.properties.selected, isTrue);
+      }
+      await _capture(tester, app, 'windows-tags-pinned-$theme');
+      await mouse.moveTo(
+        tester.getCenter(find.byKey(const ValueKey('notes-tags-toggle'))),
+      );
+      await tester.pump(const Duration(milliseconds: 140));
+      await tester.tap(find.byTooltip('搜索标签').hitTestable());
+      await _settle(tester);
+      await tester.enterText(
+        find.byKey(const ValueKey('notes-tags-search')),
+        '找不到的标签',
+      );
+      await _settle(tester);
+      expect(find.byKey(const ValueKey('notes-tag-work')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('notes-tag-pinned-work')).hitTestable(),
+        findsOneWidget,
+      );
+      await tester.tap(find.byTooltip('关闭标签搜索'));
+      await _settle(tester);
+      await tester.tap(find.byKey(const ValueKey('notes-tags-toggle')));
+      await _settle(tester);
+      expect(
+        find.byKey(const ValueKey('notes-tag-work')).hitTestable(),
+        findsNothing,
+      );
+      await _openNoteTagMenu(tester, mouse, 'pinned-work');
+      expect(find.text('取消置顶'), findsOneWidget);
+      await tester.tap(find.text('取消置顶'));
+      await _settle(tester);
+      expect(find.text('置顶标签'), findsNothing);
+      expect(find.byKey(const ValueKey('note-card-target')), findsOneWidget);
+      await mouse.removePointer();
+      await _dispose(tester, app);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('Windows 删除标签和笔记先确认且保留冻结草稿及多标签正文', (tester) async {
+    // 历史编辑尚未发布的内容不能被标签批量回收丢弃。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      seed: true,
+      initialLocation: '/notes?id=target',
+    );
+    await _enterBody(tester, '标签批量删除前的未发布修改');
+    // 置顶后从副本入口删除，同时检查原列表项也消失。
+    await tester.runAsync(
+      () => app.container
+          .read(taxonomyRepositoryProvider)
+          .setPinned('work', true),
+    );
+    await _settle(tester);
+    // 所有菜单交互都经过实际鼠标和生产弹层。
+    final TestGesture mouse = await tester.createGesture(
+      kind: ui.PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer(location: Offset.zero);
+    await _openNoteTagMenu(tester, mouse, 'pinned-work');
+    await tester.tap(find.text('删除标签'));
+    await _settle(tester);
+    expect(find.text('仅删除标签'), findsOneWidget);
+    expect(find.text('删除标签和笔记'), findsOneWidget);
+    await _capture(tester, app, 'windows-tags-delete-submenu');
+    await tester.tap(find.text('删除标签和笔记'));
+    await _settle(tester);
+    expect(find.textContaining('将 2 篇笔记移入回收站'), findsOneWidget);
+    await tester.tap(find.text('取消').hitTestable());
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('notes-tag-pinned-work')), findsOneWidget);
+    expect(_bodyReadOnly(tester), isFalse);
+    await _openNoteTagMenu(tester, mouse, 'pinned-work');
+    await tester.tap(find.text('删除标签'));
+    await _settle(tester);
+    await tester.tap(find.text('删除标签和笔记'));
+    await _settle(tester);
+    await tester.tap(find.text('删除标签并移入回收站').hitTestable());
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('notes-tag-work')), findsNothing);
+    expect(find.byKey(const ValueKey('notes-tag-pinned-work')), findsNothing);
+    expect(find.byKey(const ValueKey('note-card-weekly-note')), findsOneWidget);
+    expect(_bodyText(tester), '标签批量删除前的未发布修改');
+    expect(_bodyReadOnly(tester), isTrue);
+    // 正式正文保留原稿，只有本机草稿保留尚未发布修改。
+    final NoteEntryRecord deleted = (await tester.runAsync<NoteEntryRecord?>(
+      () => NoteRepository(app.database).find('target'),
+    ))!;
+    expect(deleted.deletedAt, isNotNull);
+    expect(deleted.body, startsWith('今日日报目标'));
+    expect(noteTagIds(deleted.tags), {'review'});
+    // 另一篇同标签笔记一并回收，未关联笔记保持活动。
+    expect(
+      (await tester.runAsync(
+        () => NoteRepository(app.database).find('yesterday'),
+      ))!.deletedAt,
+      isNotNull,
+    );
+    expect(
+      (await tester.runAsync(
+        () => NoteRepository(app.database).find('weekly-note'),
+      ))!.deletedAt,
+      isNull,
+    );
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteAudioSegments).get(),
+      ))!.single.deletedAt,
+      isNotNull,
+    );
+    // 恢复原篇时解除冻结，其他标签与未发布内容继续保留。
+    await tester.runAsync(() => NoteRepository(app.database).restore('target'));
+    await _settle(tester);
+    expect(_bodyReadOnly(tester), isFalse);
+    expect(_bodyText(tester), '标签批量删除前的未发布修改');
+    await mouse.removePointer();
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Windows 远端置顶及标签删除实时清理两个分区和失效筛选', (tester) async {
+    // 模拟下行直接更新同一数据库，不通过本机onDeleted回调。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      seed: true,
+    );
+    await _navigate(tester, app, '/notes');
+    await tester.tap(find.byKey(const ValueKey('notes-tag-work')));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('note-card-weekly-note')), findsNothing);
+    await tester.runAsync(
+      () => app.container
+          .read(taxonomyRepositoryProvider)
+          .setPinned('work', true),
+    );
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('notes-tag-pinned-work')), findsOneWidget);
+    await tester.runAsync(
+      () => app.container.read(taxonomyRepositoryProvider).delete('work'),
+    );
+    await _settle(tester);
+    expect(find.text('置顶标签'), findsNothing);
+    expect(find.byKey(const ValueKey('notes-tag-work')), findsNothing);
+    expect(find.byKey(const ValueKey('note-card-weekly-note')), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('note-count'))).data,
+      '3',
+    );
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Windows 窄窗大字号删除二级菜单保留完整文案和空标签删除', (tester) async {
+    // 抽屉与大字号使用实际菜单，空标签仍可删除且不回收无关笔记。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      theme: 'dark',
+      seed: true,
+    );
+    await _navigate(tester, app, '/notes');
+    tester.view.physicalSize = const Size(780, 900);
+    tester.platformDispatcher.textScaleFactorTestValue = 1.6;
+    await _settle(tester);
+    await tester.tap(find.byTooltip('笔记导航'));
+    await _settle(tester);
+    // 删除未关联笔记的标签，验证两级菜单可以在抽屉内操作。
+    final TestGesture mouse = await tester.createGesture(
+      kind: ui.PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer(location: Offset.zero);
+    await _openNoteTagMenu(tester, mouse, 'unused');
+    await tester.tap(find.text('删除标签'));
+    await _settle(tester);
+    expect(
+      tester
+          .renderObject<RenderParagraph>(find.text('删除标签和笔记'))
+          .didExceedMaxLines,
+      isFalse,
+    );
+    await _capture(tester, app, 'windows-tags-submenu-dark-narrow-large');
+    await tester.tap(find.text('删除标签和笔记'));
+    await _settle(tester);
+    expect(find.textContaining('将 0 篇笔记移入回收站'), findsOneWidget);
+    await tester.tap(find.text('删除标签并移入回收站').hitTestable());
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('notes-tag-unused')), findsNothing);
+    expect(
+      (await tester.runAsync(
+        () => NoteRepository(app.database).watchAll().first,
+      ))!.length,
+      3,
+    );
+    await mouse.removePointer();
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+}
+
+/// 通过行悬停和真实按钮打开指定分区中的标签菜单。
+Future<void> _openNoteTagMenu(
+  WidgetTester tester,
+  TestGesture mouse,
+  String rowId,
+) async {
+  await mouse.moveTo(
+    tester.getCenter(find.byKey(ValueKey('notes-tag-$rowId'))),
+  );
+  await tester.pump(const Duration(milliseconds: 140));
+  await tester.tap(find.byKey(ValueKey('notes-tag-menu-$rowId')));
+  await _settle(tester);
+}
+
 void statisticsPageTests() {
   testWidgets('Windows 三个统计入口连续悬停打开同一弹窗，选日清空筛选且保留草稿', (tester) async {
     // 数据和编辑状态均使用生产链路。
@@ -3587,8 +3851,17 @@ class _App {
   /// 全页面截图边界。
   final GlobalKey boundary;
 
+  /// 预览临时启用真实阴影后，正常销毁时恢复测试框架的原始设置。
+  final bool previousShadows;
+
   /// 聚合测试资源。
-  _App(this.database, this.container, this.recorder, this.boundary);
+  _App(
+    this.database,
+    this.container,
+    this.recorder,
+    this.boundary,
+    this.previousShadows,
+  );
 
   /// 避免正常路径与失败兜底重复释放。
   bool disposed = false;
@@ -3612,6 +3885,13 @@ Future<_App> _mount(
   Future<void> Function(AppDatabase)? prepareDatabase,
   Future<Directory> Function()? imageDirectory,
 }) async {
+  // 预览阴影设置随当前应用夹具一起恢复，普通测试保持原配置。
+  final bool previousShadows = debugDisableShadows;
+  if (Platform.environment['OMNI_NOTES_PREVIEW'] != null) {
+    // 中文视觉预览绘制真实阴影，避免测试框架以粗描边替代菜单阴影。
+    debugDisableShadows = false;
+    addTearDown(() => debugDisableShadows = previousShadows);
+  }
   debugDefaultTargetPlatformOverride = platform;
   tester.view.physicalSize = Size(
     platform == TargetPlatform.windows ? 1280 : width,
@@ -3657,7 +3937,13 @@ Future<_App> _mount(
   );
   // 用于保存完整应用截图。
   final GlobalKey boundary = GlobalKey();
-  final _App app = _App(database, container, recorder, boundary);
+  final _App app = _App(
+    database,
+    container,
+    recorder,
+    boundary,
+    previousShadows,
+  );
   addTearDown(() => _dispose(tester, app));
   if (initialLocation != '/home') {
     container.read(appRouterProvider).go(initialLocation);
@@ -3686,6 +3972,7 @@ Future<void> _dispose(WidgetTester tester, _App app) async {
   tester.view.resetDevicePixelRatio();
   tester.platformDispatcher.clearTextScaleFactorTestValue();
   debugDefaultTargetPlatformOverride = null;
+  debugDisableShadows = app.previousShadows;
 }
 
 /// 真实仓储插入有效分类与记录，覆盖筛选维度。

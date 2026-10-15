@@ -709,6 +709,7 @@ Future<void> _pumpTimeCard(
           name: entry.key,
           colorValue: entry.value.toARGB32(),
           sortOrder: 0,
+          isPinned: false,
           isEnabled: true,
           createdAt: today,
           updatedAt: today,

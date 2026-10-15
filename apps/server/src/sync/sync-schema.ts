@@ -1,7 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 
-/// 笔记图片子记录参与同步，所有参与者必须理解附件身份和生命周期。
-export const syncSchemaVersion = 5;
+/// 笔记标签置顶参与同步，所有参与者必须保留该字段。
+export const syncSchemaVersion = 6;
 
 /// 在写入和签发下行凭证前阻止旧客户端解释新版任务。
 export function requireSyncSchemaVersion(version: string | undefined): void {

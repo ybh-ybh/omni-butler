@@ -17,6 +17,9 @@ import 'package:omni_butler/core/sync/omni_powersync_connector.dart';
 import 'package:omni_butler/core/sync/omni_sync_runtime.dart';
 import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
+import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
+import 'package:omni_butler/features/notes/data/note_repository.dart';
+import 'package:omni_butler/features/notes/data/note_tag_actions.dart';
 import 'package:powersync/powersync.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -90,6 +93,19 @@ class _OfflineAuthController extends AuthController {
   );
 }
 
+/// 在批量回收的最后一步失败，验证真实同步队列也服从外层事务。
+class _FailingDeletionTaxonomy extends TaxonomyRepository {
+  /// 与笔记仓储共用生产同步数据库。
+  _FailingDeletionTaxonomy(super.database);
+
+  /// 标签解绑及软删除都完成后再触发事务回滚。
+  @override
+  Future<void> delete(String id, {bool retainUndoLinks = true}) async {
+    await super.delete(id, retainUndoLinks: retainUndoLinks);
+    throw StateError('模拟批量回收最后一步失败');
+  }
+}
+
 /// 写入合法的测试待办，供旧数据库和生产 Drift 桥接共用。
 Future<void> _insertTodo(AppDatabase database, String id) async {
   // 固定业务时间，避免测试依赖时钟。
@@ -110,6 +126,288 @@ Future<void> _insertTodo(AppDatabase database, String id) async {
 /// 验证完整事务、幂等重试、初始导入和离线启动行为。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('批量回收失败不留同步队列，成功时正文附件和标签基线只上传一个事务', () async {
+    // 使用真实触发器生成上传队列，不手动伪造 CRUD 记录。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_note_tag_delete_upload_',
+    );
+    // 只记录生产连接器生成的上传请求，不访问网络。
+    final _RecordingAuth auth = _RecordingAuth();
+    // 隔离的生产 PowerSync 数据库。
+    final OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      '${directory.path}/db.sqlite',
+    );
+    try {
+      // 正式笔记仓储负责版本和子资源生命周期。
+      final NoteRepository notes = NoteRepository(runtime.database);
+      // 本次删除的标签身份。
+      const String tagId = '01990000-7000-8002-8000-000000000201';
+      // 多标签笔记上仍应保留的标签身份。
+      const String otherTagId = '01990000-7000-8002-8000-000000000202';
+      // 单标签、多标签及无关笔记的原始标签快照。
+      const Map<String, Set<String>> originalTags = {
+        '01990000-7000-8002-8000-000000000203': {tagId},
+        '01990000-7000-8002-8000-000000000204': {tagId, otherTagId},
+        '01990000-7000-8002-8000-000000000205': {otherTagId},
+      };
+      // 多标签笔记同时拥有录音和图片。
+      const String multiNoteId = '01990000-7000-8002-8000-000000000204';
+      // 正式图片身份。
+      const String imageId = '01990000-7000-8002-8000-000000000206';
+      // 正式录音身份。
+      const String audioId = '01990000-7000-8002-8000-000000000207';
+      // 确认框捕获的全部活动笔记身份。
+      final Set<String> expectedNoteIds = originalTags.entries
+          .where((entry) => entry.value.contains(tagId))
+          .map((entry) => entry.key)
+          .toSet();
+      // 固定种子时间。
+      final DateTime now = DateTime.utc(2026, 10, 15);
+      // 写入两条有效笔记标签。
+      for (final String id in [tagId, otherTagId]) {
+        await runtime.database
+            .into(runtime.database.taxonomyEntries)
+            .insert(
+              TaxonomyEntriesCompanion.insert(
+                id: id,
+                module: 'notes',
+                kind: 'tag',
+                name: id,
+                colorValue: 0,
+                createdAt: now,
+                updatedAt: now,
+              ),
+            );
+      }
+      // 每篇正式笔记都通过生产保存入口生成不可变版本。
+      for (final MapEntry<String, Set<String>> entry in originalTags.entries) {
+        await notes.save(
+          NoteDraft(
+            id: entry.key,
+            body: entry.key,
+            dayKey: '2026-10-15',
+            baseRevision: '',
+            tags: entry.value,
+          ),
+        );
+      }
+      await runtime.database
+          .into(runtime.database.noteImages)
+          .insert(
+            NoteImagesCompanion.insert(
+              id: imageId,
+              noteId: multiNoteId,
+              sortOrder: 0,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+      await runtime.database
+          .into(runtime.database.noteAudioSegments)
+          .insert(
+            NoteAudioSegmentsCompanion.insert(
+              id: audioId,
+              noteId: multiNoteId,
+              sortOrder: 0,
+              durationMs: 1000,
+              mime: 'audio/wav',
+              sha256: 'hash',
+              byteSize: 100,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+      // 记录应被回收的版本身份，不能仅断言操作条数。
+      final Set<String> versionIds =
+          (await runtime.database.select(runtime.database.noteVersions).get())
+              .where((version) => expectedNoteIds.contains(version.noteId))
+              .map((version) => version.id)
+              .toSet();
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      auth.requests.clear();
+      // 最后一步失败应回滚正文、附件、标签以及触发器生成的队列。
+      final NoteTagActions failing = NoteTagActions(
+        runtime.database,
+        notes,
+        _FailingDeletionTaxonomy(runtime.database),
+      );
+      await expectLater(
+        failing.deleteTagAndNotes(tagId, expectedNoteIds: expectedNoteIds),
+        throwsStateError,
+      );
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 0);
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      expect(auth.requests, isEmpty);
+      expect((await notes.find(multiNoteId))!.deletedAt, isNull);
+      expect(
+        noteTagIds((await notes.find(multiNoteId))!.tags),
+        originalTags[multiNoteId],
+      );
+
+      // 用同一确认集合重试正式领域入口。
+      final NoteTagActions actions = NoteTagActions(
+        runtime.database,
+        notes,
+        TaxonomyRepository(runtime.database),
+      );
+      expect(
+        await actions.deleteTagAndNotes(
+          tagId,
+          expectedNoteIds: expectedNoteIds,
+        ),
+        expectedNoteIds,
+      );
+      // 捕获真实队列身份，确认上传没有拆开事务。
+      final CrudTransaction transaction = (await runtime.powerSync
+          .getNextCrudTransaction())!;
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      expect(auth.requests, hasLength(1));
+      expect(
+        auth.requests.single['transactionId'],
+        transaction.transactionId.toString(),
+      );
+      // 真实上传中的所有操作都来自同一次批量回收。
+      final List<Map> operations = (auth.requests.single['operations'] as List)
+          .cast<Map>();
+      expect(operations, hasLength(transaction.crud.length));
+      expect(
+        operations.every((operation) => operation['op'] == 'PATCH'),
+        isTrue,
+      );
+      // 每类生命周期对象的精确身份，排除无关笔记和标签被误修改。
+      final Map<String, Set<String>> expectedDeleted = {
+        'note_entries': expectedNoteIds,
+        'note_versions': versionIds,
+        'note_images': {imageId},
+        'note_audio_segments': {audioId},
+        'taxonomy_entries': {tagId},
+      };
+      expect(
+        operations.map((operation) => operation['table']).toSet(),
+        expectedDeleted.keys.toSet(),
+      );
+      // 正文、历史版本、原音、图片及标签都携带软删除字段。
+      for (final MapEntry<String, Set<String>> entry
+          in expectedDeleted.entries) {
+        expect(
+          operations
+              .where((operation) => operation['table'] == entry.key)
+              .map((operation) => operation['id'])
+              .toSet(),
+          entry.value,
+        );
+        expect(
+          operations
+              .where(
+                (operation) =>
+                    operation['table'] == entry.key &&
+                    (operation['data'] as Map)['deleted_at'] != null,
+              )
+              .map((operation) => operation['id'])
+              .toSet(),
+          entry.value,
+        );
+      }
+      // 标签解绑必须携带触发器保存的真实旧值，保留多标签笔记的其他标签。
+      final List<Map> tagChanges = operations
+          .where(
+            (operation) =>
+                operation['table'] == 'note_entries' &&
+                (operation['data'] as Map).containsKey('tags'),
+          )
+          .toList();
+      expect(tagChanges, hasLength(expectedNoteIds.length));
+      // 对每条笔记验证基线与删除后的标签，而不依赖 JSON 排列顺序。
+      for (final Map operation in tagChanges) {
+        // 本条标签变化的实际负载。
+        final Map data = operation['data'] as Map;
+        expect(
+          noteTagIds(data['tags_base'] as String),
+          originalTags[operation['id']],
+        );
+        expect(
+          noteTagIds(data['tags'] as String),
+          originalTags[operation['id']]!.difference({tagId}),
+        );
+      }
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 0);
+    } finally {
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('置顶上传仅携带自身差量，离线改名和排序不覆盖跨端置顶', () async {
+    // 独立运行真实PowerSync触发器和持久队列。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_tag_pin_upload_',
+    );
+    // 仅捕获上传负载，不连接网络。
+    final _RecordingAuth auth = _RecordingAuth();
+    // 实际同步数据库。
+    final OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      '${directory.path}/db.sqlite',
+    );
+    try {
+      // 生产仓储负责所有差量写入。
+      final TaxonomyRepository repository = TaxonomyRepository(
+        runtime.database,
+      );
+      await repository.save(
+        const TaxonomyDraft(
+          module: TaxonomyModule.notes,
+          kind: TaxonomyKind.tag,
+          name: '工作',
+          colorValue: 42,
+        ),
+      );
+      // 从真实创建队列取得标签身份，避免触发默认分类播种。
+      final CrudTransaction creation = (await runtime.powerSync
+          .getNextCrudTransaction())!;
+      // 本次创建的稳定标签ID。
+      final String id = creation.crud.single.id;
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      expect(
+        ((auth.requests.single['operations'] as List).single['data']
+            as Map)['is_pinned'],
+        0,
+      );
+      auth.requests.clear();
+      await repository.setPinned(id, true);
+      await repository.save(
+        TaxonomyDraft(
+          id: id,
+          module: TaxonomyModule.notes,
+          kind: TaxonomyKind.tag,
+          name: '已改名',
+          colorValue: 42,
+        ),
+      );
+      await repository.reorder([id]);
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      // 三次事务保持各自字段，不因最终数据库状态而扩充旧PATCH。
+      final List<Map> operations = [
+        for (final Map<String, dynamic> request in auth.requests)
+          ...(request['operations'] as List).cast<Map>(),
+      ];
+      expect(operations, hasLength(3));
+      expect((operations.first['data'] as Map)['is_pinned'], 1);
+      expect((operations.first['data'] as Map).containsKey('name'), isFalse);
+      expect(
+        (operations.first['data'] as Map).containsKey('sort_order'),
+        isFalse,
+      );
+      for (final Map operation in operations.skip(1)) {
+        expect((operation['data'] as Map).containsKey('is_pinned'), isFalse);
+      }
+    } finally {
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
 
   test('真实笔记PUT不携带标签基线，正文日期PATCH不附带未修改标签基线', () async {
     // 仅使用真实生产触发器生成队列，不手工插入powersync_crud。

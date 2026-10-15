@@ -3877,6 +3877,21 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
     requiredDuringInsert: false,
     defaultValue: const Constant<int>(0),
   );
+  static const VerificationMeta _isPinnedMeta = const VerificationMeta(
+    'isPinned',
+  );
+  @override
+  late final GeneratedColumn<bool> isPinned = GeneratedColumn<bool>(
+    'is_pinned',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_pinned" IN (0, 1))',
+    ),
+    defaultValue: const Constant<bool>(false),
+  );
   static const VerificationMeta _isEnabledMeta = const VerificationMeta(
     'isEnabled',
   );
@@ -3933,6 +3948,7 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
     name,
     colorValue,
     sortOrder,
+    isPinned,
     isEnabled,
     createdAt,
     updatedAt,
@@ -3991,6 +4007,12 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
       context.handle(
         _sortOrderMeta,
         sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
+      );
+    }
+    if (data.containsKey('is_pinned')) {
+      context.handle(
+        _isPinnedMeta,
+        isPinned.isAcceptableOrUnknown(data['is_pinned']!, _isPinnedMeta),
       );
     }
     if (data.containsKey('is_enabled')) {
@@ -4054,6 +4076,10 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
         DriftSqlType.int,
         data['${effectivePrefix}sort_order'],
       )!,
+      isPinned: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_pinned'],
+      )!,
       isEnabled: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}is_enabled'],
@@ -4098,6 +4124,9 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
   /// 用户排序值。
   final int sortOrder;
 
+  /// 笔记标签是否在侧栏置顶，其他模块保留默认关闭。
+  final bool isPinned;
+
   /// 是否允许用于新记录。
   final bool isEnabled;
 
@@ -4116,6 +4145,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     required this.name,
     required this.colorValue,
     required this.sortOrder,
+    required this.isPinned,
     required this.isEnabled,
     required this.createdAt,
     required this.updatedAt,
@@ -4130,6 +4160,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     map['name'] = Variable<String>(name);
     map['color_value'] = Variable<int>(colorValue);
     map['sort_order'] = Variable<int>(sortOrder);
+    map['is_pinned'] = Variable<bool>(isPinned);
     map['is_enabled'] = Variable<bool>(isEnabled);
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
@@ -4147,6 +4178,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
       name: Value(name),
       colorValue: Value(colorValue),
       sortOrder: Value(sortOrder),
+      isPinned: Value(isPinned),
       isEnabled: Value(isEnabled),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
@@ -4168,6 +4200,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
       name: serializer.fromJson<String>(json['name']),
       colorValue: serializer.fromJson<int>(json['colorValue']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
+      isPinned: serializer.fromJson<bool>(json['isPinned']),
       isEnabled: serializer.fromJson<bool>(json['isEnabled']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
@@ -4184,6 +4217,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
       'name': serializer.toJson<String>(name),
       'colorValue': serializer.toJson<int>(colorValue),
       'sortOrder': serializer.toJson<int>(sortOrder),
+      'isPinned': serializer.toJson<bool>(isPinned),
       'isEnabled': serializer.toJson<bool>(isEnabled),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
@@ -4198,6 +4232,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     String? name,
     int? colorValue,
     int? sortOrder,
+    bool? isPinned,
     bool? isEnabled,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -4209,6 +4244,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     name: name ?? this.name,
     colorValue: colorValue ?? this.colorValue,
     sortOrder: sortOrder ?? this.sortOrder,
+    isPinned: isPinned ?? this.isPinned,
     isEnabled: isEnabled ?? this.isEnabled,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -4224,6 +4260,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
           ? data.colorValue.value
           : this.colorValue,
       sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+      isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
       isEnabled: data.isEnabled.present ? data.isEnabled.value : this.isEnabled,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
@@ -4240,6 +4277,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
           ..write('name: $name, ')
           ..write('colorValue: $colorValue, ')
           ..write('sortOrder: $sortOrder, ')
+          ..write('isPinned: $isPinned, ')
           ..write('isEnabled: $isEnabled, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
@@ -4256,6 +4294,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     name,
     colorValue,
     sortOrder,
+    isPinned,
     isEnabled,
     createdAt,
     updatedAt,
@@ -4271,6 +4310,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
           other.name == this.name &&
           other.colorValue == this.colorValue &&
           other.sortOrder == this.sortOrder &&
+          other.isPinned == this.isPinned &&
           other.isEnabled == this.isEnabled &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt &&
@@ -4284,6 +4324,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
   final Value<String> name;
   final Value<int> colorValue;
   final Value<int> sortOrder;
+  final Value<bool> isPinned;
   final Value<bool> isEnabled;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
@@ -4296,6 +4337,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     this.name = const Value.absent(),
     this.colorValue = const Value.absent(),
     this.sortOrder = const Value.absent(),
+    this.isPinned = const Value.absent(),
     this.isEnabled = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
@@ -4309,6 +4351,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     required String name,
     required int colorValue,
     this.sortOrder = const Value.absent(),
+    this.isPinned = const Value.absent(),
     this.isEnabled = const Value.absent(),
     required DateTime createdAt,
     required DateTime updatedAt,
@@ -4328,6 +4371,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     Expression<String>? name,
     Expression<int>? colorValue,
     Expression<int>? sortOrder,
+    Expression<bool>? isPinned,
     Expression<bool>? isEnabled,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
@@ -4341,6 +4385,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
       if (name != null) 'name': name,
       if (colorValue != null) 'color_value': colorValue,
       if (sortOrder != null) 'sort_order': sortOrder,
+      if (isPinned != null) 'is_pinned': isPinned,
       if (isEnabled != null) 'is_enabled': isEnabled,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
@@ -4356,6 +4401,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     Value<String>? name,
     Value<int>? colorValue,
     Value<int>? sortOrder,
+    Value<bool>? isPinned,
     Value<bool>? isEnabled,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
@@ -4369,6 +4415,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
       name: name ?? this.name,
       colorValue: colorValue ?? this.colorValue,
       sortOrder: sortOrder ?? this.sortOrder,
+      isPinned: isPinned ?? this.isPinned,
       isEnabled: isEnabled ?? this.isEnabled,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -4398,6 +4445,9 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     if (sortOrder.present) {
       map['sort_order'] = Variable<int>(sortOrder.value);
     }
+    if (isPinned.present) {
+      map['is_pinned'] = Variable<bool>(isPinned.value);
+    }
     if (isEnabled.present) {
       map['is_enabled'] = Variable<bool>(isEnabled.value);
     }
@@ -4425,6 +4475,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
           ..write('name: $name, ')
           ..write('colorValue: $colorValue, ')
           ..write('sortOrder: $sortOrder, ')
+          ..write('isPinned: $isPinned, ')
           ..write('isEnabled: $isEnabled, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
@@ -17664,6 +17715,7 @@ typedef $$TaxonomyEntriesTableCreateCompanionBuilder =
       required String name,
       required int colorValue,
       Value<int> sortOrder,
+      Value<bool> isPinned,
       Value<bool> isEnabled,
       required DateTime createdAt,
       required DateTime updatedAt,
@@ -17678,6 +17730,7 @@ typedef $$TaxonomyEntriesTableUpdateCompanionBuilder =
       Value<String> name,
       Value<int> colorValue,
       Value<int> sortOrder,
+      Value<bool> isPinned,
       Value<bool> isEnabled,
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
@@ -17755,6 +17808,11 @@ class $$TaxonomyEntriesTableFilterComposer
 
   ColumnFilters<int> get sortOrder => $composableBuilder(
     column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -17843,6 +17901,11 @@ class $$TaxonomyEntriesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get isEnabled => $composableBuilder(
     column: $table.isEnabled,
     builder: (column) => ColumnOrderings(column),
@@ -17892,6 +17955,9 @@ class $$TaxonomyEntriesTableAnnotationComposer
 
   GeneratedColumn<int> get sortOrder =>
       $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  GeneratedColumn<bool> get isPinned =>
+      $composableBuilder(column: $table.isPinned, builder: (column) => column);
 
   GeneratedColumn<bool> get isEnabled =>
       $composableBuilder(column: $table.isEnabled, builder: (column) => column);
@@ -17968,6 +18034,7 @@ class $$TaxonomyEntriesTableTableManager
                 Value<String> name = const Value.absent(),
                 Value<int> colorValue = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
+                Value<bool> isPinned = const Value.absent(),
                 Value<bool> isEnabled = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
@@ -17980,6 +18047,7 @@ class $$TaxonomyEntriesTableTableManager
                 name: name,
                 colorValue: colorValue,
                 sortOrder: sortOrder,
+                isPinned: isPinned,
                 isEnabled: isEnabled,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
@@ -17994,6 +18062,7 @@ class $$TaxonomyEntriesTableTableManager
                 required String name,
                 required int colorValue,
                 Value<int> sortOrder = const Value.absent(),
+                Value<bool> isPinned = const Value.absent(),
                 Value<bool> isEnabled = const Value.absent(),
                 required DateTime createdAt,
                 required DateTime updatedAt,
@@ -18006,6 +18075,7 @@ class $$TaxonomyEntriesTableTableManager
                 name: name,
                 colorValue: colorValue,
                 sortOrder: sortOrder,
+                isPinned: isPinned,
                 isEnabled: isEnabled,
                 createdAt: createdAt,
                 updatedAt: updatedAt,

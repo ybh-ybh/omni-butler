@@ -389,6 +389,7 @@ model TaxonomyEntry {
   name        String               @db.VarChar(80)
   colorValue  BigInt?              @map("color_value")
   sortOrder   Int                  @default(0) @map("sort_order")
+  isPinned    Boolean              @default(false) @map("is_pinned")
   isEnabled   Boolean              @default(true) @map("is_enabled")
   createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)

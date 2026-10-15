@@ -458,8 +458,28 @@ class TaxonomyRepository {
     });
   }
 
+  /// 单独修改有效笔记标签的置顶状态，避免覆盖其他设备的改名和排序。
+  Future<void> setPinned(String id, bool pinned) async {
+    // 带业务范围和删除条件的原子更新不允许复活失效标签。
+    final int changed =
+        await (_database.update(_database.taxonomyEntries)..where(
+              (TaxonomyEntries table) =>
+                  table.id.equals(id) &
+                  table.module.equals(TaxonomyModule.notes.name) &
+                  table.kind.equals(TaxonomyKind.tag.name) &
+                  table.deletedAt.isNull(),
+            ))
+            .write(
+              TaxonomyEntriesCompanion(
+                isPinned: Value<bool>(pinned),
+                updatedAt: Value<DateTime>(DateTime.now()),
+              ),
+            );
+    if (changed == 0) throw StateError('标签不存在或已删除');
+  }
+
   /// 将分类标签移入回收状态。
-  Future<void> delete(String id) async {
+  Future<void> delete(String id, {bool retainUndoLinks = true}) async {
     // 删除前核实条目模块与类型。
     final TaxonomyEntry? entry = await (_database.select(
       _database.taxonomyEntries,
@@ -487,7 +507,8 @@ class TaxonomyRepository {
             ),
           );
         }
-        _removedNoteTagLinks[id] = affected;
+        // 批量回收不提供标签立即撤销，避免外层事务回滚遗留内存关联。
+        if (retainUndoLinks) _removedNoteTagLinks[id] = affected;
       }
       await (_database.update(
         _database.taxonomyEntries,

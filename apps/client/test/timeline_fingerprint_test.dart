@@ -234,6 +234,7 @@ TaxonomyEntry _category(DateTime day, String name, Color color) =>
       name: name,
       colorValue: color.toARGB32(),
       sortOrder: 0,
+      isPinned: false,
       isEnabled: true,
       createdAt: day,
       updatedAt: day,

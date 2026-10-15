@@ -1,5 +1,8 @@
 part of 'notes_page.dart';
 
+/// 两级标签菜单按参考图使用同宽面板，窗口边缘由共享路由约束。
+const double _noteTagMenuWidth = 240;
+
 /// 桌面平铺标签区域独立维护悬停、收起及标签名称搜索。
 class _NoteTagSection extends ConsumerStatefulWidget {
   /// 接收全量正式笔记，筛选主区不改变标签计数。
@@ -60,6 +63,9 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
   /// 菜单开启后保留对应行的操作入口。
   String? _menuTag;
 
+  /// 异步标签操作和确认期间避免重复提交。
+  bool _busy = false;
+
   /// 释放本区域的输入与焦点资源。
   @override
   void dispose() {
@@ -81,31 +87,73 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
     if (open) _searchFocus.requestFocus();
   }
 
-  /// 删除仅解除标签关联，正文、版本和原音由仓储保留。
-  Future<void> _delete(TaxonomyEntry tag) async {
+  /// 两种删除共用确认流程，关联笔记回收前保护未发布内容。
+  Future<void> _delete(TaxonomyEntry tag, {bool withNotes = false}) async {
+    if (_busy) return;
+    setState(() => _busy = true);
     try {
-      // 确认文案覆盖回收站内仍保留的关联。
-      final int count = await ref
-          .read(taxonomyRepositoryProvider)
-          .affectedNoteCount(tag.id);
-      if (!mounted) return;
-      // 沿用项目标签删除确认语义。
-      final bool confirmed = await showOmniConfirmDialog(
-        context,
-        title: '删除“${tag.name}”？',
-        message: '将解除 $count 篇笔记中的标签关联，保留全部正文和原音。',
-        confirmLabel: '删除',
-        danger: true,
+      // 同一数据源内组合既有仓储，不让通用标签层依赖笔记业务。
+      final NoteTagActions actions = NoteTagActions(
+        ref.read(appDatabaseProvider),
+        ref.read(noteRepositoryProvider),
+        ref.read(taxonomyRepositoryProvider),
       );
-      if (!confirmed || !mounted) return;
-      await ref.read(taxonomyRepositoryProvider).delete(tag.id);
-      if (!mounted) return;
-      widget.onDeleted(tag.id);
-      showOmniMessage(
-        context,
-        message: '已删除“${tag.name}”',
-        tone: OmniMessageTone.success,
-      );
+      while (mounted) {
+        // 固定本次确认对象，准备期间同步变化必须重新确认。
+        final Set<String> noteIds = withNotes
+            ? await actions.activeNoteIds(tag.id)
+            : const {};
+        // 仅删标签的计数包含回收站中仍保留的关联。
+        final int count = withNotes
+            ? noteIds.length
+            : await ref
+                  .read(taxonomyRepositoryProvider)
+                  .affectedNoteCount(tag.id);
+        if (!mounted) return;
+        // 多标签笔记也会整篇回收，确认前明确恢复期限。
+        final bool confirmed = await showOmniConfirmDialog(
+          context,
+          title: withNotes ? '删除“${tag.name}”和笔记？' : '删除“${tag.name}”？',
+          message: withNotes
+              ? '将删除此标签，并将 $count 篇笔记移入回收站，包含同时有其他标签的笔记。正文、图片和原音保留 30 天，未发布修改保留在本机草稿中。'
+              : '将解除 $count 篇笔记中的标签关联，保留全部正文和原音。',
+          confirmLabel: withNotes ? '删除标签并移入回收站' : '删除',
+          danger: true,
+        );
+        if (!confirmed || !mounted) return;
+        if (withNotes) {
+          try {
+            await ref
+                .read(noteEditorProvider)
+                .prepareForDeletion(
+                  noteIds,
+                  action: () async {
+                    if (!mounted) return;
+                    await actions.deleteTagAndNotes(
+                      tag.id,
+                      expectedNoteIds: noteIds,
+                    );
+                  },
+                );
+          } on NoteTagNotesChanged {
+            if (!mounted) return;
+            showOmniMessage(context, message: '关联笔记已变化，请重新确认删除范围。');
+            continue;
+          }
+        } else {
+          await ref.read(taxonomyRepositoryProvider).delete(tag.id);
+        }
+        if (!mounted) return;
+        widget.onDeleted(tag.id);
+        showOmniMessage(
+          context,
+          message: withNotes
+              ? '已删除“${tag.name}”，$count 篇笔记已移入回收站'
+              : '已删除“${tag.name}”',
+          tone: OmniMessageTone.success,
+        );
+        return;
+      }
     } on Object catch (error) {
       if (mounted) {
         showOmniMessage(
@@ -114,15 +162,43 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
           tone: OmniMessageTone.error,
         );
       }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  /// 菜单只提供删除标签及编辑名称两个操作。
+  /// 置顶只修改标签字段，不改变当前笔记或标签筛选。
+  Future<void> _setPinned(TaxonomyEntry tag) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(taxonomyRepositoryProvider)
+          .setPinned(tag.id, !tag.isPinned);
+    } on Object catch (error) {
+      if (mounted) {
+        showOmniMessage(
+          context,
+          message: '置顶设置失败：$error',
+          tone: OmniMessageTone.error,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 共享菜单关闭后再打开业务确认或名称编辑弹窗。
   void _selectAction(String action, TaxonomyEntry tag) {
     setState(() => _menuTag = null);
+    if (_busy || ref.read(noteEditorProvider).committing) return;
     if (action == 'delete') {
       unawaited(_delete(tag));
-    } else {
+    } else if (action == 'delete-notes') {
+      unawaited(_delete(tag, withNotes: true));
+    } else if (action == 'pin') {
+      unawaited(_setPinned(tag));
+    } else if (action == 'rename') {
       unawaited(
         showOmniDialog<void>(
           context: context,
@@ -148,6 +224,10 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
     final List<TaxonomyEntry> tags = widget.tags
         .where((tag) => tag.name.toLowerCase().contains(query))
         .toList();
+    // 置顶快捷入口保留管理器顺序，不受全部标签搜索和收起影响。
+    final List<TaxonomyEntry> pinned = widget.tags
+        .where((tag) => tag.isPinned)
+        .toList();
     // 侧栏标签保留固定父节点，折叠和悬停不把孩子挂回整个滚动页。
     return Semantics(
       key: const ValueKey('notes-tags-region'),
@@ -160,6 +240,32 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Semantics(
+              key: const ValueKey('notes-pinned-tags-region'),
+              container: true,
+              explicitChildNodes: true,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (pinned.isNotEmpty) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        left: OmniSpacing.sm,
+                        top: OmniSpacing.xs,
+                        bottom: OmniSpacing.xs,
+                      ),
+                      child: Text(
+                        '置顶标签',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                    for (final TaxonomyEntry tag in pinned)
+                      _tagRow(tag, counts[tag.id] ?? 0, pinned: true),
+                    const SizedBox(height: OmniSpacing.lg),
+                  ],
+                ],
+              ),
+            ),
             if (_searching) _searchHeader() else _header(),
             ClipRect(
               child: TweenAnimationBuilder<double>(
@@ -384,21 +490,25 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
   );
 
   /// 行悬停以菜单替换篇数，菜单点击不触发主区筛选。
-  Widget _tagRow(TaxonomyEntry tag, int count) {
+  Widget _tagRow(TaxonomyEntry tag, int count, {bool pinned = false}) {
+    // 两个分区共享业务身份，但交互和语义节点必须分别稳定。
+    final String rowId = pinned ? 'pinned-${tag.id}' : tag.id;
     // 选中标签保留浅主题底色，菜单的中性灰和正文色都清晰可见。
     final bool selected = widget.selectedIds.contains(tag.id);
     // 数量和更多图标使用相同的布局占位。
     final Color foreground = OmniColors.of(context).ink;
     // 菜单弹出后鼠标进入覆盖层也保留入口。
-    final bool menu = _hoveredTag == tag.id || _menuTag == tag.id;
+    final bool menu = _hoveredTag == rowId || _menuTag == rowId;
     return MouseRegion(
-      key: ValueKey('notes-tag-${tag.id}'),
-      onEnter: (_) => setState(() => _hoveredTag = tag.id),
-      onExit: (_) => setState(() => _hoveredTag = null),
+      key: ValueKey('notes-tag-$rowId'),
+      onEnter: (_) => setState(() => _hoveredTag = rowId),
+      onExit: (_) {
+        if (_hoveredTag == rowId) setState(() => _hoveredTag = null);
+      },
       child: Padding(
         padding: const EdgeInsets.only(bottom: OmniSpacing.xxs),
         child: Semantics(
-          key: ValueKey('notes-tag-region-${tag.id}'),
+          key: ValueKey('notes-tag-region-$rowId'),
           container: true,
           explicitChildNodes: true,
           selected: selected,
@@ -430,7 +540,7 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
                       child: Center(
                         child: Text(
                           '$count',
-                          key: ValueKey('notes-tag-count-${tag.id}'),
+                          key: ValueKey('notes-tag-count-$rowId'),
                           style: TextStyle(color: foreground),
                         ),
                       ),
@@ -438,23 +548,60 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
                     OmniHoverReveal(
                       visible: menu,
                       child: OmniPopupMenuButton<String>(
-                        key: ValueKey('notes-tag-menu-${tag.id}'),
+                        key: ValueKey('notes-tag-menu-$rowId'),
                         tooltip: '标签操作',
                         icon: const Icon(Icons.more_horiz),
-                        onOpened: () => setState(() => _menuTag = tag.id),
+                        enabled: !_busy,
+                        menuConstraints: const BoxConstraints.tightFor(
+                          width: _noteTagMenuWidth,
+                        ),
+                        onOpened: () => setState(() => _menuTag = rowId),
                         onCanceled: () => setState(() => _menuTag = null),
                         onSelected: (action) => _selectAction(action, tag),
                         itemBuilder: (_) => [
                           OmniPopupMenuItem(
-                            value: 'delete',
-                            label: '删除标签',
-                            icon: Icons.delete_outline,
-                            danger: true,
+                            key: ValueKey('notes-tag-pin-menu-$rowId'),
+                            value: 'pin',
+                            label: tag.isPinned ? '取消置顶' : '置顶',
+                            icon: tag.isPinned
+                                ? Icons.push_pin
+                                : Icons.push_pin_outlined,
                           ),
                           OmniPopupMenuItem(
                             value: 'rename',
                             label: '编辑名称',
                             icon: Icons.edit_outlined,
+                          ),
+                          const PopupMenuDivider(),
+                          OmniPopupMenuItem<String>.submenu(
+                            key: ValueKey('notes-tag-delete-menu-$rowId'),
+                            label: '删除标签',
+                            icon: Icons.delete_outline,
+                            danger: true,
+                            children: [
+                              OmniPopupMenuItem<String>.custom(
+                                key: const ValueKey('notes-tag-delete-only'),
+                                value: 'delete',
+                                danger: true,
+                                child: const Padding(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: OmniSpacing.sm,
+                                  ),
+                                  child: Text('仅删除标签'),
+                                ),
+                              ),
+                              OmniPopupMenuItem<String>.custom(
+                                key: const ValueKey('notes-tag-delete-notes'),
+                                value: 'delete-notes',
+                                danger: true,
+                                child: const Padding(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: OmniSpacing.sm,
+                                  ),
+                                  child: Text('删除标签和笔记'),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),

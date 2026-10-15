@@ -20,6 +20,93 @@ import 'package:powersync/powersync.dart';
 /// 验证 PowerSync Raw Table 与 Drift 业务表共用同一 SQLite 文件。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('v20同步库升级保留旧标签PATCH且新触发器开始捕获置顶', () async {
+    // 独立文件用于保留升级前的真实CRUD队列。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_pin_sync_upgrade_',
+    );
+    // 升级前后复用同一路径。
+    final String databasePath = '${directory.path}/runtime.sqlite';
+    // 本用例不连接任何服务器。
+    final AuthRepository auth = AuthRepository(const FlutterSecureStorage());
+    // 可关闭后重开的同步运行时。
+    OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      databasePath,
+    );
+    try {
+      // 当前schema去掉置顶列即为v20的真实同步触发器形状。
+      final RawTable oldTable = RawTable.inferred(
+        name: 'taxonomy_entries',
+        schema: RawTableSchema(
+          syncedColumns: [
+            ...omniSyncSchema.rawTables
+                .singleWhere((table) => table.name == 'taxonomy_entries')
+                .schema!
+                .syncedColumns!
+                .where((column) => column != 'is_pinned'),
+          ],
+        ),
+      );
+      // 删除新触发器后才允许SQLite删除其引用的列。
+      for (final String operation in ['INSERT', 'UPDATE', 'DELETE']) {
+        await runtime.powerSync.execute(
+          'DROP TRIGGER "powersync_taxonomy_entries_${operation.toLowerCase()}"',
+        );
+      }
+      await runtime.database.customStatement(
+        'ALTER TABLE taxonomy_entries DROP COLUMN is_pinned',
+      );
+      // 按生产SDK安装旧版触发器，不直接伪造持久队列。
+      for (final String operation in ['INSERT', 'UPDATE', 'DELETE']) {
+        await runtime.powerSync.execute(
+          'SELECT powersync_create_raw_table_crud_trigger(?, ?, ?)',
+          [
+            jsonEncode(oldTable),
+            'powersync_taxonomy_entries_${operation.toLowerCase()}',
+            operation,
+          ],
+        );
+      }
+      await runtime.database.customStatement(
+        "INSERT INTO taxonomy_entries(id,module,kind,name,color_value,created_at,updated_at) VALUES('legacy-tag','notes','tag','旧标签',42,'2026-10-15T00:00:00Z','2026-10-15T00:00:00Z')",
+      );
+      await (await runtime.powerSync.getNextCrudTransaction())!.complete();
+      await runtime.database.customStatement(
+        "UPDATE taxonomy_entries SET name='升级前改名' WHERE id='legacy-tag'",
+      );
+      await runtime.database.customStatement('PRAGMA user_version = 20');
+      await runtime.close();
+      runtime = await OmniSyncRuntime.openAtPath(auth, databasePath);
+      expect(
+        (await runtime.database
+                .select(runtime.database.taxonomyEntries)
+                .getSingle())
+            .isPinned,
+        isFalse,
+      );
+      // 旧PATCH升级后仍不带默认false，避免覆盖其他设备的置顶。
+      final CrudTransaction legacy = (await runtime.powerSync
+          .getNextCrudTransaction())!;
+      expect(legacy.crud.single.op, UpdateType.patch);
+      expect(legacy.crud.single.opData, containsPair('name', '升级前改名'));
+      expect(legacy.crud.single.opData, isNot(contains('is_pinned')));
+      await legacy.complete();
+      await runtime.database
+          .update(runtime.database.taxonomyEntries)
+          .write(const TaxonomyEntriesCompanion(isPinned: Value(true)));
+      // 重建后的触发器捕获新增字段，名称不被重复提交。
+      final CrudTransaction pinned = (await runtime.powerSync
+          .getNextCrudTransaction())!;
+      expect(pinned.crud.single.opData, containsPair('is_pinned', 1));
+      expect(pinned.crud.single.opData, isNot(contains('name')));
+    } finally {
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('v15 同步库升级保留历史队列，重装事件触发器后仅捕获备注', () async {
     // 独占临时数据库路径。
     final Directory directory = await Directory.systemTemp.createTemp(

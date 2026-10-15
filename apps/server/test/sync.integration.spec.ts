@@ -104,6 +104,8 @@ integration('SyncService PostgreSQL 集成', () => {
   let preservedLegacySelection = false;
   // 进度任务增量迁移是否原样保留普通任务和子任务。
   let preservedLegacyTodos = false;
+  // 标签置顶增量迁移只补默认值，不重写原有记录。
+  let preservedLegacyTag = false;
 
   beforeAll(async () => {
     // 解析显式提供的测试连接字符串。
@@ -145,6 +147,8 @@ integration('SyncService PostgreSQL 集成', () => {
       let legacySelection: Record<string, unknown> | undefined;
       // 新类型上线前的完整普通任务快照。
       let legacyTodos: Record<string, unknown>[] | undefined;
+      // 新字段上线前的完整标签事实。
+      let legacyTag: Record<string, unknown> | undefined;
       if (upgradingAliases) {
         // 此数据仅属于当前显式空测试库，首个用例前会正常清理。
         const seeded = await database.query<{ row: Record<string, unknown> }>(
@@ -178,6 +182,19 @@ integration('SyncService PostgreSQL 集成', () => {
         );
         legacyTodos = seeded.rows.map((row) => row.row);
       }
+      if (migration === '20261015010000_note_tag_pinning') {
+        // 在本例隔离空库的旧表结构中先插入标签。
+        const seeded = await database.query<{ row: Record<string, unknown> }>(
+          `WITH owner AS (
+             INSERT INTO sync_owners (id) VALUES ($1) RETURNING id
+           ), tag AS (
+             INSERT INTO taxonomy_entries (id, user_id, module, kind, name, sort_order, updated_at)
+             SELECT $2, id, 'notes', 'tag', 'legacy tag', 7, $3 FROM owner RETURNING *
+           ) SELECT to_jsonb(tag) AS row FROM tag`,
+          [randomUUID(), randomUUID(), timestamp],
+        );
+        legacyTag = seeded.rows[0]!.row;
+      }
       await database.query(
         readFileSync(
           join(__dirname, '../prisma/migrations', migration, 'migration.sql'),
@@ -209,6 +226,15 @@ integration('SyncService PostgreSQL 集成', () => {
         }
         preservedLegacyTodos = true;
       }
+      if (legacyTag) {
+        // 逐字段断言真实PostgreSQL增量迁移的默认值及数据保留。
+        const after = await database.query<{ row: Record<string, unknown> }>(
+          'SELECT to_jsonb(tag) AS row FROM taxonomy_entries tag WHERE id = $1',
+          [legacyTag.id],
+        );
+        expect(after.rows[0]?.row).toEqual({ ...legacyTag, is_pinned: false });
+        preservedLegacyTag = true;
+      }
     }
     prisma = new PrismaService(
       new ConfigService({ DATABASE_URL: databaseUrl }),
@@ -226,6 +252,10 @@ integration('SyncService PostgreSQL 集成', () => {
 
   it('进度任务增量迁移原样保留旧任务完成状态及父子关系', () => {
     expect(preservedLegacyTodos).toBe(true);
+  });
+
+  it('标签置顶增量迁移原样保留历史标签并默认关闭', () => {
+    expect(preservedLegacyTag).toBe(true);
   });
 
   beforeEach(async () => {
@@ -647,6 +677,22 @@ integration('SyncService PostgreSQL 集成', () => {
       'todo_items',
       'todo_progress_steps',
     ]);
+  });
+
+  it('标签置顶跨设备差量保留改名排序，同字段按服务器提交顺序更新', async () => {
+    // 旧客户端队列创建缺少新列，应使用数据库默认值。
+    const tag = put('taxonomy_entries', { module: 'notes', kind: 'tag', name: '工作', sort_order: 1 });
+    await service.applyBatch(ownerId, batch([tag]));
+    expect((await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).isPinned).toBe(false);
+    await service.applyBatch(ownerId, batch([{ op: 'PATCH', table: 'taxonomy_entries', id: tag.id, data: { is_pinned: 1 } }]));
+    // 另一设备仍持有旧未置顶快照，但仅发送实际修改字段。
+    await service.applyBatch(ownerId, batch([{ op: 'PATCH', table: 'taxonomy_entries', id: tag.id, data: { name: '另一端改名', sort_order: 9 } }]));
+    expect(await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).toMatchObject({ name: '另一端改名', sortOrder: 9, isPinned: true });
+    // 重复PUT不能把旧默认值覆盖到已置顶记录。
+    await service.applyBatch(ownerId, batch([{ ...tag, data: { ...tag.data, is_pinned: false } }]));
+    expect((await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).isPinned).toBe(true);
+    await service.applyBatch(ownerId, batch([{ op: 'PATCH', table: 'taxonomy_entries', id: tag.id, data: { is_pinned: 0 } }]));
+    expect(await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).toMatchObject({ name: '另一端改名', sortOrder: 9, isPinned: false });
   });
 
   it('ARGB 大整数可保存，同名分类不会被旧唯一约束堵塞', async () => {

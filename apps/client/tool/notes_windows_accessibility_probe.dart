@@ -325,6 +325,205 @@ void sendEditorProbeKey(
   );
 }
 
+/// 标签专项的鼠标点击使用独立指针身份，避免与历史双击探针互相污染。
+int _tagProbePointer = 9000;
+
+/// 取得可见生产控件中心，所有点击与悬停都经过真实命中测试。
+Offset tagProbePoint(Key key) {
+  // 当前挂载控件的实际布局盒。
+  final RenderBox box =
+      statisticsProbeElement(key).findRenderObject()! as RenderBox;
+  return box.localToGlobal(box.size.center(Offset.zero));
+}
+
+/// 原生窗口内发送鼠标移动，保留父菜单到子菜单的真实跨面板路径。
+Future<void> hoverTagProbe(Offset point, int viewId) async {
+  GestureBinding.instance.handlePointerEvent(
+    PointerHoverEvent(
+      viewId: viewId,
+      device: 73,
+      kind: ui.PointerDeviceKind.mouse,
+      position: point,
+    ),
+  );
+  await pauseProbe(180);
+}
+
+/// 点击生产菜单或确认按钮，不直接调用其业务回调。
+Future<void> clickTagProbe(Offset point, int viewId) async {
+  await hoverTagProbe(point, viewId);
+  // 当前点击的稳定指针标识。
+  final int pointer = _tagProbePointer++;
+  GestureBinding.instance.handlePointerEvent(
+    PointerDownEvent(
+      viewId: viewId,
+      device: 73,
+      pointer: pointer,
+      kind: ui.PointerDeviceKind.mouse,
+      buttons: kPrimaryMouseButton,
+      position: point,
+    ),
+  );
+  await pauseProbe(25);
+  GestureBinding.instance.handlePointerEvent(
+    PointerUpEvent(
+      viewId: viewId,
+      device: 73,
+      pointer: pointer,
+      kind: ui.PointerDeviceKind.mouse,
+      position: point,
+    ),
+  );
+  await pauseProbe(260);
+}
+
+/// 窄窗使用生产抽屉，探针只打开自己窗口内的侧栏。
+Future<void> openTagProbeDrawer() async {
+  // 当前页面可用的生产抽屉状态。
+  ScaffoldState? drawer;
+  // 只寻找带有抽屉的脚手架，忽略正文内部的其他面板。
+  void visit(Element element) {
+    if (element.widget case Scaffold(drawer: final Widget? widget)
+        when widget != null && element is StatefulElement) {
+      drawer = element.state as ScaffoldState;
+    }
+    element.visitChildren(visit);
+  }
+
+  WidgetsBinding.instance.rootElement?.visitChildren(visit);
+  if (drawer != null && !drawer!.isDrawerOpen) {
+    drawer!.openDrawer();
+    await pauseProbe(320);
+  }
+}
+
+/// 确认对话框内通过按钮文字定位取消操作，避免引入探针专用业务接口。
+Offset tagProbeCancelPoint() {
+  // 当前确认框中唯一的取消文字元素。
+  Element? cancel;
+  // 页面未处于笔记编辑态，只有确认对话框包含此操作。
+  void visit(Element element) {
+    if (element.widget case Text(data: '取消')) cancel = element;
+    element.visitChildren(visit);
+  }
+
+  WidgetsBinding.instance.rootElement?.visitChildren(visit);
+  if (cancel == null) throw StateError('标签删除未展示可取消的确认框');
+  // 文字中心同样位于生产按钮的命中范围内。
+  final RenderBox box = cancel!.findRenderObject()! as RenderBox;
+  return box.localToGlobal(box.size.center(Offset.zero));
+}
+
+/// 每个键位完整按下并释放，走平台入口与生产菜单的焦点快捷键。
+Future<void> pressTagProbeKey(
+  LogicalKeyboardKey logical,
+  PhysicalKeyboardKey physical,
+) async {
+  sendEditorProbeKey(logical, physical, ui.KeyEventType.down);
+  sendEditorProbeKey(logical, physical, ui.KeyEventType.up);
+  await pauseProbe(180);
+}
+
+/// 二十轮覆盖置顶双分区、真实跨面板鼠标移动、取消确认和键盘两级退出。
+Future<void> runTagsProbeRound(
+  AppDatabase database,
+  int round,
+  int viewId,
+) async {
+  await openTagProbeDrawer();
+  // 每轮先交替从全部标签与置顶标签入口切换状态。
+  final String initialRowId = round.isEven
+      ? 'probe-tag-0'
+      : 'pinned-probe-tag-0';
+  await hoverTagProbe(
+    tagProbePoint(ValueKey('notes-tag-$initialRowId')),
+    viewId,
+  );
+  await clickTagProbe(
+    tagProbePoint(ValueKey('notes-tag-menu-$initialRowId')),
+    viewId,
+  );
+  await clickTagProbe(
+    tagProbePoint(ValueKey('notes-tag-pin-menu-$initialRowId')),
+    viewId,
+  );
+  // 不依赖文案推测结果，直接核对探针自己的真实数据库。
+  final TaxonomyEntry tag = await (database.select(
+    database.taxonomyEntries,
+  )..where((table) => table.id.equals('probe-tag-0'))).getSingle();
+  if (tag.isPinned != round.isEven) throw StateError('标签置顶切换未持久化');
+  // 置顶完成后使用另一分区入口，确保两份同身份行的交互互不串联。
+  final String rowId = round.isEven ? 'pinned-probe-tag-0' : 'probe-tag-0';
+  await hoverTagProbe(tagProbePoint(ValueKey('notes-tag-$rowId')), viewId);
+  await clickTagProbe(tagProbePoint(ValueKey('notes-tag-menu-$rowId')), viewId);
+  // 真正悬停删除父行展开二级面板。
+  final Offset parentPoint = tagProbePoint(
+    ValueKey('notes-tag-delete-menu-$rowId'),
+  );
+  await hoverTagProbe(parentPoint, viewId);
+  // 两种删除交替出现确认，全部取消以保留下一轮的稳定数据。
+  final Key childKey = ValueKey(
+    round.isEven ? 'notes-tag-delete-only' : 'notes-tag-delete-notes',
+  );
+  // 经过两个面板边缘间隙再进入目标子行，覆盖子菜单错误收起的窗口。
+  final Offset childPoint = tagProbePoint(childKey);
+  await hoverTagProbe(
+    Offset((parentPoint.dx + childPoint.dx) / 2, parentPoint.dy),
+    viewId,
+  );
+  await hoverTagProbe(childPoint, viewId);
+  if (findProbeWidget(childKey) == null) throw StateError('鼠标跨面板时子菜单意外关闭');
+  await clickTagProbe(childPoint, viewId);
+  await clickTagProbe(tagProbeCancelPoint(), viewId);
+  // 确认取消后标签与两篇正式笔记都应继续可用。
+  final List<NoteEntryRecord> notes = await (database.select(
+    database.noteEntries,
+  )..where((table) => table.id.isIn(['probe-note', 'probe-tags-multi']))).get();
+  if (notes.length != 2 || notes.any((note) => note.deletedAt != null)) {
+    throw StateError('取消标签删除意外改变正式笔记');
+  }
+  await hoverTagProbe(tagProbePoint(ValueKey('notes-tag-$rowId')), viewId);
+  await clickTagProbe(tagProbePoint(ValueKey('notes-tag-menu-$rowId')), viewId);
+  // 根菜单首项为置顶，跳过编辑名称与分隔线后到达删除父项。
+  await pressTagProbeKey(
+    LogicalKeyboardKey.arrowDown,
+    PhysicalKeyboardKey.arrowDown,
+  );
+  await pressTagProbeKey(
+    LogicalKeyboardKey.arrowDown,
+    PhysicalKeyboardKey.arrowDown,
+  );
+  await pressTagProbeKey(
+    LogicalKeyboardKey.arrowRight,
+    PhysicalKeyboardKey.arrowRight,
+  );
+  if (findProbeWidget(const ValueKey('notes-tag-delete-only')) == null) {
+    throw StateError('方向键未展开标签二级菜单');
+  }
+  await pressTagProbeKey(
+    LogicalKeyboardKey.arrowDown,
+    PhysicalKeyboardKey.arrowDown,
+  );
+  await pressTagProbeKey(
+    LogicalKeyboardKey.arrowLeft,
+    PhysicalKeyboardKey.arrowLeft,
+  );
+  await pressTagProbeKey(
+    LogicalKeyboardKey.arrowRight,
+    PhysicalKeyboardKey.arrowRight,
+  );
+  await pressTagProbeKey(LogicalKeyboardKey.escape, PhysicalKeyboardKey.escape);
+  if (findProbeWidget(const ValueKey('notes-tag-delete-only')) != null ||
+      findProbeWidget(ValueKey('notes-tag-delete-menu-$rowId')) == null) {
+    throw StateError('第一次Escape未仅关闭二级菜单');
+  }
+  await pressTagProbeKey(LogicalKeyboardKey.escape, PhysicalKeyboardKey.escape);
+  if (findProbeWidget(ValueKey('notes-tag-delete-menu-$rowId')) != null) {
+    throw StateError('第二次Escape未关闭标签主菜单');
+  }
+  stdout.writeln('PROBE_TAGS:$round');
+}
+
 /// 原生窗口内重复格式、选区、菜单和列表，保持辅助功能桥真实启用。
 Future<void> runEditorProbeRound(NoteEditorController editor, int round) async {
   editor.edit(body: '中文选区格式与高亮\n第一项\n第二项');
@@ -442,6 +641,8 @@ Future<void> main(List<String> arguments) async {
   final bool editorOnly = arguments.contains('--editor-only');
   // 历史专项使用四种附件／标签组合和真正的鼠标双击。
   final bool historyOnly = arguments.contains('--history-only');
+  // 标签专项仅循环新双层菜单，避免其他浮层稀释原生无障碍证据。
+  final bool tagsOnly = arguments.contains('--tags-only');
   // 历史回归可切换深色窄窗，增加音频位于视口裁剪边缘的覆盖。
   final bool dark = arguments.contains('--dark');
   // 窄窗启用抽屉布局，保持默认探针窗口尺寸不变。
@@ -478,13 +679,25 @@ Future<void> main(List<String> arguments) async {
         );
   }
   await NoteRepository(database).save(
-    const NoteDraft(
+    NoteDraft(
       id: 'probe-note',
       body: '测试标题\n第一行正文\n第二行正文\n第三行正文\n第四行正文\n第五行正文',
       dayKey: '2026-10-14',
       baseRevision: '',
+      tags: tagsOnly ? {'probe-tag-0'} : {},
     ),
   );
+  if (tagsOnly) {
+    await NoteRepository(database).save(
+      const NoteDraft(
+        id: 'probe-tags-multi',
+        body: '标签专项多标签正式笔记',
+        dayKey: '2026-10-14',
+        baseRevision: '',
+        tags: {'probe-tag-0', 'probe-tag-1'},
+      ),
+    );
+  }
   // 多篇长文跨越视口，覆盖节点被裁剪后再进入树的场景。
   for (int index = 0; index < 12; index++) {
     await NoteRepository(database).save(
@@ -603,7 +816,21 @@ Future<void> main(List<String> arguments) async {
   // 回归失败必须返回非零状态，不能只凭窗口退出认定通过。
   int resultCode = 0;
   try {
+    if (tagsOnly) {
+      GestureBinding.instance.handlePointerEvent(
+        PointerAddedEvent(
+          viewId: window.rootView.viewId,
+          device: 73,
+          kind: ui.PointerDeviceKind.mouse,
+          position: const Offset(1, 1),
+        ),
+      );
+    }
     for (int round = 0; round < 20; round++) {
+      if (tagsOnly) {
+        await runTagsProbeRound(database, round, window.rootView.viewId);
+        continue;
+      }
       if (historyOnly) {
         await runHistoryProbeRound(round, window.rootView.viewId);
         continue;

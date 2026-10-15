@@ -21,6 +21,7 @@ import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart'
 import 'package:omni_butler/features/notes/data/note_editor_controller.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
+import 'package:omni_butler/features/notes/data/note_tag_actions.dart';
 import 'package:omni_butler/features/notes/data/note_image_repository.dart';
 import 'package:omni_butler/features/notes/data/note_draft_audio_edits.dart';
 import 'package:omni_butler/features/notes/markdown/note_markdown.dart';
@@ -446,9 +447,19 @@ class _NotesPageState extends ConsumerState<NotesPage>
       _editor = editor;
       editor.addListener(_syncText);
     }
-    // 分类含历史墓碑名称。
-    final List<TaxonomyEntry> taxonomy =
-        ref.watch(_noteTaxonomiesProvider).value ?? [];
+    // 分类含历史墓碑名称，加载完成前不清除用户筛选。
+    final AsyncValue<List<TaxonomyEntry>> taxonomyState = ref.watch(
+      _noteTaxonomiesProvider,
+    );
+    // 有效标签和墓碑共用同一数据源，远端删除也能移除失效筛选。
+    final List<TaxonomyEntry> taxonomy = taxonomyState.value ?? [];
+    if (_windows && taxonomyState.hasValue) {
+      _tagFilter.retainAll(
+        taxonomy
+            .where((tag) => tag.kind == 'tag' && tag.deletedAt == null)
+            .map((tag) => tag.id),
+      );
+    }
     // 历史有效笔记。
     final AsyncValue<List<NoteEntryRecord>> notes = ref.watch(notesProvider);
     // 本机传输与转写状态。

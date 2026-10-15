@@ -156,7 +156,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
   });
 
   /// 用实际 token 请求 HTTP，undefined JSON 不添加无关 body。
-  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '5', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
+  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '6', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
   /// 构造稳定真实同步操作。
   function batch(operations: SyncOperationDto[]): { clientId: string; transactionId: string; operations: SyncOperationDto[] } { return { clientId: randomUUID(), transactionId: randomUUID(), operations }; }
   /// 构造可回听的测试 WAV，仅测试存储不向厂商发送此合成文件。

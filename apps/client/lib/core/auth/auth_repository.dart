@@ -8,7 +8,7 @@ import 'package:omni_butler/core/auth/auth_models.dart';
 const String fixedApiPath = '/omni-butler/api/v1';
 
 /// 当前客户端支持的业务同步结构版本。
-const int syncSchemaVersion = 5;
+const int syncSchemaVersion = 6;
 
 /// 完整设备会话使用同一个安全存储键，避免写入中断造成凭证混搭。
 const String _sessionKey = 'sync.device_session';

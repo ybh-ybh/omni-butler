@@ -34,7 +34,7 @@ streams:
         FROM daily_quote_selections WHERE user_id = auth.user_id()
       - >-
         SELECT id, module, kind, name, color_value,
-        sort_order, is_enabled, created_at, updated_at,
+        sort_order, is_pinned, is_enabled, created_at, updated_at,
         deleted_at FROM taxonomy_entries WHERE user_id = auth.user_id()
       - >-
         SELECT id, module, record_id, taxonomy_id, created_at, deleted_at

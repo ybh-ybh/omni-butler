@@ -11,6 +11,20 @@ describe('SyncSqlBuilder', () => {
   /// 固定记录标识。
   const recordId = 'ea78cdfc-4368-45e9-b541-2adb46a0c136';
 
+  it('标签置顶支持创建和独立差量，旧编辑不会隐式写入取消置顶', () => {
+    // 新版创建明确携带置顶值。
+    const creation = builder.build({ op: 'PUT', table: 'taxonomy_entries', id: recordId, data: { module: 'notes', kind: 'tag', name: '工作', is_pinned: true } }, userId);
+    expect(creation.sql).toContain('"is_pinned"');
+    expect(creation.sql).toContain('ON CONFLICT ("id") DO NOTHING');
+    // 独立置顶不得把客户端缓存中的名称和排序带入更新。
+    const pinned = builder.build({ op: 'PATCH', table: 'taxonomy_entries', id: recordId, data: { is_pinned: true } }, userId);
+    expect(pinned.sql).toBe('UPDATE "taxonomy_entries" SET "is_pinned" = $3 WHERE "id" = $1::uuid AND "user_id" = $2::uuid');
+    expect(pinned.values).toEqual([recordId, userId, true]);
+    // 旧离线编辑缺失置顶字段时仍只改变名称。
+    const legacy = builder.build({ op: 'PATCH', table: 'taxonomy_entries', id: recordId, data: { name: '改名' } }, userId);
+    expect(legacy.sql).not.toContain('is_pinned');
+  });
+
   it('笔记图片只开放关联和排序字段，拒绝路径及非整数顺序', () => {
     // 合法子记录按图片身份创建，而非覆盖整篇图片数组。
     const operation: SyncOperationDto = { op: 'PUT', table: 'note_images', id: recordId, data: { note_id: userId, sort_order: 0 } };

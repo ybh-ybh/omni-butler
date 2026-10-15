@@ -283,6 +283,10 @@ class TaxonomyEntries extends Table {
   /// 用户排序值。
   IntColumn get sortOrder => integer().withDefault(const Constant<int>(0))();
 
+  /// 笔记标签是否在侧栏置顶，其他模块保留默认关闭。
+  BoolColumn get isPinned =>
+      boolean().withDefault(const Constant<bool>(false))();
+
   /// 是否允许用于新记录。
   BoolColumn get isEnabled =>
       boolean().withDefault(const Constant<bool>(true))();
@@ -743,7 +747,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 20;
+  int get schemaVersion => 21;
 
   /// 创建数据库并从旧版本安全升级。
   @override
@@ -937,6 +941,17 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         }
         if (!existingTables.contains('note_draft_images')) {
           await migrator.createTable(noteDraftImages);
+        }
+      }
+      if (from < 21) {
+        // 降版测试可能已含此列，先检查避免重复添加。
+        final List<QueryRow> taxonomyColumns = await customSelect(
+          'PRAGMA table_info(taxonomy_entries)',
+        ).get();
+        if (!taxonomyColumns.any(
+          (row) => row.read<String>('name') == 'is_pinned',
+        )) {
+          await migrator.addColumn(taxonomyEntries, taxonomyEntries.isPinned);
         }
       }
       if (from == 17) {

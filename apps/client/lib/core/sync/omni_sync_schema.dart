@@ -111,6 +111,7 @@ final Schema omniSyncSchema = Schema(
       'name',
       'color_value',
       'sort_order',
+      'is_pinned',
       'is_enabled',
       'created_at',
       'updated_at',

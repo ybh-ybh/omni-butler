@@ -515,6 +515,9 @@ class OmniPopupMenuItem<T> extends PopupMenuItem<T> {
   /// 危险操作使用独立的浅红悬停底色。
   final bool danger;
 
+  /// 非空时此行只展开二级菜单，不向路由返回业务值。
+  final List<PopupMenuEntry<T>>? children;
+
   /// 创建紧凑操作菜单项。
   OmniPopupMenuItem({
     required T value,
@@ -524,7 +527,8 @@ class OmniPopupMenuItem<T> extends PopupMenuItem<T> {
     super.enabled = true,
     super.onTap,
     super.key,
-  }) : super(
+  }) : children = null,
+       super(
          value: value,
          height: OmniDropdownMetrics.itemHeight,
          padding: EdgeInsets.zero,
@@ -533,6 +537,28 @@ class OmniPopupMenuItem<T> extends PopupMenuItem<T> {
            icon: icon,
            danger: danger,
            enabled: enabled,
+         ),
+       );
+
+  /// 创建 Windows 二级菜单入口，悬停和激活都保留主菜单。
+  OmniPopupMenuItem.submenu({
+    required String label,
+    required List<PopupMenuEntry<T>> children,
+    IconData? icon,
+    this.danger = false,
+    super.enabled = true,
+    super.key,
+  }) : assert(children.isNotEmpty),
+       children = children,
+       super(
+         height: OmniDropdownMetrics.itemHeight,
+         padding: EdgeInsets.zero,
+         child: _OmniPopupMenuItemContent(
+           label: label,
+           icon: icon,
+           danger: danger,
+           enabled: enabled,
+           hasSubmenu: true,
          ),
        );
 
@@ -546,7 +572,12 @@ class OmniPopupMenuItem<T> extends PopupMenuItem<T> {
     super.enabled = true,
     super.onTap,
     super.key,
-  }) : super(value: value, child: child);
+  }) : children = null,
+       super(value: value, child: child);
+
+  /// 二级入口没有叶子值，不能被初始选择逻辑当作可返回操作。
+  @override
+  bool represents(T? value) => children == null && super.represents(value);
 
   /// Windows 定制菜单行反馈，其他平台仍交给框架原有实现。
   @override
@@ -566,6 +597,61 @@ class _OmniPopupMenuItemState<T>
   /// 当前菜单行是否持有键盘焦点。
   bool _focused = false;
 
+  /// 使用当前有效行锚点展开二级菜单，不创建额外路由。
+  void _openSubmenu({required bool focusFirst}) {
+    // 普通叶子保持原有选中行为。
+    final List<PopupMenuEntry<T>>? children = widget.children;
+    // 当前菜单由 Windows 共享路由提供，其他平台不引入新浮层。
+    final OmniMenuScope<T>? scope = OmniMenuScope.maybeOf<T>(context);
+    if (!widget.enabled || children == null || scope == null) return;
+    // 在当前有效元素阶段读取并缓存父行的实际渲染对象。
+    final RenderObject? anchor = context.findRenderObject();
+    if (anchor is! RenderBox || !anchor.attached) return;
+    if (focusFirst) scope.useKeyboard();
+    scope.openSubmenu(
+      owner: this,
+      anchor: anchor,
+      parentFocus: _focusNode,
+      items: children,
+      focusFirst: focusFirst,
+    );
+  }
+
+  /// 父行激活只展开；叶子仍由 Flutter 一次返回原有业务值。
+  @override
+  void handleTap() {
+    if (widget.children != null &&
+        Theme.of(context).platform == TargetPlatform.windows) {
+      _openSubmenu(
+        focusFirst: HardwareKeyboard.instance.logicalKeysPressed.isNotEmpty,
+      );
+      return;
+    }
+    super.handleTap();
+  }
+
+  /// 父项右方向键进入子菜单，Enter 和 Space 仍复用原有激活语义。
+  KeyEventResult _handleSubmenuKey(FocusNode node, KeyEvent event) {
+    if (widget.children != null &&
+        widget.enabled &&
+        event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _openSubmenu(focusFirst: true);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// 保留原菜单项角色和操作，并向读屏暴露父项展开状态。
+  @override
+  Widget buildSemantics({required Widget child}) {
+    if (widget.children == null) return super.buildSemantics(child: child);
+    return Semantics(
+      expanded: OmniMenuScope.maybeOf<T>(context)?.isExpanded(this) ?? false,
+      child: super.buildSemantics(child: child),
+    );
+  }
+
   /// 释放每行独立的焦点状态。
   @override
   void dispose() {
@@ -581,10 +667,13 @@ class _OmniPopupMenuItemState<T>
     }
     // 当前主题的中性与危险语义色。
     final OmniColors colors = OmniColors.of(context);
+    // 同一路由的展开状态供父行在子菜单悬停期间保持反馈。
+    final OmniMenuScope<T>? scope = OmniMenuScope.maybeOf<T>(context);
     // 只为可用行显示悬停或键盘焦点背景。
     final bool highlighted =
         widget.enabled &&
-        (OmniMenuNavigation.keyboardOf(context) ? _focused : _hovered);
+        ((scope?.isExpanded(this) ?? false) ||
+            (OmniMenuNavigation.keyboardOf(context) ? _focused : _hovered));
     // 退场保留同一RGB，仅改变透明度，避免与透明黑插值时短暂闪暗。
     final Color background = widget.danger
         ? colors.danger.withValues(
@@ -601,44 +690,56 @@ class _OmniPopupMenuItemState<T>
       fontSize: OmniMenuMetrics.fontSize,
       fontWeight: FontWeight.w400,
     );
-    return MergeSemantics(
-      child: buildSemantics(
-        child: AnimatedContainer(
-          duration: OmniMotion.duration(context, OmniMotion.windowsMenuHover),
-          curve: OmniMotion.standardCurve,
-          decoration: BoxDecoration(
-            color: background,
-            borderRadius: BorderRadius.circular(OmniRadius.control),
-          ),
-          child: OmniInkWell(
-            focusNode: _focusNode,
-            onTap: widget.enabled ? handleTap : null,
-            // 右键仅提供按压反馈，保留菜单且不执行左键业务动作。
-            onSecondaryTap: widget.enabled ? () {} : null,
-            onHover: (bool hovered) {
-              if (hovered && widget.enabled) _focusNode.requestFocus();
-              setState(() => _hovered = hovered);
-            },
-            onFocusChange: (bool focused) => setState(() => _focused = focused),
-            canRequestFocus: widget.enabled,
-            mouseCursor: widget.enabled
-                ? SystemMouseCursors.click
-                : SystemMouseCursors.basic,
-            borderRadius: BorderRadius.circular(OmniRadius.control),
-            hoverColor: Colors.transparent,
-            focusColor: Colors.transparent,
-            highlightColor: Colors.transparent,
-            splashColor: Colors.transparent,
-            splashFactory: NoSplash.splashFactory,
-            child: DefaultTextStyle(
-              style: style,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: widget.height),
-                child: Padding(
-                  padding: widget.padding ?? EdgeInsets.zero,
-                  child: Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: buildChild(),
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: _handleSubmenuKey,
+      child: MergeSemantics(
+        child: buildSemantics(
+          child: AnimatedContainer(
+            duration: OmniMotion.duration(context, OmniMotion.windowsMenuHover),
+            curve: OmniMotion.standardCurve,
+            decoration: BoxDecoration(
+              color: background,
+              borderRadius: BorderRadius.circular(OmniRadius.control),
+            ),
+            child: OmniInkWell(
+              focusNode: _focusNode,
+              onTap: widget.enabled ? handleTap : null,
+              // 右键仅提供按压反馈，保留菜单且不执行左键业务动作。
+              onSecondaryTap: widget.enabled ? () {} : null,
+              onHover: (bool hovered) {
+                if (hovered && widget.enabled) {
+                  _focusNode.requestFocus();
+                  scope?.enteredItem(this);
+                  _openSubmenu(focusFirst: false);
+                }
+                setState(() => _hovered = hovered);
+              },
+              onFocusChange: (bool focused) {
+                if (focused) scope?.enteredItem(this);
+                setState(() => _focused = focused);
+              },
+              canRequestFocus: widget.enabled,
+              mouseCursor: widget.enabled
+                  ? SystemMouseCursors.click
+                  : SystemMouseCursors.basic,
+              borderRadius: BorderRadius.circular(OmniRadius.control),
+              hoverColor: Colors.transparent,
+              focusColor: Colors.transparent,
+              highlightColor: Colors.transparent,
+              splashColor: Colors.transparent,
+              splashFactory: NoSplash.splashFactory,
+              child: DefaultTextStyle(
+                style: style,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: widget.height),
+                  child: Padding(
+                    padding: widget.padding ?? EdgeInsets.zero,
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: buildChild(),
+                    ),
                   ),
                 ),
               ),
@@ -1119,12 +1220,16 @@ class _OmniPopupMenuItemContent extends StatelessWidget {
   /// 是否允许操作，用于同步菜单项的禁用颜色。
   final bool enabled;
 
+  /// 二级菜单入口在最右侧显示展开箭头。
+  final bool hasSubmenu;
+
   /// 创建操作菜单项内容。
   const _OmniPopupMenuItemContent({
     required this.label,
     required this.icon,
     required this.danger,
     required this.enabled,
+    this.hasSubmenu = false,
   });
 
   /// 构建对齐的图标与文字。
@@ -1167,6 +1272,14 @@ class _OmniPopupMenuItemContent extends StatelessWidget {
               ),
             ),
           ),
+          if (hasSubmenu) ...<Widget>[
+            const SizedBox(width: OmniSpacing.xs),
+            Icon(
+              Icons.chevron_right,
+              size: OmniMenuMetrics.iconSize,
+              color: foreground,
+            ),
+          ],
         ],
       ),
     );

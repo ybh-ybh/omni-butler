@@ -120,6 +120,9 @@ class _DelayedDrafts extends NoteLocalDraftRepository {
   /// 测试按需阻塞原音落盘。
   Completer<void>? stageGate;
 
+  /// 暂存队列捕获失败后，删除准备仍须感知这份失败。
+  bool stageFails = false;
+
   /// 进入提交后的可观察事件。
   final Completer<void> commitStarted = Completer();
 
@@ -135,6 +138,7 @@ class _DelayedDrafts extends NoteLocalDraftRepository {
   }) async {
     if (!stageStarted.isCompleted) stageStarted.complete();
     await stageGate?.future;
+    if (stageFails) throw StateError('模拟原音暂存失败');
     return super.stageAudio(result, draftId: draftId, consent: consent);
   }
 
@@ -838,6 +842,223 @@ void main() {
       ),
       contains('A正文'),
     );
+  });
+
+  test('删除准备只暂存历史编辑和原音，不发布正文或丢弃草稿', () async {
+    // 删除目标是一篇正式笔记，草稿正文仍是本机私有修改。
+    final NoteEntryRecord note = (await repository.save(
+      const NoteDraft(
+        id: 'deleting',
+        body: '正式原文',
+        dayKey: '2026-10-15',
+        baseRevision: '',
+      ),
+    ))!;
+    await editor.open(note.id);
+    editor.edit(body: '删除前仍未发布的修改');
+    await editor.startRecording();
+    recorder.nextResult = await recording();
+    // 固定代次，准备过程不能清空或切换草稿。
+    final String localId = editor.draftId!;
+    await editor.prepareForDeletion({note.id});
+    expect(recorder.stops, 1);
+    expect(recorder.state.isActive, isFalse);
+    expect(editor.draftId, localId);
+    expect(editor.committing, isFalse);
+    expect((await repository.find(note.id))!.body, '正式原文');
+    expect((await editor.localDrafts.find(localId))!.body, '删除前仍未发布的修改');
+    expect(await editor.localDrafts.audio(localId), hasLength(1));
+    await repository.softDelete(note.id);
+    editor.acceptRemote(await repository.find(note.id));
+    expect(editor.frozen, isTrue);
+    expect((await editor.localDrafts.find(localId))!.discarded, isFalse);
+  });
+
+  test('删除其他笔记不会停止顶部未发布草稿的活动录音', () async {
+    editor.edit(body: '未发布顶部草稿');
+    await editor.startRecording();
+    // 顶部录音拥有独立笔记身份。
+    final String recordingNoteId = recorder.state.noteId!;
+    await editor.prepareForDeletion({'other-note'});
+    expect(recorder.stops, 0);
+    expect(recorder.state.noteId, recordingNoteId);
+    expect(recorder.state.isActive, isTrue);
+    expect(editor.committing, isFalse);
+  });
+
+  test('删除准备等待命中笔记的在途设备启动及其暂存队列', () async {
+    editor.dispose();
+    // 原音进入数据库前保持阻塞。
+    final _DelayedDrafts local = _DelayedDrafts(repository)
+      ..stageGate = Completer();
+    editor = NoteEditorController(
+      repository,
+      recorder,
+      explicitCommit: true,
+      localDraftRepository: local,
+    );
+    editor.edit(body: '待回收关联草稿');
+    recorder.startGate = Completer();
+    // 设备仍idle时保留删除目标身份。
+    final String noteId = editor.draft.id;
+    // 正在等待系统启动完成。
+    final Future<void> starting = editor.startRecording();
+    await recorder.startRequested.future;
+    recorder.nextResult = await recording();
+    // 删除不能在录音启动结果交付前返回。
+    bool prepared = false;
+    // 同时等待设备启动与原音暂存。
+    final Future<void> preparing = editor
+        .prepareForDeletion({noteId})
+        .then((_) => prepared = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(prepared, isFalse);
+    recorder.startGate!.complete();
+    await starting;
+    await local.stageStarted.future;
+    expect(prepared, isFalse);
+    local.stageGate!.complete();
+    await preparing;
+    expect(recorder.stops, 1);
+    expect(await local.audio(editor.draftId!), hasLength(1));
+  });
+
+  test('完成订阅已捕获原音暂存失败时，删除准备抛错且保留恢复能力', () async {
+    editor.dispose();
+    // 让完成事件订阅处理失败，异步队列本身仍正常结束。
+    final _DelayedDrafts local = _DelayedDrafts(repository)..stageFails = true;
+    editor = NoteEditorController(
+      repository,
+      recorder,
+      explicitCommit: true,
+      localDraftRepository: local,
+    );
+    editor.edit(body: '失败后不能继续删除');
+    await editor.startRecording();
+    recorder.nextResult = await recording();
+    await recorder.stop();
+    await local.stageStarted.future;
+    await expectLater(
+      editor.prepareForDeletion({editor.draft.id}),
+      throwsStateError,
+    );
+    expect(editor.committing, isFalse);
+    expect(recorder.acknowledged, isEmpty);
+    expect(await File('${directory.path}/audio.wav').exists(), isTrue);
+    expect((await editor.localDrafts.find(editor.draftId!))!.body, '失败后不能继续删除');
+    await editor.prepareForDeletion({'unrelated-note'});
+    expect(await editor.commit(), NoteCommitResult.failed);
+    expect(
+      (await editor.localDrafts.find(editor.draftId!))!.discarded,
+      isFalse,
+    );
+    local.stageFails = false;
+    recorder.pending = [await recording()];
+    await editor.recover();
+    await editor.prepareForDeletion({editor.draft.id});
+    expect(recorder.acknowledged, {'audio'});
+    expect(await editor.commit(), NoteCommitResult.committed);
+  });
+
+  test('已结束的图片暂存失败仍阻止关联删除，重试成功后可继续', () async {
+    editor.edit(body: '选图失败的本机草稿');
+    await expectLater(
+      editor.addImages(['${directory.path}/missing.png']),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(editor.imageAdding, isFalse);
+    await expectLater(
+      editor.prepareForDeletion({editor.draft.id}),
+      throwsStateError,
+    );
+    expect(editor.committing, isFalse);
+    await editor.prepareForDeletion({'unrelated-note'});
+    await editor.addImages([await imageFile('retry')]);
+    await editor.prepareForDeletion({editor.draft.id});
+    expect(await editor.images.staged(editor.draftId!), hasLength(1));
+  });
+
+  test('部分选图失败后成功保存结束旧代次，重开可准备删除', () async {
+    editor.edit(body: '可保存的正文与已暂存图片');
+    // 正式身份在发布后沿用，编辑草稿代次会重新分配。
+    final String noteId = editor.draft.id;
+    // 同次选图先成功一张，再遇到文件读取失败。
+    final String goodImage = await imageFile('partial-success');
+    await expectLater(
+      editor.addImages([goodImage, '${directory.path}/missing.png']),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(await editor.images.staged(editor.draftId!), hasLength(1));
+    await expectLater(editor.prepareForDeletion({noteId}), throwsStateError);
+    expect(await editor.commit(), NoteCommitResult.committed);
+    await editor.open(noteId);
+    await editor.prepareForDeletion({noteId});
+    expect((await repository.find(noteId))!.body, '可保存的正文与已暂存图片');
+    expect(await editor.images.published(noteId), hasLength(1));
+    expect(editor.committing, isFalse);
+  });
+
+  test('领域删除事务尚在排队时门禁持续阻止目标输入及录音启动', () async {
+    editor.edit(body: '删除前的本机内容');
+    // 领域事务由测试决定完成时点。
+    final Completer<void> actionGate = Completer();
+    // 可观察已经排空草稿并进入领域删除。
+    final Completer<void> actionEntered = Completer();
+    // 捕捉删除对应的当前身份。
+    final String noteId = editor.draft.id;
+    // 删除门禁应横跨领域异步任务的整个生命周期。
+    final Future<void> deleting = editor.prepareForDeletion(
+      {noteId},
+      action: () async {
+        actionEntered.complete();
+        await actionGate.future;
+      },
+    );
+    await actionEntered.future;
+    expect(editor.committing, isTrue);
+    editor.edit(body: '不能穿过删除门禁的输入');
+    await editor.startRecording();
+    expect(editor.draft.body, '删除前的本机内容');
+    expect(recorder.state.isActive, isFalse);
+    actionGate.complete();
+    await deleting;
+    expect(editor.committing, isFalse);
+  });
+
+  test('空标签仍执行领域删除且失败恢复门禁，无关录音持续活动', () async {
+    editor.edit(body: '其他笔记的录音');
+    await editor.startRecording();
+    // 空标签删除同样属于受控的领域操作。
+    bool actionRan = false;
+    await expectLater(
+      editor.prepareForDeletion(
+        {},
+        action: () async {
+          actionRan = true;
+          expect(editor.committing, isTrue);
+          expect(recorder.state.isActive, isTrue);
+          throw StateError('模拟领域删除回滚');
+        },
+      ),
+      throwsStateError,
+    );
+    expect(actionRan, isTrue);
+    expect(editor.committing, isFalse);
+    expect(recorder.state.isActive, isTrue);
+    expect(recorder.stops, 0);
+  });
+
+  test('删除无关笔记时正在请求设备的录音照常启动', () async {
+    editor.edit(body: '另一篇录音');
+    recorder.startGate = Completer();
+    // 录音权限请求已固定这篇身份。
+    final Future<void> starting = editor.startRecording();
+    await recorder.startRequested.future;
+    await editor.prepareForDeletion({'unrelated-note'});
+    recorder.startGate!.complete();
+    await starting;
+    expect(recorder.state.isActive, isTrue);
+    expect(recorder.stops, 0);
   });
 
   test('软删冻结本机草稿并阻止录音，恢复后可继续编辑和显式保存', () async {
