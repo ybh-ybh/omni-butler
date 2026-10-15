@@ -4,6 +4,7 @@ import 'dart:ui' show PathMetric;
 import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/shared/ui/omni_press_feedback.dart';
 
 /// 每日待办专用的完成复选框。
 class TodoCompletionCheckbox extends StatefulWidget {
@@ -152,25 +153,32 @@ class _TodoCompletionCheckboxState extends State<TodoCompletionCheckbox>
     // 未选中边框使用更清晰的品牌同色阶。
     final Color idleBorder = TodoCompletionCheckbox.idleBorderColorOf(context);
     // 按压轻微收缩；减少动态效果时以颜色提供反馈。
-    final double interactionScale = _pressed && !disableAnimations ? 0.96 : 1;
+    // Windows使用共享内容动画，Android保留原完成框按压。
+    final bool windows = Theme.of(context).platform == TargetPlatform.windows;
+    // 避免共享Windows反馈与旧缩放叠加。
+    final double interactionScale = !windows && _pressed && !disableAnimations
+        ? 0.96
+        : 1;
 
     return Semantics(
       checked: widget.value,
       enabled: enabled,
       label: widget.semanticLabel,
-      onTap: enabled ? () => widget.onChanged!(!widget.value) : null,
+      onTap: !windows && enabled
+          ? () => widget.onChanged!(!widget.value)
+          : null,
       child: SizedBox(
         width: tapSize.width,
         height: tapSize.height,
         child: Material(
           color: Colors.transparent,
-          child: InkWell(
+          child: OmniInkWell(
             key: const ValueKey<String>('todo-completion-interaction'),
             onTap: enabled ? () => widget.onChanged!(!widget.value) : null,
             onHover: _handleHover,
             onHighlightChanged: _handleHighlight,
             onFocusChange: _handleFocus,
-            excludeFromSemantics: true,
+            excludeFromSemantics: !windows,
             mouseCursor: enabled
                 ? SystemMouseCursors.click
                 : SystemMouseCursors.basic,

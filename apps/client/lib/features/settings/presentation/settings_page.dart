@@ -586,7 +586,7 @@ class _AndroidSettingsCategoryRow extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    return InkWell(
+    return OmniInkWell(
       key: ValueKey<String>(
         category == _SettingsCategory.home
             ? 'android-settings-home'
@@ -715,7 +715,7 @@ class _SettingsNavigationItem extends StatelessWidget {
       key: ValueKey<String>('settings-category-${category.name}'),
       color: selected ? colors.brandSoft : Colors.transparent,
       borderRadius: BorderRadius.circular(OmniRadius.panel),
-      child: InkWell(
+      child: OmniInkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(OmniRadius.panel),
         child: SizedBox(
@@ -783,7 +783,7 @@ class _CompactSettingsNavigation extends StatelessWidget {
           children: <Widget>[
             for (final _SettingsCategory category
                 in _SettingsCategory.values) ...<Widget>[
-              ChoiceChip(
+              OmniChoiceChip(
                 label: Text(category.label),
                 avatar: Icon(category.icon, size: OmniSize.icon),
                 selected: category == selectedCategory,

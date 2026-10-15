@@ -1088,11 +1088,11 @@ class _TodosPageState extends ConsumerState<TodosPage> {
             children: <Widget>[
               for (final TodoPriorityQuadrant quadrant
                   in todoPriorityQuadrantActionOrder)
-                SimpleDialogOption(
+                OmniSimpleDialogOption(
                   onPressed: quadrant == current
                       ? null
                       : () => Navigator.pop(context, quadrant),
-                  child: ListTile(
+                  child: OmniListTile(
                     enabled: quadrant != current,
                     leading: Icon(quadrant.icon),
                     title: Text(quadrant.actionLabel),
@@ -1140,7 +1140,7 @@ class _TodosPageState extends ConsumerState<TodosPage> {
             onPressed: () => Navigator.pop(context),
           ),
           if (todo.repeatSeriesId != null)
-            TextButton(
+            OmniTextButton(
               onPressed: () => Navigator.pop(context, TodoSeriesScope.single),
               child: const Text('仅本次'),
             ),
@@ -1245,7 +1245,7 @@ class _TodoViewBar extends StatelessWidget {
       );
     }
     // 进行中与完成历史切换。
-    final Widget selector = SegmentedButton<_TodoPageView>(
+    final Widget selector = OmniSegmentedButton<_TodoPageView>(
       showSelectedIcon: false,
       segments: <ButtonSegment<_TodoPageView>>[
         ButtonSegment<_TodoPageView>(
@@ -1269,7 +1269,7 @@ class _TodoViewBar extends StatelessWidget {
         selector,
         if (onReturnToQuadrants != null) ...<Widget>[
           const SizedBox(width: OmniSpacing.xs),
-          TextButton.icon(
+          OmniTextButton.icon(
             key: const ValueKey<String>('todo-return-quadrants'),
             onPressed: onReturnToQuadrants,
             icon: const Icon(Icons.arrow_back_rounded, size: 17),
@@ -1619,7 +1619,7 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                 children: <Widget>[
                   Material(
                     color: accent.withValues(alpha: 0.055),
-                    child: InkWell(
+                    child: OmniInkWell(
                       key: ValueKey<String>(
                         'todo-quadrant-heading-${quadrant.value}',
                       ),
@@ -3333,7 +3333,7 @@ class _QuadrantEmptyState extends StatelessWidget {
       child: Row(
         children: <Widget>[
           const Expanded(child: Text('暂无进行中任务')),
-          TextButton.icon(
+          OmniTextButton.icon(
             onPressed: onCreate,
             icon: const Icon(Icons.add_rounded, size: 16),
             label: const Text('添加'),

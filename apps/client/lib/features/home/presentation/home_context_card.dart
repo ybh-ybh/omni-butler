@@ -537,7 +537,7 @@ class _ExpandableContextSection extends StatelessWidget {
               ),
             ),
             const SizedBox(width: OmniSpacing.xs),
-            TextButton(
+            OmniTextButton(
               key: ValueKey<String>('home-context-open-$title'),
               onPressed: onOpen,
               style: TextButton.styleFrom(

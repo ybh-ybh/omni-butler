@@ -1062,7 +1062,7 @@ class _InventoryMoveSourceRow extends StatelessWidget {
         : '${record.quantity} 件';
     return Padding(
       padding: EdgeInsets.only(left: accessory && inherited ? 28 : 8, right: 8),
-      child: InkWell(
+      child: OmniInkWell(
         key: ValueKey<String>('inventory-move-item-${record.id}'),
         onTap: autoIncluded ? null : onToggle,
         borderRadius: BorderRadius.circular(OmniRadius.control),
@@ -1223,7 +1223,7 @@ class _InventoryMoveTargetPanel extends StatelessWidget {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-              TextButton.icon(
+              OmniTextButton.icon(
                 onPressed: () => TaxonomyManagerDialog.show(
                   context,
                   module: TaxonomyModule.inventory,

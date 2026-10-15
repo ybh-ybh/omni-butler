@@ -1,9 +1,9 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
-import 'package:omni_butler/shared/ui/omni_icon_button.dart';
 
 /// 根据触控密度与当前视口约束日历宽度。
 double _calendarWidth(BuildContext context) {
@@ -300,14 +300,14 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
           )
         : widget.style;
     if (widget.icon == null) {
-      return OutlinedButton(
+      return OmniOutlinedButton(
         focusNode: _triggerFocus,
         onPressed: widget.onChanged == null ? null : _toggleMenu,
         style: emphasisStyle,
         child: Text(widget.label, overflow: TextOverflow.ellipsis),
       );
     }
-    return OutlinedButton.icon(
+    return OmniOutlinedButton.icon(
       focusNode: _triggerFocus,
       onPressed: widget.onChanged == null ? null : _toggleMenu,
       style: emphasisStyle,
@@ -443,7 +443,7 @@ class _OmniCalendarPanel extends StatelessWidget {
       child: Row(
         children: <Widget>[
           Expanded(
-            child: TextButton(
+            child: OmniTextButton(
               onPressed: onToggleMonthGrid,
               style: TextButton.styleFrom(
                 foregroundColor: colors.ink,
@@ -544,7 +544,7 @@ class _OmniCalendarPanel extends StatelessWidget {
       child: Center(
         child: SizedBox.square(
           dimension: OmniDensity.isTouch(context) ? OmniSize.touch : 32,
-          child: TextButton(
+          child: OmniTextButton(
             focusNode: DateUtils.isSameDay(date, focusDate) ? dateFocus : null,
             onPressed: enabled ? () => onSelectDate(date) : null,
             style: ButtonStyle(
@@ -653,7 +653,7 @@ class _OmniCalendarPanel extends StatelessWidget {
               final bool selected = month == visibleMonth.month;
               return Padding(
                 padding: const EdgeInsets.all(4),
-                child: TextButton(
+                child: OmniTextButton(
                   onPressed: enabled ? () => onSelectMonth(month) : null,
                   style: TextButton.styleFrom(
                     foregroundColor: selected ? colors.brandStrong : colors.ink,
@@ -878,46 +878,59 @@ class _OmniTimePickerButtonState extends State<OmniTimePickerButton> {
   Widget _buildTimeItem(int minutes, OmniColors colors) {
     // 当前项是否被选中。
     final bool selected = minutes == _selectedMinutes;
-    return MenuItemButton(
-      focusNode: selected ? _timeFocus : null,
-      onPressed: widget.onChanged == null ? null : () => _selectTime(minutes),
-      style: ButtonStyle(
-        minimumSize: WidgetStatePropertyAll<Size>(Size(0, _itemHeight)),
-        fixedSize: WidgetStatePropertyAll<Size>(Size.fromHeight(_itemHeight)),
-        padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
-          EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
-        ),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        visualDensity: OmniDensity.isTouch(context)
-            ? VisualDensity.standard
-            : VisualDensity.compact,
-        alignment: Alignment.center,
-        foregroundColor: WidgetStatePropertyAll<Color>(
-          selected ? colors.accentInk : colors.ink,
-        ),
-        backgroundColor: WidgetStateProperty.resolveWith<Color?>((
-          Set<WidgetState> states,
-        ) {
-          if (selected) {
-            return colors.brand;
-          }
-          if (states.contains(WidgetState.hovered) ||
-              states.contains(WidgetState.focused)) {
-            return colors.paperSubtle;
-          }
-          return Colors.transparent;
-        }),
-        shape: WidgetStatePropertyAll<OutlinedBorder>(
-          RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(OmniRadius.control),
+    return OmniPressBinding(
+      enabled: widget.onChanged != null,
+      builder: (BuildContext context, OmniPressFeedback feedback) =>
+          MenuItemButton(
+            statesController: feedback.statesController,
+            focusNode: selected ? _timeFocus : null,
+            onPressed: widget.onChanged == null
+                ? null
+                : () {
+                    feedback.activate();
+                    _selectTime(minutes);
+                  },
+            style: ButtonStyle(
+              foregroundBuilder: feedback.foregroundBuilder,
+              minimumSize: WidgetStatePropertyAll<Size>(Size(0, _itemHeight)),
+              fixedSize: WidgetStatePropertyAll<Size>(
+                Size.fromHeight(_itemHeight),
+              ),
+              padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+                EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
+              ),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: OmniDensity.isTouch(context)
+                  ? VisualDensity.standard
+                  : VisualDensity.compact,
+              alignment: Alignment.center,
+              foregroundColor: WidgetStatePropertyAll<Color>(
+                selected ? colors.accentInk : colors.ink,
+              ),
+              backgroundColor: WidgetStateProperty.resolveWith<Color?>((
+                Set<WidgetState> states,
+              ) {
+                if (selected) {
+                  return colors.brand;
+                }
+                if (states.contains(WidgetState.hovered) ||
+                    states.contains(WidgetState.focused)) {
+                  return colors.paperSubtle;
+                }
+                return Colors.transparent;
+              }),
+              shape: WidgetStatePropertyAll<OutlinedBorder>(
+                RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(OmniRadius.control),
+                ),
+              ),
+              textStyle: WidgetStatePropertyAll<TextStyle>(
+                Theme.of(context).textTheme.bodyMedium!
+                    .copyWith(fontSize: 13, fontWeight: FontWeight.w400),
+              ),
+            ),
+            child: Text(_formatMinutes(minutes)),
           ),
-        ),
-        textStyle: WidgetStatePropertyAll<TextStyle>(
-          Theme.of(context).textTheme.bodyMedium!
-              .copyWith(fontSize: 13, fontWeight: FontWeight.w400),
-        ),
-      ),
-      child: Text(_formatMinutes(minutes)),
     );
   }
 
@@ -930,14 +943,14 @@ class _OmniTimePickerButtonState extends State<OmniTimePickerButton> {
           )
         : null;
     if (widget.icon == null) {
-      return OutlinedButton(
+      return OmniOutlinedButton(
         focusNode: _triggerFocus,
         onPressed: widget.onChanged == null ? null : _toggleMenu,
         style: style,
         child: Text(widget.label, overflow: TextOverflow.ellipsis),
       );
     }
-    return OutlinedButton.icon(
+    return OmniOutlinedButton.icon(
       focusNode: _triggerFocus,
       onPressed: widget.onChanged == null ? null : _toggleMenu,
       style: style,

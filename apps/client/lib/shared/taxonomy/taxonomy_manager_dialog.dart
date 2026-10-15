@@ -608,7 +608,7 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
                 ),
                 const SizedBox(width: OmniSpacing.sm),
                 Expanded(
-                  child: InkWell(
+                  child: OmniInkWell(
                     onTap: () => _startRenaming(entry),
                     borderRadius: BorderRadius.circular(OmniRadius.control),
                     child: Padding(
@@ -816,7 +816,7 @@ class _ColorPalette extends StatelessWidget {
                   label: item.$1,
                   selected: selected,
                   button: true,
-                  child: InkWell(
+                  child: OmniInkWell(
                     borderRadius: BorderRadius.circular(OmniRadius.pill),
                     onTap: () => Navigator.of(context).pop(item.$2),
                     child: SizedBox(

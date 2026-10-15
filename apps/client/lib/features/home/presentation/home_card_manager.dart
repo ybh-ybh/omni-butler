@@ -293,7 +293,7 @@ class HomeCardManagerContent extends ConsumerWidget {
                         ),
                         subtitle: Align(
                           alignment: Alignment.centerLeft,
-                          child: TextButton(
+                          child: OmniTextButton(
                             onPressed: onOpenFeatures,
                             child: const Text('前往功能管理'),
                           ),

@@ -439,7 +439,7 @@ class _FingerprintDayRow extends StatelessWidget {
       children: <Widget>[
         SizedBox(
           width: 72,
-          child: InkWell(
+          child: OmniInkWell(
             borderRadius: BorderRadius.circular(OmniRadius.control),
             onTap: onOpenDay,
             child: Padding(
@@ -464,7 +464,7 @@ class _FingerprintDayRow extends StatelessWidget {
                   color: colors.paperSubtle,
                   borderRadius: BorderRadius.circular(OmniRadius.control),
                   clipBehavior: Clip.antiAlias,
-                  child: InkWell(
+                  child: OmniInkWell(
                     onTap: onOpenDay,
                     child: Stack(
                       children: <Widget>[
@@ -555,7 +555,7 @@ class _FingerprintRecordSegment extends StatelessWidget {
         message: description,
         child: Material(
           color: Colors.transparent,
-          child: InkWell(
+          child: OmniInkWell(
             onTap: onTap,
             borderRadius: BorderRadius.circular(OmniRadius.tiny),
             child: Padding(
@@ -835,7 +835,7 @@ class _MonthFingerprintCell extends StatelessWidget {
         ),
       ),
       clipBehavior: Clip.antiAlias,
-      child: InkWell(
+      child: OmniInkWell(
         onTap: onTap,
         child: Padding(
           padding: EdgeInsets.all(showDuration ? OmniSpacing.xs : 4),
@@ -1625,7 +1625,7 @@ class _DayTimelineBlock extends StatelessWidget {
           color: background,
           borderRadius: BorderRadius.circular(OmniRadius.tiny),
           clipBehavior: Clip.antiAlias,
-          child: InkWell(
+          child: OmniInkWell(
             onTap: onTap,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,

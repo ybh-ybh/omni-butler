@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
+import 'omni_press_feedback.dart';
+
 /// Omni Butler 按钮视觉类型。
 enum OmniButtonVariant {
   /// 品牌色主要操作。
@@ -186,30 +188,52 @@ class OmniButton extends StatelessWidget {
       icon: icon,
       loading: loading,
     );
-    // 按钮使用 Flutter 的焦点、键盘、语义与点击取消能力。
-    final Widget button = switch (variant) {
-      OmniButtonVariant.primary ||
-      OmniButtonVariant.pagePrimary ||
-      OmniButtonVariant.danger => FilledButton(
-        onPressed: effectiveOnPressed,
-        style: style,
-        child: content,
-      ),
-      OmniButtonVariant.secondary => OutlinedButton(
-        onPressed: effectiveOnPressed,
-        style: style,
-        child: content,
-      ),
-      OmniButtonVariant.text => TextButton(
-        onPressed: effectiveOnPressed,
-        style: style,
-        child: content,
-      ),
-    };
-    return Semantics(
-      liveRegion: loading,
-      value: loading ? '正在处理' : null,
-      child: button,
+    return OmniPressBinding(
+      enabled: effectiveOnPressed != null,
+      builder: (context, feedback) {
+        // 点击立即执行业务，反馈仅补足快速点击的视觉帧。
+        final VoidCallback? activate = effectiveOnPressed == null
+            ? null
+            : () {
+                feedback.activate();
+                effectiveOnPressed();
+              };
+        // 前景构建器只缩放图标与文字。
+        final ButtonStyle pressedStyle = style.copyWith(
+          foregroundBuilder: feedback.foregroundBuilder,
+        );
+        // 按钮使用 Flutter 的焦点、键盘、语义与点击取消能力。
+        final Widget button = switch (variant) {
+          OmniButtonVariant.primary ||
+          OmniButtonVariant.pagePrimary ||
+          OmniButtonVariant.danger => FilledButton(
+            clipBehavior: Clip.none,
+            onPressed: activate,
+            statesController: feedback.statesController,
+            style: pressedStyle,
+            child: content,
+          ),
+          OmniButtonVariant.secondary => OutlinedButton(
+            clipBehavior: Clip.none,
+            onPressed: activate,
+            statesController: feedback.statesController,
+            style: pressedStyle,
+            child: content,
+          ),
+          OmniButtonVariant.text => TextButton(
+            clipBehavior: Clip.none,
+            onPressed: activate,
+            statesController: feedback.statesController,
+            style: pressedStyle,
+            child: content,
+          ),
+        };
+        return Semantics(
+          liveRegion: loading,
+          value: loading ? '正在处理' : null,
+          child: button,
+        );
+      },
     );
   }
 }

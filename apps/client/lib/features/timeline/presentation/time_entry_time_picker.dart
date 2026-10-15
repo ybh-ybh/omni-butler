@@ -184,7 +184,7 @@ class _TimeEntryEndpointCardState extends State<TimeEntryEndpointCard> {
               selected: widget.selected,
               button: true,
               label: '调整$label时间',
-              child: InkWell(
+              child: OmniInkWell(
                 key: ValueKey<String>('time-${widget.endpoint}-select'),
                 onTap: widget.enabled ? widget.onSelect : null,
                 child: timeContent,

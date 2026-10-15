@@ -828,7 +828,7 @@ class _InventoryCreateSplitButtonState
               label: '新增物品',
               onTap: widget.onCreate,
               child: ExcludeSemantics(
-                child: InkWell(
+                child: OmniInkWell(
                   key: const ValueKey<String>('inventory-mobile-create'),
                   onTap: widget.onCreate,
                   child: SizedBox(
@@ -1670,7 +1670,7 @@ class _InventoryFilterRow extends StatelessWidget {
                 final String chipLabel = value == null
                     ? '全部$label${showCount ? ' $totalCount' : ''}'
                     : '$value${showCount ? ' ${counts[value] ?? 0}' : ''}';
-                return ChoiceChip(
+                return OmniChoiceChip(
                   key: ValueKey<String>(
                     'inventory-${label == '标签' ? 'tag' : 'location'}-${value ?? 'all'}',
                   ),
@@ -2920,7 +2920,7 @@ class _InventoryCard extends ConsumerWidget {
   }) {
     return Material(
       color: colors.paper,
-      child: InkWell(
+      child: OmniInkWell(
         key: ValueKey<String>('inventory-card-${item.id}'),
         onTap: onOpen,
         highlightColor: Theme.of(context).platform == TargetPlatform.android

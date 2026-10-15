@@ -3,6 +3,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:omni_butler/shared/ui/omni_press_feedback.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
@@ -42,6 +43,7 @@ void main() {
 
     await tester.tap(find.text('工作'));
     await _pumpUi(tester);
+
     await tester.enterText(find.byType(TextField), '专注');
     await tester.tap(find.text('保存'));
     await _pumpUi(tester);
@@ -256,6 +258,14 @@ void main() {
     await _pumpUi(tester);
     await tester.tap(find.text('工作'));
     await _pumpUi(tester);
+    // 先完成内容回弹与输入焦点过渡，再记录静止画面。
+    await tester.pumpAndSettle();
+    // 所有操作内容已回到原尺寸，不把回弹中间帧纳入基线。
+    for (final OmniPressContent content in tester.widgetList<OmniPressContent>(
+      find.byType(OmniPressContent),
+    )) {
+      expect(content.controller.scale, 1);
+    }
 
     await expectLater(
       find.byType(Dialog),

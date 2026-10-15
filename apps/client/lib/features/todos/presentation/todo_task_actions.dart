@@ -72,7 +72,7 @@ class _TodoTaskContextMenuState extends State<TodoTaskContextMenu> {
       // 指针在覆盖层中的实际位置。
       final Offset position = overlay.globalToLocal(globalPosition);
       // 用户选择的动作，取消菜单时为空。
-      final String? action = await showMenu<String>(
+      final String? action = await showOmniMenu<String>(
         context: context,
         position: RelativeRect.fromRect(
           position & Size.zero,
@@ -83,14 +83,6 @@ class _TodoTaskContextMenuState extends State<TodoTaskContextMenu> {
           minWidth: OmniDropdownMetrics.actionMenuMinWidth,
           maxWidth: OmniDropdownMetrics.actionMenuMaxWidth,
         ),
-        popUpAnimationStyle: OmniMotion.reduce(context)
-            ? AnimationStyle.noAnimation
-            : const AnimationStyle(
-                duration: OmniMotion.fast,
-                reverseDuration: OmniMotion.fast,
-                curve: OmniMotion.standardCurve,
-                reverseCurve: Curves.easeInCubic,
-              ),
         items: <PopupMenuEntry<String>>[
           OmniPopupMenuItem<String>(
             value: 'edit',

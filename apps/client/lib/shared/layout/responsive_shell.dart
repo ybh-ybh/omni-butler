@@ -643,31 +643,45 @@ class _RailDestination extends StatelessWidget {
       child: Material(
         key: ValueKey<String>('navigation-${destination.path}'),
         color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(OmniRadius.control),
-          child: SizedBox(
-            width: 56,
-            height: 48,
-            child: Center(
-              child: Container(
-                width: 32,
-                height: 32,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: selected
-                      ? chrome.selectedBackground
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(OmniRadius.control),
-                ),
-                child: Icon(
-                  selected ? destination.selectedIcon : destination.icon,
-                  size: OmniSize.navigationIcon,
-                  color: selected ? chrome.selectedForeground : chrome.muted,
+        child: OmniPressBinding(
+          builder: (BuildContext context, OmniPressFeedback feedback) =>
+              InkWell(
+                statesController: feedback.statesController,
+                onTap: () {
+                  feedback.activate();
+                  onTap();
+                },
+                borderRadius: BorderRadius.circular(OmniRadius.control),
+                child: SizedBox(
+                  width: 56,
+                  height: 48,
+                  child: Center(
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? chrome.selectedBackground
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(OmniRadius.control),
+                      ),
+                      child: OmniPressContent(
+                        controller: feedback,
+                        child: Icon(
+                          selected
+                              ? destination.selectedIcon
+                              : destination.icon,
+                          size: OmniSize.navigationIcon,
+                          color: selected
+                              ? chrome.selectedForeground
+                              : chrome.muted,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
         ),
       ),
     );
@@ -749,7 +763,7 @@ class _CompactDestination extends StatelessWidget {
     return Material(
       key: ValueKey<String>('navigation-${destination.path}'),
       color: Colors.transparent,
-      child: InkWell(
+      child: OmniInkWell(
         onTap: onTap,
         child: Semantics(
           selected: selected,
@@ -875,7 +889,7 @@ class _SearchTrigger extends StatelessWidget {
         borderRadius: BorderRadius.circular(OmniRadius.control),
         side: BorderSide(color: colors.line),
       ),
-      child: InkWell(
+      child: OmniInkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(OmniRadius.control),
         child: SizedBox(
@@ -1003,7 +1017,7 @@ class _SidebarDestination extends StatelessWidget {
       key: ValueKey<String>('navigation-${destination.path}'),
       color: selected ? chrome.selectedBackground : Colors.transparent,
       borderRadius: BorderRadius.circular(OmniRadius.control),
-      child: InkWell(
+      child: OmniInkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(OmniRadius.control),
         child: SizedBox(

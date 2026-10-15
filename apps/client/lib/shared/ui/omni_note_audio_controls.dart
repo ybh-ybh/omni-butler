@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
+import 'omni_press_feedback.dart';
+
 /// 音频条的紧凑文字操作，悬停浅灰底并显示手形光标。
 class OmniNoteAudioLink extends StatelessWidget {
   /// 操作名称同时供键盘及读屏使用。
@@ -42,69 +44,80 @@ class OmniNoteAudioLink extends StatelessWidget {
   Widget build(BuildContext context) {
     // 表面与主题操作色跟随当前明暗配色。
     final OmniColors colors = OmniColors.of(context);
-    return TextButton(
-      onPressed: onPressed,
-      style: ButtonStyle(
-        foregroundColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.disabled)
-              ? colors.muted.withValues(alpha: 0.45)
-              : hoverForeground != null &&
+    return OmniPressBinding(
+      enabled: onPressed != null,
+      builder: (context, feedback) => TextButton(
+        clipBehavior: Clip.none,
+        onPressed: onPressed == null
+            ? null
+            : () {
+                feedback.activate();
+                onPressed!();
+              },
+        statesController: feedback.statesController,
+        style: ButtonStyle(
+          foregroundBuilder: feedback.foregroundBuilder,
+          foregroundColor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.disabled)
+                ? colors.muted.withValues(alpha: 0.45)
+                : hoverForeground != null &&
+                      (states.contains(WidgetState.hovered) ||
+                          states.contains(WidgetState.focused))
+                ? hoverForeground!
+                : color ?? colors.brand,
+          ),
+          backgroundColor: WidgetStateProperty.resolveWith(
+            (states) =>
+                showHoverBackground &&
                     (states.contains(WidgetState.hovered) ||
+                        states.contains(WidgetState.pressed) ||
                         states.contains(WidgetState.focused))
-              ? hoverForeground!
-              : color ?? colors.brand,
-        ),
-        backgroundColor: WidgetStateProperty.resolveWith(
-          (states) =>
-              showHoverBackground &&
-                  (states.contains(WidgetState.hovered) ||
-                      states.contains(WidgetState.pressed) ||
-                      states.contains(WidgetState.focused))
-              ? colors.mist
-              : Colors.transparent,
-        ),
-        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-        minimumSize: const WidgetStatePropertyAll(Size(0, OmniSpacing.xl)),
-        padding: const WidgetStatePropertyAll(
-          EdgeInsets.symmetric(
-            horizontal: OmniSpacing.xs,
-            vertical: OmniSpacing.xxs,
+                ? colors.mist
+                : Colors.transparent,
           ),
-        ),
-        textStyle: WidgetStatePropertyAll(
-          Theme.of(context).textTheme.bodySmall?.copyWith(
-            fontSize: 12,
-            height: 4 / 3,
-            fontWeight: FontWeight.normal,
+          overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+          minimumSize: const WidgetStatePropertyAll(Size(0, OmniSpacing.xl)),
+          padding: const WidgetStatePropertyAll(
+            EdgeInsets.symmetric(
+              horizontal: OmniSpacing.xs,
+              vertical: OmniSpacing.xxs,
+            ),
           ),
-        ),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        visualDensity: VisualDensity.standard,
-        mouseCursor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.disabled)
-              ? SystemMouseCursors.basic
-              : SystemMouseCursors.click,
-        ),
-        shape: const WidgetStatePropertyAll(
-          RoundedRectangleBorder(
-            borderRadius: BorderRadius.all(Radius.circular(OmniRadius.tiny)),
+          textStyle: WidgetStatePropertyAll(
+            Theme.of(context).textTheme.bodySmall?.copyWith(
+              fontSize: 12,
+              height: 4 / 3,
+              fontWeight: FontWeight.normal,
+            ),
           ),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.standard,
+          mouseCursor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.disabled)
+                ? SystemMouseCursors.basic
+                : SystemMouseCursors.click,
+          ),
+          shape: const WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.all(Radius.circular(OmniRadius.tiny)),
+            ),
+          ),
+          animationDuration: OmniMotion.duration(context, OmniMotion.fast),
         ),
-        animationDuration: OmniMotion.duration(context, OmniMotion.fast),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (leadingIcon != null) ...[
-            Icon(leadingIcon, size: 12),
-            const SizedBox(width: OmniSpacing.xxs),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (leadingIcon != null) ...[
+              Icon(leadingIcon, size: 12),
+              const SizedBox(width: OmniSpacing.xxs),
+            ],
+            Text(label),
+            if (trailingIcon != null) ...[
+              const SizedBox(width: OmniSpacing.xxs),
+              Icon(trailingIcon, size: 12),
+            ],
           ],
-          Text(label),
-          if (trailingIcon != null) ...[
-            const SizedBox(width: OmniSpacing.xxs),
-            Icon(trailingIcon, size: 12),
-          ],
-        ],
+        ),
       ),
     );
   }

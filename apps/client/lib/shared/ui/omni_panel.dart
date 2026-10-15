@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
+import 'omni_press_feedback.dart';
+
 /// 为指定面板提供内部滚动控制器。
 class OmniPanelScrollScope extends InheritedWidget {
   /// 面板内容使用的滚动控制器。
@@ -58,6 +60,9 @@ class OmniPanel extends StatelessWidget {
   /// 可选点击回调。
   final VoidCallback? onTap;
 
+  /// 可选双击操作，与行内按钮共享原生手势排他规则。
+  final GestureTapCallback? onDoubleTap;
+
   /// 是否裁剪面板内容。
   final Clip clipBehavior;
 
@@ -74,6 +79,7 @@ class OmniPanel extends StatelessWidget {
     this.padding = const EdgeInsets.all(OmniSpacing.md),
     this.margin,
     this.onTap,
+    this.onDoubleTap,
     this.clipBehavior = Clip.antiAlias,
     this.flat = false,
     this.showBorder = true,
@@ -172,8 +178,9 @@ class OmniPanel extends StatelessWidget {
                   ? BorderSide(color: colors.line)
                   : BorderSide.none,
             ),
-      child: InkWell(
+      child: OmniInkWell(
         onTap: onTap,
+        onDoubleTap: onDoubleTap,
         hoverColor: colors.ink.withValues(alpha: 0.04),
         highlightColor: colors.ink.withValues(alpha: 0.08),
         focusColor: colors.brand.withValues(alpha: 0.12),
@@ -470,7 +477,7 @@ class OmniListRow extends StatelessWidget {
       color: Colors.transparent,
       borderRadius: borderRadius,
       clipBehavior: borderRadius == null ? Clip.none : Clip.antiAlias,
-      child: InkWell(
+      child: OmniInkWell(
         onTap: onTap,
         borderRadius: borderRadius,
         hoverColor: colors.ink.withValues(alpha: 0.04),

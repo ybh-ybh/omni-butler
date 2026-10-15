@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
+import 'omni_press_feedback.dart';
+
 /// 为已有长按条目提供触点扩散与轻微缩放，保留原点击和菜单行为。
 class OmniPressSurface extends StatefulWidget {
   /// 原条目及其独立操作按钮。
@@ -192,6 +194,36 @@ class _OmniPressSurfaceState extends State<OmniPressSurface>
   /// 保持手势宿主的原尺寸，绘制与缩放仅作用于可见条目。
   @override
   Widget build(BuildContext context) {
+    if (Theme.of(context).platform == TargetPlatform.windows) {
+      return OmniPressBinding(
+        enabled: widget.enabled && widget.onSecondaryTapUp != null,
+        builder: (context, secondary) => OmniSecondaryPressScope(
+          controller: secondary,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            excludeFromSemantics: widget.excludeFromSemantics,
+            onTap: widget.enabled ? widget.onTap : null,
+            onSecondaryTapDown:
+                widget.enabled && widget.onSecondaryTapUp != null
+                ? (_) => secondary.setPressed(true)
+                : null,
+            onSecondaryTapUp: widget.enabled && widget.onSecondaryTapUp != null
+                ? (details) {
+                    secondary.setPressed(false);
+                    secondary.activate();
+                    widget.onSecondaryTapUp!(details);
+                  }
+                : null,
+            onSecondaryTapCancel:
+                widget.enabled && widget.onSecondaryTapUp != null
+                ? secondary.cancel
+                : null,
+            onLongPressStart: widget.enabled ? widget.onLongPressStart : null,
+            child: widget.child,
+          ),
+        ),
+      );
+    }
     // 新按下反馈只覆盖启用中的安卓条目。
     final bool feedback = _android && widget.enabled;
     return GestureDetector(

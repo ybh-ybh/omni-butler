@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:drift/drift.dart' hide Column;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -589,7 +590,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
                   if (mounted) setState(() => _range = value ?? 'all');
                 },
               ),
-              FilterChip(
+              OmniFilterChip(
                 label: const Text('未打标签'),
                 selected: _untagged,
                 onSelected: (value) => setState(() {
@@ -600,7 +601,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
               ...taxonomy
                   .where((item) => item.kind == 'tag' && item.deletedAt == null)
                   .map(
-                    (item) => FilterChip(
+                    (item) => OmniFilterChip(
                       label: Text(item.name),
                       selected: _tagFilter.contains(item.id),
                       onSelected: (selected) => setState(() {
@@ -669,7 +670,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
                       ),
                     Material(
                       type: MaterialType.transparency,
-                      child: ListTile(
+                      child: OmniListTile(
                         selected: note.id == _editor?.draft.id,
                         title: Text(
                           note.body.trim().isEmpty
@@ -963,7 +964,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
               children: taxonomy
                   .where((item) => item.kind == 'tag' && item.deletedAt == null)
                   .map(
-                    (item) => FilterChip(
+                    (item) => OmniFilterChip(
                       label: Text(item.name),
                       selected: editor.draft.tags.contains(item.id),
                       onSelected: editor.frozen || editor.committing
@@ -1188,7 +1189,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
               : ListView(
                   children: versions
                       .map(
-                        (version) => ListTile(
+                        (version) => OmniListTile(
                           title: Text(
                             version.body.isEmpty ? '内容已清空' : version.body,
                             maxLines: 5,

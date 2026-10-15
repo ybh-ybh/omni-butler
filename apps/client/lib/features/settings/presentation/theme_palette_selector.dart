@@ -122,7 +122,7 @@ class _PaletteOption extends StatelessWidget {
       child: Tooltip(
         message: palette.label,
         excludeFromSemantics: true,
-        child: InkWell(
+        child: OmniInkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(OmniRadius.control),
           child: SizedBox(

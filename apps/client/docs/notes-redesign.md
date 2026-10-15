@@ -1,8 +1,10 @@
 # Windows 笔记重构交付与验证
 
-更新：2026-10-14。需求以 [笔记 PRD v2.9](../../../spec/笔记功能PRD.md) 为准，本轮没有部署正式服务、操作真实用户数据库或启动新的付费转写。
+更新：2026-10-15。需求以 [笔记 PRD v2.10](../../../spec/笔记功能PRD.md) 为准，本轮没有部署正式服务、操作真实用户数据库或启动新的付费转写。
 
 ## 实现
+
+v2.10 输入标签合并为单行，超宽横向滚动。选中移到最前，取消回到未选区规范位置，两个分区内均保持管理器原顺序，不写回持久排序。复用原生Flex测量自然宽高并插值实际布局位置，每个标签保留同一语义父节点，避免改序时重挂；读屏及键盘顺序同步。约220ms移位和显隐均可从当前画面反向，减少动画即时更新；已选常驻、未选井号展开及草稿保存协议沿用。
 
 v2.9 Windows输入框去掉管理标签按钮，侧栏原排序入口改为管理标签，沿用现有新增／改名／删除／拖动排序管理器。输入标签使用与物品筛选一致的紧凑圆角、描边和无勾选外观，保留多选和笔记主题色。已选常驻；未选通过井号显示或隐藏，220ms高度、透明度与轻微缩放可反向打断；隐藏立即停用命中、焦点和读屏。当前草稿和正式关联继续使用原有保存协议，Android呈现不变。
 
@@ -31,6 +33,8 @@ Windows 文字与原音只写本机草稿，发布／保存才原子提升为正
 笔记类别只在notes模块退休。回收站查询／清空支持general、notes、all；到期清理覆盖all。SQLite19、同步schema4、本机快照4、服务器迁移协议3分别管理；旧队列身份及原始负载摘要不改，服务端执行副本兼容退休类别。草稿原音备份和换服复制使用独立校验文件，选择服务器数据不会混入旧源草稿。
 
 ## 验证
+
+2026-10-15 v2.10：134项笔记回归通过（`build/notes-tag-row-regression.log`）；新增普通／减少动画的单行排序、70ms中途取消、精确归位、语义节点身份及700dp／1.6字号长标签横滚回归通过。静态分析无问题，UI样式检查28项受控例外通过。原生探针增加选中／中途取消标签，真实Windows辅助功能桥已启用，20轮完成、AXTree错误0、无PROBE_FAILURE（`build/notes-tag-row-native/{stdout,stderr}.log`）。生产Debug 17.6秒、Release 56.0秒构建完成，入口均为`lib/main.dart`；探针仅保留在独立build/notes-tag-row-native目录。
 
 - v2.9专项155项全部通过（70秒），包括新建草稿预选常驻、多选显隐、反向与减少动画、隐藏语义排除、显式发布关联、侧栏管理／查询／改名删除及共享控件回归。最终静态分析无问题，样式仍44项受控例外；日志`build/notes-tags-ax-regression.log`、`build/notes-tags-ax-analyze.log`、`build/notes-tags-ax-style.log`。
 - 原生Windows辅助功能桥已通过WM_GETOBJECT开启：相邻Tooltip负向对照20轮产生136条同类AXTree错误，使用边界后20轮0条；生产NotesPage多篇长文、标签与正文显隐、提示、编辑／取消、侧栏折叠、视口裁剪20轮0条。均有`PROBE_NATIVE_AX_ACTIVE:true`及`PROBE_COMPLETE`，同时检查stdout、stderr；不是仅以程序退出判断通过。日志`build/notes-ax-anchors-before.*.log`、`notes-ax-anchors-after.*.log`、`notes-ax-notes-after.*.log`。全部数据为进程内存与私有mock偏好，不读用户笔记，不启用设备或识别。
@@ -86,6 +90,8 @@ flutter build windows --release --no-pub
 服务端常规复验（在apps/server执行）：`npm test`、`npm run build`。数据库集成必须指向独占测试PostgreSQL，不能将真实业务数据库地址用于测试。
 
 ## 中文预览
+
+v2.10生产根应用预览在`apps/client/build/notes-tag-row-preview`：`windows-tags-single-row.png`、`windows-tags-selected-first.png`、`windows-tags-single-row-narrow.png`，已核对单行、选中前置及长名称横滚。
 
 v2.8预览位于`apps/client/build/notes-body-edit-preview`：`windows-body-collapsed.png`、`windows-body-expanded.png`、`windows-body-hover.png`、`windows-body-switched.png`及`windows-edit-audio-collapsed.png`、`windows-edit-audio-expanded.png`。来自生产根应用，编辑态已等待原音核验并聚焦正文，能检查主题轮廓、字数、取消和录音四个操作。
 

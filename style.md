@@ -28,9 +28,11 @@
 | 图标操作 | `OmniIconButton` | 提供 tooltip 或明确的语义标签；不可只有悬停才能操作 |
 | 内容卡片、分组列表 | `OmniPanel`、`OmniListPanel`、`OmniListRow` | 保留固定卡头与内部滚动契约，避免无界布局中的 Expanded |
 | Android 已有长按条目的按下反馈 | `OmniPressSurface` | 手指落下即从触点扩散中性灰并轻缩小；保留点击、长按菜单和行内按钮 |
+| Windows 内容按压 | `OmniPressBinding`、`OmniPressContent`、`OmniInkWell` | 使用原控件状态，只缩文字、图标及可点击内容；Material、hover、边框、布局和命中不缩放 |
+| 原生按钮与选择行适配 | `OmniTextButton`、`OmniOutlinedButton`、`OmniFilledButton`、`OmniListTile`、`OmniChoiceChip`、`OmniFilterChip`、`OmniSegmentedButton` | 保留原主题、参数、业务时序与Android呈现；原生按钮必须保留原裁剪，避免foregroundBuilder改变静止边缘 |
 | 文本、搜索、表单输入 | `OmniTextField`、`OmniTextFormField` | 由 Flutter 保留文本编辑、输入法、焦点和 Form 行为 |
 | 布尔选择、互斥选项 | `OmniCheckbox`、`OmniRadioListTile`、`OmniSwitch` | 勾选表示选择/完成；开关表示立即生效的设置 |
-| 下拉与菜单 | `OmniDropdownButton`、`OmniDropdownButtonFormField`、`OmniPopupMenuButton` | 保留选中标识、禁用态、键盘操作与关闭后焦点恢复 |
+| 下拉与菜单 | `OmniDropdownButton`、`OmniDropdownButtonFormField`、`OmniPopupMenuButton`、`showOmniMenu` | 操作菜单统一入口；下拉面板样式沿用，只增加按压；保留选中、禁用、键盘及焦点恢复 |
 | 日期与时间 | `OmniDatePickerButton`、`OmniTimePickerButton` | 通过应用浮层选择；禁用日期与当前日期含义不同 |
 | 分段切换 | `OmniSlidingSegmentedControl` | 需要跟手指示器时使用连续索引；保留既有横滑协调 |
 | 编辑与确认 | `showOmniDialog`、`OmniDialogScaffold`、`OmniSideSheetScaffold` | 不绕过 Windows 应用内弹窗路径；操作区允许换行 |
@@ -132,6 +134,13 @@ OmniButton(
 | 错误 | 靠近问题来源说明，允许修正或重试 |
 
 - 同一浮层进入和退出保持空间关系；菜单从触发位置展开。
+- Windows操作与上下文菜单使用当前窗口内的统一PopupRoute：12dp圆角、主题1dp边框、轻阴影、4dp内边距、默认160–280dp宽；标准行至少36dp，图标16dp、文字14dp、图文间距8dp、水平留白12dp。多行管理切换和颜色网格保留业务内容与尺寸。
+- 操作菜单整体淡入并从0.96到1，进入150ms／退出120ms；行悬停100ms，普通项浅灰、危险项浅红、8dp圆角，禁用项无hover。进入不逐行展开，关闭开始就禁止重复点击、聚焦和语义操作；鼠标仅高亮当前行，键盘显示当前焦点。窗口边缘避让、滚动及焦点恢复必须保留。
+- Windows全部可点击控件统一内容按压0.97／90ms压下／160ms恢复，使用easeOutCubic；快速有效点击补足可见压缩，完整按住后直接恢复，不补播第二次压下。业务回调按原时机执行，不能等待动画。变换从当前值接续，取消／禁用／卸载清理反馈，减少动画只保留颜色与焦点反馈。
+- Windows右键沿用相同内容按压；上下文手势通过`OmniSecondaryPressScope`交给最近内容层，特殊整行用`OmniSecondaryPressContent`标记边界，同一反馈只消费一次。背景和热区不缩放，菜单按原时机打开；菜单项右键只反馈，不执行左键业务。
+- hover退场必须保留底色RGB，仅渐变透明度；不能与透明黑色插值。验收须检查跨行和反向切换的实际中间帧，普通及危险行均不得短暂闪暗。
+- 原生按钮通过WidgetStatesController及foregroundBuilder接入；InkWell沿用原识别器和嵌套排他，行内按钮不带动父行。Checkbox、Radio与选择Chip保持唯一操作节点和组导航；已有完成框缩放不叠加，热力图以当前hover尺度为基准。输入区、滚动条、连续拖动滑块、分隔线及坐标操作区不缩放。
+- 表单下拉和日期时间面板只接点击反馈；文本编辑菜单、系统托盘和系统原生窗口沿用原呈现。Android已有长按扩散、缩放和触觉规则继续适用。
 - Android 首页与待办的普通父项、子项、进度项，以及紧凑管理的物品和会员行，使用统一按下反馈。扩散圆心固定在实际触点，灰色逐渐加深并按原轮廓裁剪；只缩放视觉，不改变占位和命中尺寸。松手、滚动取消和菜单打开后淡出恢复，扩散不倒放，重复释放不重新计时。
 - 新反馈只替换这些条目的旧按下高亮，保留行内按钮的独立反馈与业务。Android 宽屏已有任务长按同样覆盖；其他控件不自动接入。减少动画时保留即时静态灰色，不执行缩放与扩散；参数统一来自主题与 `OmniMotion`。
 - Android 触屏长按触发菜单时请求一次系统长按振动反馈，遵循系统触觉设置；短按、取消、禁用和松手不额外振动，减少动画不关闭触觉反馈。
@@ -163,4 +172,5 @@ OmniButton(
 - `flutter test tool/ui_pages_preview_test.dart` 使用内存数据库和虚构数据输出七路由、事件编辑器及分类管理器的中文预览。它不会启动正式应用的同步、通知或自动业务服务。
 - 中文字体与图标由 `OMNI_UI_FONT`、`OMNI_UI_ICONS` 指定；本机默认使用 Windows 微软雅黑和 Flutter SDK Material 图标。预览不把平台中文字体提交为项目资产。
 - 常规 golden 使用测试字体核对结构，中文预览核对实际文字；两者用途不同。按图审查后才能更新基线。
+- `tool/windows_interaction_probe.dart`提供独立Windows原生窗口、真实Pointer／KeyData轨迹、AX桥及中文动效截图；只使用内存状态，不启动生产数据库、偏好、设备或同步。`OMNI_INTERACTION_PROBE_OUTPUT`指定证据目录，`OMNI_INTERACTION_PROBE_DARK`切换明暗。
 - `tool/check_ui_style.dart` 是源码边界检查，支持常用原生控件族、具名构造和颜色/圆角字面量；它不替代代码审查或实际渲染验证。例外按文件和类型设上限，减少后必须同步收紧。

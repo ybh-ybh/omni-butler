@@ -266,7 +266,9 @@ void main() {
     );
 
     // 共享开关列表项内部使用的列表项。
-    final ListTile listTile = tester.widget<ListTile>(find.byType(ListTile));
+    final ListTile listTile = tester.widget<ListTile>(
+      find.byWidgetPredicate((Widget widget) => widget is ListTile).first,
+    );
     expect(
       listTile.contentPadding,
       const EdgeInsets.symmetric(horizontal: OmniSpacing.sm, vertical: 2),

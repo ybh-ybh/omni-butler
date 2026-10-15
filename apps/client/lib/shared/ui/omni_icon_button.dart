@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'omni_windows_semantics_boundary.dart';
+import 'omni_press_feedback.dart';
 
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
@@ -146,23 +147,36 @@ class OmniIconButton extends StatelessWidget {
               ),
             ),
           );
-    // Windows提示锚点单独成树，避免在列表条目中合并。
-    final Widget button = IconButton(
-      icon: icon,
-      onPressed: onPressed,
-      tooltip: tooltip,
-      iconSize: iconSize,
-      color: color,
-      constraints: constraints,
-      padding: padding,
-      visualDensity: visualDensity,
-      style: effectiveStyle,
-      isSelected: isSelected,
-      selectedIcon: selectedIcon,
-      focusNode: focusNode,
-      autofocus: autofocus,
-      hoverColor: hoverColor,
+    return OmniPressBinding(
+      enabled: onPressed != null,
+      builder: (context, feedback) {
+        // Windows提示锚点单独成树，避免在列表条目中合并。
+        final Widget button = IconButton(
+          icon: icon,
+          onPressed: onPressed == null
+              ? null
+              : () {
+                  feedback.activate();
+                  onPressed!();
+                },
+          statesController: feedback.statesController,
+          tooltip: tooltip,
+          iconSize: iconSize,
+          color: color,
+          constraints: constraints,
+          padding: padding,
+          visualDensity: visualDensity,
+          style: effectiveStyle.copyWith(
+            foregroundBuilder: feedback.foregroundBuilder,
+          ),
+          isSelected: isSelected,
+          selectedIcon: selectedIcon,
+          focusNode: focusNode,
+          autofocus: autofocus,
+          hoverColor: hoverColor,
+        );
+        return OmniWindowsSemanticsBoundary(child: button);
+      },
     );
-    return OmniWindowsSemanticsBoundary(child: button);
   }
 }

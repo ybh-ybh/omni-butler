@@ -86,7 +86,7 @@ class _NoteHeatmapCellState extends State<_NoteHeatmapCell> {
         button: active,
         selected: widget.selected,
         label: '${widget.dayKey}，${widget.count} 篇笔记',
-        child: InkWell(
+        child: OmniInkWell(
           key: ValueKey('note-heatmap-${widget.dayKey}'),
           mouseCursor: SystemMouseCursors.click,
           borderRadius: BorderRadius.circular(OmniRadius.tiny),
@@ -998,9 +998,8 @@ extension _WindowsNotesView on _NotesPageState {
           );
     // 小号时间使用灰色，深色模式沿用主题的可读灰度。
     final OmniColors colors = OmniColors.of(context);
-    return GestureDetector(
+    return KeyedSubtree(
       key: ValueKey('note-card-${note.id}'),
-      onDoubleTap: expanded ? null : () => _open(note.id),
       // 稳定卡片语义父节点，展开及裁剪只更新其内部孩子。
       child: Semantics(
         key: ValueKey('note-card-region-${note.id}'),
@@ -1010,6 +1009,7 @@ extension _WindowsNotesView on _NotesPageState {
           expanded
               ? _noteEditorSurface(editor, taxonomy, segments, local, recording)
               : OmniPanel(
+                  onDoubleTap: () => _open(note.id),
                   showBorder: false,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1075,6 +1075,7 @@ extension _WindowsNotesView on _NotesPageState {
                                 value: 'delete',
                                 label: '移入回收站',
                                 icon: Icons.delete_outline,
+                                danger: true,
                               ),
                             ],
                           ),

@@ -618,7 +618,7 @@ class _TimeCategoryLegend extends StatelessWidget {
             key: ValueKey<String>('home-time-legend-item-${slice.label}'),
             button: true,
             selected: !hiddenCategories.contains(slice.label),
-            child: InkWell(
+            child: OmniInkWell(
               onTap: () => onToggle(slice.label),
               borderRadius: BorderRadius.circular(OmniRadius.control),
               child: ConstrainedBox(
@@ -953,7 +953,7 @@ class _TimeEmptyState extends StatelessWidget {
           const SizedBox(width: OmniSpacing.xs),
           const Expanded(child: Text('今天还没有时间记录')),
           if (onCreate != null)
-            TextButton(onPressed: onCreate, child: const Text('开始记录')),
+            OmniTextButton(onPressed: onCreate, child: const Text('开始记录')),
         ],
       ),
     );

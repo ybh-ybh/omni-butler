@@ -112,7 +112,7 @@ class _PriorityQuadrantOption extends StatelessWidget {
           ),
         ),
         clipBehavior: Clip.antiAlias,
-        child: InkWell(
+        child: OmniInkWell(
           onTap: onSelected,
           child: ConstrainedBox(
             key: ValueKey<String>('todo-priority-option-${quadrant.value}'),

@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
+import 'omni_interactive_controls.dart';
+import 'omni_press_feedback.dart';
+
 /// Omni Butler 统一的语义开关。
 class OmniSwitch extends StatelessWidget {
   /// 开关当前值。
@@ -28,16 +31,14 @@ class OmniSwitch extends StatelessWidget {
     return Semantics(
       toggled: value,
       enabled: enabled,
-      onTap: toggle,
       child: SizedBox(
         width: OmniSize.switchTapWidth,
         height: height,
         child: Material(
           color: Colors.transparent,
-          child: InkWell(
+          child: OmniInkWell(
             key: const ValueKey<String>('omni-switch-interaction'),
             onTap: toggle,
-            excludeFromSemantics: true,
             canRequestFocus: enabled,
             mouseCursor: enabled
                 ? SystemMouseCursors.click
@@ -145,7 +146,7 @@ class OmniSwitchListTile extends StatelessWidget {
       child: Semantics(
         toggled: value,
         enabled: onChanged != null,
-        child: ListTile(
+        child: OmniListTile(
           contentPadding: contentPadding,
           minTileHeight: OmniDensity.controlHeight(context, large: true),
           title: title,

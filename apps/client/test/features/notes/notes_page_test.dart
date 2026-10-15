@@ -168,11 +168,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('今天').last);
     await _settle(tester);
-    await tester.tap(find.widgetWithText(FilterChip, '工作'));
-    await tester.tap(find.widgetWithText(FilterChip, '复盘'));
+    await tester.tap(find.widgetWithText(OmniFilterChip, '工作'));
+    await tester.tap(find.widgetWithText(OmniFilterChip, '复盘'));
     await _settle(tester);
     expect(find.text('今日日报目标'), findsOneWidget);
-    expect(find.byType(ListTile), findsOneWidget);
+    expect(find.byType(OmniListTile), findsOneWidget);
     await tester.enterText(find.widgetWithText(TextField, '搜索笔记、标签或转写'), '不存在');
     await _settle(tester);
     expect(find.text('没有符合条件的笔记'), findsOneWidget);
@@ -1271,7 +1271,7 @@ void main() {
         );
         final Finder region = find.byKey(const ValueKey('note-composer-tags'));
         final Finder expansion = find.byKey(
-          const ValueKey('note-composer-tags-expansion'),
+          const ValueKey('note-tag-visibility-review'),
         );
         final Finder toggle = find.byKey(const ValueKey('note-composer-tag'));
         expect(selected.hitTestable(), findsOneWidget);
@@ -1325,7 +1325,7 @@ void main() {
         );
         // 样式与物品标签筛选一致，只将语义操作色用于笔记主题。
         final FilterChip chip = tester.widget(
-          find.descendant(of: selected, matching: find.byType(FilterChip)),
+          find.descendant(of: selected, matching: find.byType(OmniFilterChip)),
         );
         final OmniColors colors = OmniColors.of(tester.element(selected));
         expect(chip.showCheckmark, isFalse);
@@ -1343,6 +1343,127 @@ void main() {
           find.byKey(const ValueKey('note-selected-tag-work')),
           findsNothing,
         );
+        await _dispose(tester, app);
+        expect(tester.takeException(), isNull);
+      } finally {
+        semantics.dispose();
+      }
+    });
+  }
+
+  for (final bool reduceMotion in [false, true]) {
+    testWidgets('Windows 标签单行排序、取消归位与中途反向：减少动画$reduceMotion', (tester) async {
+      // 显式开启读屏，验证标签移动不会替换其语义父节点。
+      final SemanticsHandle semantics = tester.ensureSemantics();
+      try {
+        tester.platformDispatcher.accessibilityFeaturesTestValue =
+            FakeAccessibilityFeatures(disableAnimations: reduceMotion);
+        addTearDown(
+          tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
+        );
+        // 冷启动笔记路由，不依赖正文编辑或真实录音设备。
+        final _App app = await _mount(
+          tester,
+          platform: TargetPlatform.windows,
+          seed: true,
+          initialLocation: '/notes',
+        );
+        await tester.tap(find.byKey(const ValueKey('note-composer-tag')));
+        await _settle(tester);
+        // 外层显隐区域不受按钮按压缩放影响，代表标签的实际布局位置。
+        final Finder work = find.byKey(
+          const ValueKey('note-tag-visibility-work'),
+        );
+        final Finder review = find.byKey(
+          const ValueKey('note-tag-visibility-review'),
+        );
+        final Finder unused = find.byKey(
+          const ValueKey('note-tag-visibility-unused'),
+        );
+        final Finder region = find.byKey(const ValueKey('note-composer-tags'));
+        // 三个标签的原始位置用于检查取消后的精确归位。
+        final double left = tester.getTopLeft(work).dx;
+        final double original = tester.getTopLeft(unused).dx;
+        // 稳定语义节点应跨选择、移动、取消保持相同身份。
+        final Finder semanticTag = find.descendant(
+          of: region,
+          matching: find.byKey(const ValueKey('unused')),
+        );
+        final int semanticId = tester.getSemantics(semanticTag).id;
+        expect(tester.getTopLeft(work).dy, tester.getTopLeft(review).dy);
+        expect(tester.getTopLeft(review).dy, tester.getTopLeft(unused).dy);
+        expect(tester.getTopLeft(review).dx, inExclusiveRange(left, original));
+        await _capture(tester, app, 'windows-tags-single-row');
+        await tester.tap(
+          find.byKey(const ValueKey('note-available-tag-unused')),
+        );
+        await tester.pump();
+        if (!reduceMotion) {
+          expect(tester.getTopLeft(unused).dx, closeTo(original, 0.01));
+          await tester.pump(const Duration(milliseconds: 70));
+          // 检查实际中间帧，避免把仅更新目标位置当成动画。
+          final double middle = tester.getTopLeft(unused).dx;
+          expect(middle, inExclusiveRange(left, original));
+          await tester.tap(
+            find.byKey(const ValueKey('note-selected-tag-unused')),
+          );
+          await tester.pump();
+          expect(tester.getTopLeft(unused).dx, closeTo(middle, 0.01));
+          await tester.pump(const Duration(milliseconds: 60));
+          expect(
+            tester.getTopLeft(unused).dx,
+            inExclusiveRange(middle, original),
+          );
+          await _settle(tester);
+          expect(tester.getTopLeft(unused).dx, closeTo(original, 0.01));
+          await tester.tap(
+            find.byKey(const ValueKey('note-available-tag-unused')),
+          );
+        }
+        await _settle(tester);
+        expect(tester.getTopLeft(unused).dx, closeTo(left, 0.01));
+        expect(tester.getTopLeft(work).dx, greaterThan(left));
+        expect(tester.getSemantics(semanticTag).id, semanticId);
+        expect(_semanticLabels(tester.getSemantics(region)), contains('灵感'));
+        await _capture(tester, app, 'windows-tags-selected-first');
+        await tester.tap(
+          find.byKey(const ValueKey('note-selected-tag-unused')),
+        );
+        await _settle(tester);
+        expect(tester.getTopLeft(work).dx, closeTo(left, 0.01));
+        expect(tester.getTopLeft(unused).dx, closeTo(original, 0.01));
+        expect(tester.getSemantics(semanticTag).id, semanticId);
+        // 长名称与窄窗口仍为一排，溢出交给横向滚动而非换行。
+        await tester.runAsync(() async {
+          await (app.database.update(
+            app.database.taxonomyEntries,
+          )..where((table) => table.id.equals('review'))).write(
+            const TaxonomyEntriesCompanion(
+              name: Value('这是一个用于验证单行横向滚动的完整长标签名称'),
+            ),
+          );
+        });
+        tester.view.physicalSize = const Size(700, 900);
+        tester.platformDispatcher.textScaleFactorTestValue = 1.6;
+        await _settle(tester);
+        expect(tester.getTopLeft(work).dy, tester.getTopLeft(review).dy);
+        expect(tester.getTopLeft(review).dy, tester.getTopLeft(unused).dy);
+        // 读取标签自身的横向滚动状态，防止误查主区纵向滚动。
+        final ScrollableState scroll = tester.state(
+          find.descendant(
+            of: find.byKey(const ValueKey('note-composer-tags-expansion')),
+            matching: find.byType(Scrollable),
+          ),
+        );
+        expect(scroll.position.maxScrollExtent, greaterThan(0));
+        await tester.drag(region, const Offset(-450, 0));
+        await _settle(tester);
+        expect(scroll.position.pixels, greaterThan(0));
+        expect(
+          find.byKey(const ValueKey('note-available-tag-unused')).hitTestable(),
+          findsOneWidget,
+        );
+        await _capture(tester, app, 'windows-tags-single-row-narrow');
         await _dispose(tester, app);
         expect(tester.takeException(), isNull);
       } finally {

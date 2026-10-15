@@ -1532,7 +1532,7 @@ class _MembershipCategoryFilters extends StatelessWidget {
                     : categories[index - 1];
                 // 当前标签是否处于选中状态。
                 final bool selected = category == selectedCategory;
-                return ChoiceChip(
+                return OmniChoiceChip(
                   key: ValueKey<String>(
                     'membership-category-${category ?? 'all'}',
                   ),
@@ -3663,7 +3663,7 @@ class _PaymentHistoryDialog extends ConsumerWidget {
               itemBuilder: (BuildContext context, int index) {
                 // 当前支付记录。
                 final MembershipPaymentRecord payment = records[index];
-                return ListTile(
+                return OmniListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.receipt_long_outlined),
                   title: Text(

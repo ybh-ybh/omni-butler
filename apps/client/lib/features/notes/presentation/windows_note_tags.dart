@@ -251,7 +251,7 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
   );
 
   /// 标题保留整行点击，指示箭头沿用独立悬停颜色。
-  Widget _headerTitle() => InkWell(
+  Widget _headerTitle() => OmniInkWell(
     key: const ValueKey('notes-tags-toggle'),
     onTap: () => setState(() => _collapsed = !_collapsed),
     borderRadius: BorderRadius.circular(OmniRadius.control),

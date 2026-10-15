@@ -1920,7 +1920,7 @@ class _FloatingTodoRow extends ConsumerWidget {
           Expanded(
             child: Material(
               color: Colors.transparent,
-              child: InkWell(
+              child: OmniInkWell(
                 key: ValueKey<String>('floating-todo-edit-${todo.id}'),
                 borderRadius: BorderRadius.circular(OmniRadius.control),
                 onTap: () => isProgress
@@ -2207,7 +2207,7 @@ class _FloatingCompactButton extends StatelessWidget {
             child: CircularProgressIndicator(strokeWidth: 2),
           )
         : Text(label);
-    return OutlinedButton(
+    return OmniOutlinedButton(
       onPressed: loading ? null : onPressed,
       style: style,
       child: child,
@@ -2515,7 +2515,7 @@ class _FloatingErrorState extends StatelessWidget {
         Expanded(
           child: Text(message, style: TextStyle(color: colors.danger)),
         ),
-        TextButton(onPressed: onRetry, child: const Text('重试')),
+        OmniTextButton(onPressed: onRetry, child: const Text('重试')),
       ],
     );
   }

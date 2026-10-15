@@ -22,6 +22,8 @@ import 'package:omni_butler/features/notes/presentation/notes_page.dart';
 import 'package:omni_butler/shared/ui/omni_note_composer_button.dart';
 import 'package:omni_butler/shared/ui/omni_note_audio_controls.dart';
 import 'package:omni_butler/shared/ui/omni_windows_semantics_boundary.dart';
+import 'package:omni_butler/shared/ui/omni_panel.dart';
+import 'package:omni_butler/shared/ui/omni_taxonomy_chip.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 空设备广播避免探针启动麦克风或读取用户原件。
@@ -74,6 +76,30 @@ Widget? findProbeWidget(Key key) {
 
   WidgetsBinding.instance.rootElement?.visitChildren(visit);
   return found;
+}
+
+/// 在稳定卡片语义边界内找到实际面板双击入口，不依赖外层手势类型。
+void editProbeHistoryNote() {
+  // 当前生产面板提供的唯一编辑动作。
+  VoidCallback? activate;
+  // 仅在指定历史卡片内部寻找双击入口。
+  void visit(Element element, {bool insideCard = false}) {
+    // 卡片根现在保持为稳定KeyedSubtree，交互由内部OmniPanel承担。
+    final bool inCard =
+        insideCard ||
+        element.widget.key == const ValueKey('note-card-probe-note');
+    // 当前元素可能是负责双击的面板。
+    final Widget widget = element.widget;
+    if (inCard && widget is OmniPanel && widget.onDoubleTap != null) {
+      activate = widget.onDoubleTap;
+      return;
+    }
+    element.visitChildren((Element child) => visit(child, insideCard: inCard));
+  }
+
+  WidgetsBinding.instance.rootElement?.visitChildren(visit);
+  if (activate == null) throw StateError('探针未找到历史笔记的生产双击入口');
+  activate!();
 }
 
 /// 在输入聚焦时展示真实Tooltip窗口，并改变标签关联。
@@ -302,16 +328,24 @@ Future<void> main(List<String> arguments) async {
           const ValueKey('note-composer-tag'),
         ) as OmniNoteComposerButton).onPressed!();
         await pauseProbe(60);
+        if (step == 0) {
+          // 选中与中途取消触发同一行移位，检查原生语义节点保持连接。
+          (findProbeWidget(
+            const ValueKey('note-available-tag-probe-tag-2'),
+          ) as OmniTaxonomyChip).onSelected!(true);
+          await pauseProbe(70);
+          (findProbeWidget(
+            const ValueKey('note-selected-tag-probe-tag-2'),
+          ) as OmniTaxonomyChip).onSelected!(false);
+          await pauseProbe(70);
+        }
         (findProbeWidget(
           const ValueKey('note-body-toggle-probe-note'),
         ) as OmniNoteAudioLink).onPressed!();
         await pauseProbe();
       }
       // 双击原地编辑和取消同样属于用户的展开／收缩操作。
-      final GestureDetector card = findProbeWidget(
-        const ValueKey('note-card-probe-note'),
-      ) as GestureDetector;
-      card.onDoubleTap!();
+      editProbeHistoryNote();
       await pauseProbe();
       activateProbeInput();
       await pauseProbe(60);

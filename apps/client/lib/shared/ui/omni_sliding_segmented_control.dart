@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
+import 'omni_press_feedback.dart';
+
 /// 带连续轨道与滑块动画的通用分段选择控件。
 class OmniSlidingSegmentedControl<T> extends StatelessWidget {
   /// 按展示顺序排列的选项。
@@ -132,7 +134,7 @@ class OmniSlidingSegmentedControl<T> extends StatelessWidget {
                         button: true,
                         selected: isSelected,
                         label: labelBuilder(option),
-                        child: InkWell(
+                        child: OmniInkWell(
                           key: itemKeyBuilder?.call(option),
                           borderRadius: BorderRadius.circular(
                             OmniRadius.control,

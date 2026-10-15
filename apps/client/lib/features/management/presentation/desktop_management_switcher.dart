@@ -121,7 +121,7 @@ class _DesktopManagementSwitcherState
               // 每个启用分区保留独立的菜单行和选中语义。
               for (final ManagementSection section in _menuOrder)
                 if (preference.isEnabled(section.feature))
-                  PopupMenuItem<ManagementSection>(
+                  OmniPopupMenuItem<ManagementSection>.custom(
                     key: ValueKey<String>(
                       'desktop-management-option-${section.name}',
                     ),

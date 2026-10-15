@@ -503,7 +503,7 @@ class _ProgressStepBlock extends StatelessWidget {
           ),
         ),
         clipBehavior: Clip.antiAlias,
-        child: InkWell(
+        child: OmniInkWell(
           key: ValueKey<String>('todo-progress-step-${step.id}'),
           onTap: enabled ? onTap : null,
           child: ConstrainedBox(

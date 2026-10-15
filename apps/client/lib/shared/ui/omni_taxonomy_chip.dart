@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
+import 'omni_interactive_controls.dart';
+
 /// 可多选的标签沿用物品筛选气泡的圆角、密度及描边层级。
 class OmniTaxonomyChip extends StatelessWidget {
   /// 创建保留原生选择语义的紧凑标签。
@@ -26,7 +28,7 @@ class OmniTaxonomyChip extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题的主操作色与中性表面。
     final OmniColors colors = OmniColors.of(context);
-    return FilterChip(
+    return OmniFilterChip(
       label: Text(label),
       selected: selected,
       showCheckmark: false,

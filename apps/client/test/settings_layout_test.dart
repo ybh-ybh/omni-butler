@@ -337,7 +337,7 @@ void main() {
             // 窄桌面采用可滚动 ChoiceChip，安卓采用分类入口。
             final Finder category =
                 platform == TargetPlatform.windows && size.width < 760
-                ? find.widgetWithText(ChoiceChip, '数据同步')
+                ? find.widgetWithText(OmniChoiceChip, '数据同步')
                 : _category(platform, 'sync');
             await tester.ensureVisible(category);
             await tester.tap(category);

@@ -551,7 +551,13 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 280));
-    expect(_scale(tester), 1);
+    expect(
+      find.descendant(
+        of: find.byType(OmniPressSurface),
+        matching: find.byType(Transform),
+      ),
+      findsNothing,
+    );
     await tester.pump(const Duration(milliseconds: 240));
     expect(menus, 1);
     await gesture.up();

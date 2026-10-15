@@ -1094,7 +1094,7 @@ class _EventToolbar extends StatelessWidget {
             SizedBox(
               key: const ValueKey<String>('event-status-selector'),
               height: actionHeight,
-              child: SegmentedButton<bool>(
+              child: OmniSegmentedButton<bool>(
                 // 分段按钮内部默认按 40px 布局，桌面紧凑密度使其匹配 32px 外框。
                 style: ButtonStyle(
                   visualDensity: compact
@@ -1725,7 +1725,7 @@ class _CompactEventActionButton extends StatelessWidget {
     return Semantics(
       button: true,
       label: label,
-      child: InkWell(
+      child: OmniInkWell(
         onTap: onPressed,
         borderRadius: visualRadius,
         child: SizedBox(

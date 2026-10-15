@@ -72,7 +72,7 @@ class TodoProgressSummaryView extends ConsumerWidget {
           button: onTap != null,
           child: Material(
             color: Colors.transparent,
-            child: InkWell(
+            child: OmniInkWell(
               onTap: onTap,
               borderRadius: BorderRadius.circular(OmniRadius.control),
               child: Padding(
@@ -410,7 +410,7 @@ class _TodoProgressTaskTileState extends ConsumerState<TodoProgressTaskTile> {
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(OmniRadius.control),
         clipBehavior: Clip.antiAlias,
-        child: InkWell(
+        child: OmniInkWell(
           key: ValueKey<String>('progress-task-surface-${todo.id}'),
           onTap: busy ? null : openProgress,
           borderRadius: BorderRadius.circular(OmniRadius.control),

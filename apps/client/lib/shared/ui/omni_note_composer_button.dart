@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'omni_windows_semantics_boundary.dart';
+import 'omni_press_feedback.dart';
 
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
@@ -42,31 +43,43 @@ class OmniNoteComposerButton extends StatelessWidget {
   /// 保留原生键盘和提示能力，并将背景完整绘制到参考尺寸。
   @override
   Widget build(BuildContext context) => OmniWindowsSemanticsBoundary(
-    child: IconButton(
-      tooltip: tooltip,
-      onPressed: onPressed,
-      icon: icon,
-      style: ButtonStyle(
-        mouseCursor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.disabled)
-              ? SystemMouseCursors.basic
-              : SystemMouseCursors.click,
-        ),
-        foregroundColor: WidgetStatePropertyAll(foreground),
-        iconColor: WidgetStatePropertyAll(foreground),
-        backgroundColor: WidgetStatePropertyAll(background),
-        overlayColor: WidgetStatePropertyAll(overlay),
-        iconSize: const WidgetStatePropertyAll(OmniSpacing.xl),
-        padding: const WidgetStatePropertyAll(EdgeInsets.zero),
-        minimumSize: WidgetStatePropertyAll(size),
-        maximumSize: WidgetStatePropertyAll(size),
-        fixedSize: WidgetStatePropertyAll(size),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        visualDensity: VisualDensity.standard,
-        animationDuration: OmniMotion.duration(context, OmniMotion.fast),
-        shape: const WidgetStatePropertyAll(
-          RoundedRectangleBorder(
-            borderRadius: BorderRadius.all(Radius.circular(OmniRadius.control)),
+    child: OmniPressBinding(
+      enabled: onPressed != null,
+      builder: (context, feedback) => IconButton(
+        tooltip: tooltip,
+        onPressed: onPressed == null
+            ? null
+            : () {
+                feedback.activate();
+                onPressed!();
+              },
+        statesController: feedback.statesController,
+        icon: icon,
+        style: ButtonStyle(
+          foregroundBuilder: feedback.foregroundBuilder,
+          mouseCursor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.disabled)
+                ? SystemMouseCursors.basic
+                : SystemMouseCursors.click,
+          ),
+          foregroundColor: WidgetStatePropertyAll(foreground),
+          iconColor: WidgetStatePropertyAll(foreground),
+          backgroundColor: WidgetStatePropertyAll(background),
+          overlayColor: WidgetStatePropertyAll(overlay),
+          iconSize: const WidgetStatePropertyAll(OmniSpacing.xl),
+          padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+          minimumSize: WidgetStatePropertyAll(size),
+          maximumSize: WidgetStatePropertyAll(size),
+          fixedSize: WidgetStatePropertyAll(size),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.standard,
+          animationDuration: OmniMotion.duration(context, OmniMotion.fast),
+          shape: const WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.all(
+                Radius.circular(OmniRadius.control),
+              ),
+            ),
           ),
         ),
       ),

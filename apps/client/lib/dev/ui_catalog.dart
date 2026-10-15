@@ -227,6 +227,29 @@ class _CatalogExamplesState extends State<_CatalogExamples> {
                     icon: const Icon(Icons.more_horiz),
                     onPressed: () {},
                   ),
+                  OmniPopupMenuButton<String>(
+                    tooltip: '统一操作菜单',
+                    onSelected: (_) {},
+                    itemBuilder: (_) => <PopupMenuEntry<String>>[
+                      OmniPopupMenuItem<String>(
+                        value: 'edit',
+                        label: '编辑条目',
+                        icon: Icons.edit_outlined,
+                      ),
+                      OmniPopupMenuItem<String>(
+                        value: 'delete',
+                        label: '移入回收站',
+                        icon: Icons.delete_outline_rounded,
+                        danger: true,
+                      ),
+                      OmniPopupMenuItem<String>(
+                        value: 'disabled',
+                        label: '暂不可用',
+                        icon: Icons.block_outlined,
+                        enabled: false,
+                      ),
+                    ],
+                  ),
                 ],
               ),
               Wrap(

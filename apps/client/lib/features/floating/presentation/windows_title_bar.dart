@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:omni_butler/app/theme/app_chrome_colors.dart';
 
 /// 不支持原生标题栏染色的 Windows 使用的独立标题栏。
@@ -163,14 +164,12 @@ class _CaptionButtonState extends State<_CaptionButton> {
       label: widget.label,
       tooltip: widget.label,
       button: true,
-      onTap: widget.onPressed,
       child: Material(
         color: background,
-        child: InkWell(
+        child: OmniInkWell(
           onTap: widget.onPressed,
           onHover: (bool hovered) => setState(() => _hovered = hovered),
           onFocusChange: (bool focused) => setState(() => _focused = focused),
-          excludeFromSemantics: true,
           hoverColor: Colors.transparent,
           focusColor: Colors.transparent,
           highlightColor: pressedTint.withValues(alpha: 0.08),

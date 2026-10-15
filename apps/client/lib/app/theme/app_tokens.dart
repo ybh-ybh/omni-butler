@@ -93,6 +93,33 @@ abstract final class OmniSize {
   static const double navigationIcon = 20;
 }
 
+/// Omni Butler 的统一操作菜单尺寸和材质 Token。
+abstract final class OmniMenuMetrics {
+  /// 标准操作菜单的最小宽度。
+  static const double minWidth = 160;
+
+  /// 标准操作菜单的最大宽度。
+  static const double maxWidth = 280;
+
+  /// 标准操作行的最小高度。
+  static const double itemHeight = 36;
+
+  /// 操作菜单图标尺寸。
+  static const double iconSize = 16;
+
+  /// 操作菜单文字尺寸。
+  static const double fontSize = 14;
+
+  /// 操作菜单的轻阴影层级。
+  static const double elevation = 6;
+
+  /// 操作菜单阴影透明度。
+  static const double shadowOpacity = 0.12;
+
+  /// 危险菜单行的浅红悬停透明度。
+  static const double dangerHoverOpacity = 0.10;
+}
+
 /// Omni Butler 的统一动效 Token。
 abstract final class OmniMotion {
   /// 只依据系统禁用动画偏好，不将辅助服务导航等同于减少动画。
@@ -116,6 +143,27 @@ abstract final class OmniMotion {
 
   /// 安卓条目按下时的轻微缩放比例。
   static const double pressScale = 0.98;
+
+  /// Windows按下时仅压缩内容的比例。
+  static const double windowsPressScale = 0.97;
+
+  /// Windows内容按下至压缩尺寸的时长。
+  static const Duration windowsPressDown = Duration(milliseconds: 90);
+
+  /// Windows松开或取消后内容恢复的时长。
+  static const Duration windowsPressRelease = Duration(milliseconds: 160);
+
+  /// Windows操作菜单整体淡入与缩放的时长。
+  static const Duration windowsMenuEnter = Duration(milliseconds: 150);
+
+  /// Windows操作菜单整体淡出与缩放的时长。
+  static const Duration windowsMenuExit = Duration(milliseconds: 120);
+
+  /// Windows操作菜单打开和关闭时的最小视觉比例。
+  static const double windowsMenuScale = 0.96;
+
+  /// Windows菜单行悬停与焦点底色切换时长。
+  static const Duration windowsMenuHover = Duration(milliseconds: 100);
 
   /// 面板进入与退出时长。
   static const Duration panel = Duration(milliseconds: 220);

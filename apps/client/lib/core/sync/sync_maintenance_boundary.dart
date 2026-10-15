@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:omni_butler/core/sync/sync_connection_coordinator.dart';
 import 'package:omni_butler/core/sync/sync_connection_providers.dart';
@@ -88,7 +89,7 @@ class SyncMaintenanceBoundary extends ConsumerWidget {
                               spacing: 12,
                               runSpacing: 8,
                               children: [
-                                FilledButton(
+                                OmniFilledButton(
                                   onPressed: () async {
                                     try {
                                       await coordinator.resume();
@@ -99,7 +100,7 @@ class SyncMaintenanceBoundary extends ConsumerWidget {
                                   child: const Text('继续迁移'),
                                 ),
                                 if (state.canCancel)
-                                  TextButton(
+                                  OmniTextButton(
                                     onPressed: () async {
                                       try {
                                         await coordinator.cancel();
