@@ -156,7 +156,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
   });
 
   /// 用实际 token 请求 HTTP，undefined JSON 不添加无关 body。
-  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '6', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
+  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '7', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
   /// 构造稳定真实同步操作。
   function batch(operations: SyncOperationDto[]): { clientId: string; transactionId: string; operations: SyncOperationDto[] } { return { clientId: randomUUID(), transactionId: randomUUID(), operations }; }
   /// 构造可回听的测试 WAV，仅测试存储不向厂商发送此合成文件。
@@ -565,7 +565,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
     const timestamp = new Date().toISOString();
     // 元数据完整且明确省略未上传原音，标签超限是唯一失败原因。
     const snapshot = { syncKey, migrationId: randomUUID(), expectedOwnerId: user.sub, snapshotVersion: 3, omittedAudioIds: [sample.segmentId], operations: [
-      ...tags.map((id, index): SyncOperationDto => ({ op: 'PUT', table: 'taxonomy_entries', id, data: { module: 'notes', kind: 'tag', name: `迁移标签${index}`, sort_order: index, is_enabled: true, created_at: timestamp, updated_at: timestamp, deleted_at: null, color_value: null } })),
+      ...tags.map((id, index): SyncOperationDto => ({ op: 'PUT', table: 'taxonomy_entries', id, data: { module: 'notes', kind: 'tag', name: `迁移标签${index}`, sort_order: index, is_pinned: false, is_enabled: true, created_at: timestamp, updated_at: timestamp, deleted_at: null, color_value: null, icon_emoji: null } })),
       { ...sample.operations[0]!, data: { ...sample.operations[0]!.data, tags: JSON.stringify(tags) } }, sample.operations[1]!,
     ] };
     expect((await request('/sync/migrations', 'POST', snapshot, null)).status).toBe(400);

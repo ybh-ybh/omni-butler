@@ -11,6 +11,25 @@ describe('SyncSqlBuilder', () => {
   /// 固定记录标识。
   const recordId = 'ea78cdfc-4368-45e9-b541-2adb46a0c136';
 
+  it('标签图标接受完整组合表情与显式清空，缺失字段不覆盖图标', () => {
+    // 完整 Unicode 序列不能被转换成单个码点或裁剪。
+    const emoji = '👩🏽‍💻';
+    // 新建标签直接携带图标。
+    const creation = builder.build({ op: 'PUT', table: 'taxonomy_entries', id: recordId, data: { module: 'notes', kind: 'tag', name: '工作', icon_emoji: emoji } }, userId);
+    expect(creation.sql).toContain('"icon_emoji"');
+    expect(creation.values).toContain(emoji);
+    // 图标变更只携带自身字段。
+    const update = builder.build({ op: 'PATCH', table: 'taxonomy_entries', id: recordId, data: { icon_emoji: emoji } }, userId);
+    expect(update.sql).toBe('UPDATE "taxonomy_entries" SET "icon_emoji" = $3 WHERE "id" = $1::uuid AND "user_id" = $2::uuid');
+    expect(update.values).toEqual([recordId, userId, emoji]);
+    expect(builder.build({ op: 'PATCH', table: 'taxonomy_entries', id: recordId, data: { icon_emoji: null } }, userId).values).toEqual([recordId, userId, null]);
+    expect(builder.build({ op: 'PATCH', table: 'taxonomy_entries', id: recordId, data: { name: '重命名' } }, userId).sql).not.toContain('icon_emoji');
+  });
+
+  it.each([0, true, [], {}, undefined])('标签图标拒绝非文字值 %j', (iconEmoji) => {
+    expect(() => builder.build({ op: 'PATCH', table: 'taxonomy_entries', id: recordId, data: { icon_emoji: iconEmoji } }, userId)).toThrow(BadRequestException);
+  });
+
   it('标签置顶支持创建和独立差量，旧编辑不会隐式写入取消置顶', () => {
     // 新版创建明确携带置顶值。
     const creation = builder.build({ op: 'PUT', table: 'taxonomy_entries', id: recordId, data: { module: 'notes', kind: 'tag', name: '工作', is_pinned: true } }, userId);

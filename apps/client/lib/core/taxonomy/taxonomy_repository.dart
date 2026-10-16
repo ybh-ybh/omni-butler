@@ -208,6 +208,70 @@ class TaxonomyRepository {
     });
   }
 
+  /// 原子保存有效笔记标签实际改动的名称和图标。
+  Future<void> updateNoteTagAppearance(
+    String id, {
+    Value<String> name = const Value.absent(),
+    Value<String?> iconEmoji = const Value.absent(),
+  }) => _database.transaction(() async {
+    // 保存时重新读取活动标签，旧弹窗不能修改已删除或其他模块的条目。
+    final TaxonomyEntry? current =
+        await (_database.select(_database.taxonomyEntries)..where(
+              (TaxonomyEntries table) =>
+                  table.id.equals(id) &
+                  table.module.equals(TaxonomyModule.notes.name) &
+                  table.kind.equals(TaxonomyKind.tag.name) &
+                  table.deletedAt.isNull(),
+            ))
+            .getSingleOrNull();
+    if (current == null) throw StateError('标签不存在或已删除');
+    if (!name.present && !iconEmoji.present) return;
+
+    // 未编辑的名称保持 absent，避免覆盖其他设备刚提交的名称。
+    final Value<String> updatedName = name.present
+        ? Value(name.value.trim())
+        : const Value.absent();
+    if (updatedName.present) {
+      if (updatedName.value.isEmpty) {
+        throw const FormatException('名称不能为空');
+      }
+      // 查重与最终更新共用事务，名称失败时不能单独保存图标。
+      final List<TaxonomyEntry> existing =
+          await (_database.select(_database.taxonomyEntries)..where(
+                (TaxonomyEntries table) =>
+                    table.module.equals(TaxonomyModule.notes.name) &
+                    table.kind.equals(TaxonomyKind.tag.name) &
+                    table.deletedAt.isNull(),
+              ))
+              .get();
+      if (existing.any(
+        (TaxonomyEntry entry) =>
+            entry.id != id &&
+            entry.name.trim().toLowerCase() == updatedName.value.toLowerCase(),
+      )) {
+        throw const FormatException('同一模块内不能使用重复名称');
+      }
+    }
+
+    // 差量写入只包含本次编辑字段，不回写旧弹窗的排序、颜色或启用状态。
+    final int changed =
+        await (_database.update(_database.taxonomyEntries)..where(
+              (TaxonomyEntries table) =>
+                  table.id.equals(id) &
+                  table.module.equals(TaxonomyModule.notes.name) &
+                  table.kind.equals(TaxonomyKind.tag.name) &
+                  table.deletedAt.isNull(),
+            ))
+            .write(
+              TaxonomyEntriesCompanion(
+                name: updatedName,
+                iconEmoji: iconEmoji,
+                updatedAt: Value(DateTime.now()),
+              ),
+            );
+    if (changed == 0) throw StateError('标签不存在或已删除');
+  });
+
   /// 将 taxonomy 重命名同步到业务表中的冗余展示字段。
   Future<void> _syncRenamedReferences({
     required TaxonomyDraft draft,

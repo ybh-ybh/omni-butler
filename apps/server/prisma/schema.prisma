@@ -388,6 +388,8 @@ model TaxonomyEntry {
   kind        String               @db.VarChar(16)
   name        String               @db.VarChar(80)
   colorValue  BigInt?              @map("color_value")
+  /// 标签图标保留完整 Unicode 序列，空值使用客户端默认井号。
+  iconEmoji   String?              @map("icon_emoji")
   sortOrder   Int                  @default(0) @map("sort_order")
   isPinned    Boolean              @default(false) @map("is_pinned")
   isEnabled   Boolean              @default(true) @map("is_enabled")

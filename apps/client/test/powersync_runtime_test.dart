@@ -10,6 +10,7 @@ import 'package:omni_butler/core/auth/auth_repository.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/sync/omni_sync_runtime.dart';
 import 'package:omni_butler/core/sync/omni_sync_schema.dart';
+import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/features/events/data/event_repository.dart';
 import 'package:omni_butler/features/memberships/data/membership_repository.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
@@ -36,7 +37,7 @@ void main() {
       databasePath,
     );
     try {
-      // 当前schema去掉置顶列即为v20的真实同步触发器形状。
+      // 当前schema去掉置顶和图标列才是v20的真实同步触发器形状。
       final RawTable oldTable = RawTable.inferred(
         name: 'taxonomy_entries',
         schema: RawTableSchema(
@@ -45,7 +46,9 @@ void main() {
                 .singleWhere((table) => table.name == 'taxonomy_entries')
                 .schema!
                 .syncedColumns!
-                .where((column) => column != 'is_pinned'),
+                .where(
+                  (column) => column != 'is_pinned' && column != 'icon_emoji',
+                ),
           ],
         ),
       );
@@ -57,6 +60,9 @@ void main() {
       }
       await runtime.database.customStatement(
         'ALTER TABLE taxonomy_entries DROP COLUMN is_pinned',
+      );
+      await runtime.database.customStatement(
+        'ALTER TABLE taxonomy_entries DROP COLUMN icon_emoji',
       );
       // 按生产SDK安装旧版触发器，不直接伪造持久队列。
       for (final String operation in ['INSERT', 'UPDATE', 'DELETE']) {
@@ -92,6 +98,7 @@ void main() {
       expect(legacy.crud.single.op, UpdateType.patch);
       expect(legacy.crud.single.opData, containsPair('name', '升级前改名'));
       expect(legacy.crud.single.opData, isNot(contains('is_pinned')));
+      expect(legacy.crud.single.opData, isNot(contains('icon_emoji')));
       await legacy.complete();
       await runtime.database
           .update(runtime.database.taxonomyEntries)
@@ -101,6 +108,156 @@ void main() {
           .getNextCrudTransaction())!;
       expect(pinned.crud.single.opData, containsPair('is_pinned', 1));
       expect(pinned.crud.single.opData, isNot(contains('name')));
+    } finally {
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('v21同步库升级保留旧改名PATCH，新触发器捕获组合图标与显式移除', () async {
+    // 临时文件完整保留升级前的真实SDK队列，不访问用户数据库。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_icon_sync_upgrade_',
+    );
+    // 升级前后使用同一同步数据库文件。
+    final String databasePath = '${directory.path}/runtime.sqlite';
+    // 本用例不会启动网络连接。
+    final AuthRepository auth = AuthRepository(const FlutterSecureStorage());
+    // 可重开的生产同步运行时。
+    OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      databasePath,
+    );
+    try {
+      // v21已经支持置顶，但尚未声明或保存图标。
+      final RawTable oldTable = RawTable.inferred(
+        name: 'taxonomy_entries',
+        schema: RawTableSchema(
+          syncedColumns: [
+            ...omniSyncSchema.rawTables
+                .singleWhere((table) => table.name == 'taxonomy_entries')
+                .schema!
+                .syncedColumns!
+                .where((column) => column != 'icon_emoji'),
+          ],
+        ),
+      );
+      // 先移除引用新列的当前触发器，再还原物理表结构。
+      for (final String operation in ['INSERT', 'UPDATE', 'DELETE']) {
+        await runtime.powerSync.execute(
+          'DROP TRIGGER "powersync_taxonomy_entries_${operation.toLowerCase()}"',
+        );
+      }
+      await runtime.database.customStatement(
+        'ALTER TABLE taxonomy_entries DROP COLUMN icon_emoji',
+      );
+      // 旧触发器由生产SDK安装，CRUD记录由实际业务SQL生成。
+      for (final String operation in ['INSERT', 'UPDATE', 'DELETE']) {
+        await runtime.powerSync.execute(
+          'SELECT powersync_create_raw_table_crud_trigger(?, ?, ?)',
+          [
+            jsonEncode(oldTable),
+            'powersync_taxonomy_entries_${operation.toLowerCase()}',
+            operation,
+          ],
+        );
+      }
+      await runtime.database.customStatement(
+        "INSERT INTO taxonomy_entries(id,module,kind,name,color_value,sort_order,is_pinned,created_at,updated_at) VALUES('legacy-tag','notes','tag','旧标签',42,7,1,'2026-10-15T00:00:00Z','2026-10-15T00:00:00Z')",
+      );
+      await (await runtime.powerSync.getNextCrudTransaction())!.complete();
+      await runtime.database.customStatement(
+        "UPDATE taxonomy_entries SET name='升级前改名' WHERE id='legacy-tag'",
+      );
+      // 保存旧事务身份和负载，重开不能把默认空图标混入旧PATCH。
+      final CrudTransaction beforeUpgrade = (await runtime.powerSync
+          .getNextCrudTransaction())!;
+      expect(beforeUpgrade.crud.single.opData, {'name': '升级前改名'});
+      await runtime.database.customStatement('PRAGMA user_version = 21');
+      await runtime.close();
+      runtime = await OmniSyncRuntime.openAtPath(auth, databasePath);
+
+      // 升级保留旧标签事实，新增可空图标不改变其他字段。
+      final TaxonomyEntry upgraded = await runtime.database
+          .select(runtime.database.taxonomyEntries)
+          .getSingle();
+      expect(upgraded.name, '升级前改名');
+      expect(upgraded.iconEmoji, isNull);
+      expect(upgraded.isPinned, isTrue);
+      expect(upgraded.colorValue, 42);
+      expect(upgraded.sortOrder, 7);
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 1);
+      // 已持久化的旧队列保持身份及原始差量，不能被升级改写。
+      final CrudTransaction legacy = (await runtime.powerSync
+          .getNextCrudTransaction())!;
+      expect(legacy.transactionId, beforeUpgrade.transactionId);
+      expect(legacy.crud.single.op, UpdateType.patch);
+      expect(legacy.crud.single.opData, beforeUpgrade.crud.single.opData);
+      expect(legacy.crud.single.opData, isNot(contains('icon_emoji')));
+      await legacy.complete();
+
+      // 升级后的实际业务入口只提交新修改的字段。
+      final TaxonomyRepository repository = TaxonomyRepository(
+        runtime.database,
+      );
+      await repository.updateNoteTagAppearance(
+        upgraded.id,
+        iconEmoji: const Value('👩🏽‍💻'),
+      );
+      // 新版触发器必须捕获完整多码点序列，且不附带名称或排序。
+      final CrudTransaction selected = (await runtime.powerSync
+          .getNextCrudTransaction())!;
+      expect(selected.crud.single.op, UpdateType.patch);
+      expect(
+        selected.crud.single.opData,
+        containsPair('icon_emoji', '👩🏽‍💻'),
+      );
+      expect(
+        selected.crud.single.opData!.keys,
+        unorderedEquals(['icon_emoji', 'updated_at']),
+      );
+      await selected.complete();
+      await repository.save(
+        TaxonomyDraft(
+          id: upgraded.id,
+          module: TaxonomyModule.notes,
+          kind: TaxonomyKind.tag,
+          name: '普通入口改名',
+          colorValue: upgraded.colorValue,
+          sortOrder: upgraded.sortOrder,
+        ),
+      );
+      // 普通编辑入口也不能把本机图标加入自己的改名差量。
+      final CrudTransaction renamed = (await runtime.powerSync
+          .getNextCrudTransaction())!;
+      expect(renamed.crud.single.opData, containsPair('name', '普通入口改名'));
+      expect(renamed.crud.single.opData, isNot(contains('icon_emoji')));
+      expect(
+        (await runtime.database
+                .select(runtime.database.taxonomyEntries)
+                .getSingle())
+            .iconEmoji,
+        '👩🏽‍💻',
+      );
+      await renamed.complete();
+      await repository.updateNoteTagAppearance(
+        upgraded.id,
+        iconEmoji: const Value(null),
+      );
+      // 移除必须产生显式null，省略字段只代表没有修改图标。
+      final CrudTransaction removed = (await runtime.powerSync
+          .getNextCrudTransaction())!;
+      expect(removed.crud.single.opData, containsPair('icon_emoji', null));
+      expect(removed.crud.single.opData, isNot(contains('name')));
+      await removed.complete();
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 0);
+      expect(
+        (await runtime.database
+                .select(runtime.database.taxonomyEntries)
+                .getSingle())
+            .iconEmoji,
+        isNull,
+      );
     } finally {
       await runtime.close();
       await directory.delete(recursive: true);

@@ -106,6 +106,8 @@ integration('SyncService PostgreSQL 集成', () => {
   let preservedLegacyTodos = false;
   // 标签置顶增量迁移只补默认值，不重写原有记录。
   let preservedLegacyTag = false;
+  // 标签图标增量迁移只补空值，保留已有置顶和其他标签事实。
+  let preservedLegacyTagIcon = false;
 
   beforeAll(async () => {
     // 解析显式提供的测试连接字符串。
@@ -149,6 +151,8 @@ integration('SyncService PostgreSQL 集成', () => {
       let legacyTodos: Record<string, unknown>[] | undefined;
       // 新字段上线前的完整标签事实。
       let legacyTag: Record<string, unknown> | undefined;
+      // 图标上线前已置顶的标签完整数据库行。
+      let legacyTagIcon: Record<string, unknown> | undefined;
       if (upgradingAliases) {
         // 此数据仅属于当前显式空测试库，首个用例前会正常清理。
         const seeded = await database.query<{ row: Record<string, unknown> }>(
@@ -195,6 +199,19 @@ integration('SyncService PostgreSQL 集成', () => {
         );
         legacyTag = seeded.rows[0]!.row;
       }
+      if (migration === '20261016000000_note_tag_icon_emoji') {
+        // 用真实旧结构验证图标迁移保留已有名称、排序和置顶。
+        const seeded = await database.query<{ row: Record<string, unknown> }>(
+          `WITH owner AS (
+             INSERT INTO sync_owners (id) VALUES ($1) RETURNING id
+           ), tag AS (
+             INSERT INTO taxonomy_entries (id, user_id, module, kind, name, sort_order, is_pinned, updated_at)
+             SELECT $2, id, 'notes', 'tag', 'legacy pinned tag', 9, true, $3 FROM owner RETURNING *
+           ) SELECT to_jsonb(tag) AS row FROM tag`,
+          [randomUUID(), randomUUID(), timestamp],
+        );
+        legacyTagIcon = seeded.rows[0]!.row;
+      }
       await database.query(
         readFileSync(
           join(__dirname, '../prisma/migrations', migration, 'migration.sql'),
@@ -235,6 +252,15 @@ integration('SyncService PostgreSQL 集成', () => {
         expect(after.rows[0]?.row).toEqual({ ...legacyTag, is_pinned: false });
         preservedLegacyTag = true;
       }
+      if (legacyTagIcon) {
+        // 空图标是本次迁移唯一增加的事实。
+        const after = await database.query<{ row: Record<string, unknown> }>(
+          'SELECT to_jsonb(tag) AS row FROM taxonomy_entries tag WHERE id = $1',
+          [legacyTagIcon.id],
+        );
+        expect(after.rows[0]?.row).toEqual({ ...legacyTagIcon, icon_emoji: null });
+        preservedLegacyTagIcon = true;
+      }
     }
     prisma = new PrismaService(
       new ConfigService({ DATABASE_URL: databaseUrl }),
@@ -256,6 +282,10 @@ integration('SyncService PostgreSQL 集成', () => {
 
   it('标签置顶增量迁移原样保留历史标签并默认关闭', () => {
     expect(preservedLegacyTag).toBe(true);
+  });
+
+  it('标签图标增量迁移原样保留已置顶历史标签并补空图标', () => {
+    expect(preservedLegacyTagIcon).toBe(true);
   });
 
   beforeEach(async () => {
@@ -591,7 +621,9 @@ integration('SyncService PostgreSQL 集成', () => {
       kind: 'tag',
       name: '迁移标签',
       color_value: null,
+      icon_emoji: null,
       sort_order: 0,
+      is_pinned: false,
       is_enabled: true,
       deleted_at: null,
     });
@@ -639,7 +671,7 @@ integration('SyncService PostgreSQL 集成', () => {
       counts: { quotes: 2 },
       limits: { maxOperations: 100000, maxBytes: 33554432 },
     });
-    expect(Object.keys(preview.counts)).toHaveLength(15);
+    expect(Object.keys(preview.counts)).toHaveLength(16);
   });
 
   afterAll(async () => {
@@ -669,6 +701,7 @@ integration('SyncService PostgreSQL 集成', () => {
       'memberships',
       'note_audio_segments',
       'note_entries',
+      'note_images',
       'note_versions',
       'quotes',
       'record_taxonomy_links',
@@ -693,6 +726,35 @@ integration('SyncService PostgreSQL 集成', () => {
     expect((await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).isPinned).toBe(true);
     await service.applyBatch(ownerId, batch([{ op: 'PATCH', table: 'taxonomy_entries', id: tag.id, data: { is_pinned: 0 } }]));
     expect(await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).toMatchObject({ name: '另一端改名', sortOrder: 9, isPinned: false });
+  });
+
+  it('标签图标跨设备保留组合表情，独立改名不覆盖且显式空值移除', async () => {
+    // 缺失图标的新建操作保留历史队列语义，默认空图标。
+    const tag = put('taxonomy_entries', { module: 'notes', kind: 'tag', name: '工作', sort_order: 1 });
+    await service.applyBatch(ownerId, batch([tag]));
+    expect((await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).iconEmoji).toBeNull();
+    // 肤色、零宽连接符必须完整往返数据库。
+    const emoji = '👩🏽‍💻';
+    await service.applyBatch(ownerId, batch([{ op: 'PATCH', table: 'taxonomy_entries', id: tag.id, data: { icon_emoji: emoji } }]));
+    await service.applyBatch(ownerId, batch([{ op: 'PATCH', table: 'taxonomy_entries', id: tag.id, data: { name: '另一端改名', sort_order: 9, is_pinned: true } }]));
+    expect(await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).toMatchObject({ name: '另一端改名', sortOrder: 9, isPinned: true, iconEmoji: emoji });
+    // 另一设备重放旧创建不能移除图标。
+    await service.applyBatch(ownerId, batch([tag]));
+    expect((await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).iconEmoji).toBe(emoji);
+    await service.applyBatch(ownerId, batch([{ op: 'PATCH', table: 'taxonomy_entries', id: tag.id, data: { icon_emoji: null } }]));
+    expect(await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).toMatchObject({ name: '另一端改名', sortOrder: 9, isPinned: true, iconEmoji: null });
+  });
+
+  it('换服协议v3完整快照保留标签图标且不接受缺失图标列', async () => {
+    // 换服使用完整当前行，图标参与严格字段检查。
+    const tag = put('taxonomy_entries', { module: 'notes', kind: 'tag', name: '工作', color_value: null, icon_emoji: '👨‍👩‍👧‍👦', sort_order: 1, is_pinned: true, is_enabled: true, deleted_at: null });
+    // 本地旧快照须先由客户端补齐新列再生成换服请求。
+    const missingIcon = { ...tag, data: { ...tag.data } };
+    delete missingIcon.data.icon_emoji;
+    await expect(migrations.replace({ ...migration([missingIcon]), snapshotVersion: 3 })).rejects.toBeInstanceOf(BadRequestException);
+    expect((await prisma!.syncOwner.findFirst())?.id).toBe(ownerId);
+    await migrations.replace({ ...migration([tag]), snapshotVersion: 3 });
+    expect(await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).toMatchObject({ name: '工作', isPinned: true, iconEmoji: '👨‍👩‍👧‍👦' });
   });
 
   it('ARGB 大整数可保存，同名分类不会被旧唯一约束堵塞', async () => {

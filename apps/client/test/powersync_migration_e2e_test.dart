@@ -327,7 +327,9 @@ Future<String> _image(
 Dio _api() => Dio(
   BaseOptions(
     baseUrl: '$_address/omni-butler/api/v1',
-    headers: <String, String>{'X-Omni-Sync-Schema': '2'},
+    headers: <String, String>{
+      'X-Omni-Sync-Schema': syncSchemaVersion.toString(),
+    },
     receiveTimeout: const Duration(seconds: 90),
   ),
 );

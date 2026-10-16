@@ -93,6 +93,8 @@ flutter:
   assets:
     - assets/icon/app_icon.png
     - windows/runner/resources/app_icon.ico
+    # 标签图标的完整分类、中英关键词及许可通知，运行时离线读取。
+    - assets/emoji/note_tag_emoji_catalog.json
 
   # To add assets to your application, add an assets section, like this:
   # assets:
