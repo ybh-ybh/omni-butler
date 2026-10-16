@@ -11,7 +11,6 @@ import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/note_composer_style.dart';
-import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/sync/sync_preferences.dart';
@@ -23,7 +22,6 @@ import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
 import 'package:omni_butler/features/notes/data/note_tag_actions.dart';
 import 'package:omni_butler/features/notes/data/note_image_repository.dart';
-import 'package:omni_butler/features/notes/data/note_draft_audio_edits.dart';
 import 'package:omni_butler/features/notes/markdown/note_markdown.dart';
 import 'package:omni_butler/features/notes/presentation/note_rich_editor.dart';
 import 'package:omni_butler/features/notes/presentation/note_markdown_text.dart';
@@ -31,9 +29,10 @@ import 'package:omni_butler/features/notes/presentation/note_audio_card.dart';
 import 'package:omni_butler/features/notes/presentation/note_search_focus.dart';
 import 'package:omni_butler/features/notes/presentation/note_statistic_button.dart';
 import 'package:omni_butler/features/notes/presentation/windows_note_statistics_dialog.dart';
+import 'package:omni_butler/features/notes/presentation/windows_note_search_bar.dart';
+import 'package:omni_butler/features/notes/presentation/windows_note_search_filter.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
 import 'package:omni_butler/features/settings/presentation/recycle_bin_section.dart';
-import 'package:omni_butler/shared/search/global_search_dialog.dart';
 import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:omni_butler/shared/ui/omni_note_composer_button.dart';
@@ -189,6 +188,12 @@ class _NotesPageState extends ConsumerState<NotesPage>
 
   /// 无有效标签集合。
   bool _untagged = false;
+
+  /// 桌面标签筛选可切换为排除所选标签。
+  bool _excludeSearchTags = false;
+
+  /// 桌面内容类型按交集筛选，不改变正文或附件数据。
+  final Set<String> _searchContents = {};
 
   /// 防止数据流在build中同步通知。
   bool _acceptingRemote = false;
@@ -364,6 +369,11 @@ class _NotesPageState extends ConsumerState<NotesPage>
             _search.clear();
             _tagFilter.clear();
             _selectedDay = null;
+            _range = 'all';
+            _customRange = null;
+            _untagged = false;
+            _excludeSearchTags = false;
+            _searchContents.clear();
           }
         }
       });
@@ -385,12 +395,13 @@ class _NotesPageState extends ConsumerState<NotesPage>
     }
   });
 
-  /// 可组合的日期、类别、标签与关键词筛选。
+  /// 可组合的日期、标签、内容与关键词筛选。
   bool _matches(
     NoteEntryRecord note,
     List<TaxonomyEntry> taxonomies,
-    List<NoteAudioSegmentRecord> audio,
-  ) {
+    List<NoteAudioSegmentRecord> audio, {
+    Set<String> imageNoteIds = const {},
+  }) {
     if (_selectedDay != null && note.dayKey != _selectedDay) return false;
     // 有效多标签，不把被删除标签算入未打标签判断。
     final Set<String> tags = noteTagIds(note.tags).intersection(
@@ -399,7 +410,23 @@ class _NotesPageState extends ConsumerState<NotesPage>
           .map((item) => item.id)
           .toSet(),
     );
-    if (_untagged && tags.isNotEmpty || !tags.containsAll(_tagFilter)) {
+    if (_untagged && tags.isNotEmpty ||
+        (_excludeSearchTags
+            ? tags.any(_tagFilter.contains)
+            : !tags.containsAll(_tagFilter))) {
+      return false;
+    }
+    if (_searchContents.contains('image') && !imageNoteIds.contains(note.id) ||
+        _searchContents.contains('audio') &&
+            !audio.any(
+              (segment) =>
+                  segment.noteId == note.id && segment.deletedAt == null,
+            ) ||
+        _searchContents.contains('link') &&
+            !RegExp(
+              r'https?://[^\s<>]+',
+              caseSensitive: false,
+            ).hasMatch(note.body)) {
       return false;
     }
     // 当前本地自然日。
@@ -411,10 +438,15 @@ class _NotesPageState extends ConsumerState<NotesPage>
       'today' => today,
       'week' => today.subtract(Duration(days: today.weekday - 1)),
       'month' => DateTime(today.year, today.month),
+      'lastMonth' => DateTime(today.year, today.month - 1),
+      'last7' => DateTime(today.year, today.month, today.day - 6),
+      'last30' => DateTime(today.year, today.month, today.day - 29),
       'custom' => _customRange?.start,
       _ => null,
     };
-    final DateTime? end = _range == 'custom'
+    final DateTime? end = _range == 'lastMonth'
+        ? DateTime(today.year, today.month, 0)
+        : _range == 'custom'
         ? _customRange?.end
         : start == null
         ? null

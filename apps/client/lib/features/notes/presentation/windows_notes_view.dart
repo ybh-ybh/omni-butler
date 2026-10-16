@@ -155,9 +155,17 @@ extension _WindowsNotesView on _NotesPageState {
         ref.watch(_allNoteAudioProvider).value ?? [];
     // 所有活动正式笔记。
     final List<NoteEntryRecord> all = notes.value ?? [];
+    // 正式图片流参与筛选，草稿图片不会提前命中。
+    final Set<String> imageNoteIds =
+        (ref.watch(_allNoteImagesProvider).value ?? [])
+            .where((image) => image.deletedAt == null)
+            .map((image) => image.noteId)
+            .toSet();
     // 当前视图的交集结果。
     final List<NoteEntryRecord> filtered = all
-        .where((note) => _matches(note, taxonomy, audio))
+        .where(
+          (note) => _matches(note, taxonomy, audio, imageNoteIds: imageNoteIds),
+        )
         .toList();
     // 当前数据源实际可用的平铺标签。
     final List<TaxonomyEntry> tags = taxonomy
@@ -370,29 +378,50 @@ extension _WindowsNotesView on _NotesPageState {
     );
   }
 
-  /// 固定头部保留视图标题、右侧笔记搜索、全局搜索与外观入口。
+  /// 固定头部只保留视图标题和带过滤菜单的笔记搜索。
   Widget _noteHeader(bool drawer, List<TaxonomyEntry> tags) {
     // 当前视图的短标题。
     final String label = _recycle
         ? '笔记回收站'
-        : _tagFilter.isNotEmpty
+        : _tagFilter.isNotEmpty && !_excludeSearchTags
         ? '# ${tags.where((tag) => _tagFilter.contains(tag.id)).firstOrNull?.name ?? '标签'}'
         : _selectedDay ?? '全部笔记';
-    // 搜索框只查询笔记模块。
-    final Widget search = SizedBox(
-      width: 260,
-      child: OmniTextField(
-        key: const ValueKey('notes-search'),
-        controller: _search,
-        focusNode: _searchFocus,
-        decoration: const InputDecoration(
-          hintText: '搜索笔记 · Ctrl+F',
-          prefixIcon: Icon(Icons.search),
-        ),
-        onChanged: (_) => _updateWindows(() {
-          _recycle = false;
-        }),
+    // 聚焦向左展开，窄窗中由父级宽度限制。
+    final Widget search = WindowsNoteSearchBar(
+      controller: _search,
+      focusNode: _searchFocus,
+      tags: tags,
+      filter: WindowsNoteSearchFilter(
+        range: _selectedDay == null ? _range : 'custom',
+        customRange: _selectedDay == null
+            ? _customRange
+            : DateTimeRange(
+                start: DateTime.parse(_selectedDay!),
+                end: DateTime.parse(_selectedDay!),
+              ),
+        tagMode: _untagged
+            ? 'none'
+            : _excludeSearchTags
+            ? 'exclude'
+            : 'include',
+        tagIds: _tagFilter,
+        contents: _searchContents,
       ),
+      onChanged: (_) => _updateWindows(() => _recycle = false),
+      onFilterChanged: (filter) => _updateWindows(() {
+        _recycle = false;
+        _selectedDay = null;
+        _range = filter.range;
+        _customRange = filter.customRange;
+        _untagged = filter.tagMode == 'none';
+        _excludeSearchTags = filter.tagMode == 'exclude';
+        _tagFilter
+          ..clear()
+          ..addAll(filter.tagIds);
+        _searchContents
+          ..clear()
+          ..addAll(filter.contents);
+      }),
     );
     return Padding(
       padding: const EdgeInsets.fromLTRB(
@@ -434,41 +463,7 @@ extension _WindowsNotesView on _NotesPageState {
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                   ),
-                  if (!stacked) search,
-                  OmniIconButton(
-                    tooltip: '全局搜索',
-                    icon: const Icon(Icons.manage_search),
-                    onPressed: () => GlobalSearchDialog.show(context),
-                  ),
-                  OmniPopupMenuButton<ThemeMode>(
-                    tooltip: '外观模式',
-                    icon: const Icon(Icons.contrast),
-                    onSelected: (mode) => ref
-                        .read(themeControllerProvider.notifier)
-                        .setThemeMode(mode),
-                    itemBuilder: (_) => [
-                      OmniPopupMenuItem(
-                        value: ThemeMode.system,
-                        label: '跟随系统',
-                        icon: Icons.brightness_auto_outlined,
-                      ),
-                      OmniPopupMenuItem(
-                        value: ThemeMode.light,
-                        label: '浅色',
-                        icon: Icons.light_mode_outlined,
-                      ),
-                      OmniPopupMenuItem(
-                        value: ThemeMode.dark,
-                        label: '深色',
-                        icon: Icons.dark_mode_outlined,
-                      ),
-                    ],
-                  ),
-                  OmniIconButton(
-                    tooltip: '本机草稿',
-                    icon: const Icon(Icons.drafts_outlined),
-                    onPressed: _showLocalDrafts,
-                  ),
+                  if (!stacked) SizedBox(width: 400, child: search),
                 ],
               ),
               if (stacked)
@@ -689,16 +684,22 @@ extension _WindowsNotesView on _NotesPageState {
                   _noteNavigation(
                     '全部笔记',
                     Icons.grid_view_rounded,
-                    !_recycle && _selectedDay == null && _tagFilter.isEmpty,
+                    !_recycle &&
+                        _selectedDay == null &&
+                        (_tagFilter.isEmpty || _excludeSearchTags),
                     _allNotes,
                   ),
                   const SizedBox(height: OmniSpacing.xl),
                   _NoteTagSection(
                     notes: notes,
                     tags: tags,
-                    selectedIds: _recycle ? const {} : _tagFilter,
+                    selectedIds: _recycle || _excludeSearchTags
+                        ? const {}
+                        : _tagFilter,
                     onSelect: (id) => _updateWindows(() {
                       _recycle = false;
+                      _untagged = false;
+                      _excludeSearchTags = false;
                       _tagFilter
                         ..clear()
                         ..add(id);
@@ -757,6 +758,8 @@ extension _WindowsNotesView on _NotesPageState {
         _untagged = false;
         _range = 'all';
         _customRange = null;
+        _excludeSearchTags = false;
+        _searchContents.clear();
         _closeNoteDrawer();
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -864,6 +867,8 @@ extension _WindowsNotesView on _NotesPageState {
                                   _selectedDay = _selectedDay == key
                                       ? null
                                       : key;
+                                  _range = 'all';
+                                  _customRange = null;
                                   _closeNoteDrawer();
                                 }),
                               ),
@@ -957,6 +962,9 @@ extension _WindowsNotesView on _NotesPageState {
     _search.clear();
     _range = 'all';
     _untagged = false;
+    _customRange = null;
+    _excludeSearchTags = false;
+    _searchContents.clear();
     _closeNoteDrawer();
   });
 
@@ -1643,89 +1651,6 @@ extension _WindowsNotesView on _NotesPageState {
       _focus.requestFocus();
     },
   );
-
-  /// 从草稿菜单恢复已有编辑，不生成新的正式记录。
-  Future<void> _showLocalDrafts() => _perform(() async {
-    // 确保当前输入先进入本机清单。
-    final NoteEditorController editor = ref.read(noteEditorProvider);
-    if (_committing || editor.committing) return;
-    await editor.flush();
-    // 一次读取可恢复的草稿，关闭菜单时不会改变草稿。
-    final List<NoteLocalDraftRecord> drafts = await editor.listLocalDrafts();
-    // 空正文的图片草稿必须可辨识，删除差量不作为有效图片。
-    final Set<String> imageDrafts = {};
-    for (final NoteLocalDraftRecord draft in drafts) {
-      // 同一解析器保留已有插入与音频删除标记。
-      final Set<String> removed = NoteDraftAudioEdits.fromJson(
-        draft.pendingInsertions,
-      ).imageDeletions;
-      // 草稿新增和正式图片共同决定派生名称。
-      final List<NoteImageView> images = await editor.images
-          .watch(draft.noteId, draftId: draft.id)
-          .first;
-      if (images.any((image) => !removed.contains(image.id))) {
-        imageDrafts.add(draft.id);
-      }
-    }
-    if (!mounted) return;
-    await showOmniDialog<void>(
-      context: context,
-      builder: (context) => OmniDialogScaffold(
-        title: '本机草稿',
-        width: 520,
-        actions: [
-          OmniButton(
-            label: '关闭',
-            variant: OmniButtonVariant.text,
-            onPressed: () => Navigator.pop(context),
-          ),
-        ],
-        child: SizedBox(
-          height: 320,
-          child: drafts.isEmpty
-              ? const Center(child: Text('暂无待发布草稿'))
-              : ListView(
-                  children: [
-                    for (final NoteLocalDraftRecord draft in drafts)
-                      OmniListRow(
-                        title: NoteMarkdownText(
-                          source: draft.body.trim().isEmpty
-                              ? imageDrafts.contains(draft.id)
-                                    ? '图片草稿'
-                                    : '录音草稿'
-                              : _displayNoteBody(draft.body).split('\n').first,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          draft.isNew
-                              ? '新笔记 · ${draft.dayKey}'
-                              : '历史笔记的修改 · ${draft.dayKey}',
-                        ),
-                        trailing: OmniButton(
-                          label: '继续编辑',
-                          variant: OmniButtonVariant.text,
-                          onPressed: () async {
-                            Navigator.pop(context);
-                            await editor.openLocalDraft(draft.id);
-                            _updateWindows(() {
-                              _recycle = false;
-                              _search.clear();
-                              _tagFilter.clear();
-                              _selectedDay = null;
-                              _expandedNoteId = draft.isNew
-                                  ? null
-                                  : draft.noteId;
-                            });
-                          },
-                        ),
-                      ),
-                  ],
-                ),
-        ),
-      ),
-    );
-  });
 
   /// 删除指定历史笔记不切换正文，不结束另一篇的录音。
   Future<void> _deleteHistoryNote(String id, NoteEditorController editor) =>

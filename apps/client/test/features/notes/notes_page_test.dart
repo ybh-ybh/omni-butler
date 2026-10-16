@@ -29,6 +29,8 @@ import 'package:omni_butler/app/theme/note_composer_style.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:omni_butler/shared/ui/omni_note_composer_button.dart';
 import 'package:omni_butler/features/notes/presentation/notes_page.dart';
+import 'package:omni_butler/features/notes/presentation/windows_note_search_bar.dart';
+import 'package:omni_butler/features/notes/presentation/windows_note_search_filter.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart';
@@ -41,6 +43,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 全应用路径回归：所有音频接口都由替身接管。
 void main() {
+  searchPageTests();
   statisticsPageTests();
   editorToolbarTests();
   noteTagActionTests();
@@ -2668,6 +2671,180 @@ void main() {
   });
 }
 
+/// 搜索栏接入真实笔记、附件与侧栏状态后的结果回归。
+void searchPageTests() {
+  testWidgets('Windows搜索过滤：标签排除、无标签和内容交集命中真实正式数据', (tester) async {
+    // 种子含三篇带标签笔记，其中target带原始语音。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      initialLocation: '/notes',
+      seed: true,
+      prepareDatabase: (database) async {
+        // 独立无标签链接笔记同时关联正式图片。
+        final DateTime now = DateTime.now();
+        await NoteRepository(database).save(
+          NoteDraft(
+            id: 'linked-image',
+            body: '资料链接 https://example.com/reference',
+            dayKey: businessDayKey(now),
+            baseRevision: '',
+          ),
+        );
+        await database
+            .into(database.noteImages)
+            .insert(
+              NoteImagesCompanion.insert(
+                id: 'search-image',
+                noteId: 'linked-image',
+                sortOrder: 0,
+                createdAt: now,
+                updatedAt: now,
+              ),
+            );
+      },
+    );
+    expect(find.byTooltip('全局搜索'), findsNothing);
+    expect(find.byTooltip('外观模式'), findsNothing);
+    expect(find.byTooltip('本机草稿'), findsNothing);
+    // 排除工作标签，不会排除只有复盘的周报和无标签笔记。
+    await _applySearchFilter(
+      tester,
+      WindowsNoteSearchFilter(tagMode: 'exclude', tagIds: {'work'}),
+    );
+    expect(
+      tester
+          .widget<Semantics>(
+            find.byKey(const ValueKey('notes-tag-region-work')),
+          )
+          .properties
+          .selected,
+      isFalse,
+    );
+    expect(find.byKey(const ValueKey('note-card-target')), findsNothing);
+    expect(find.byKey(const ValueKey('note-card-yesterday')), findsNothing);
+    expect(find.byKey(const ValueKey('note-card-weekly-note')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('note-card-linked-image')),
+      findsOneWidget,
+    );
+    // 包含工作且有语音只有target，保留原转写检索。
+    await _applySearchFilter(
+      tester,
+      WindowsNoteSearchFilter(tagIds: {'work'}, contents: {'audio'}),
+    );
+    expect(find.byKey(const ValueKey('note-card-target')), findsOneWidget);
+    expect(find.byKey(const ValueKey('note-card-yesterday')), findsNothing);
+    await tester.enterText(find.byKey(const ValueKey('notes-search')), '语音验收');
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('note-card-target')), findsOneWidget);
+    // 全部笔记撤销所有新增过滤，不丢失正在编辑的草稿。
+    await tester.tap(find.text('全部笔记').first);
+    await _settle(tester);
+    await _applySearchFilter(
+      tester,
+      WindowsNoteSearchFilter(tagMode: 'none', contents: {'image', 'link'}),
+    );
+    expect(
+      find.byKey(const ValueKey('note-card-linked-image')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('note-card-target')), findsNothing);
+    await _applySearchFilter(
+      tester,
+      WindowsNoteSearchFilter(contents: {'image', 'audio'}),
+    );
+    expect(find.text('没有符合条件的笔记'), findsOneWidget);
+    await tester.tap(find.text('清除筛选'));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('note-card-target')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('note-card-linked-image')),
+      findsOneWidget,
+    );
+    await _capture(tester, app, 'windows-search-page');
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('Windows搜索过滤：近七天和近三十天包含边界，自定义结束日包含全天', (tester) async {
+    // 归档自然日刻意覆盖每个快捷范围的内外边界。
+    final DateTime now = DateTime.now();
+    // 使用日历构造避免夏令时改变业务日期。
+    final DateTime today = DateTime(now.year, now.month, now.day);
+    // 内存数据库只写入本用例边界样本。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      initialLocation: '/notes',
+      prepareDatabase: (database) async {
+        // 0、6、7、29、30日前分别命中/越过两个边界。
+        for (final int days in [0, 6, 7, 29, 30]) {
+          await NoteRepository(database).save(
+            NoteDraft(
+              id: 'boundary-$days',
+              body: '边界样本$days',
+              dayKey: businessDayKey(
+                DateTime(today.year, today.month, today.day - days),
+              ),
+              baseRevision: '',
+            ),
+          );
+        }
+      },
+    );
+    await _applySearchFilter(tester, WindowsNoteSearchFilter(range: 'last7'));
+    expect(find.byKey(const ValueKey('note-card-boundary-6')), findsOneWidget);
+    expect(find.byKey(const ValueKey('note-card-boundary-7')), findsNothing);
+    await _applySearchFilter(tester, WindowsNoteSearchFilter(range: 'last30'));
+    expect(find.byKey(const ValueKey('note-card-boundary-29')), findsOneWidget);
+    expect(find.byKey(const ValueKey('note-card-boundary-30')), findsNothing);
+    await _applySearchFilter(
+      tester,
+      WindowsNoteSearchFilter(
+        range: 'custom',
+        customRange: DateTimeRange(start: today, end: today),
+      ),
+    );
+    expect(find.byKey(const ValueKey('note-card-boundary-0')), findsOneWidget);
+    expect(find.byKey(const ValueKey('note-card-boundary-6')), findsNothing);
+    await _applySearchFilter(
+      tester,
+      WindowsNoteSearchFilter(range: 'lastMonth'),
+    );
+    // 上月的真实首尾独立于测试运行月份，逐篇检查归档日期。
+    for (final int days in [0, 6, 7, 29, 30]) {
+      // 当前样本所在日期。
+      final DateTime date = DateTime(today.year, today.month, today.day - days);
+      // 跨年时也按完整年月判断上月。
+      final DateTime previous = DateTime(today.year, today.month - 1);
+      expect(
+        find.byKey(ValueKey('note-card-boundary-$days')),
+        date.year == previous.year && date.month == previous.month
+            ? findsOneWidget
+            : findsNothing,
+      );
+    }
+    // 热图选择替换快捷时间条件，避免“上月”和“今天”形成隐藏交集。
+    await tester.tap(find.byKey(ValueKey('note-day-${businessDayKey(today)}')));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('note-card-boundary-0')), findsOneWidget);
+    expect(find.byKey(const ValueKey('note-card-boundary-6')), findsNothing);
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+}
+
+/// 组件交互在独立测试覆盖，此处通过公开回调校验真实页面查询接线。
+Future<void> _applySearchFilter(
+  WidgetTester tester,
+  WindowsNoteSearchFilter filter,
+) async {
+  tester
+      .widget<WindowsNoteSearchBar>(find.byType(WindowsNoteSearchBar))
+      .onFilterChanged(filter);
+  await _settle(tester);
+}
+
 /// 统计弹窗的生产页面回归，复用真实数据库、编辑器和路由。
 /// 置顶快捷入口与两种删除使用真实侧栏、仓储和编辑会话回归。
 void noteTagActionTests() {
@@ -3392,7 +3569,7 @@ void editorToolbarTests() {
     await _capture(tester, app, 'windows-toolbar-dark-narrow');
     await _dispose(tester, app);
   });
-  testWidgets('Windows编辑栏：阅读保留非列表缩进，格式草稿菜单不泄漏标记', (tester) async {
+  testWidgets('Windows编辑栏：阅读保留非列表缩进，格式草稿仍可恢复', (tester) async {
     // 以真实持久内容验证阅读层不会通过trim改变格式语义。
     final _App app = await _mount(
       tester,
@@ -3412,21 +3589,16 @@ void editorToolbarTests() {
     expect(find.text('  - 普通标题'), findsOneWidget);
     expect(find.text('  1. 普通正文'), findsOneWidget);
     expect(find.text('•'), findsNothing);
-    // 只读菜单同样由受限解析器处理格式。
+    // 删除顶栏草稿入口后，草稿仍由原控制器持久化并可恢复。
     app.container.read(noteEditorProvider).edit(body: '**草稿加粗**');
     await _settle(tester);
-    await tester.tap(find.byTooltip('本机草稿'));
-    await _settle(tester);
-    expect(
-      find.descendant(
-        of: find.byType(OmniDialogScaffold),
-        matching: find.text('草稿加粗'),
-      ),
-      findsOneWidget,
-    );
-    expect(find.text('**草稿加粗**'), findsNothing);
-    await tester.tap(find.byTooltip('关闭').hitTestable());
-    await _settle(tester);
+    await tester.runAsync(() => app.container.read(noteEditorProvider).flush());
+    // 底层草稿继续保留受限格式源，不由搜索栏负责生命周期。
+    final List<NoteLocalDraftRecord> drafts = (await tester.runAsync(
+      () => app.container.read(noteEditorProvider).listLocalDrafts(),
+    ))!;
+    expect(drafts.any((draft) => draft.body == '**草稿加粗**'), isTrue);
+    expect(find.byTooltip('本机草稿'), findsNothing);
     await _dispose(tester, app);
     expect(tester.takeException(), isNull);
   });
@@ -3614,12 +3786,9 @@ void editorToolbarTests() {
       }
     }
     await _capture(tester, app, 'windows-toolbar-images');
-    await tester.tap(find.byTooltip('本机草稿'));
-    await _settle(tester);
-    expect(find.text('图片草稿'), findsOneWidget);
-    expect(find.text('录音草稿'), findsNothing);
-    await tester.tap(find.byTooltip('关闭').hitTestable());
-    await _settle(tester);
+    // 顶栏删除草稿按钮不影响已暂存的图片与后续发布。
+    expect(find.byTooltip('本机草稿'), findsNothing);
+    expect(app.container.read(noteEditorProvider).hasImages, isTrue);
     await tester.tap(find.byTooltip('移除图片').first);
     await _settle(tester);
     expect(find.byTooltip('移除图片'), findsOneWidget);
