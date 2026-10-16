@@ -1,11 +1,7 @@
 part of 'notes_page.dart';
 
 /// 图片事实供纯图片标题读取，文件本身仍由专用图片同步链路管理。
-final _allNoteImagesProvider = StreamProvider<List<NoteImageRecord>>((ref) {
-  // 当前资料库的正式图片身份，包含回收站事实以便响应恢复。
-  final AppDatabase database = ref.watch(appDatabaseProvider);
-  return database.select(database.noteImages).watch();
-});
+final _allNoteImagesProvider = allNoteImagesProvider;
 
 /// Aa 的三个固定操作，不扩展到未约定的字体或颜色设置。
 enum _NoteFormat { bold, underline, highlight }

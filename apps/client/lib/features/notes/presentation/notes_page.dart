@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'android_notes_view.dart';
+import 'windows_note_tags.dart';
+import '../data/note_search_filter.dart';
+
 import 'package:drift/drift.dart' hide Column;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -19,8 +23,6 @@ import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart';
 import 'package:omni_butler/features/notes/data/note_editor_controller.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
-import 'package:omni_butler/features/notes/data/note_repository.dart';
-import 'package:omni_butler/features/notes/data/note_tag_actions.dart';
 import 'package:omni_butler/features/notes/data/note_image_repository.dart';
 import 'package:omni_butler/features/notes/markdown/note_markdown.dart';
 import 'package:omni_butler/features/notes/presentation/note_rich_editor.dart';
@@ -31,7 +33,6 @@ import 'package:omni_butler/features/notes/presentation/note_statistic_button.da
 import 'package:omni_butler/features/notes/presentation/windows_note_statistics_dialog.dart';
 import 'package:omni_butler/features/notes/presentation/windows_note_search_bar.dart';
 import 'package:omni_butler/features/notes/presentation/windows_note_search_filter.dart';
-import 'package:omni_butler/features/notes/presentation/windows_note_tag_editor.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
 import 'package:omni_butler/features/settings/presentation/recycle_bin_section.dart';
 import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
@@ -43,45 +44,48 @@ import 'package:omni_butler/shared/ui/omni_windows_semantics_boundary.dart';
 import 'package:uuid/uuid.dart';
 
 part 'windows_notes_view.dart';
-part 'windows_note_tags.dart';
+
 part 'windows_note_tag_picker.dart';
 part 'windows_note_body.dart';
 part 'windows_note_tools.dart';
 
 /// 含已删除名称的笔记分类流，历史名称不能丢失。
-final _noteTaxonomiesProvider = StreamProvider<List<TaxonomyEntry>>((ref) {
-  // 当前数据库与模块管理项。
-  final AppDatabase database = ref.watch(appDatabaseProvider);
-  return (database.select(database.taxonomyEntries)
-        ..where((table) => table.module.equals('notes'))
-        ..orderBy([(table) => OrderingTerm.asc(table.sortOrder)]))
-      .watch();
-});
+final _noteTaxonomiesProvider = noteTaxonomiesProvider;
 
 /// 全部原始转写用于历史组合检索。
-final _allNoteAudioProvider = StreamProvider<List<NoteAudioSegmentRecord>>((
-  ref,
-) {
-  // 当前模块原音，无效记录不会进入有效笔记集合。
-  final AppDatabase database = ref.watch(appDatabaseProvider);
-  return database.select(database.noteAudioSegments).watch();
-});
+final _allNoteAudioProvider = allNoteAudioProvider;
 
-/// 低成本捕捉入口；路由预载只构造空编辑器，不产生业务记录。
-class NotesPage extends ConsumerStatefulWidget {
+/// 平台入口保持既有路由和外部笔记定位参数。
+class NotesPage extends StatelessWidget {
   /// 搜索或通知指定已有笔记。
   final String? initialNoteId;
 
-  /// 创建笔记页。
+  /// 创建平台对应的笔记工作区。
   const NotesPage({this.initialNoteId, super.key});
 
-  /// 创建页面状态。
+  /// Android 使用独立布局，其他平台沿用原有工作区。
   @override
-  ConsumerState<NotesPage> createState() => _NotesPageState();
+  Widget build(BuildContext context) =>
+      Theme.of(context).platform == TargetPlatform.android
+      ? AndroidNotesView(initialNoteId: initialNoteId)
+      : _NotesWorkspace(initialNoteId: initialNoteId);
+}
+
+/// 原工作区保留 Windows 呈现和其他平台兼容路径。
+class _NotesWorkspace extends ConsumerStatefulWidget {
+  /// 外部笔记定位请求。
+  final String? initialNoteId;
+
+  /// 创建既有工作区。
+  const _NotesWorkspace({this.initialNoteId});
+
+  /// 创建原工作区状态。
+  @override
+  ConsumerState<_NotesWorkspace> createState() => _NotesPageState();
 }
 
 /// 历史与编辑区域共用的呈现状态。
-class _NotesPageState extends ConsumerState<NotesPage>
+class _NotesPageState extends ConsumerState<_NotesWorkspace>
     with WidgetsBindingObserver {
   /// 正文输入与中文输入法状态。
   final TextEditingController _body = TextEditingController();
@@ -260,7 +264,7 @@ class _NotesPageState extends ConsumerState<NotesPage>
 
   /// 搜索改变指定记录时直接打开原记录。
   @override
-  void didUpdateWidget(NotesPage oldWidget) {
+  void didUpdateWidget(_NotesWorkspace oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.initialNoteId != oldWidget.initialNoteId &&
         widget.initialNoteId != null) {
@@ -403,71 +407,25 @@ class _NotesPageState extends ConsumerState<NotesPage>
     List<NoteAudioSegmentRecord> audio, {
     Set<String> imageNoteIds = const {},
   }) {
-    if (_selectedDay != null && note.dayKey != _selectedDay) return false;
-    // 有效多标签，不把被删除标签算入未打标签判断。
-    final Set<String> tags = noteTagIds(note.tags).intersection(
-      taxonomies
-          .where((item) => item.kind == 'tag' && item.deletedAt == null)
-          .map((item) => item.id)
-          .toSet(),
+    return matchesNoteSearch(
+      note,
+      filter: NoteSearchFilter(
+        range: _range,
+        customRange: _customRange,
+        tagMode: _untagged
+            ? 'none'
+            : _excludeSearchTags
+            ? 'exclude'
+            : 'include',
+        tagIds: _tagFilter,
+        contents: _searchContents,
+      ),
+      taxonomies: taxonomies,
+      audio: audio,
+      imageNoteIds: imageNoteIds,
+      query: _search.text,
+      selectedDay: _selectedDay,
     );
-    if (_untagged && tags.isNotEmpty ||
-        (_excludeSearchTags
-            ? tags.any(_tagFilter.contains)
-            : !tags.containsAll(_tagFilter))) {
-      return false;
-    }
-    if (_searchContents.contains('image') && !imageNoteIds.contains(note.id) ||
-        _searchContents.contains('audio') &&
-            !audio.any(
-              (segment) =>
-                  segment.noteId == note.id && segment.deletedAt == null,
-            ) ||
-        _searchContents.contains('link') &&
-            !RegExp(
-              r'https?://[^\s<>]+',
-              caseSensitive: false,
-            ).hasMatch(note.body)) {
-      return false;
-    }
-    // 当前本地自然日。
-    final DateTime now = DateTime.now();
-    // 自然日边界保持日期语义。
-    final DateTime today = DateTime(now.year, now.month, now.day);
-    // 筛选下限与上限。
-    final DateTime? start = switch (_range) {
-      'today' => today,
-      'week' => today.subtract(Duration(days: today.weekday - 1)),
-      'month' => DateTime(today.year, today.month),
-      'lastMonth' => DateTime(today.year, today.month - 1),
-      'last7' => DateTime(today.year, today.month, today.day - 6),
-      'last30' => DateTime(today.year, today.month, today.day - 29),
-      'custom' => _customRange?.start,
-      _ => null,
-    };
-    final DateTime? end = _range == 'lastMonth'
-        ? DateTime(today.year, today.month, 0)
-        : _range == 'custom'
-        ? _customRange?.end
-        : start == null
-        ? null
-        : today;
-    if (start != null && note.dayKey.compareTo(businessDayKey(start)) < 0 ||
-        end != null && note.dayKey.compareTo(businessDayKey(end)) > 0) {
-      return false;
-    }
-    // 类别与标签名字也可作为关键词。
-    final String keyword = _search.text.trim().toLowerCase();
-    if (keyword.isEmpty) return true;
-    return [
-      NoteMarkdown.plainText(note.body),
-      ...taxonomies
-          .where((item) => tags.contains(item.id))
-          .map((item) => item.name),
-      ...audio
-          .where((item) => item.noteId == note.id)
-          .map((item) => item.transcript ?? ''),
-    ].any((value) => value.toLowerCase().contains(keyword));
   }
 
   /// 构建与现有导航共存的两端布局。

@@ -37,7 +37,7 @@ NoteDraft noteDraftFromLocal(NoteLocalDraftRecord local) => NoteDraft(
   dateEdited: local.dateEdited,
 );
 
-/// Windows 未发布草稿与新增原音仅写本机表。
+/// 两端未发布草稿与新增原音仅写本机表。
 class NoteLocalDraftRepository {
   /// 正式笔记仓储负责现有版本、配额和标签约束。
   final NoteRepository notes;
@@ -162,12 +162,20 @@ class NoteLocalDraftRepository {
       )..where((table) => table.noteId.equals(result.noteId))).get();
       // 当前草稿内稳定排序的原音。
       final List<NoteDraftAudioSegmentRecord> staged = await audio(draftId);
+      // 待确认片段已取消或原音已明确移除时，不能继续占用本篇录音额度。
+      final Set<String> removed = NoteDraftAudioEdits.fromJson(
+        draft.pendingInsertions,
+      ).deletions;
       // 暂停时间不包含在实际采样时长中。
       final int duration = result.duration.inMilliseconds;
       if (duration > 1800000 ||
           duration +
-                  published.fold<int>(0, (sum, item) => sum + item.durationMs) +
-                  staged.fold<int>(0, (sum, item) => sum + item.durationMs) >
+                  published
+                      .where((item) => !removed.contains(item.id))
+                      .fold<int>(0, (sum, item) => sum + item.durationMs) +
+                  staged
+                      .where((item) => !removed.contains(item.id))
+                      .fold<int>(0, (sum, item) => sum + item.durationMs) >
               3600000) {
         throw const FormatException('录音超出单段 30 分钟或单篇 60 分钟上限，原音仍可恢复');
       }

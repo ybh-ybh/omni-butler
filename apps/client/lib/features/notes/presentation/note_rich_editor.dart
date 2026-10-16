@@ -10,7 +10,7 @@ import 'package:omni_butler/app/theme/note_composer_style.dart';
 import '../markdown/note_markdown.dart';
 import 'note_markdown_text.dart';
 
-/// Windows 可视编辑会话；选区始终使用可见文字偏移而非 Markdown 偏移。
+/// 两端可视编辑会话；选区始终使用可见文字偏移而非 Markdown 偏移。
 class NoteRichEditorController extends ChangeNotifier {
   /// 仅在加载时解析，未编辑的旧正文不会被重新编码。
   NoteRichEditorController({String source = ''}) : _markdown = source {
@@ -72,6 +72,18 @@ class NoteRichEditorController extends ChangeNotifier {
     ),
     quill.ChangeSource.local,
   );
+
+  /// 当前文档是否可以撤销。
+  bool get canUndo => quillController.hasUndo;
+
+  /// 当前文档是否可以重做。
+  bool get canRedo => quillController.hasRedo;
+
+  /// 复用Quill文档撤销，不跨草稿重放。
+  void undo() => quillController.undo();
+
+  /// 复用Quill文档重做并保留当前选区。
+  void redo() => quillController.redo();
 
   /// 当前选区全部为粗体时显示选中状态。
   bool get isBold => _attribute('bold') == true;
@@ -332,6 +344,7 @@ class NoteRichEditor extends StatefulWidget {
     this.enabled = true,
     this.readOnly = false,
     this.minHeight = 160,
+    this.scrollable = false,
     this.style,
     this.placeholder = '现在的想法是...',
   });
@@ -353,6 +366,9 @@ class NoteRichEditor extends StatefulWidget {
 
   /// 新建编辑器保留原有最小正文高度。
   final double minHeight;
+
+  /// 安卓紧凑编辑区可启用内部滚动，桌面默认维持外层滚动。
+  final bool scrollable;
 
   /// 原卡片传入的正文样式。
   final TextStyle? style;
@@ -567,7 +583,7 @@ class _NoteRichEditorState extends State<NoteRichEditor> {
         scrollController: _scroll,
         config: quill.QuillEditorConfig(
           editorKey: widget.controller.editorKey,
-          scrollable: false,
+          scrollable: widget.scrollable,
           minHeight: widget.minHeight,
           placeholder: widget.placeholder,
           padding: EdgeInsets.zero,

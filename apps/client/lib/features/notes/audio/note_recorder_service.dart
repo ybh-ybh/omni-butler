@@ -63,6 +63,22 @@ class NoteRecorderService {
   /// 当前状态快照。
   NoteRecordingState state = const NoteRecordingState();
 
+  /// 高频音量只供可见录音卡片重绘，不刷新编辑状态。
+  final StreamController<NoteRecordingLevel> _levels =
+      StreamController.broadcast();
+
+  /// 可视化是否允许采样，后台与不可见面板关闭。
+  bool _metering = false;
+
+  /// 只读的实时音量流。
+  Stream<NoteRecordingLevel> get levels => _levels.stream;
+
+  /// 可视化开关不改变原件采集与前台服务生命周期。
+  Future<void> setMeteringActive(bool active) async {
+    _metering = active;
+    if (_android) await _channel.invokeMethod<void>('setMetering', active);
+  }
+
   /// 页面共享状态广播。
   final StreamController<NoteRecordingState> _states =
       StreamController.broadcast();
@@ -221,6 +237,18 @@ class NoteRecorderService {
       _lastPacket = DateTime.now();
       if (_android) {
         await _channel.invokeMethod<void>('start', session);
+        // 原生仅在设备确实启动后响应；事件通道可能晚于方法返回。
+        if (state.phase == NoteRecordingPhase.starting) {
+          _publish(
+            NoteRecordingState(
+              phase: NoteRecordingPhase.recording,
+              noteId: noteId,
+              draftId: draftId,
+              recordingId: id,
+              limit: limit,
+            ),
+          );
+        }
       } else {
         if (!await _ensureRecorder().hasPermission()) {
           throw StateError('麦克风权限未开启，请在系统设置允许录音');
@@ -392,6 +420,32 @@ class NoteRecorderService {
     if (raw is! Map) return;
     // 仅接收本机通道结构。
     final event = Map<String, dynamic>.from(raw);
+    // 兼容未携带代次的旧原生事件，仅可补回同一采集的持久身份。
+    if (event['id'] == _session?['id'] &&
+        event['draftId'] == null &&
+        _session?['draftId'] is String) {
+      event['draftId'] = _session!['draftId'];
+    }
+    if (event['type'] == 'meter') {
+      if (_metering &&
+          state.phase == NoteRecordingPhase.recording &&
+          event['id'] == state.recordingId) {
+        // 非有限或越界值不进入绘制，旧片段不能污染当前波形。
+        final double value = (event['level'] as num?)?.toDouble() ?? 0;
+        if (value.isFinite) {
+          _levels.add(
+            NoteRecordingLevel(
+              recordingId: event['id'] as String,
+              level: value.clamp(0, 1),
+              duration: Duration(
+                milliseconds: (event['durationMs'] as num?)?.toInt() ?? 0,
+              ),
+            ),
+          );
+        }
+      }
+      return;
+    }
     if (event['type'] == 'return') {
       if (event['noteId'] is String) {
         _returnRequests.add(event['noteId'] as String);
@@ -513,8 +567,13 @@ class NoteRecorderService {
         final String? draftId = session['draftId'] as String?;
         // 草稿取消只保护对应代次，不禁止同篇笔记以后再次录音。
         final String deletedOwner =
-            draftId != null &&
-                await _deletionMarker(directory, 'draft:$draftId').exists()
+            await _deletionMarker(
+              directory,
+              'recording:${session['id']}',
+            ).exists()
+            ? 'recording:${session['id']}'
+            : draftId != null &&
+                  await _deletionMarker(directory, 'draft:$draftId').exists()
             ? 'draft:$draftId'
             : noteId;
         // 正式删除和本机取消共用可靠的清单清理。
@@ -569,6 +628,7 @@ class NoteRecorderService {
     String noteId, {
     Set<String> protectedPaths = const {},
     String? draftId,
+    String? recordingId,
   }) => _serial(() async {
     if (noteId.trim().isEmpty) throw ArgumentError('笔记标识不能为空');
     // 当前数据源私有目录，不初始化任何音频设备或事件通道。
@@ -595,7 +655,9 @@ class NoteRecorderService {
         // 清单内容损坏或跨目录时不记录可删原件。
         final Map<String, dynamic> session =
             jsonDecode(await entry.readAsString()) as Map<String, dynamic>;
-        if (draftId == null
+        if (recordingId != null
+            ? session['id'] != recordingId
+            : draftId == null
             ? session['noteId'] != noteId
             : session['draftId'] != draftId) {
           continue;
@@ -640,6 +702,16 @@ class NoteRecorderService {
     }
     if (failure != null) throw failure;
   });
+
+  /// 独立片段取消与整篇删除共用原件保护和持久清理标记。
+  Future<void> discardPendingForRecording(
+    String id, {
+    Set<String> protectedPaths = const {},
+  }) => discardPendingForNote(
+    'recording:$id',
+    recordingId: id,
+    protectedPaths: protectedPaths,
+  );
 
   /// 取消草稿只清理该代次的清单，不能写整篇笔记的永久删除事实。
   Future<void> discardPendingForDraft(
@@ -809,6 +881,7 @@ class NoteRecorderService {
     await _recordSubscription?.cancel();
     await _audioSubscription?.cancel();
     await _recorder?.dispose();
+    await _levels.close();
     await _states.close();
     await _completed.close();
     await _returnRequests.close();

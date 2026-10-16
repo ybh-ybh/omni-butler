@@ -329,6 +329,10 @@ class ResponsiveShell extends ConsumerWidget {
               final bool windowsNotes =
                   Theme.of(context).platform == TargetPlatform.windows &&
                   location == '/notes';
+              // 安卓笔记的根覆盖层自行避让键盘，底层导航保持原尺寸。
+              final bool androidNotes =
+                  Theme.of(context).platform == TargetPlatform.android &&
+                  location == '/notes';
               // 当前是否为展开布局。
               final bool isExpanded = OmniBreakpoint.isExpanded(
                 constraints.maxWidth,
@@ -336,6 +340,7 @@ class ResponsiveShell extends ConsumerWidget {
 
               if (isCompact && !isDesktopPlatform) {
                 return Scaffold(
+                  resizeToAvoidBottomInset: !androidNotes,
                   backgroundColor: colors.canvas,
                   body: SafeArea(child: child),
                   bottomNavigationBar: _CompactNavigation(
@@ -355,6 +360,7 @@ class ResponsiveShell extends ConsumerWidget {
               }
 
               return Scaffold(
+                resizeToAvoidBottomInset: !androidNotes,
                 backgroundColor: colors.canvas,
                 body: Row(
                   children: <Widget>[
@@ -389,7 +395,7 @@ class ResponsiveShell extends ConsumerWidget {
                     Expanded(
                       child: Column(
                         children: <Widget>[
-                          if (!windowsNotes) const _TopBar(),
+                          if (!windowsNotes && !androidNotes) const _TopBar(),
                           Expanded(child: child),
                         ],
                       ),
@@ -419,8 +425,9 @@ class ResponsiveShell extends ConsumerWidget {
     StatefulNavigationShell? navigationShell,
   ) {
     if (destination.path == '/notes') {
-      // 主动导航清除旧搜索定位；已在记录页再次点击入口也提供新草稿。
-      if (location == '/notes') {
+      // 主动导航清除旧搜索定位；安卓保留原草稿，其他平台维持原进入行为。
+      if (location == '/notes' &&
+          Theme.of(context).platform != TargetPlatform.android) {
         ref.read(noteEditorProvider).enter();
       }
       context.go('/notes');

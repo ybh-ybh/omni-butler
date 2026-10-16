@@ -6,6 +6,54 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证笔记历史的归一化、提交顺序、持久化和失败隔离。
 void main() {
+  test('清空与提交串行持久化，旧写入不会复活历史', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 隔离存储和历史服务。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 当前测试容器模拟一次设备会话。
+    final ProviderContainer container = _container(preferences);
+    // 所有操作立即排队，验证清空不会被前面的提交覆盖。
+    final NoteSearchHistory history = container.read(
+      noteSearchHistoryProvider.notifier,
+    );
+    await Future.wait([
+      history.record('旧词'),
+      history.record('新词'),
+      history.clear(),
+    ]);
+    expect(container.read(noteSearchHistoryProvider), isEmpty);
+    expect(preferences.getStringList('notes.search.history'), isEmpty);
+    // 新容器恢复时同样保持清空。
+    final ProviderContainer restored = _container(preferences);
+    expect(restored.read(noteSearchHistoryProvider), isEmpty);
+    await Future.wait([
+      history.record('先提交'),
+      history.clear(),
+      history.record('清空后提交'),
+    ]);
+    expect(container.read(noteSearchHistoryProvider), ['清空后提交']);
+    expect(preferences.getStringList('notes.search.history'), ['清空后提交']);
+  });
+
+  test('清空持久化失败仍可继续提交历史', () async {
+    // 写入失败不能打断后续队列。
+    final _FailingPreferences preferences = _FailingPreferences(
+      throwOnWrite: true,
+    );
+    // 当前测试持有的独立容器。
+    final ProviderContainer container = _container(preferences);
+    // 失败后仍可复用的历史控制器。
+    final NoteSearchHistory history = container.read(
+      noteSearchHistoryProvider.notifier,
+    );
+    await history.record('旧词');
+    await expectLater(history.clear(), completes);
+    expect(container.read(noteSearchHistoryProvider), isEmpty);
+    await history.record('新词');
+    expect(container.read(noteSearchHistoryProvider), ['新词']);
+    expect(preferences.writeAttempts, 3);
+  });
+
   test('空白搜索不产生历史和存储写入', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     // 当前设备的测试存储。

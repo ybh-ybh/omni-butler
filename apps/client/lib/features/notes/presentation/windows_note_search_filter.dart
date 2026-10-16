@@ -1,54 +1,15 @@
 import 'dart:math' as math;
 
+import '../data/note_search_filter.dart';
+
 import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
-/// 笔记搜索使用的不可变过滤值；菜单草稿只在点击搜索后提交。
-@immutable
-class WindowsNoteSearchFilter {
-  /// 时间范围：all、month、lastMonth、last7、last30 或 custom。
-  final String range;
-
-  /// 自定义起止日，匹配时由调用方包含结束日全天。
-  final DateTimeRange? customRange;
-
-  /// 标签匹配方式：include、exclude 或 none。
-  final String tagMode;
-
-  /// 已选标签身份；复制后不允许外部修改。
-  final Set<String> tagIds;
-
-  /// 内容类型身份：image、link 或 audio。
-  final Set<String> contents;
-
-  /// 复制集合，避免菜单或调用方意外修改已应用的过滤条件。
-  WindowsNoteSearchFilter({
-    this.range = 'all',
-    this.customRange,
-    this.tagMode = 'include',
-    Set<String> tagIds = const <String>{},
-    Set<String> contents = const <String>{},
-  }) : tagIds = Set<String>.unmodifiable(tagIds),
-       contents = Set<String>.unmodifiable(contents);
-
-  /// 页面初始值和重置可直接复用的空过滤条件。
-  const WindowsNoteSearchFilter.empty()
-    : range = 'all',
-      customRange = null,
-      tagMode = 'include',
-      tagIds = const <String>{},
-      contents = const <String>{};
-
-  /// 仅真正影响结果的条件会激活搜索栏过滤标记。
-  bool get isActive =>
-      range != 'all' ||
-      tagMode == 'none' ||
-      tagIds.isNotEmpty ||
-      contents.isNotEmpty;
-}
+/// 保留 Windows 调用方名称，条件模型由两端共用。
+typedef WindowsNoteSearchFilter = NoteSearchFilter;
 
 /// 在当前窗口的过滤按钮下方显示菜单，取消时不提交草稿。
 Future<WindowsNoteSearchFilter?> showWindowsNoteSearchFilter({

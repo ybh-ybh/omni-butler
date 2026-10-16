@@ -1,5 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+
+import 'package:image_picker/image_picker.dart';
+import 'package:omni_butler/features/notes/data/note_image_acquisition.dart';
+
 import 'dart:ui' as ui;
 
 import 'package:crypto/crypto.dart';
@@ -40,8 +44,14 @@ import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
 import 'package:omni_butler/features/notes/audio/note_wav.dart';
 import 'package:omni_butler/features/notes/data/note_local_draft_repository.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
+import 'package:omni_butler/features/notes/data/note_search_history.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+part 'android_notes_scenarios.dart';
+part 'android_note_search_scenarios.dart';
+part 'android_note_composer_scenarios.dart';
+part 'android_note_actions_scenarios.dart';
 
 /// 全应用路径回归：所有音频接口都由替身接管。
 void main() {
@@ -107,104 +117,10 @@ void main() {
       );
     await emoji.load();
   });
-  testWidgets('Android六分支预载不录音，保存与历史及重新进入相互独立', (tester) async {
-    // 完整生产路由环境。
-    final _App app = await _mount(tester);
-    expect(app.routerPath, '/home');
-    expect(
-      await tester.runAsync(
-        () => app.database.select(app.database.noteEntries).get(),
-      ),
-      isEmpty,
-    );
-    expect(app.recorder.starts, 0);
-    // 首次真正进入后使用实际编辑器自动保存。
-    await _navigate(tester, app, '/notes');
-    final String originalId = app.container.read(noteEditorProvider).draft.id;
-    await _enterBody(tester, '今天完成笔记功能，明天继续验证。');
-    await _settle(tester, elapsed: const Duration(milliseconds: 700));
-    expect(
-      (await tester.runAsync(
-        () => NoteRepository(app.database).find(originalId),
-      ))?.body,
-      '今天完成笔记功能，明天继续验证。',
-    );
-    expect(find.text('已保存到本机'), findsOneWidget);
-    // 生命周期恢复不能生成另一篇笔记。
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    await _settle(tester);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await _settle(tester);
-    expect(app.container.read(noteEditorProvider).draft.id, originalId);
-    await tester.tap(find.byTooltip('查看历史'));
-    await _settle(tester);
-    expect(find.text('今天完成笔记功能，明天继续验证。'), findsOneWidget);
-    await tester.tap(find.text('今天完成笔记功能，明天继续验证。'));
-    await _settle(tester);
-    expect(app.container.read(noteEditorProvider).draft.id, originalId);
-    expect(
-      (await tester.runAsync(
-        () => app.database.select(app.database.noteEntries).get(),
-      ))!.length,
-      1,
-    );
-    // 一级导航离开后返回，旧正文仍在库中，新入口为空。
-    await _navigate(tester, app, '/home');
-    await _navigate(tester, app, '/notes');
-    expect(app.container.read(noteEditorProvider).draft.id, isNot(originalId));
-    expect(_bodyText(tester), isEmpty);
-    expect(
-      (await tester.runAsync(
-        () => NoteRepository(app.database).find(originalId),
-      ))?.body,
-      '今天完成笔记功能，明天继续验证。',
-    );
-    expect(
-      (await tester.runAsync(
-        () => app.database.select(app.database.noteEntries).get(),
-      ))!.length,
-      1,
-    );
-    expect(app.recorder.starts, 0);
-    await _dispose(tester, app);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('历史按时间多标签与原始转写交集筛选', (tester) async {
-    // 已有多天、多类别和多标签的真实数据库。
-    final _App app = await _mount(tester, seed: true);
-    await _navigate(tester, app, '/notes');
-    await tester.tap(find.byTooltip('查看历史'));
-    await _settle(tester);
-    expect(find.text('今日日报目标'), findsOneWidget);
-    expect(find.text('昨日日报'), findsOneWidget);
-    // 正文没有关键词，搜索应命中原始转写。
-    await tester.enterText(
-      find.widgetWithText(TextField, '搜索笔记、标签或转写'),
-      '语音验收',
-    );
-    await _settle(tester);
-    expect(find.text('今日日报目标'), findsOneWidget);
-    expect(find.text('昨日日报'), findsNothing);
-    await tester.tap(find.text('全部时间'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('今天').last);
-    await _settle(tester);
-    await tester.tap(find.widgetWithText(OmniFilterChip, '工作'));
-    await tester.tap(find.widgetWithText(OmniFilterChip, '复盘'));
-    await _settle(tester);
-    expect(find.text('今日日报目标'), findsOneWidget);
-    expect(find.byType(OmniListTile), findsOneWidget);
-    await tester.enterText(find.widgetWithText(TextField, '搜索笔记、标签或转写'), '不存在');
-    await _settle(tester);
-    expect(find.text('没有符合条件的笔记'), findsOneWidget);
-    await tester.tap(find.text('清除筛选'));
-    await _settle(tester);
-    expect(find.text('昨日日报'), findsOneWidget);
-    expect(app.recorder.starts, 0);
-    await _dispose(tester, app);
-    expect(tester.takeException(), isNull);
-  });
+  androidNoteTests();
+  androidSearchTests();
+  androidComposerTests();
+  androidNoteActionTests();
 
   testWidgets('Windows 统计、热力图、标签与搜索仅使用正式笔记', (tester) async {
     // Windows 真正页面与本机数据库，不访问外部设备。
@@ -2299,6 +2215,8 @@ void main() {
           seed: true,
         );
         await _navigate(tester, app, '/notes');
+        await tester.tap(find.byKey(const ValueKey('android-note-input')));
+        await _settle(tester);
         await _enterBody(tester, '记录此刻的想法\n\n今天完成了第一轮验证。把临时想法写下来，之后再整理成日报或周报。');
         await _settle(tester, elapsed: const Duration(milliseconds: 700));
         await _capture(tester, app, '${platform.name}-$theme');
@@ -2673,7 +2591,7 @@ void main() {
     await _settle(tester);
     await _capture(tester, app, 'android-320-large-editor');
     expect(tester.takeException(), isNull);
-    await tester.tap(find.byTooltip('查看历史'));
+    await tester.tap(find.byKey(const ValueKey('android-note-input')));
     await _settle(tester);
     await _capture(tester, app, 'android-320-large-history');
     FlutterError.onError = previousErrorHandler;
@@ -4213,6 +4131,7 @@ Future<_App> _mount(
   bool allowRecording = false,
   Future<void> Function(AppDatabase)? prepareDatabase,
   Future<Directory> Function()? imageDirectory,
+  ImagePicker? systemImagePicker,
 }) async {
   // 各widget用例拥有不同fake async区域，避免复用已结束区域中的Future。
   NoteTagEmojiCatalog.resetCacheForTesting();
@@ -4251,12 +4170,23 @@ Future<_App> _mount(
       sharedPreferencesProvider.overrideWithValue(preferences),
       appDatabaseProvider.overrideWithValue(database),
       noteRecorderProvider.overrideWithValue(recorder),
+      if (systemImagePicker != null)
+        noteImageAcquisitionProvider.overrideWith(
+          (ref) => NoteImageAcquisition(
+            editor: ref.watch(noteEditorProvider),
+            sourceKey: 'test-source',
+            preferences: preferences,
+            picker: systemImagePicker,
+          ),
+        ),
       if (imageDirectory != null)
         noteEditorProvider.overrideWith(
           (ref) => NoteEditorController(
             ref.watch(noteRepositoryProvider),
             ref.watch(noteRecorderProvider),
-            explicitCommit: platform == TargetPlatform.windows,
+            explicitCommit:
+                platform == TargetPlatform.windows ||
+                platform == TargetPlatform.android,
             imageRepository: NoteImageRepository(
               database,
               directoryProvider: imageDirectory,
@@ -4296,7 +4226,7 @@ Future<void> _dispose(WidgetTester tester, _App app) async {
   await tester.pumpWidget(const SizedBox.shrink());
   await tester.pump();
   app.container.dispose();
-  await app.recorder.dispose();
+  await tester.runAsync(app.recorder.dispose);
   await tester.pump(const Duration(milliseconds: 100));
   await tester.runAsync(app.database.close);
   tester.view.resetPhysicalSize();
@@ -4412,6 +4342,12 @@ class _Recorder implements NoteRecorderService {
   /// 检测意外自动录音。
   int starts = 0;
 
+  /// 模拟原生停止返回先到、完成事件迟到的真实交付顺序。
+  bool deferCompletion = false;
+
+  /// 延迟事件保留同一原件，不能二次创建笔记。
+  NoteRecordingResult? deferred;
+
   /// 只有明确验证录音交互的用例允许启动替身。
   bool allowRecording = false;
 
@@ -4430,9 +4366,49 @@ class _Recorder implements NoteRecorderService {
   @override
   Stream<NoteRecordingState> get states => _states.stream;
 
-  /// 无原音完成事件。
+  /// 使用真实临时WAV交付完成事件，验证正式仓储的原音事务。
+  final StreamController<NoteRecordingResult> _completed =
+      StreamController.broadcast();
+
+  /// 采样可视化与低频状态分开。
+  final StreamController<NoteRecordingLevel> _levels =
+      StreamController.broadcast();
+
+  /// 当前是否允许可视音量采样。
+  bool metering = false;
+
+  /// 明确取消的片段不能被迟到事件恢复。
+  final Set<String> discarded = {};
+
+  /// 原件位于当前测试独有的临时目录。
+  Directory? directory;
+
+  /// 原音完成事件由正常停止或测试中的中断触发。
   @override
-  Stream<NoteRecordingResult> get completed => const Stream.empty();
+  Stream<NoteRecordingResult> get completed => _completed.stream;
+
+  /// 不访问系统设备的真实音量事件流。
+  @override
+  Stream<NoteRecordingLevel> get levels => _levels.stream;
+
+  /// 可视化只改变事件开关，不改变采集阶段。
+  @override
+  Future<void> setMeteringActive(bool active) async {
+    metering = active;
+  }
+
+  /// 注入有限音量，让生产绘制使用真实事件接口。
+  void meter(double value, Duration duration) {
+    if (metering && _state.phase == NoteRecordingPhase.recording) {
+      _levels.add(
+        NoteRecordingLevel(
+          recordingId: _state.recordingId!,
+          level: value,
+          duration: duration,
+        ),
+      );
+    }
+  }
 
   /// 无通知导航事件。
   @override
@@ -4451,6 +4427,36 @@ class _Recorder implements NoteRecorderService {
       phase: NoteRecordingPhase.recording,
       noteId: noteId,
       draftId: draftId,
+      recordingId: 'android-fake-$starts',
+      limit: const Duration(minutes: 30),
+    );
+    _states.add(_state);
+  }
+
+  /// 初始化不需要平台通道。
+  @override
+  Future<void> pause() async {
+    _state = NoteRecordingState(
+      phase: NoteRecordingPhase.paused,
+      noteId: _state.noteId,
+      draftId: _state.draftId,
+      duration: _state.duration,
+      recordingId: _state.recordingId,
+      limit: _state.limit,
+    );
+    _states.add(_state);
+  }
+
+  /// 暂停后恢复同一原音归属。
+  @override
+  Future<void> resume() async {
+    _state = NoteRecordingState(
+      phase: NoteRecordingPhase.recording,
+      noteId: _state.noteId,
+      draftId: _state.draftId,
+      duration: _state.duration,
+      recordingId: _state.recordingId,
+      limit: _state.limit,
     );
     _states.add(_state);
   }
@@ -4466,14 +4472,55 @@ class _Recorder implements NoteRecorderService {
 
   /// 页面测试没有永久删除恢复候选。
   @override
-  Future<bool> isPermanentlyDiscarded(String noteId) async => false;
+  Future<bool> isPermanentlyDiscarded(String noteId) async =>
+      noteId.startsWith('recording:') &&
+      discarded.contains(noteId.substring(10));
+
+  /// 取消只记录本段身份，保护已有其他原音。
+  @override
+  Future<void> discardPendingForRecording(
+    String id, {
+    Set<String> protectedPaths = const {},
+  }) async {
+    discarded.add(id);
+  }
+
+  /// 数据库可靠接管后可确认清单。
+  @override
+  Future<void> acknowledge(String id) async {}
 
   /// 没有设备需要停止。
   @override
   Future<NoteRecordingResult?> stop({String? reason}) async {
+    if (!_state.isActive) return null;
+    // 停止时只写测试专用原件，不调用麦克风。
+    final NoteRecordingState previous = _state;
+    directory ??= Directory.systemTemp.createTempSync(
+      'android-composer-audio-',
+    );
+    // 三秒16kHz单声道PCM供真实仓储校验。
+    final File file = File('${directory!.path}/${previous.recordingId}.wav')
+      ..writeAsBytesSync([
+        ...NoteWav.header(NoteWav.bytesPerSecond * 3),
+        ...List<int>.filled(NoteWav.bytesPerSecond * 3, 0),
+      ]);
+    // 录音归属和采样时间不会随页面关闭而变化。
+    final NoteRecordingResult result = NoteRecordingResult(
+      id: previous.recordingId!,
+      noteId: previous.noteId!,
+      draftId: previous.draftId,
+      path: file.path,
+      duration: const Duration(seconds: 3),
+      startedAt: DateTime.now(),
+    );
     _state = const NoteRecordingState();
     _states.add(_state);
-    return null;
+    if (deferCompletion) {
+      deferred = result;
+    } else {
+      _completed.add(result);
+    }
+    return result;
   }
 
   /// 页面替身没有采集原件，取消仅由真实仓储处理草稿引用。
@@ -4485,7 +4532,19 @@ class _Recorder implements NoteRecorderService {
 
   /// 释放替身的事件流，避免用例之间残留订阅。
   @override
-  Future<void> dispose() => _states.close();
+  Future<void> dispose() async {
+    await _states.close();
+    await _levels.close();
+    await _completed.close();
+    if (directory != null &&
+        directory!.existsSync() &&
+        directory!.path
+            .split(Platform.pathSeparator)
+            .last
+            .startsWith('android-composer-audio-')) {
+      await directory!.delete(recursive: true);
+    }
+  }
 
   /// 捕获未预期接口调用。
   @override

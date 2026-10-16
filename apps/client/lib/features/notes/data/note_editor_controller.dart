@@ -21,7 +21,7 @@ class NoteEditorController extends ChangeNotifier {
   /// 当前设备唯一录音器。
   final NoteRecorderService recorder;
 
-  /// Windows 仅显式发布正式笔记，其他平台沿用自动保存。
+  /// 启用显式提交的工作区只发布正式笔记，其他平台沿用自动保存。
   final bool explicitCommit;
 
   /// 与正式仓储共享事务的本机草稿存储。
@@ -193,23 +193,26 @@ class NoteEditorController extends ChangeNotifier {
         _notify();
       });
     }
-    _completed = recorder.completed.listen((result) {
-      _audioWrites = _audioWrites
-          .then((_) async {
-            await _persistAudio(result);
-            _audioWriteFailures.remove(result.id);
-          })
-          .catchError((Object failure) {
-            _audioWriteFailures[result.id] = (
-              noteId: result.noteId,
-              draftId: result.draftId,
-              failure: failure,
-            );
-            pendingRecoveryCount++;
-            error = '原音待恢复：$failure';
-            _notify();
-          });
-    });
+    _completed = recorder.completed.listen(_queueAudio);
+  }
+
+  /// 完成事件和停止返回统一排队，原生双通道交付顺序不影响可靠暂存。
+  void _queueAudio(NoteRecordingResult result) {
+    _audioWrites = _audioWrites
+        .then((_) async {
+          await _persistAudio(result);
+          _audioWriteFailures.remove(result.id);
+        })
+        .catchError((Object failure) {
+          _audioWriteFailures[result.id] = (
+            noteId: result.noteId,
+            draftId: result.draftId,
+            failure: failure,
+          );
+          pendingRecoveryCount++;
+          error = '原音待恢复：$failure';
+          _notify();
+        });
   }
 
   /// 安全通知仍在存活的页面。
@@ -257,7 +260,7 @@ class NoteEditorController extends ChangeNotifier {
   }
 
   /// 多选逐张暂存，部分失败时已成功的图片仍留在草稿。
-  Future<void> addImages(List<String> paths) async {
+  Future<void> addImages(List<String> paths, {String? requestId}) async {
     if (!explicitCommit ||
         paths.isEmpty ||
         _imageWrites != null ||
@@ -272,7 +275,12 @@ class NoteEditorController extends ChangeNotifier {
     // 最终笔记身份不会随草稿代次变化。
     final String noteId = draft.id;
     // 发布、取消与退出共享这个在途任务。
-    final Future<void> work = _stageImages(localId, noteId, paths);
+    final Future<void> work = _stageImages(
+      localId,
+      noteId,
+      paths,
+      requestId: requestId,
+    );
     _imageWrites = work;
     _imageWritingNoteId = noteId;
     _notify();
@@ -296,8 +304,9 @@ class NoteEditorController extends ChangeNotifier {
   Future<void> _stageImages(
     String localId,
     String noteId,
-    List<String> paths,
-  ) async {
+    List<String> paths, {
+    String? requestId,
+  }) async {
     // 空正文也需要先持久化草稿代次，取消才能可靠写墓碑。
     final DateTime now = DateTime.now();
     if (draft.createdAt == null) {
@@ -319,8 +328,21 @@ class NoteEditorController extends ChangeNotifier {
     _generation++;
     await flush();
     if (dirty) throw StateError(error ?? '草稿暂存失败');
-    for (final String sourcePath in paths) {
-      if (!await images.stage(localId, noteId, sourcePath)) break;
+    // 请求内序号生成稳定附件身份，系统恢复重复交付也不会重复导入。
+    for (int index = 0; index < paths.length; index++) {
+      if (!await images.stage(
+        localId,
+        noteId,
+        paths[index],
+        imageId: requestId == null
+            ? null
+            : const Uuid().v5(
+                Namespace.url.value,
+                'notes-media:$requestId:$index',
+              ),
+      )) {
+        break;
+      }
     }
   }
 
@@ -712,8 +734,12 @@ class NoteEditorController extends ChangeNotifier {
     final Duration remaining = Duration(
       milliseconds:
           3600000 -
-          segments.fold<int>(0, (sum, item) => sum + item.durationMs) -
-          staged.fold<int>(0, (sum, item) => sum + item.durationMs),
+          segments
+              .where((item) => !isAudioRemoved(item.id))
+              .fold<int>(0, (sum, item) => sum + item.durationMs) -
+          staged
+              .where((item) => !isAudioRemoved(item.id))
+              .fold<int>(0, (sum, item) => sum + item.durationMs),
     );
     if (remaining <= Duration.zero) {
       error = '本篇录音已达 60 分钟，请新建笔记';
@@ -767,6 +793,13 @@ class NoteEditorController extends ChangeNotifier {
     NoteRecordingResult result, {
     bool recovery = false,
   }) async {
+    if (await recorder.isPermanentlyDiscarded('recording:${result.id}')) {
+      await recorder.discardPendingForRecording(
+        result.id,
+        protectedPaths: await repository.protectedAudioPaths(),
+      );
+      return;
+    }
     if (explicitCommit) {
       await _stageAudio(result, recovery: recovery);
       return;
@@ -854,7 +887,12 @@ class NoteEditorController extends ChangeNotifier {
     final List<NoteRecordingResult> recovered = await recorder.recoverPending();
     if (explicitCommit) {
       for (final NoteRecordingResult item in recovered) {
-        await _stageAudio(item, recovery: true);
+        // 恢复也进入同一原音队列，单段取消必须等待所有在途写入。
+        final Future<void> restore = _audioWrites.then(
+          (_) => _stageAudio(item, recovery: true),
+        );
+        _audioWrites = restore.catchError((Object _) {});
+        await restore;
         _audioWriteFailures.remove(item.id);
       }
       pendingRecoveryCount = 0;
@@ -993,6 +1031,81 @@ class NoteEditorController extends ChangeNotifier {
             _localNoteIds.contains(noteId) ||
             (draft.id == noteId && _localHasChanges)
       : draft.id == noteId && (dirty || conflicted);
+
+  /// 显式创建独立语音草稿，先保护此前未发布的文字与附件。
+  Future<bool> startFreshComposer() async {
+    if (!explicitCommit ||
+        committing ||
+        _cancelling ||
+        recordingStarting ||
+        recorder.state.isActive) {
+      return false;
+    }
+    await flush();
+    if (dirty || committing || _cancelling || recordingStarting) return false;
+    _blank();
+    _notify();
+    return true;
+  }
+
+  /// 外部相机启动前固定本机草稿，进程回收后仍能恢复原归属。
+  Future<void> prepareMediaDraft() async {
+    if (!explicitCommit || committing || _cancelling || frozen || conflicted) {
+      throw StateError('当前草稿不可添加图片');
+    }
+    await flush();
+    if (dirty) throw StateError(error ?? '草稿暂存失败');
+    if (await localDrafts.find(_draftId!) == null) {
+      await localDrafts.save(id: _draftId!, draft: draft, isNew: _isNewDraft);
+    }
+  }
+
+  /// 停止并可靠暂存当前片段，不把设备空闲误认为附件已经完成落盘。
+  Future<void> finishRecording({NoteRecordingResult? completed}) async {
+    // 停止方法的返回与完成流均可提供可靠事实，不能只等待尚未交付的流。
+    NoteRecordingResult? result = completed;
+    if (recorder.state.isActive && recorder.state.draftId == _draftId) {
+      result ??= await recorder.stop();
+    }
+    if (result != null) _queueAudio(result);
+    await _audioWrites;
+    if (_audioWriteFailures.values.any(
+      (failure) => failure.draftId == _draftId,
+    )) {
+      throw StateError('原音尚未可靠暂存，请恢复原音后重试');
+    }
+    await flush();
+    if (dirty) throw StateError(error ?? '草稿暂存失败');
+  }
+
+  /// 只丢弃本次片段，持久标记阻止迟到回调或重启恢复重新添加。
+  Future<void> discardRecording(String recordingId) async {
+    // 取消流程固定原草稿身份，不影响已有文字或其他原音。
+    final String? owner = _draftId;
+    // 已有共享引用始终受保护。
+    final Set<String> protected = await repository.protectedAudioPaths();
+    await recorder.discardPendingForRecording(
+      recordingId,
+      protectedPaths: protected,
+    );
+    if (recorder.state.isActive && recorder.state.recordingId == recordingId) {
+      await recorder.stop();
+    }
+    await _audioWrites;
+    await recorder.discardPendingForRecording(
+      recordingId,
+      protectedPaths: protected,
+    );
+    _audioWriteFailures.remove(recordingId);
+    if (owner != _draftId) return;
+    _pendingAudioDeletions.add(recordingId);
+    _pendingInsertions.remove(recordingId);
+    _localHasChanges = true;
+    dirty = true;
+    _generation++;
+    await flush();
+    if (dirty) throw StateError(error ?? '取消录音暂存失败');
+  }
 
   /// 顶部输入框恢复上次的新建草稿，切换不会停止其他草稿的录音。
   Future<void> openComposer() async {
@@ -1303,11 +1416,19 @@ class NoteEditorController extends ChangeNotifier {
     }
   }
 
-  /// Windows 结束录音仅暂存，旧清单恢复也不会自动发布。
+  /// 显式提交平台结束录音仅暂存，旧清单恢复也不会自动发布。
   Future<void> _stageAudio(
     NoteRecordingResult result, {
     bool recovery = false,
   }) async {
+    // 恢复快照可能早于取消标记，落库前仍校验片段身份。
+    if (await recorder.isPermanentlyDiscarded('recording:${result.id}')) {
+      await recorder.discardPendingForRecording(
+        result.id,
+        protectedPaths: await repository.protectedAudioPaths(),
+      );
+      return;
+    }
     // 已提升的片段只需确认旧清单，不能生成第二份草稿。
     final NoteAudioSegmentRecord? published = await (repository.database.select(
       repository.database.noteAudioSegments,

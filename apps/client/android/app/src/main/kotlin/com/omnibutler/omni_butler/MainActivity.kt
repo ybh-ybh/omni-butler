@@ -35,6 +35,10 @@ class MainActivity : FlutterActivity() {
                             else requestRecordingPermissions(arguments, result)
                         }
                     }
+                    "setMetering" -> {
+                        NoteRecordingService.active?.meteringEnabled = call.arguments == true
+                        result.success(null)
+                    }
                     "pause" -> { NoteRecordingService.active?.pauseRecording(); result.success(null) }
                     "resume" -> {
                         try { NoteRecordingService.active?.resumeRecording(); result.success(null) }
@@ -126,6 +130,8 @@ class MainActivity : FlutterActivity() {
             val command = Intent(this, NoteRecordingService::class.java).setAction(NoteRecordingService.START)
                 .putExtra("id", arguments["id"] as String)
                 .putExtra("noteId", arguments["noteId"] as String)
+                // 原生状态、通知和完成回调必须保留本机草稿代次。
+                .putExtra("draftId", arguments["draftId"] as? String)
                 .putExtra("path", path)
                 .putExtra("startedAt", arguments["startedAt"] as String)
                 .putExtra("creationTimezone", arguments["creationTimezone"] as? String ?: "legacy:unknown")

@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:omni_butler/features/notes/data/note_image_acquisition.dart';
 import 'package:omni_butler/core/attachments/image_sync_store.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
@@ -87,7 +91,20 @@ class _DraftRecorder implements NoteRecorderService {
 
   /// 测试不依赖真实永久删除标记。
   @override
-  Future<bool> isPermanentlyDiscarded(String noteId) async => false;
+  Future<bool> isPermanentlyDiscarded(String noteId) async =>
+      discardedRecordings.contains(noteId);
+
+  /// 单段取消的持久事实独立于整篇草稿。
+  final Set<String> discardedRecordings = {};
+
+  /// 丢弃当前片段不影响此前原音。
+  @override
+  Future<void> discardPendingForRecording(
+    String id, {
+    Set<String> protectedPaths = const {},
+  }) async {
+    discardedRecordings.add('recording:$id');
+  }
 
   /// 记录可靠暂存确认。
   @override
@@ -276,6 +293,213 @@ void main() {
     await file.writeAsBytes(img.encodePng(img.Image(width: 3, height: 2)));
     return file.path;
   }
+
+  test('独立语音草稿先保存原文字，失败不切换身份', () async {
+    editor.edit(body: '继续保留的文字');
+    // 原本机草稿身份用于恢复，不进入正式笔记。
+    final String previous = editor.draftId!;
+    expect(await editor.startFreshComposer(), isTrue);
+    expect((await editor.localDrafts.find(previous))!.body, '继续保留的文字');
+    expect(editor.draftId, isNot(previous));
+    expect(editor.draft.body, isEmpty);
+    expect(await repository.watchAll().first, isEmpty);
+    editor.edit(body: '暂存失败不丢');
+    // 数据库真实失败验证新建前的门禁。
+    final String failedOwner = editor.draftId!;
+    await database.customStatement(
+      "CREATE TRIGGER fail_fresh_draft BEFORE INSERT ON note_local_drafts BEGIN SELECT RAISE(ABORT, 'no write'); END",
+    );
+    expect(await editor.startFreshComposer(), isFalse);
+    expect(editor.draftId, failedOwner);
+    expect(editor.draft.body, '暂存失败不丢');
+    await database.customStatement('DROP TRIGGER fail_fresh_draft');
+  });
+
+  test('单段取消排空原音队列且迟到回调不复活，已有片段与正文保留', () async {
+    editor.edit(body: '已有正文');
+    await editor.flush();
+    // 已有片段必须保持有效。
+    final NoteRecordingResult kept = await recording(id: 'kept');
+    recorder.events.add(kept);
+    await editor.finishRecording();
+    // 停止后再取消也必须立即归还配额，保留的原件只等待既有孤儿清理。
+    final NoteRecordingResult reviewed = await recording(id: 'reviewed-cancel');
+    recorder.events.add(reviewed);
+    await editor.finishRecording();
+    await editor.discardRecording(reviewed.id);
+    await editor.startRecording();
+    expect(recorder.remaining, const Duration(seconds: 3599));
+    await editor.finishRecording();
+    // 本次片段在停止时完成，取消标记必须先于完成事件落地。
+    final NoteRecordingResult removed = await recording(id: 'removed');
+    recorder.nextResult = removed;
+    recorder.state = NoteRecordingState(
+      phase: NoteRecordingPhase.recording,
+      noteId: editor.draft.id,
+      draftId: editor.draftId,
+      recordingId: removed.id,
+    );
+    await editor.discardRecording(removed.id);
+    recorder.events.add(removed);
+    await editor.finishRecording();
+    expect(
+      (await editor.localDrafts.audio(editor.draftId!))
+          .where((item) => !editor.isAudioRemoved(item.id))
+          .map((item) => item.id),
+      ['kept'],
+    );
+    expect(editor.draft.body, '已有正文');
+    expect(await editor.commit(), NoteCommitResult.committed);
+    expect(
+      (await database.select(database.noteAudioSegments).get()).single.id,
+      kept.id,
+    );
+  });
+
+  /// 生成相机或相册交付的真实图片，导入仍经过尺寸、哈希和私有复制。
+  Future<File> pickedImage() async {
+    // 测试目录中的原始图片，不操作真实用户文件。
+    final File file = File('${directory.path}/picked.png');
+    await file.writeAsBytes(img.encodePng(img.Image(width: 8, height: 8)));
+    return file;
+  }
+
+  /// 创建原本机请求清单，模拟系统回收进程之前已经完成的归属暂存。
+  Future<SharedPreferences> pendingImage({
+    required String source,
+    List<String> paths = const [],
+  }) async {
+    SharedPreferences.setMockInitialValues({});
+    // 同一个设备存储在服务重建后保持可读。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    await editor.prepareMediaDraft();
+    await preferences.setString(
+      'notes.media.pending',
+      '{"source":"$source","draftId":"${editor.draftId}","noteId":"${editor.draft.id}","requestId":"stable-request","paths":${jsonEncode(paths)}}',
+    );
+    return preferences;
+  }
+
+  test('系统相机成功只导入原草稿，取消相册不发布', () async {
+    SharedPreferences.setMockInitialValues({});
+    // 隔离系统选择器和本机偏好。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 相机与相册交付由测试系统边界决定。
+    final _AcquisitionPicker picker = _AcquisitionPicker([
+      XFile((await pickedImage()).path),
+    ]);
+    // 生产导入服务继续使用真实编辑器和仓储。
+    final NoteImageAcquisition service = NoteImageAcquisition(
+      editor: editor,
+      sourceKey: 'source',
+      preferences: preferences,
+      picker: picker,
+    );
+    addTearDown(service.dispose);
+    editor.edit(body: '相机之前的正文');
+    expect(await service.acquire(camera: true), isTrue);
+    expect(picker.camera, isTrue);
+    expect(editor.draft.body, '相机之前的正文');
+    expect(await editor.images.staged(editor.draftId!), hasLength(1));
+    picker.files = [];
+    expect(await service.acquire(camera: false), isFalse);
+    expect(await repository.watchAll().first, isEmpty);
+    expect(preferences.containsKey('notes.media.pending'), isFalse);
+  });
+
+  test('进程回收恢复与重复交付按请求去重，保留首份私有原件', () async {
+    // 系统丢失结果交付的原件。
+    final File file = await pickedImage();
+    // 原请求没有结果，等冷启动取回。
+    final SharedPreferences preferences = await pendingImage(source: 'source');
+    // 只第一次恢复返回系统结果。
+    final _AcquisitionPicker picker = _AcquisitionPicker([])
+      ..lost = [XFile(file.path)];
+    // 两次服务实例模拟进程边界。
+    final NoteImageAcquisition service = NoteImageAcquisition(
+      editor: editor,
+      sourceKey: 'source',
+      preferences: preferences,
+      picker: picker,
+    );
+    expect(await service.recover(), isTrue);
+    // 模拟数据库已经写入、请求清单尚未删除时进程退出。
+    final SharedPreferences replay = await pendingImage(
+      source: 'source',
+      paths: [file.path],
+    );
+    // 首份私有文件不能被第二次导入覆盖或删除。
+    final String saved = (await editor.images.staged(editor.draftId!))
+        .single
+        .localPath!;
+    service.dispose();
+    // 重启服务复用同一请求的稳定附件身份。
+    final NoteImageAcquisition restarted = NoteImageAcquisition(
+      editor: editor,
+      sourceKey: 'source',
+      preferences: replay,
+      picker: _AcquisitionPicker([]),
+    );
+    addTearDown(restarted.dispose);
+    expect(await restarted.recover(), isTrue);
+    expect(await editor.images.staged(editor.draftId!), hasLength(1));
+    expect(await File(saved).exists(), isTrue);
+  });
+
+  test('已取消草稿不接收系统迟到图片，数据源不符时保留原请求', () async {
+    // 同一外部结果只能导回原数据源。
+    final File file = await pickedImage();
+    // 本机清单明确属于源A。
+    final SharedPreferences preferences = await pendingImage(
+      source: 'A',
+      paths: [file.path],
+    );
+    // 源B不能根据当前编辑器猜测归属。
+    final NoteImageAcquisition other = NoteImageAcquisition(
+      editor: editor,
+      sourceKey: 'B',
+      preferences: preferences,
+      picker: _AcquisitionPicker([]),
+    );
+    expect(await other.recover(), isFalse);
+    expect(preferences.containsKey('notes.media.pending'), isTrue);
+    expect(await editor.images.staged(editor.draftId!), isEmpty);
+    other.dispose();
+    await editor.localDrafts.discard(editor.draftId!);
+    // 返回源A后仍需尊重原草稿取消墓碑。
+    final NoteImageAcquisition original = NoteImageAcquisition(
+      editor: editor,
+      sourceKey: 'A',
+      preferences: preferences,
+      picker: _AcquisitionPicker([]),
+    );
+    addTearDown(original.dispose);
+    expect(await original.recover(), isFalse);
+    expect(await editor.images.staged(editor.draftId!), isEmpty);
+    expect(preferences.containsKey('notes.media.pending'), isFalse);
+  });
+
+  test('图片导入失败保留请求，修复原件后可重试且不重复', () async {
+    SharedPreferences.setMockInitialValues({});
+    // 无效系统返回文件模拟解码失败。
+    final File file = File('${directory.path}/retry.png')
+      ..writeAsBytesSync([1, 2, 3]);
+    // 当前设备偏好不会写入真实用户存储。
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    // 生产服务负责保留失败清单。
+    final NoteImageAcquisition service = NoteImageAcquisition(
+      editor: editor,
+      sourceKey: 'source',
+      preferences: preferences,
+      picker: _AcquisitionPicker([XFile(file.path)]),
+    );
+    addTearDown(service.dispose);
+    await expectLater(service.acquire(camera: false), throwsA(anything));
+    expect(preferences.containsKey('notes.media.pending'), isTrue);
+    await file.writeAsBytes(img.encodePng(img.Image(width: 8, height: 8)));
+    expect(await service.recover(), isTrue);
+    expect(await editor.images.staged(editor.draftId!), hasLength(1));
+  });
 
   test('多图先存本机草稿，纯图片发布原子创建两图及MinIO待传操作', () async {
     final String noteId = editor.draft.id;
@@ -1141,4 +1365,54 @@ void main() {
     expect(await editor.listLocalDrafts(), isEmpty);
     expect(await database.select(database.noteEntries).get(), isEmpty);
   });
+}
+
+/// 系统外部图片返回的可控边界，不替换仓储或导入事务。
+class _AcquisitionPicker extends Fake implements ImagePicker {
+  /// 正常外部界面返回的文件。
+  List<XFile> files;
+
+  /// 冷启动丢失结果，仅交付一次。
+  List<XFile>? lost;
+
+  /// 最近是否启动相机。
+  bool camera = false;
+
+  /// 创建图片返回边界。
+  _AcquisitionPicker(this.files);
+
+  /// 系统相机单选。
+  @override
+  Future<XFile?> pickImage({
+    required ImageSource source,
+    double? maxWidth,
+    double? maxHeight,
+    int? imageQuality,
+    CameraDevice preferredCameraDevice = CameraDevice.rear,
+    bool requestFullMetadata = true,
+  }) async {
+    camera = source == ImageSource.camera;
+    return files.isEmpty ? null : files.first;
+  }
+
+  /// 系统相册多选。
+  @override
+  Future<List<XFile>> pickMultiImage({
+    double? maxWidth,
+    double? maxHeight,
+    int? imageQuality,
+    int? limit,
+    bool requestFullMetadata = true,
+  }) async => files;
+
+  /// 系统回收进程后取回原始结果。
+  @override
+  Future<LostDataResponse> retrieveLostData() async {
+    // 已交付的数据不在第二次恢复时重放。
+    final List<XFile>? result = lost;
+    lost = null;
+    return result == null
+        ? LostDataResponse.empty()
+        : LostDataResponse(files: result, type: RetrieveType.image);
+  }
 }

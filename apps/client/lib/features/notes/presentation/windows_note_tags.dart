@@ -1,18 +1,39 @@
-part of 'notes_page.dart';
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/core/database/app_database.dart';
+import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
+import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
+import 'package:omni_butler/shared/ui/omni_ui.dart';
+
+import '../data/note_providers.dart';
+import '../data/note_repository.dart';
+import '../data/note_tag_actions.dart';
+import 'windows_note_tag_editor.dart';
 
 /// 两级标签菜单按参考图使用同宽面板，窗口边缘由共享路由约束。
 const double _noteTagMenuWidth = 240;
 
 /// 桌面平铺标签区域独立维护悬停、收起及标签名称搜索。
-class _NoteTagSection extends ConsumerStatefulWidget {
+class NoteTagSection extends ConsumerStatefulWidget {
   /// 接收全量正式笔记，筛选主区不改变标签计数。
-  const _NoteTagSection({
+  const NoteTagSection({
     required this.notes,
     required this.tags,
     required this.selectedIds,
     required this.onSelect,
     required this.onDeleted,
+    this.touchActions = false,
+    super.key,
   });
+
+  /// 移动端操作入口常驻，不要求悬停。
+  final bool touchActions;
 
   /// 未删除的正式笔记。
   final List<NoteEntryRecord> notes;
@@ -31,11 +52,11 @@ class _NoteTagSection extends ConsumerStatefulWidget {
 
   /// 创建区域内交互状态。
   @override
-  ConsumerState<_NoteTagSection> createState() => _NoteTagSectionState();
+  ConsumerState<NoteTagSection> createState() => _NoteTagSectionState();
 }
 
 /// 使用独立焦点，避免标签筛选抢占笔记搜索快捷键。
-class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
+class _NoteTagSectionState extends ConsumerState<NoteTagSection> {
   /// 标签名称搜索内容。
   final TextEditingController _query = TextEditingController();
 
@@ -398,7 +419,7 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
             ),
           ),
           OmniHoverReveal(
-            visible: _headerHovered,
+            visible: _headerHovered || widget.touchActions,
             child: MouseRegion(
               onEnter: (_) => setState(() => _collapseHovered = true),
               onExit: (_) => setState(() => _collapseHovered = false),
@@ -419,7 +440,7 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
 
   /// 工具保留36dp热区，只有背景绘制缩小为28dp。
   Widget _headerTools() => OmniHoverReveal(
-    visible: _hovered,
+    visible: _hovered || widget.touchActions,
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -512,7 +533,10 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
     final Color foreground = OmniColors.of(context).ink;
     // 菜单弹出后鼠标进入覆盖层也保留入口。
     final bool menu =
-        _hoveredTag == rowId || _focusedTag == rowId || _menuTag == rowId;
+        widget.touchActions ||
+        _hoveredTag == rowId ||
+        _focusedTag == rowId ||
+        _menuTag == rowId;
     return Focus(
       skipTraversal: true,
       onFocusChange: (focused) {

@@ -88,3 +88,22 @@ class NoteRecordingState {
       limit > Duration.zero &&
       limit - duration <= const Duration(seconds: 30);
 }
+
+/// 不持久化的可视化采样，与录音身份和真实采样时长绑定。
+class NoteRecordingLevel {
+  /// 创建已归一化的录音音量。
+  const NoteRecordingLevel({
+    required this.recordingId,
+    required this.level,
+    required this.duration,
+  });
+
+  /// 当前片段身份，过滤迟到采样。
+  final String recordingId;
+
+  /// 归一化音量，范围为零到一。
+  final double level;
+
+  /// 本批有效PCM累计时长，不包含暂停时间。
+  final Duration duration;
+}

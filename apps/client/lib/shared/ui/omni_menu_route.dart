@@ -102,10 +102,13 @@ Future<T?> showOmniMenu<T>({
   EdgeInsetsGeometry? menuPadding,
   bool useRootNavigator = false,
   bool? requestFocus,
+  // 移动端可按需复用完整面板淡入缩放，默认入口仍沿用原生过渡。
+  bool wholePanelTransition = false,
 }) {
   assert(items.isNotEmpty);
   assert((position == null) != (positionBuilder == null));
-  if (Theme.of(context).platform != TargetPlatform.windows) {
+  if (Theme.of(context).platform != TargetPlatform.windows &&
+      !wholePanelTransition) {
     return showMenu<T>(
       context: context,
       position: position,

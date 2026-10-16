@@ -59,7 +59,7 @@ class NoteAudioCard extends StatefulWidget {
   /// 正在录音时禁用回听，文字和转写管理继续可用。
   final bool recordingActive;
 
-  /// Windows阅读与编辑共用紧凑音频条，Android沿用完整卡片。
+  /// 两端阅读与编辑可共用紧凑音频条，旧页面保留完整卡片选项。
   final bool compact;
 
   /// 历史编辑在原有音频工具后增加正文插入和草稿删除。

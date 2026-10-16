@@ -44,6 +44,8 @@ dependencies:
   collection: ^1.19.1
   ffi: ^2.2.0
   file_picker: ^12.2.0
+  # 安卓笔记使用系统相机与相册，并恢复进程回收后的选择结果。
+  image_picker: ^1.2.4
   crypto: ^3.0.7
   path_provider: ^2.1.6
   path: ^1.9.1

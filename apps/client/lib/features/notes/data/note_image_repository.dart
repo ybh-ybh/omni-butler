@@ -138,7 +138,28 @@ SELECT n.id, a.local_path, a.mime_type, COALESCE(a.upload_state, 'pending') AS u
           );
 
   /// 文件选择后立即复制私有原件，取消代次不得登记或上传。
-  Future<bool> stage(String draftId, String noteId, String sourcePath) async {
+  Future<bool> stage(
+    String draftId,
+    String noteId,
+    String sourcePath, {
+    String? imageId,
+  }) async {
+    // 外部选择请求使用固定身份，恢复时先复用已登记的原件。
+    final NoteDraftImageRecord? existing = imageId == null
+        ? null
+        : await (database.select(
+            database.noteDraftImages,
+          )..where((row) => row.id.equals(imageId))).getSingleOrNull();
+    if (existing != null) {
+      // 幂等命中仍尊重取消墓碑，不能把已丢弃请求当作导入成功。
+      final NoteLocalDraftRecord? owner = await (database.select(
+        database.noteLocalDrafts,
+      )..where((row) => row.id.equals(draftId))).getSingleOrNull();
+      return owner != null &&
+          !owner.discarded &&
+          existing.draftId == draftId &&
+          existing.noteId == noteId;
+    }
     // 选择器交付的外部文件。
     final File source = File(sourcePath);
     if (!await source.exists()) throw const FileSystemException('所选图片不存在');
@@ -155,7 +176,7 @@ SELECT n.id, a.local_path, a.mime_type, COALESCE(a.upload_state, 'pending') AS u
     // 原件摘要贯穿发布、传输和迁移。
     final String digest = sha256.convert(bytes).toString();
     // 私有文件身份不依赖外部文件名。
-    final String id = const Uuid().v4();
+    final String id = imageId ?? const Uuid().v4();
     // 应用持久数据根目录。
     final Directory root = await directoryProvider();
     // 原件不再依赖系统文件选择器的临时位置。

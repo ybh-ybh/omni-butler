@@ -84,14 +84,16 @@ class _WindowsNoteStatisticsDialogState
     final Size viewport = MediaQuery.sizeOf(context);
     // 当前主题所有表面和文字颜色。
     final OmniColors colors = OmniColors.of(context);
+    // 安卓使用完整可用宽度，七列日历在大字号下仍能容纳两位日期。
+    final bool mobile = Theme.of(context).platform == TargetPlatform.android;
     return Dialog(
       key: const ValueKey('notes-statistics-dialog'),
-      insetPadding: const EdgeInsets.all(24),
+      insetPadding: EdgeInsets.all(mobile ? 0 : 24),
       backgroundColor: colors.canvas,
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
-        width: math.min(1120, viewport.width - 48),
-        height: math.min(780, viewport.height - 48),
+        width: mobile ? viewport.width : math.min(1120, viewport.width - 48),
+        height: mobile ? viewport.height : math.min(780, viewport.height - 48),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -263,7 +265,10 @@ class _WindowsNoteStatisticsDialogState
           MediaQuery.textScalerOf(context).scale(14) / 14,
         );
         // 扣除两边留白后的实际内容宽度。
-        final double width = constraints.maxWidth - 48;
+        final double horizontalPadding =
+            Theme.of(context).platform == TargetPlatform.android ? 8 : 24;
+        // 扣除当前平台的内容安全留白。
+        final double width = constraints.maxWidth - horizontalPadding * 2;
         // 卡片之间保持截图中的均匀留白。
         final int columns = ((width + 20) / (300 * scale + 20)).floor().clamp(
           1,
@@ -278,7 +283,12 @@ class _WindowsNoteStatisticsDialogState
         return SingleChildScrollView(
           key: const ValueKey('notes-statistics-scroll'),
           controller: _scroll,
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          padding: EdgeInsets.fromLTRB(
+            horizontalPadding,
+            0,
+            horizontalPadding,
+            24,
+          ),
           child: Wrap(
             spacing: 20,
             runSpacing: 20,
@@ -351,7 +361,9 @@ class _MonthCard extends StatelessWidget {
     return OmniPanel(
       key: ValueKey('notes-statistics-month-$year-$month'),
       showBorder: false,
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.all(
+        Theme.of(context).platform == TargetPlatform.android ? 8 : 18,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -420,7 +432,13 @@ class _MonthCard extends StatelessWidget {
                           final String dayKey =
                               '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
                           return Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            padding: EdgeInsets.symmetric(
+                              horizontal:
+                                  Theme.of(context).platform ==
+                                      TargetPlatform.android
+                                  ? 0
+                                  : 4,
+                            ),
                             child: _StatisticsDay(
                               dayKey: dayKey,
                               day: day,

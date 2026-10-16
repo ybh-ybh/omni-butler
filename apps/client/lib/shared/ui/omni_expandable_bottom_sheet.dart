@@ -77,6 +77,15 @@ class OmniExpandableBottomSheetScaffold extends StatefulWidget {
   /// 提交期间禁止关闭及改变高度。
   final bool canClose;
 
+  /// 业务可先可靠暂存再主动关闭，失败时保留面板。
+  final Future<void> Function()? onRequestClose;
+
+  /// 默认高度沿用半屏，笔记可指定更高的初始比例。
+  final double initialExtent;
+
+  /// 展开后的最大比例，默认仍为全屏。
+  final double maximumExtent;
+
   /// 无障碍朗读使用的面板名称。
   final String semanticsLabel;
 
@@ -87,8 +96,15 @@ class OmniExpandableBottomSheetScaffold extends StatefulWidget {
     required this.bodyBuilder,
     required this.semanticsLabel,
     this.canClose = true,
+    this.onRequestClose,
+    this.initialExtent = 0.5,
+    this.maximumExtent = 1,
     super.key,
-  });
+  }) : assert(
+         initialExtent > 0 &&
+             initialExtent <= maximumExtent &&
+             maximumExtent <= 1,
+       );
 
   /// 创建高度、手势及滚动状态。
   @override
@@ -101,7 +117,10 @@ class _OmniExpandableBottomSheetScaffoldState
     extends State<OmniExpandableBottomSheetScaffold>
     with SingleTickerProviderStateMixin {
   /// 初始及收起时的高度比例。
-  static const double _collapsedExtent = 0.5;
+  double get _collapsedExtent => widget.initialExtent;
+
+  /// 本次手势向下移动的距离，仅业务提供关闭回调时启用下滑关闭。
+  double _dismissDistance = 0;
 
   /// 沿用应用分页的原生弹簧与设备像素容差。
   static const PageScrollPhysics _physics = PageScrollPhysics();
@@ -147,7 +166,12 @@ class _OmniExpandableBottomSheetScaffoldState
 
   /// 点击遮罩直接关闭，提交时保持锁定。
   void _dismissFromBarrier() {
-    if (widget.canClose) Navigator.of(context).pop();
+    if (!widget.canClose) return;
+    if (widget.onRequestClose != null) {
+      unawaited(widget.onRequestClose!());
+    } else {
+      Navigator.of(context).pop();
+    }
   }
 
   /// 提交锁定时中断正在进行的手势与吸附。
@@ -182,16 +206,20 @@ class _OmniExpandableBottomSheetScaffoldState
   void _onDragStart(DragStartDetails details) {
     if (!widget.canClose) return;
     _stopMotion();
-    _extent.value = _extent.value.clamp(_collapsedExtent, 1);
+    _extent.value = _extent.value.clamp(_collapsedExtent, widget.maximumExtent);
+    _dismissDistance = 0;
     _dragging = true;
   }
 
   /// 跟随手指调整高度，并限制在半屏和全屏之间。
   void _onDragUpdate(DragUpdateDetails details) {
     if (!_dragging || !widget.canClose) return;
+    if (_extent.value <= _collapsedExtent) {
+      _dismissDistance += details.delta.dy;
+    }
     _extent.value = (_extent.value - details.delta.dy / _availableHeight).clamp(
       _collapsedExtent,
-      1,
+      widget.maximumExtent,
     );
   }
 
@@ -199,6 +227,10 @@ class _OmniExpandableBottomSheetScaffoldState
   void _onDragEnd(DragEndDetails details) {
     if (!_dragging || !widget.canClose) return;
     _dragging = false;
+    if (widget.onRequestClose != null && _dismissDistance > 64) {
+      _dismissFromBarrier();
+      return;
+    }
     // 将手指向上的速度转换为高度增加速度。
     final double velocity = -(details.primaryVelocity ?? 0);
     // 原生物理使用的安全视口和设备像素比。
@@ -208,7 +240,7 @@ class _OmniExpandableBottomSheetScaffoldState
     // 无明显速度时，以半屏和全屏的中点选择最近落点。
     final bool expand = velocity.abs() > velocityTolerance
         ? velocity > 0
-        : _extent.value >= (_collapsedExtent + 1) / 2;
+        : _extent.value >= (_collapsedExtent + widget.maximumExtent) / 2;
     unawaited(_settle(expand: expand, velocity: velocity));
   }
 
@@ -216,7 +248,11 @@ class _OmniExpandableBottomSheetScaffoldState
   void _onDragCancel() {
     if (!_dragging) return;
     _dragging = false;
-    unawaited(_settle(expand: _extent.value >= (_collapsedExtent + 1) / 2));
+    unawaited(
+      _settle(
+        expand: _extent.value >= (_collapsedExtent + widget.maximumExtent) / 2,
+      ),
+    );
   }
 
   /// 点击横线或读屏操作也可展开和收起。
@@ -241,7 +277,7 @@ class _OmniExpandableBottomSheetScaffoldState
     // 这次吸附对应的有效代次。
     final int generation = _motionGeneration;
     // 全屏和半屏仅有两个稳定落点。
-    final double target = expand ? 1 : _collapsedExtent;
+    final double target = expand ? widget.maximumExtent : _collapsedExtent;
     if (!expand) FocusManager.instance.primaryFocus?.unfocus();
     if (!OmniMotion.reduce(context) && _extent.value != target) {
       // 将原生像素容差转换为安全视口比例。
@@ -285,10 +321,17 @@ class _OmniExpandableBottomSheetScaffoldState
         ? 0
         : MediaQuery.paddingOf(context).bottom;
     return PopScope<Object?>(
-      canPop: widget.canClose && keyboardInset == 0,
+      canPop:
+          widget.onRequestClose == null &&
+          widget.canClose &&
+          keyboardInset == 0,
       onPopInvokedWithResult: (bool didPop, Object? result) {
         if (!didPop && widget.canClose && keyboardInset > 0) {
           FocusManager.instance.primaryFocus?.unfocus();
+        } else if (!didPop &&
+            widget.canClose &&
+            widget.onRequestClose != null) {
+          unawaited(widget.onRequestClose!());
         }
       },
       child: FocusTraversalGroup(
@@ -310,7 +353,10 @@ class _OmniExpandableBottomSheetScaffoldState
               child: SizedBox(
                 height:
                     (_availableHeight *
-                            _extent.value.clamp(_collapsedExtent, 1))
+                            _extent.value.clamp(
+                              _collapsedExtent,
+                              widget.maximumExtent,
+                            ))
                         .clamp(minimumHeight, _availableHeight) +
                     safeBottom,
                 width: constraints.maxWidth,

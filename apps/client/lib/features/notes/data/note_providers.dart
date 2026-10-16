@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:drift/drift.dart' show OrderingTerm;
+
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -9,6 +11,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/foundation.dart';
 import 'package:omni_butler/core/auth/auth_providers.dart';
+import 'package:omni_butler/app/theme/theme_controller.dart';
+
+import 'note_image_acquisition.dart';
+
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/sync/sync_connection_providers.dart';
@@ -62,16 +68,64 @@ final noteEditorProvider = Provider<NoteEditorController>((ref) {
   final NoteEditorController editor = NoteEditorController(
     ref.watch(noteRepositoryProvider),
     ref.watch(noteRecorderProvider),
-    explicitCommit: defaultTargetPlatform == TargetPlatform.windows,
+    explicitCommit:
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.android,
   );
   ref.onDispose(editor.dispose);
   return editor;
+});
+
+/// 相机恢复与当前数据源、草稿服务共存，Windows不调用系统取图。
+final noteImageAcquisitionProvider = Provider<NoteImageAcquisition>((ref) {
+  // 与录音恢复采用同一数据源派生规则。
+  final String sourceKey = sha256
+      .convert(
+        utf8.encode(
+          ref.watch(syncRuntimeProvider)?.databasePath ?? 'standalone',
+        ),
+      )
+      .toString();
+  // 外部系统界面返回不依赖页面是否仍挂载。
+  final NoteImageAcquisition service = NoteImageAcquisition(
+    editor: ref.watch(noteEditorProvider),
+    sourceKey: sourceKey,
+    preferences: ref.watch(sharedPreferencesProvider),
+  );
+  ref.onDispose(service.dispose);
+  return service;
 });
 
 /// 按日期归档的笔记流。
 final notesProvider = StreamProvider<List<NoteEntryRecord>>(
   (ref) => ref.watch(noteRepositoryProvider).watchAll(),
 );
+
+/// 两端列表使用同一份有效及墓碑标签事实。
+final noteTaxonomiesProvider = StreamProvider<List<TaxonomyEntry>>((ref) {
+  // 当前实际数据源。
+  final AppDatabase database = ref.watch(appDatabaseProvider);
+  return (database.select(database.taxonomyEntries)
+        ..where((table) => table.module.equals('notes'))
+        ..orderBy([(table) => OrderingTerm.asc(table.sortOrder)]))
+      .watch();
+});
+
+/// 搜索与卡片按笔记身份读取原音，避免复用当前编辑篇的片段。
+final allNoteAudioProvider = StreamProvider<List<NoteAudioSegmentRecord>>((
+  ref,
+) {
+  // 当前实际数据源。
+  final AppDatabase database = ref.watch(appDatabaseProvider);
+  return database.select(database.noteAudioSegments).watch();
+});
+
+/// 正式图片事实参与搜索，草稿图片不会提前命中。
+final allNoteImagesProvider = StreamProvider<List<NoteImageRecord>>((ref) {
+  // 当前实际数据源。
+  final AppDatabase database = ref.watch(appDatabaseProvider);
+  return database.select(database.noteImages).watch();
+});
 
 /// 当前编辑器读取包含墓碑的记录，远端删除不依赖正文revision变化。
 final noteByIdProvider = StreamProvider.family<NoteEntryRecord?, String>((
@@ -115,6 +169,9 @@ final noteRecordingProvider = StreamProvider<NoteRecordingState>((ref) async* {
 /// 全局生命周期只在生产运行时接入，测试可分别注入服务。
 final noteInfrastructureProvider = Provider<void>((ref) {
   if (ref.watch(syncRuntimeProvider) == null) return;
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    unawaited(ref.watch(noteImageAcquisitionProvider).recover());
+  }
   // 开始本地孤儿清理，与网络开关无关。
   final NoteRepository repository = ref.watch(noteRepositoryProvider);
   // 主应用与迁移共享的编辑会话。
@@ -164,3 +221,17 @@ final noteAudioTransferProvider = Provider<NoteAudioTransferService?>((ref) {
   transfer.start();
   return transfer;
 });
+
+/// 安卓发送按钮订阅本机原音事实，空草稿不产生正式内容。
+final androidDraftAudioProvider =
+    StreamProvider.family<List<NoteDraftAudioSegmentRecord>, String?>((
+      ref,
+      id,
+    ) {
+      if (id == null) return Stream.value([]);
+      return (ref
+              .watch(appDatabaseProvider)
+              .select(ref.watch(appDatabaseProvider).noteDraftAudioSegments)
+            ..where((row) => row.draftId.equals(id)))
+          .watch();
+    });

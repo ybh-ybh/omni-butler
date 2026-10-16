@@ -32,8 +32,17 @@ class NoteSearchHistory extends Notifier<List<String>> {
       return;
     }
     state = _normalizeHistory(<String>[trimmedQuery, ...state]);
-    // 本次提交时的不可变历史快照。
-    final List<String> history = state;
+    await _persist(state);
+  }
+
+  /// 清空本机历史，与提交共用写入队列以防旧请求恢复已清条目。
+  Future<void> clear() async {
+    state = const <String>[];
+    await _persist(state);
+  }
+
+  /// 按操作顺序保存不可变快照，失败不阻断后续写入。
+  Future<void> _persist(List<String> history) async {
     // 在异步写入前获取存储，避免销毁后再读取依赖。
     final SharedPreferences preferences = ref.read(sharedPreferencesProvider);
     _pendingWrite = _pendingWrite.then((_) async {

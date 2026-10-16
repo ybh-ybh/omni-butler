@@ -52,6 +52,12 @@ class OmniDatePickerButton extends StatefulWidget {
   /// 触发按钮文案。
   final String label;
 
+  /// 紧窄标题可将日期时间换成两行，旧入口保持省略行为。
+  final bool wrapLabel;
+
+  /// 可选外部控制器，覆盖页可先关闭日历再处理系统返回。
+  final MenuController? controller;
+
   /// 触发按钮图标；为空时只展示文案。
   final IconData? icon;
 
@@ -72,6 +78,8 @@ class OmniDatePickerButton extends StatefulWidget {
     required this.lastDate,
     required this.label,
     required this.onChanged,
+    this.wrapLabel = false,
+    this.controller,
     this.icon = Icons.calendar_today_outlined,
     this.style,
     this.currentDate,
@@ -86,7 +94,8 @@ class OmniDatePickerButton extends StatefulWidget {
 /// 锚定式日期选择器状态。
 class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
   /// 浮层菜单控制器。
-  final MenuController _menuController = MenuController();
+  late final MenuController _menuController =
+      widget.controller ?? MenuController();
 
   /// 日期浮层关闭后恢复的触发器焦点。
   final FocusNode _triggerFocus = FocusNode();
@@ -304,7 +313,15 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
         focusNode: _triggerFocus,
         onPressed: widget.onChanged == null ? null : _toggleMenu,
         style: emphasisStyle,
-        child: Text(widget.label, overflow: TextOverflow.ellipsis),
+        child: Text(
+          widget.label,
+          maxLines: widget.wrapLabel ? 2 : null,
+          softWrap: widget.wrapLabel ? true : null,
+          textAlign: widget.wrapLabel ? TextAlign.center : null,
+          overflow: widget.wrapLabel
+              ? TextOverflow.visible
+              : TextOverflow.ellipsis,
+        ),
       );
     }
     return OmniOutlinedButton.icon(
@@ -312,7 +329,15 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
       onPressed: widget.onChanged == null ? null : _toggleMenu,
       style: emphasisStyle,
       icon: Icon(widget.icon, size: 18),
-      label: Text(widget.label, overflow: TextOverflow.ellipsis),
+      label: Text(
+        widget.label,
+        maxLines: widget.wrapLabel ? 2 : null,
+        softWrap: widget.wrapLabel ? true : null,
+        textAlign: widget.wrapLabel ? TextAlign.center : null,
+        overflow: widget.wrapLabel
+            ? TextOverflow.visible
+            : TextOverflow.ellipsis,
+      ),
     );
   }
 

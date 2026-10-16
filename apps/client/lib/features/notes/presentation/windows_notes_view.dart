@@ -690,7 +690,7 @@ extension _WindowsNotesView on _NotesPageState {
                     _allNotes,
                   ),
                   const SizedBox(height: OmniSpacing.xl),
-                  _NoteTagSection(
+                  NoteTagSection(
                     notes: notes,
                     tags: tags,
                     selectedIds: _recycle || _excludeSearchTags

@@ -57,9 +57,11 @@ void main() {
     controller.selection = const TextSelection(baseOffset: 0, extentOffset: 2);
     controller.toggleBold();
     expect(controller.markdown, '**甲乙**');
-    controller.quillController.undo();
+    expect(controller.canUndo, isTrue);
+    controller.undo();
     expect(controller.markdown, '甲乙');
-    controller.quillController.redo();
+    expect(controller.canRedo, isTrue);
+    controller.redo();
     expect(controller.markdown, '**甲乙**');
   });
 

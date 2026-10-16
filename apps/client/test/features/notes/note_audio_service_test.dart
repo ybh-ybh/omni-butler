@@ -462,6 +462,31 @@ void main() {
     expect(device.starts, 1);
   });
 
+  test('按片段取消只删除命中原件，重启清单不能复活且保留同篇其他片段', () async {
+    // 同一篇笔记的两个片段不可按笔记整体清除。
+    final File cancelled = await _pendingFile(
+      directory,
+      'cancelled',
+      'same-note',
+    );
+    // 未取消原件继续等待正常恢复。
+    final File retained = await _pendingFile(
+      directory,
+      'retained',
+      'same-note',
+    );
+    await service.discardPendingForRecording('cancelled');
+    expect(await cancelled.exists(), isFalse);
+    expect(await retained.exists(), isTrue);
+    expect(await service.isPermanentlyDiscarded('recording:cancelled'), isTrue);
+    expect(await service.isPermanentlyDiscarded('same-note'), isFalse);
+    await _pendingFile(directory, 'cancelled', 'same-note');
+    expect((await service.recoverPending()).map((item) => item.id), [
+      'retained',
+    ]);
+    expect(await cancelled.exists(), isFalse);
+  });
+
   test('Android 通知完成与 stop 返回去重，迟到事件不能清空新录音', () async {
     await service.dispose();
     device = _Recorder();
@@ -495,12 +520,15 @@ void main() {
     messenger.setMockMethodCallHandler(commands, (call) async {
       if (call.method == 'start') {
         current = Map<String, dynamic>.from(call.arguments as Map);
-        await send({
-          ...current!,
-          'type': 'state',
-          'phase': 'recording',
-          'durationMs': 0,
-        });
+        // 首次响应故意先于事件，重现真实Android桥的启动交付顺序。
+        if (current!['noteId'] == 'native-second') {
+          await send({
+            ...current!,
+            'type': 'state',
+            'phase': 'recording',
+            'durationMs': 0,
+          });
+        }
       }
       if (call.method == 'stop') {
         return {...current!, 'durationMs': 1000, 'type': 'completed'};
@@ -518,7 +546,36 @@ void main() {
     // 真实 UI 只订阅完成流，不能因 method response 和 EventChannel 双通道重复落库。
     final delivered = <NoteRecordingResult>[];
     final subscription = service.completed.listen(delivered.add);
-    await service.start('native-first');
+    // 音量事件独立于正文状态，隐藏、暂停、旧身份和非法值均不交付。
+    final List<NoteRecordingLevel> levels = [];
+    // 独立广播订阅不增加主状态通知。
+    final levelSubscription = service.levels.listen(levels.add);
+    await service.start('native-first', draftId: 'native-draft');
+    expect(service.state.recordingId, current!['id']);
+    expect(service.state.draftId, 'native-draft');
+    // 旧版原生缺失代次仍只能回填当前同一片段的身份。
+    final Map<String, dynamic> legacy = {
+      ...current!,
+      'type': 'state',
+      'phase': 'recording',
+    }..remove('draftId');
+    await send(legacy);
+    expect(service.state.draftId, 'native-draft');
+    await send({...current!, 'type': 'meter', 'level': .2, 'durationMs': 50});
+    expect(levels, isEmpty);
+    await service.setMeteringActive(true);
+    await send({...current!, 'type': 'meter', 'level': .4, 'durationMs': 100});
+    expect(levels.single.level, .4);
+    expect(levels.single.duration, const Duration(milliseconds: 100));
+    await send({...current!, 'type': 'meter', 'level': double.nan});
+    await send({...current!, 'type': 'meter', 'id': 'old-id', 'level': .9});
+    await send({...current!, 'type': 'state', 'phase': 'paused'});
+    await send({...current!, 'type': 'meter', 'level': .7});
+    expect(levels, hasLength(1));
+    await send({...current!, 'type': 'state', 'phase': 'recording'});
+    await service.setMeteringActive(false);
+    await send({...current!, 'type': 'meter', 'level': .8});
+    expect(levels, hasLength(1));
     expect(service.state.phase, NoteRecordingPhase.recording);
     // 原生通知完成和显式 stop 可能以任意顺序到达。
     final oldResult = {...current!, 'durationMs': 1000, 'type': 'completed'};
@@ -533,6 +590,7 @@ void main() {
     expect(delivered.length, 1);
     await service.stop();
     await subscription.cancel();
+    await levelSubscription.cancel();
     messenger.setMockMethodCallHandler(commands, null);
     // 保留 listen/cancel mock 到 teardown 完成，避免取消订阅的 MissingPlugin。
     addTearDown(

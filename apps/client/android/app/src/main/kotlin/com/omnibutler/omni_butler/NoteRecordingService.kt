@@ -96,6 +96,9 @@ class NoteRecordingService : Service() {
     // 系统静音麦克风（权限撤回或被抢占）时不能显示正常采集。
     private var recordingCallback: AudioManager.AudioRecordingCallback? = null
 
+    // 可视音量仅在录音卡片可见时计算，不影响后台录音。
+    @Volatile var meteringEnabled = false
+
     // 服务不提供 Binder；所有操作通过明确命令。
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -133,6 +136,8 @@ class NoteRecordingService : Service() {
             val limitMs = intent.getLongExtra("limitMs", 0).coerceAtMost(30L * 60 * 1000)
             require(limitMs > 0)
             metadata = mapOf("id" to intent.getStringExtra("id"), "noteId" to intent.getStringExtra("noteId"),
+                // 草稿身份与采集身份同时固定，不依赖页面当前选择。
+                "draftId" to intent.getStringExtra("draftId"),
                 "path" to intent.getStringExtra("path"), "startedAt" to intent.getStringExtra("startedAt"),
                 "creationTimezone" to (intent.getStringExtra("creationTimezone") ?: "legacy:unknown"), "limitMs" to limitMs)
             if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
@@ -182,6 +187,8 @@ class NoteRecordingService : Service() {
         val buffer = ByteArray(bufferSize)
         // 最近的磁盘同步检查点。
         var checkpoint = android.os.SystemClock.elapsedRealtime()
+        // 波形事件最多20Hz，不与磁盘同步和通知刷新耦合。
+        var lastMeter = 0L
         try {
             while (running) {
                 if (paused) { Thread.sleep(50); continue }
@@ -197,6 +204,19 @@ class NoteRecordingService : Service() {
                     if (count > 0) { output!!.write(buffer, 0, count); audioBytes += count }
                     // 每秒补写 WAV 长度并同步，强退后仍可直接播放有效部分。
                     val now = android.os.SystemClock.elapsedRealtime()
+                    if (meteringEnabled && count > 0 && now - lastMeter >= 50) {
+                        // 16位小端PCM的均方根转为有限可视幅度。
+                        var squares = 0.0
+                        for (index in 0 until count step 2) {
+                            // 保留有符号16位采样，避免负值被当作大正数。
+                            val sample = ((buffer[index].toInt() and 255) or (buffer[index + 1].toInt() shl 8)).toShort().toDouble() / 32768.0
+                            squares += sample * sample
+                        }
+                        // 提升语音的低电平可见度，静音仍为零。
+                        val level = kotlin.math.sqrt(kotlin.math.sqrt(squares / (count / 2))).coerceIn(0.0, 1.0)
+                        emit(mapOf("type" to "meter", "id" to metadata["id"], "level" to level, "durationMs" to audioBytes * 1000 / BYTES_PER_SECOND))
+                        lastMeter = now
+                    }
                     if (now - checkpoint >= 1000) {
                         updateHeader()
                         output!!.fd.sync()
