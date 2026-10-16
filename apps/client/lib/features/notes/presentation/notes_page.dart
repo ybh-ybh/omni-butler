@@ -31,6 +31,7 @@ import 'package:omni_butler/features/notes/presentation/note_audio_card.dart';
 import 'package:omni_butler/features/notes/presentation/note_search_focus.dart';
 import 'package:omni_butler/features/notes/presentation/note_statistic_button.dart';
 import 'package:omni_butler/features/notes/presentation/windows_note_statistics_dialog.dart';
+import 'package:omni_butler/features/notes/presentation/windows_note_tag_editor.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
 import 'package:omni_butler/features/settings/presentation/recycle_bin_section.dart';
 import 'package:omni_butler/shared/search/global_search_dialog.dart';

@@ -33,7 +33,7 @@ streams:
         SELECT id, day_key, quote_id, created_at, updated_at
         FROM daily_quote_selections WHERE user_id = auth.user_id()
       - >-
-        SELECT id, module, kind, name, color_value,
+        SELECT id, module, kind, name, color_value, icon_emoji,
         sort_order, is_pinned, is_enabled, created_at, updated_at,
         deleted_at FROM taxonomy_entries WHERE user_id = auth.user_id()
       - >-

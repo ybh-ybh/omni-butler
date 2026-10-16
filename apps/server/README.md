@@ -30,9 +30,13 @@ NestJS 11 + Prisma 7 + PowerSync 的个人自托管同步 API。服务不提供�
 
 `POST /omni-butler/api/v1/sync/operations` 接收 `{clientId, transactionId, operations}`。事务重试必须保留身份和内容；每个本地事务整体提交，最大 100000 条、32 MB。PUT 只创建，PATCH 修改已有记录，DELETE 保留永久删除墓碑。缺失记录 PATCH 返回 409，不能假确认成功。
 
-当前同步结构为 `syncSchemaVersion=3`。增量上传、全量替换和 PowerSync 凭证接口均要求 `X-Omni-Sync-Schema: 3`，版本不兼容返回 `409 SYNC_SCHEMA_MISMATCH`；客户端必须保留本地数据及待上传事务并停止同步。预检、连接、刷新、会话与凭证响应包含当前版本。发布时先升级数据库、API 与 PowerSync 规则，再升级各客户端；这次增量迁移保留已有数据，无需重置数据库。
+当前同步结构为 `syncSchemaVersion=7`。增量上传、全量替换和 PowerSync 凭证接口均要求 `X-Omni-Sync-Schema: 7`，版本不兼容返回 `409 SYNC_SCHEMA_MISMATCH`；客户端必须保留本地数据及待上传事务并停止同步。预检、连接、刷新、会话与凭证响应包含当前版本。发布时先升级数据库、API 与 PowerSync 规则，再升级各客户端；这次增量迁移保留已有数据，无需重置数据库。
 
-进度任务使用 `todo_items.task_type=progress` 和独立 `todo_progress_steps` 表，步骤只能属于同 owner 的进度根任务。满进度不自动完成；事务最后仅撤销不再满足满进度条件的已确认任务。父任务软删除保留步骤自身删除标记，恢复不会复活独立删除的步骤；永久删除级联步骤并记录墓碑。完整导入步骤之后再协调，保留合法的手动完成确认。当前快照协议为 v3，无笔记旧快照仍可使用 v2。
+标签图标使用可空 `taxonomy_entries.icon_emoji` 文本列，完整保存组合 emoji，`null` 表示默认 `#`。PATCH 缺失该列时保留已有图标，显式 `null` 才移除；名称、置顶和排序的独立更新不会覆盖图标。升级时先备份，再执行 `npm run prisma:migrate:deploy` 应用 `20261016000000_note_tag_icon_emoji`，更新 API 与 `deploy/powersync/sync-config.yaml` 的下行查询，最后升级参与同步的所有客户端。服务端 v7 会拒绝 v6 及更旧客户端的写入和下行凭证，升级期间允许客户端保留本地离线操作。
+
+客户端本地快照格式升至 v7，恢复 v1–v6 时由客户端为历史标签补 `icon_emoji: null`。换服网络协议继续使用 `snapshotVersion=3`（无笔记旧请求仍支持 v2），完整标签行必须包含 `icon_emoji`，不要将本地快照格式 v7 直接作为换服协议号。部署后在隔离环境验证一台设备设置组合 emoji，另一台设备接收、改名及清空，确认两个方向均生效后再推广客户端。
+
+进度任务使用 `todo_items.task_type=progress` 和独立 `todo_progress_steps` 表，步骤只能属于同 owner 的进度根任务。满进度不自动完成；事务最后仅撤销不再满足满进度条件的已确认任务。父任务软删除保留步骤自身删除标记，恢复不会复活独立删除的步骤；永久删除级联步骤并记录墓碑。完整导入步骤之后再协调，保留合法的手动完成确认。
 
 笔记使用 `note_entries`、`note_versions`、`note_audio_segments` 三张同步表，正文并发版本保留候选，原始录音通过独立的私有文件接口传输，生产原音及迁移暂存统一保存到 MinIO 私有桶 `omni-butler-note-audio`，图片开关不影响音频。语音厂商密钥只在后端，腾讯文件识别适配器与领域任务解耦。提交响应丢失时保留 `submissionUnknown`，绝不自动重复提交计费任务；只有查询已知任务允许自动网络重试。完整迁移必须先暂存真实原音，再在快照 v3 同一事务验证并接管；回收站绑定正文、原音和结果一起保留、恢复及永久清理。接口、环境变量、备份与故障语义见[笔记原音说明](src/notes/README.md)。
 

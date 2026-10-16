@@ -120,7 +120,9 @@ Future<_EndToEndAuth> _connectTestDevice() async {
     BaseOptions(
       baseUrl: AuthRepository(const FlutterSecureStorage())
           .normalizeBaseUrl(_serverAddress),
-      headers: <String, String>{'X-Omni-Sync-Schema': '2'},
+      headers: <String, String>{
+        'X-Omni-Sync-Schema': syncSchemaVersion.toString(),
+      },
     ),
   );
   // 服务端签发的设备令牌组。

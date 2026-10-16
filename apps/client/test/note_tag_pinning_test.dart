@@ -95,7 +95,7 @@ void main() {
     }
   });
 
-  test('v20真实文件升级为21，标签及其他字段保留且置顶默认关闭', () async {
+  test('v20真实文件升级为22，标签及其他字段保留且置顶默认关闭', () async {
     // 隔离旧版数据库，不访问用户数据。
     final Directory directory = await Directory.systemTemp.createTemp(
       'note-pin-v20-',
@@ -138,7 +138,7 @@ void main() {
       expect(
         (await database.customSelect('PRAGMA user_version').getSingle())
             .read<int>('user_version'),
-        21,
+        22,
       );
     } finally {
       await database.close();
@@ -148,7 +148,7 @@ void main() {
 
   test('旧快照1到5仅在恢复副本补置顶0，当前快照保留置顶1', () {
     // 每个旧版本独立构造，验证兼容范围完整。
-    for (final int version in [1, 2, 3, 4, 5, 6]) {
+    for (final int version in [1, 2, 3, 4, 5, 6, 7]) {
       // 不共享内部表，避免测试之间互相污染。
       final Map<String, List<Map<String, Object?>>> tables = {
         for (final String table in SyncSnapshot.tableNames) table: [],
@@ -159,7 +159,7 @@ void main() {
         'module': 'notes',
         'kind': 'tag',
         'name': '标签',
-        if (version == 6) 'is_pinned': 1,
+        if (version >= 6) 'is_pinned': 1,
       };
       tables['taxonomy_entries']!.add(original);
       // 生产解码路径必须不改变原始文件对应的数据对象。
@@ -170,13 +170,13 @@ void main() {
       });
       expect(
         restored.tables['taxonomy_entries']!.single['is_pinned'],
-        version == 6 ? 1 : 0,
+        version >= 6 ? 1 : 0,
       );
       expect(
         (restored.operations.single['data'] as Map)['is_pinned'],
-        version == 6 ? 1 : 0,
+        version >= 6 ? 1 : 0,
       );
-      expect(original.containsKey('is_pinned'), version == 6);
+      expect(original.containsKey('is_pinned'), version >= 6);
     }
     expect(SyncSnapshot.migrationProtocolVersion, 3);
   });

@@ -60,6 +60,9 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
   /// 当前悬停的标签行。
   String? _hoveredTag;
 
+  /// 键盘停留在标签行或其更多按钮时，同样保留操作入口。
+  String? _focusedTag;
+
   /// 菜单开启后保留对应行的操作入口。
   String? _menuTag;
 
@@ -188,10 +191,17 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
     }
   }
 
-  /// 共享菜单关闭后再打开业务确认或名称编辑弹窗。
-  void _selectAction(String action, TaxonomyEntry tag) {
-    setState(() => _menuTag = null);
-    if (_busy || ref.read(noteEditorProvider).committing) return;
+  /// 编辑期间保持原行的入口，浮层关闭后恢复正常悬停显示。
+  void _selectAction(
+    String action,
+    TaxonomyEntry tag, {
+    required BuildContext anchorContext,
+    required String rowId,
+  }) {
+    // 被编辑器提交保护拦截的动作同样应清理菜单入口状态。
+    final bool blocked = _busy || ref.read(noteEditorProvider).committing;
+    setState(() => _menuTag = !blocked && action == 'rename' ? rowId : null);
+    if (blocked) return;
     if (action == 'delete') {
       unawaited(_delete(tag));
     } else if (action == 'delete-notes') {
@@ -200,10 +210,13 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
       unawaited(_setPinned(tag));
     } else if (action == 'rename') {
       unawaited(
-        showOmniDialog<void>(
+        showWindowsNoteTagEditor(
           context: context,
-          builder: (_) => _NoteTagNameDialog(tag: tag),
-        ),
+          anchorContext: anchorContext,
+          tag: tag,
+        ).whenComplete(() {
+          if (mounted) setState(() => _menuTag = null);
+        }),
       );
     }
   }
@@ -498,115 +511,143 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
     // 数量和更多图标使用相同的布局占位。
     final Color foreground = OmniColors.of(context).ink;
     // 菜单弹出后鼠标进入覆盖层也保留入口。
-    final bool menu = _hoveredTag == rowId || _menuTag == rowId;
-    return MouseRegion(
-      key: ValueKey('notes-tag-$rowId'),
-      onEnter: (_) => setState(() => _hoveredTag = rowId),
-      onExit: (_) {
-        if (_hoveredTag == rowId) setState(() => _hoveredTag = null);
+    final bool menu =
+        _hoveredTag == rowId || _focusedTag == rowId || _menuTag == rowId;
+    return Focus(
+      skipTraversal: true,
+      onFocusChange: (focused) {
+        if ((_focusedTag == rowId) == focused) return;
+        setState(() => _focusedTag = focused ? rowId : null);
       },
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: OmniSpacing.xxs),
-        child: Semantics(
-          key: ValueKey('notes-tag-region-$rowId'),
-          container: true,
-          explicitChildNodes: true,
-          selected: selected,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: selected
-                  ? Theme.of(context).colorScheme.primaryContainer
-                  : OmniColors.of(context).canvas,
-              borderRadius: BorderRadius.circular(OmniRadius.control),
-            ),
-            child: OmniListRow(
-              borderRadius: BorderRadius.circular(OmniRadius.control),
-              padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
-              leading: Icon(Icons.tag, size: OmniSize.icon, color: foreground),
-              title: Text(
-                tag.name,
-                style: TextStyle(color: foreground),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+      child: MouseRegion(
+        key: ValueKey('notes-tag-$rowId'),
+        onEnter: (_) => setState(() => _hoveredTag = rowId),
+        onExit: (_) {
+          if (_hoveredTag == rowId) setState(() => _hoveredTag = null);
+        },
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: OmniSpacing.xxs),
+          child: Semantics(
+            key: ValueKey('notes-tag-region-$rowId'),
+            container: true,
+            explicitChildNodes: true,
+            selected: selected,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: selected
+                    ? Theme.of(context).colorScheme.primaryContainer
+                    : OmniColors.of(context).canvas,
+                borderRadius: BorderRadius.circular(OmniRadius.control),
               ),
-              onTap: () => widget.onSelect(tag.id),
-              trailing: SizedBox.square(
-                dimension: OmniSize.iconButton,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    OmniHoverReveal(
-                      visible: _hovered && !menu,
-                      child: Center(
-                        child: Text(
-                          '$count',
-                          key: ValueKey('notes-tag-count-$rowId'),
-                          style: TextStyle(color: foreground),
+              child: OmniListRow(
+                borderRadius: BorderRadius.circular(OmniRadius.control),
+                padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.sm),
+                leading: NoteTagIcon(
+                  key: ValueKey('notes-tag-icon-$rowId'),
+                  emoji: tag.iconEmoji,
+                  color: foreground,
+                ),
+                title: Text(
+                  tag.name,
+                  style: TextStyle(color: foreground),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onTap: () => widget.onSelect(tag.id),
+                trailing: SizedBox.square(
+                  dimension: OmniSize.iconButton,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      OmniHoverReveal(
+                        visible: _hovered && !menu,
+                        child: Center(
+                          child: Text(
+                            '$count',
+                            key: ValueKey('notes-tag-count-$rowId'),
+                            style: TextStyle(color: foreground),
+                          ),
                         ),
                       ),
-                    ),
-                    OmniHoverReveal(
-                      visible: menu,
-                      child: OmniPopupMenuButton<String>(
-                        key: ValueKey('notes-tag-menu-$rowId'),
-                        tooltip: '标签操作',
-                        icon: const Icon(Icons.more_horiz),
-                        enabled: !_busy,
-                        menuConstraints: const BoxConstraints.tightFor(
-                          width: _noteTagMenuWidth,
+                      OmniHoverReveal(
+                        visible: menu,
+                        child: Builder(
+                          builder: (anchorContext) =>
+                              OmniPopupMenuButton<String>(
+                                key: ValueKey('notes-tag-menu-$rowId'),
+                                tooltip: '标签操作',
+                                icon: const Icon(Icons.more_horiz),
+                                enabled: !_busy,
+                                menuConstraints: const BoxConstraints.tightFor(
+                                  width: _noteTagMenuWidth,
+                                ),
+                                onOpened: () =>
+                                    setState(() => _menuTag = rowId),
+                                onCanceled: () =>
+                                    setState(() => _menuTag = null),
+                                onSelected: (action) => _selectAction(
+                                  action,
+                                  tag,
+                                  anchorContext: anchorContext,
+                                  rowId: rowId,
+                                ),
+                                itemBuilder: (_) => [
+                                  OmniPopupMenuItem(
+                                    key: ValueKey('notes-tag-pin-menu-$rowId'),
+                                    value: 'pin',
+                                    label: tag.isPinned ? '取消置顶' : '置顶',
+                                    icon: tag.isPinned
+                                        ? Icons.push_pin
+                                        : Icons.push_pin_outlined,
+                                  ),
+                                  OmniPopupMenuItem(
+                                    value: 'rename',
+                                    label: '编辑名称/图标',
+                                    icon: Icons.edit_outlined,
+                                  ),
+                                  const PopupMenuDivider(),
+                                  OmniPopupMenuItem<String>.submenu(
+                                    key: ValueKey(
+                                      'notes-tag-delete-menu-$rowId',
+                                    ),
+                                    label: '删除标签',
+                                    icon: Icons.delete_outline,
+                                    danger: true,
+                                    children: [
+                                      OmniPopupMenuItem<String>.custom(
+                                        key: const ValueKey(
+                                          'notes-tag-delete-only',
+                                        ),
+                                        value: 'delete',
+                                        danger: true,
+                                        child: const Padding(
+                                          padding: EdgeInsets.symmetric(
+                                            horizontal: OmniSpacing.sm,
+                                          ),
+                                          child: Text('仅删除标签'),
+                                        ),
+                                      ),
+                                      OmniPopupMenuItem<String>.custom(
+                                        key: const ValueKey(
+                                          'notes-tag-delete-notes',
+                                        ),
+                                        value: 'delete-notes',
+                                        danger: true,
+                                        child: const Padding(
+                                          padding: EdgeInsets.symmetric(
+                                            horizontal: OmniSpacing.sm,
+                                          ),
+                                          child: Text('删除标签和笔记'),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
                         ),
-                        onOpened: () => setState(() => _menuTag = rowId),
-                        onCanceled: () => setState(() => _menuTag = null),
-                        onSelected: (action) => _selectAction(action, tag),
-                        itemBuilder: (_) => [
-                          OmniPopupMenuItem(
-                            key: ValueKey('notes-tag-pin-menu-$rowId'),
-                            value: 'pin',
-                            label: tag.isPinned ? '取消置顶' : '置顶',
-                            icon: tag.isPinned
-                                ? Icons.push_pin
-                                : Icons.push_pin_outlined,
-                          ),
-                          OmniPopupMenuItem(
-                            value: 'rename',
-                            label: '编辑名称',
-                            icon: Icons.edit_outlined,
-                          ),
-                          const PopupMenuDivider(),
-                          OmniPopupMenuItem<String>.submenu(
-                            key: ValueKey('notes-tag-delete-menu-$rowId'),
-                            label: '删除标签',
-                            icon: Icons.delete_outline,
-                            danger: true,
-                            children: [
-                              OmniPopupMenuItem<String>.custom(
-                                key: const ValueKey('notes-tag-delete-only'),
-                                value: 'delete',
-                                danger: true,
-                                child: const Padding(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: OmniSpacing.sm,
-                                  ),
-                                  child: Text('仅删除标签'),
-                                ),
-                              ),
-                              OmniPopupMenuItem<String>.custom(
-                                key: const ValueKey('notes-tag-delete-notes'),
-                                value: 'delete-notes',
-                                danger: true,
-                                child: const Padding(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: OmniSpacing.sm,
-                                  ),
-                                  child: Text('删除标签和笔记'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -615,106 +656,4 @@ class _NoteTagSectionState extends ConsumerState<_NoteTagSection> {
       ),
     );
   }
-}
-
-/// 平铺标签名称编辑，保留原有身份、颜色与排列位置。
-class _NoteTagNameDialog extends ConsumerStatefulWidget {
-  /// 创建名称编辑小弹窗。
-  const _NoteTagNameDialog({required this.tag});
-
-  /// 需要改名的有效标签。
-  final TaxonomyEntry tag;
-
-  /// 创建名称输入及保存状态。
-  @override
-  ConsumerState<_NoteTagNameDialog> createState() => _NoteTagNameDialogState();
-}
-
-/// 失败时保留输入，只有仓储成功后关闭弹窗。
-class _NoteTagNameDialogState extends ConsumerState<_NoteTagNameDialog> {
-  /// 保留当前名称及用户未提交的输入。
-  late final TextEditingController _name = TextEditingController(
-    text: widget.tag.name,
-  );
-
-  /// 阻止保存中的重复提交。
-  bool _saving = false;
-
-  /// 展示名称约束或持久化错误。
-  String? _error;
-
-  /// 释放弹窗输入。
-  @override
-  void dispose() {
-    _name.dispose();
-    super.dispose();
-  }
-
-  /// 保存平铺名称，不生成层级标签。
-  Future<void> _save() async {
-    if (_saving) return;
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-    try {
-      await ref
-          .read(taxonomyRepositoryProvider)
-          .save(
-            TaxonomyDraft(
-              id: widget.tag.id,
-              module: TaxonomyModule.notes,
-              kind: TaxonomyKind.tag,
-              name: _name.text,
-              colorValue: widget.tag.colorValue,
-              sortOrder: widget.tag.sortOrder,
-            ),
-          );
-      if (mounted) Navigator.of(context).pop();
-    } on Object catch (error) {
-      if (mounted) {
-        setState(
-          () =>
-              _error = error is FormatException ? error.message : '保存失败：$error',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  /// 图标、名称和保存按钮排在同一行，沿用 Omni 弹窗样式。
-  @override
-  Widget build(BuildContext context) => OmniDialogScaffold(
-    title: '编辑名称',
-    width: 420,
-    onWindowsEnter: () => unawaited(_save()),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.only(top: OmniSpacing.xs),
-          child: Icon(Icons.tag),
-        ),
-        const SizedBox(width: OmniSpacing.sm),
-        Expanded(
-          child: OmniTextField(
-            key: const ValueKey('notes-tag-name'),
-            controller: _name,
-            autofocus: true,
-            enabled: !_saving,
-            onChanged: (_) {
-              if (_error != null) setState(() => _error = null);
-            },
-            decoration: InputDecoration(hintText: '标签名称', errorText: _error),
-          ),
-        ),
-        const SizedBox(width: OmniSpacing.sm),
-        OmniButton(
-          onPressed: _saving ? null : () => unawaited(_save()),
-          label: _saving ? '保存中' : '保存',
-        ),
-      ],
-    ),
-  );
 }

@@ -63,6 +63,7 @@ export const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
     'kind',
     'name',
     'color_value',
+    'icon_emoji',
     'sort_order',
     'is_pinned',
     'is_enabled',
@@ -191,6 +192,9 @@ export class SyncSqlBuilder {
     }
     // 客户端提交的数据。
     const data = { ...operation.data };
+    if (operation.table === 'taxonomy_entries' && Object.hasOwn(data, 'icon_emoji') && data.icon_emoji !== null && typeof data.icon_emoji !== 'string') {
+      throw new BadRequestException('标签图标必须为空或完整的表情文字');
+    }
     if (operation.table === 'note_images' && data.sort_order !== undefined && (!Number.isSafeInteger(data.sort_order) || (data.sort_order as number) < 0)) {
       throw new BadRequestException('笔记图片顺序必须为非负整数');
     }

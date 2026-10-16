@@ -7,8 +7,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:omni_butler/features/notes/data/note_editor_controller.dart';
 import 'package:omni_butler/features/notes/data/note_image_repository.dart';
+import 'package:omni_butler/features/notes/data/note_tag_emoji_catalog.dart';
 import 'package:omni_butler/features/notes/presentation/note_rich_editor.dart';
 import 'package:omni_butler/features/notes/presentation/note_markdown_text.dart';
+import 'package:omni_butler/features/notes/presentation/windows_note_tag_editor.dart';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:drift/drift.dart' hide Column, isNull, isNotNull;
@@ -93,6 +95,14 @@ void main() {
         ).readAsBytes().then(ByteData.sublistView),
       );
     await icons.load();
+    // 图标预览使用本机彩色字体，普通测试不依赖此文件。
+    final FontLoader emoji = FontLoader('Segoe UI Emoji')
+      ..addFont(
+        File('C:/Windows/Fonts/seguiemj.ttf')
+            .readAsBytes()
+            .then(ByteData.sublistView),
+      );
+    await emoji.load();
   });
   testWidgets('Android六分支预载不录音，保存与历史及重新进入相互独立', (tester) async {
     // 完整生产路由环境。
@@ -787,14 +797,14 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('notes-tag-menu-work')));
     await _settle(tester);
     expect(find.text('删除标签'), findsOneWidget);
-    expect(find.text('编辑名称'), findsOneWidget);
+    expect(find.text('编辑名称/图标'), findsOneWidget);
     expect(
       find.byWidgetPredicate((widget) => widget is PopupMenuItem<String>),
       findsNWidgets(3),
     );
     expect(find.text('置顶'), findsOneWidget);
     await _capture(tester, app, 'windows-tags-menu');
-    await tester.tap(find.text('编辑名称'));
+    await tester.tap(find.text('编辑名称/图标'));
     await _settle(tester);
     expect(
       tester
@@ -813,7 +823,7 @@ void main() {
       find.byKey(const ValueKey('notes-tag-name')),
       '未确认的名称',
     );
-    await tester.tap(find.byTooltip('关闭').hitTestable());
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await _settle(tester);
     expect(
       find.descendant(
@@ -828,7 +838,7 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('notes-tag-menu-work')));
     await _settle(tester);
-    await tester.tap(find.text('编辑名称'));
+    await tester.tap(find.text('编辑名称/图标'));
     await _settle(tester);
     await tester.enterText(find.byKey(const ValueKey('notes-tag-name')), '复盘');
     await tester.tap(find.text('保存'));
@@ -2671,6 +2681,155 @@ void main() {
 /// 统计弹窗的生产页面回归，复用真实数据库、编辑器和路由。
 /// 置顶快捷入口与两种删除使用真实侧栏、仓储和编辑会话回归。
 void noteTagActionTests() {
+  testWidgets('Windows 标签键盘聚焦显示菜单且编辑关闭后恢复入口焦点', (tester) async {
+    // 不依赖悬停即可从标签行进入更多操作。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      seed: true,
+    );
+    await _navigate(tester, app, '/notes');
+    // 名称位于主行InkWell的键盘焦点之内。
+    final Finder name = find.descendant(
+      of: find.byKey(const ValueKey('notes-tag-work')),
+      matching: find.text('工作'),
+    );
+    Focus.of(tester.element(name)).requestFocus();
+    await _settle(tester);
+    expect(
+      find.byKey(const ValueKey('notes-tag-menu-work')).hitTestable(),
+      findsOneWidget,
+    );
+    // 将焦点交给生产按钮本身，随后完全使用键盘打开菜单。
+    final OmniIconButton button = tester.widget(
+      find.descendant(
+        of: find.byKey(const ValueKey('notes-tag-menu-work')),
+        matching: find.byType(OmniIconButton),
+      ),
+    );
+    button.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await _settle(tester);
+    await tester.tap(find.text('编辑名称/图标'));
+    await _settle(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await _settle(tester);
+    expect(button.focusNode!.hasFocus, isTrue);
+    expect(
+      find.byKey(const ValueKey('notes-tag-menu-work')).hitTestable(),
+      findsOneWidget,
+    );
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final String theme in ['light', 'dark']) {
+    testWidgets('Windows 标签emoji保存后同步显示在两个分区且取消移除保留图标：$theme', (tester) async {
+      // 使用完整页面、真实标签仓储和未发布正文验证交互边界。
+      final _App app = await _mount(
+        tester,
+        platform: TargetPlatform.windows,
+        theme: theme,
+        seed: true,
+      );
+      await _navigate(tester, app, '/notes');
+      await _enterBody(tester, '图标编辑期间保留的草稿');
+      await tester.runAsync(
+        () => app.container
+            .read(taxonomyRepositoryProvider)
+            .setPinned('work', true),
+      );
+      await _settle(tester);
+      // 入口与实际鼠标菜单共用原来的标签行身份。
+      final TestGesture mouse = await tester.createGesture(
+        kind: ui.PointerDeviceKind.mouse,
+      );
+      await mouse.addPointer(location: Offset.zero);
+      await _openNoteTagMenu(tester, mouse, 'work');
+      await tester.tap(find.text('编辑名称/图标'));
+      await _settle(tester);
+      // 默认浮层靠近标签入口，不在整个窗口中心展示。
+      final Rect editor = tester.getRect(
+        find.byKey(const ValueKey('notes-tag-editor')),
+      );
+      expect(editor.width, 320);
+      expect(editor.left, lessThan(400));
+      await tester.tap(find.byKey(const ValueKey('notes-tag-icon-button')));
+      await _settle(tester);
+      await _capture(tester, app, 'windows-tags-emoji-picker-$theme');
+      await tester.enterText(
+        find.byKey(const ValueKey('notes-tag-emoji-search')),
+        '😀',
+      );
+      await _settle(tester);
+      await tester.tap(find.byKey(const ValueKey('notes-tag-emoji-😀')));
+      await _settle(tester);
+      for (final String row in ['work', 'pinned-work']) {
+        expect(
+          tester
+              .widget<NoteTagIcon>(find.byKey(ValueKey('notes-tag-icon-$row')))
+              .emoji,
+          isNull,
+        );
+      }
+      await tester.tap(find.byKey(const ValueKey('notes-tag-save')));
+      await _settle(tester);
+      for (final String row in ['work', 'pinned-work']) {
+        expect(
+          tester
+              .widget<NoteTagIcon>(find.byKey(ValueKey('notes-tag-icon-$row')))
+              .emoji,
+          '😀',
+        );
+      }
+      await _capture(tester, app, 'windows-tags-emoji-saved-$theme');
+      await _openNoteTagMenu(tester, mouse, 'pinned-work');
+      await tester.tap(find.text('编辑名称/图标'));
+      await _settle(tester);
+      await tester.tap(find.byKey(const ValueKey('notes-tag-icon-button')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const ValueKey('notes-tag-emoji-remove')));
+      await tester.pumpAndSettle();
+      await tester.tapAt(const Offset(1100, 800));
+      await _settle(tester);
+      expect(
+        tester
+            .widget<NoteTagIcon>(
+              find.byKey(const ValueKey('notes-tag-icon-work')),
+            )
+            .emoji,
+        '😀',
+      );
+      // 再次从同一入口确认移除，两处分区都回到默认井号。
+      await _openNoteTagMenu(tester, mouse, 'work');
+      await tester.tap(find.text('编辑名称/图标'));
+      await _settle(tester);
+      await tester.tap(find.byKey(const ValueKey('notes-tag-icon-button')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const ValueKey('notes-tag-emoji-remove')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('notes-tag-save')));
+      await _settle(tester);
+      for (final String row in ['work', 'pinned-work']) {
+        expect(
+          tester
+              .widget<NoteTagIcon>(find.byKey(ValueKey('notes-tag-icon-$row')))
+              .emoji,
+          isNull,
+        );
+      }
+      expect(_bodyText(tester), '图标编辑期间保留的草稿');
+      expect(
+        tester.widget<Text>(find.byKey(const ValueKey('note-count'))).data,
+        '3',
+      );
+      await mouse.removePointer();
+      await _dispose(tester, app);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   for (final String theme in ['light', 'dark']) {
     testWidgets('Windows 标签置顶双分区及搜索折叠保持独立：$theme', (tester) async {
       // 两个主题都使用实际笔记数据，重复展示不能影响统计。
@@ -3885,6 +4044,8 @@ Future<_App> _mount(
   Future<void> Function(AppDatabase)? prepareDatabase,
   Future<Directory> Function()? imageDirectory,
 }) async {
+  // 各widget用例拥有不同fake async区域，避免复用已结束区域中的Future。
+  NoteTagEmojiCatalog.resetCacheForTesting();
   // 预览阴影设置随当前应用夹具一起恢复，普通测试保持原配置。
   final bool previousShadows = debugDisableShadows;
   if (Platform.environment['OMNI_NOTES_PREVIEW'] != null) {

@@ -409,6 +409,93 @@ void main() {
     }
   });
 
+  test('图标上传保留组合字符与显式移除，普通标签更新不携带图标', () async {
+    // 使用实际触发器与队列，验证更新没有扩散为整行写入。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_tag_appearance_upload_',
+    );
+    // 仅记录请求，不连接网络。
+    final _RecordingAuth auth = _RecordingAuth();
+    // 实际 PowerSync 数据库。
+    final OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      '${directory.path}/db.sqlite',
+    );
+    try {
+      // 所有改动走生产仓储。
+      final TaxonomyRepository repository = TaxonomyRepository(
+        runtime.database,
+      );
+      await repository.save(
+        const TaxonomyDraft(
+          module: TaxonomyModule.notes,
+          kind: TaxonomyKind.tag,
+          name: '工作',
+          colorValue: 42,
+        ),
+      );
+      // 从创建事务中取得真实的稳定标签身份。
+      final CrudTransaction creation = (await runtime.powerSync
+          .getNextCrudTransaction())!;
+      // 刚创建的标签标识。
+      final String id = creation.crud.single.id;
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      // 正常创建队列省略空列，服务器使用 nullable 默认值。
+      final Map creationData =
+          (auth.requests.single['operations'] as List).single['data'] as Map;
+      expect(creationData['icon_emoji'], isNull);
+      auth.requests.clear();
+
+      await repository.updateNoteTagAppearance(
+        id,
+        name: const Value('开发'),
+        iconEmoji: const Value('👩🏽‍💻'),
+      );
+      await repository.save(
+        TaxonomyDraft(
+          id: id,
+          module: TaxonomyModule.notes,
+          kind: TaxonomyKind.tag,
+          name: '普通入口改名',
+          colorValue: 42,
+        ),
+      );
+      await repository.reorder([id]);
+      await repository.setPinned(id, true);
+      await repository.updateNoteTagAppearance(
+        id,
+        iconEmoji: const Value(null),
+      );
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      // 保留每次事务的原始差量，不能用最终行状态覆盖旧操作。
+      final List<Map> operations = [
+        for (final Map<String, dynamic> request in auth.requests)
+          ...(request['operations'] as List).cast<Map>(),
+      ];
+      expect(operations, hasLength(5));
+      expect((operations.first['data'] as Map)['name'], '开发');
+      expect((operations.first['data'] as Map)['icon_emoji'], '👩🏽‍💻');
+      expect(
+        (operations.first['data'] as Map).keys,
+        unorderedEquals(['name', 'icon_emoji', 'updated_at']),
+      );
+      // 普通改名、排序和置顶不能携带旧图标值。
+      for (final Map operation in operations.skip(1).take(3)) {
+        expect((operation['data'] as Map).containsKey('icon_emoji'), isFalse);
+      }
+      expect(
+        (operations.last['data'] as Map).containsKey('icon_emoji'),
+        isTrue,
+      );
+      expect((operations.last['data'] as Map)['icon_emoji'], isNull);
+      expect((operations.last['data'] as Map).containsKey('name'), isFalse);
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 0);
+    } finally {
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('真实笔记PUT不携带标签基线，正文日期PATCH不附带未修改标签基线', () async {
     // 仅使用真实生产触发器生成队列，不手工插入powersync_crud。
     final Directory directory = await Directory.systemTemp.createTemp(

@@ -287,6 +287,9 @@ class TaxonomyEntries extends Table {
   BoolColumn get isPinned =>
       boolean().withDefault(const Constant<bool>(false))();
 
+  /// 笔记标签的完整 emoji 字符串，空值使用默认井号图标。
+  TextColumn get iconEmoji => text().nullable()();
+
   /// 是否允许用于新记录。
   BoolColumn get isEnabled =>
       boolean().withDefault(const Constant<bool>(true))();
@@ -747,7 +750,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 21;
+  int get schemaVersion => 22;
 
   /// 创建数据库并从旧版本安全升级。
   @override
@@ -952,6 +955,17 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
           (row) => row.read<String>('name') == 'is_pinned',
         )) {
           await migrator.addColumn(taxonomyEntries, taxonomyEntries.isPinned);
+        }
+      }
+      if (from < 22) {
+        // 中断升级或降版测试可能已经含图标列，避免重复添加。
+        final List<QueryRow> taxonomyColumns = await customSelect(
+          'PRAGMA table_info(taxonomy_entries)',
+        ).get();
+        if (!taxonomyColumns.any(
+          (row) => row.read<String>('name') == 'icon_emoji',
+        )) {
+          await migrator.addColumn(taxonomyEntries, taxonomyEntries.iconEmoji);
         }
       }
       if (from == 17) {
