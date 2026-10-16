@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -10,7 +9,7 @@ import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/features/home/data/home_card_preferences.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
-/// 安卓首页的固定名言、平铺分页和独立纵向阅读区域。
+/// 安卓首页的可滚动名言、吸顶导航和平铺分页阅读区域。
 class HomeMobileDashboard extends StatefulWidget {
   /// 已启用且业务可用的模块顺序。
   final List<HomeCardId> visibleCards;
@@ -33,30 +32,21 @@ class HomeMobileDashboard extends StatefulWidget {
     super.key,
   });
 
-  /// 创建会话内分页与顶部测量状态。
+  /// 创建会话内分页与滚动状态。
   @override
   State<HomeMobileDashboard> createState() => _HomeMobileDashboardState();
 }
 
-/// 按稳定模块身份保留选择，并协调短视口的顶部收起。
+/// 按稳定模块身份保留选择，并协调名言与正文的纵向滚动。
 class _HomeMobileDashboardState extends State<HomeMobileDashboard> {
   /// 首页自己的横向分页，不接力一级导航。
   final PageController _pageController = PageController();
 
-  /// 短视口中只负责让顶部横幅滚出的外层控制器。
+  /// 负责让顶部名言横幅滚出的外层控制器。
   final ScrollController _outerController = ScrollController();
-
-  /// 上次排版是否允许收起顶部，用于恢复标准视口的位置。
-  bool _collapsible = true;
-
-  /// 保持顶部业务子树在固定与可收起模式之间的身份。
-  final GlobalKey _headerKey = GlobalKey();
 
   /// 当前选择的稳定模块身份。
   HomeCardId? _selected;
-
-  /// 顶部真实排版高度，包含名言与用户字体缩放。
-  double? _headerHeight;
 
   /// 重排后的待对齐页码，防止旧滚动通知覆盖当前选择。
   int? _pendingPage;
@@ -109,12 +99,6 @@ class _HomeMobileDashboardState extends State<HomeMobileDashboard> {
     super.dispose();
   }
 
-  /// 接收布局完成后的真实顶部高度。
-  void _onHeaderSize(Size size) {
-    if (!mounted || _headerHeight == size.height) return;
-    setState(() => _headerHeight = size.height);
-  }
-
   /// 标签选择与正文横滑使用同一个分页控制器。
   void _selectPage(int index) {
     if (!_pageController.hasClients || _pendingPage != null) return;
@@ -134,7 +118,7 @@ class _HomeMobileDashboardState extends State<HomeMobileDashboard> {
   /// 消费首页非分页区域的水平手势，防止触发外层一级横滑。
   void _consumeHorizontalDrag(DragStartDetails details) {}
 
-  /// 构建连续实底首页及必要时可向上收起的顶部。
+  /// 构建名言随滚动退出、模块导航到顶常驻的首页。
   @override
   Widget build(BuildContext context) {
     // 当前实际可用的模块。
@@ -170,58 +154,33 @@ class _HomeMobileDashboardState extends State<HomeMobileDashboard> {
         color: colors.paper,
         child: LayoutBuilder(
           builder: (BuildContext context, BoxConstraints constraints) {
-            // 首帧先使用可收起布局，避免测量完成前在极短视口溢出。
-            final bool collapsible =
-                _headerHeight == null ||
-                constraints.maxHeight - _headerHeight! - tabHeight <
-                    minimumBodyHeight;
-            if (_collapsible != collapsible) {
-              _collapsible = collapsible;
-              if (!collapsible) {
-                WidgetsBinding.instance.addPostFrameCallback((Duration _) {
-                  if (mounted && !_collapsible && _outerController.hasClients) {
-                    // 正文已换回独立控制器，复位顶部不会重置各模块位置。
-                    _outerController.jumpTo(0);
-                  }
-                });
-              }
-            }
             // 名言沿用原有水平边距与自然尺寸。
-            final Widget header = _HomeHeaderMeasure(
-              key: _headerKey,
-              onSize: _onHeaderSize,
-              child: ColoredBox(
-                color: colors.paper,
-                child: Padding(
-                  key: const ValueKey<String>('home-mobile-header'),
-                  padding: const EdgeInsets.fromLTRB(
-                    14,
-                    OmniSpacing.xs,
-                    14,
-                    OmniSpacing.xs,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      if (widget.visibleCards.contains(HomeCardId.quote))
-                        widget.cards[HomeCardId.quote]!,
-                    ],
-                  ),
+            final Widget header = ColoredBox(
+              color: colors.paper,
+              child: Padding(
+                key: const ValueKey<String>('home-mobile-header'),
+                padding: const EdgeInsets.fromLTRB(
+                  14,
+                  OmniSpacing.xs,
+                  14,
+                  OmniSpacing.xs,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    if (widget.visibleCards.contains(HomeCardId.quote))
+                      widget.cards[HomeCardId.quote]!,
+                  ],
                 ),
               ),
             );
             return NestedScrollView(
               key: const ValueKey<String>('home-mobile-vertical-layout'),
               controller: _outerController,
-              physics: collapsible
-                  ? const ClampingScrollPhysics()
-                  : const NeverScrollableScrollPhysics(),
-              scrollBehavior: ScrollConfiguration.of(context).copyWith(
-                scrollbars: false,
-                // 嵌套协调器可能保留旧拖拽状态，标准视口显式关闭外层输入。
-                dragDevices: collapsible ? null : const <PointerDeviceKind>{},
-              ),
+              physics: const ClampingScrollPhysics(),
+              scrollBehavior: ScrollConfiguration.of(context)
+                  .copyWith(scrollbars: false),
               headerSliverBuilder: (BuildContext context, bool innerScrolled) =>
                   <Widget>[SliverToBoxAdapter(child: header)],
               body: LayoutBuilder(
@@ -254,7 +213,7 @@ class _HomeMobileDashboardState extends State<HomeMobileDashboard> {
                                         'home-mobile-page-empty',
                                       ),
                                       bottomPadding: widget.bottomPadding,
-                                      coordinated: collapsible,
+                                      coordinated: true,
                                       child: OmniPanel(
                                         key: const ValueKey<String>(
                                           'home-dashboard-empty',
@@ -314,9 +273,7 @@ class _HomeMobileDashboardState extends State<HomeMobileDashboard> {
                                               'home-mobile-page-${card.name}',
                                             ),
                                             bottomPadding: widget.bottomPadding,
-                                            coordinated:
-                                                collapsible &&
-                                                _selected == card,
+                                            coordinated: _selected == card,
                                             child: widget.cards[card]!,
                                           ),
                                       ],
@@ -693,7 +650,7 @@ class _HomeModuleViewport extends StatefulWidget {
   /// 滚动尾部的悬浮操作避让。
   final double bottomPadding;
 
-  /// 仅短视口的当前模块参与顶部收起。
+  /// 当前模块参与顶部名言与正文的联动滚动。
   final bool coordinated;
 
   /// 创建稳定模块容器。
@@ -737,57 +694,5 @@ class _HomeModuleViewportState extends State<_HomeModuleViewport>
       preserveScrollState: true,
       child: SizedBox.expand(child: widget.child),
     );
-  }
-}
-
-/// 在真实排版后通知顶部大小，避免为名言或中文字号猜测高度。
-class _HomeHeaderMeasure extends SingleChildRenderObjectWidget {
-  /// 顶部大小变化后的回调。
-  final ValueChanged<Size> onSize;
-
-  /// 创建无额外布局约束的测量节点。
-  const _HomeHeaderMeasure({
-    required this.onSize,
-    required super.child,
-    super.key,
-  });
-
-  /// 创建透明代理测量对象。
-  @override
-  RenderObject createRenderObject(BuildContext context) =>
-      _HomeHeaderMeasureBox(onSize);
-
-  /// 更新回调但不重建布局子树。
-  @override
-  void updateRenderObject(
-    BuildContext context,
-    _HomeHeaderMeasureBox renderObject,
-  ) {
-    renderObject.onSize = onSize;
-  }
-}
-
-/// 仅在顶部大小变化时于帧末发布测量值。
-class _HomeHeaderMeasureBox extends RenderProxyBox {
-  /// 当前布局通知回调。
-  ValueChanged<Size> onSize;
-
-  /// 上次通知的布局尺寸。
-  Size? _previousSize;
-
-  /// 创建顶部测量渲染对象。
-  _HomeHeaderMeasureBox(this.onSize);
-
-  /// 按子组件自然尺寸排版并延后通知上层。
-  @override
-  void performLayout() {
-    super.performLayout();
-    if (_previousSize == size) return;
-    _previousSize = size;
-    // 捕获本帧测量值，避免帧末读取已失效布局。
-    final Size measured = size;
-    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
-      if (attached) onSize(measured);
-    });
   }
 }

@@ -361,14 +361,17 @@ void main() {
     await tester.tap(_key('home-todo-tree-toggle-${parent.id}'));
     await tester.pumpAndSettle();
     expect(find.text('分页子任务 1'), findsOneWidget);
-    // 正常高度下纵向滚动只移动当前模块。
-    final Rect quoteBefore = tester.getRect(_key('home-quote-card'));
-    await tester.drag(_key('home-mobile-pager'), const Offset(0, -220));
+    // 正常高度下先将名言滚出，再继续滚动当前模块。
+    await tester.drag(_key('home-mobile-pager'), const Offset(0, -420));
     await tester.pumpAndSettle();
     // 当前待办页真实纵向滚动位置。
     final double scrollBefore = _moduleScroll(tester, 'todos').pixels;
     expect(scrollBefore, greaterThan(100));
-    expect(tester.getRect(_key('home-quote-card')), quoteBefore);
+    expect(_key('home-quote-card'), findsNothing);
+    expect(
+      tester.getTopLeft(_key('home-mobile-tabs')).dy,
+      closeTo(tester.getTopLeft(_key('home-mobile-vertical-layout')).dy, 0.1),
+    );
 
     await _selectModule(tester, 'timeStatus');
     await _selectModule(tester, 'todayContext');
@@ -487,7 +490,8 @@ void main() {
     _expectPage(tester, 1);
     await tester.tap(_key('home-todo-tree-toggle-${parent.id}'));
     await tester.pumpAndSettle();
-    await tester.drag(_key('home-mobile-pager'), const Offset(0, -200));
+    // 留在正文中段，避免隐藏导航后视口变高导致末尾偏移被合法钳制。
+    await tester.drag(_key('home-mobile-pager'), const Offset(0, -350));
     await tester.pumpAndSettle();
     // 开关悬浮按钮前的真实正文位置。
     final double scrollBefore = _moduleScroll(tester, 'todos').pixels;

@@ -67,14 +67,35 @@ void main() {
     }
   });
 
-  testWidgets('标准视口在顶部竖拖不会让模块进入固定头部后方', (WidgetTester tester) async {
+  testWidgets('标准视口名言随顶部竖拖退出且导航到顶后常驻', (WidgetTester tester) async {
     await _pumpDashboard(tester);
-    // 拖动前模块标题与标签的边界。
-    final Rect before = tester.getRect(_key('viewport-title-todos'));
-    await tester.drag(_key('viewport-quote'), const Offset(0, -180));
+    await tester.drag(_key('viewport-quote'), const Offset(0, -280));
     await tester.pumpAndSettle();
-    expect(tester.getRect(_key('viewport-title-todos')), before);
+    expect(
+      tester.getBottomLeft(_key('viewport-quote')).dy,
+      lessThanOrEqualTo(0),
+    );
+    expect(tester.getTopLeft(_key('home-mobile-tabs')).dy, closeTo(0, 0.1));
+    // 名言退出后继续滚动，只推动正文，导航仍可点击。
+    await tester.drag(_key('home-mobile-pager'), const Offset(0, -180));
+    await tester.pumpAndSettle();
+    expect(_bodyScroll(tester).pixels, greaterThan(100));
+    expect(tester.getTopLeft(_key('home-mobile-tabs')).dy, closeTo(0, 0.1));
+    expect(_key('home-mobile-tabs').hitTestable(), findsOneWidget);
     _expectBodyBelowTabs(tester, HomeCardId.todos);
+    // 切换模块仍保持导航吸顶，回到原模块保留正文位置。
+    final double bodyOffset = _bodyScroll(tester).pixels;
+    await tester.tap(_key('home-mobile-tab-timeStatus'));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(_key('home-mobile-tabs')).dy, closeTo(0, 0.1));
+    _expectBodyBelowTabs(tester, HomeCardId.timeStatus);
+    await tester.tap(_key('home-mobile-tab-todos'));
+    await tester.pumpAndSettle();
+    expect(_bodyScroll(tester).pixels, closeTo(bodyOffset, 0.1));
+    // 下拉回到正文起点后，名言可重新进入屏幕。
+    await tester.drag(_key('home-mobile-pager'), const Offset(0, 1000));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(_key('viewport-quote')).dy, closeTo(8, 0.1));
     expect(tester.takeException(), isNull);
   });
 
@@ -125,7 +146,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('标准短屏往返保留正文状态和偏移并恢复顶部位置', (WidgetTester tester) async {
+  testWidgets('标准短屏往返保留正文状态和偏移且名言保持收起', (WidgetTester tester) async {
     await _pumpDashboard(tester);
     // 首次展开的正文状态必须跨视口模式保持同一实例。
     final State<StatefulWidget> originalState = tester.state(
@@ -133,11 +154,11 @@ void main() {
     );
     await tester.tap(_key('viewport-toggle-todos'));
     await tester.pumpAndSettle();
-    await tester.drag(_key('home-mobile-pager'), const Offset(0, -220));
+    await tester.drag(_key('home-mobile-pager'), const Offset(0, -420));
     await tester.pumpAndSettle();
-    // 标准视口下独立正文的真实滚动偏移。
+    // 名言收起后正文的真实滚动偏移。
     final double originalOffset = _bodyScroll(tester).pixels;
-    // 名言在恢复标准视口后应重新落回初始位置。
+    // 视口变更应保持名言收起的位置。
     final Rect originalHeader = tester.getRect(_key('viewport-quote'));
     expect(originalOffset, greaterThan(100));
 
@@ -148,11 +169,8 @@ void main() {
     expect(find.text('已展开todos'), findsOneWidget);
     await tester.dragFrom(const Offset(180, 150), const Offset(0, -180));
     await tester.pumpAndSettle();
-    expect(
-      tester.getTopLeft(_key('viewport-quote')).dy,
-      lessThan(originalHeader.top),
-    );
-    // 切换回标准模式前记录真实位置，避免把顶部收起误算为正文滚动。
+    expect(tester.getRect(_key('viewport-quote')), originalHeader);
+    // 恢复标准尺寸前记录正文位置。
     final double shortOffset = _bodyScroll(tester).pixels;
 
     tester.view.physicalSize = const Size(390, 844);
@@ -167,7 +185,8 @@ void main() {
 }
 
 /// 返回测试控件的稳定标识。
-Finder _key(String value) => find.byKey(ValueKey<String>(value));
+Finder _key(String value) =>
+    find.byKey(ValueKey<String>(value), skipOffstage: false);
 
 /// 读取待办模拟正文的唯一纵向滚动位置。
 ScrollPosition _bodyScroll(WidgetTester tester) => tester
