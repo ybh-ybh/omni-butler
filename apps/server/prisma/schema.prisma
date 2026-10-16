@@ -387,6 +387,7 @@ model TaxonomyEntry {
   module      String               @db.VarChar(24)
   kind        String               @db.VarChar(16)
   name        String               @db.VarChar(80)
+  /// 仅其他模块使用颜色；笔记标签由数据库约束保证为空。
   colorValue  BigInt?              @map("color_value")
   /// 标签图标保留完整 Unicode 序列，空值使用客户端默认井号。
   iconEmoji   String?              @map("icon_emoji")

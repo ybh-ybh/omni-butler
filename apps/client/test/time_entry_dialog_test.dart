@@ -267,7 +267,7 @@ void main() {
           final Container marker = tester.widget<Container>(dot);
           expect(
             (marker.decoration! as BoxDecoration).color,
-            Color(category.colorValue),
+            Color(category.colorValue ?? 0xFF3370FF),
           );
           expect(
             tester.getTopLeft(dot).dx,

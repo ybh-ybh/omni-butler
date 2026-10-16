@@ -95,7 +95,7 @@ void main() {
     }
   });
 
-  test('v20真实文件升级为22，标签及其他字段保留且置顶默认关闭', () async {
+  test('v20真实文件升级为23，标签及其他字段保留且置顶默认关闭', () async {
     // 隔离旧版数据库，不访问用户数据。
     final Directory directory = await Directory.systemTemp.createTemp(
       'note-pin-v20-',
@@ -115,7 +115,7 @@ void main() {
               module: 'notes',
               kind: 'tag',
               name: '旧标签',
-              colorValue: 42,
+              colorValue: const Value(null),
               sortOrder: const Value(7),
               createdAt: now,
               updatedAt: now,
@@ -131,14 +131,14 @@ void main() {
       final TaxonomyEntry restored =
           (await database.select(database.taxonomyEntries).get()).single;
       expect(restored.name, '旧标签');
-      expect(restored.colorValue, 42);
+      expect(restored.colorValue, isNull);
       expect(restored.sortOrder, 7);
       expect(restored.updatedAt, now);
       expect(restored.isPinned, isFalse);
       expect(
         (await database.customSelect('PRAGMA user_version').getSingle())
             .read<int>('user_version'),
-        22,
+        23,
       );
     } finally {
       await database.close();

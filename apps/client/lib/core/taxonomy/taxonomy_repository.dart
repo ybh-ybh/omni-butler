@@ -46,8 +46,11 @@ class TaxonomyDraft {
   /// 显示名称。
   final String name;
 
-  /// ARGB 颜色值。
-  final int colorValue;
+  /// 其他模块的 ARGB 颜色；笔记标签不使用颜色。
+  final int? colorValue;
+
+  /// 新增笔记标签的完整表情，空值使用井号。
+  final String? iconEmoji;
 
   /// 用户排序值。
   final int sortOrder;
@@ -58,7 +61,8 @@ class TaxonomyDraft {
     required this.module,
     required this.kind,
     required this.name,
-    required this.colorValue,
+    this.colorValue,
+    this.iconEmoji,
     this.sortOrder = 0,
   });
 }
@@ -171,7 +175,10 @@ class TaxonomyRepository {
               module: draft.module.name,
               kind: draft.kind.name,
               name: name,
-              colorValue: draft.colorValue,
+              colorValue: Value(
+                draft.module == TaxonomyModule.notes ? null : draft.colorValue,
+              ),
+              iconEmoji: Value(draft.iconEmoji),
               sortOrder: Value<int>(draft.sortOrder),
               isEnabled: const Value<bool>(true),
               createdAt: deleted?.createdAt ?? now,
@@ -191,7 +198,9 @@ class TaxonomyRepository {
       )..where((TaxonomyEntries table) => table.id.equals(draft.id!))).write(
         TaxonomyEntriesCompanion(
           name: Value<String>(name),
-          colorValue: Value<int>(draft.colorValue),
+          colorValue: Value<int?>(
+            draft.module == TaxonomyModule.notes ? null : draft.colorValue,
+          ),
           sortOrder: Value<int>(draft.sortOrder),
           isEnabled: const Value<bool>(true),
           updatedAt: Value<DateTime>(now),
@@ -253,7 +262,7 @@ class TaxonomyRepository {
       }
     }
 
-    // 差量写入只包含本次编辑字段，不回写旧弹窗的排序、颜色或启用状态。
+    // 差量写入只包含本次编辑字段，不回写旧弹窗的排序或启用状态。
     final int changed =
         await (_database.update(_database.taxonomyEntries)..where(
               (TaxonomyEntries table) =>
@@ -745,7 +754,7 @@ class TaxonomyRepository {
             module: TaxonomyModule.timeline.name,
             kind: TaxonomyKind.category.name,
             name: defaults[index].$1,
-            colorValue: defaults[index].$2.toARGB32(),
+            colorValue: Value(defaults[index].$2.toARGB32()),
             sortOrder: Value<int>(index),
             createdAt: now.add(Duration(milliseconds: index)),
             updatedAt: now.add(Duration(milliseconds: index)),

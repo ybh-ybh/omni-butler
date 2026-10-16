@@ -277,8 +277,14 @@ class TaxonomyEntries extends Table {
   /// 显示名称。
   TextColumn get name => text()();
 
-  /// ARGB 颜色值。
-  IntColumn get colorValue => integer()();
+  /// 其他模块的 ARGB 颜色值；笔记标签必须为空。
+  IntColumn get colorValue => integer().nullable()();
+
+  /// 共享列只为其他模块保留，禁止笔记标签重新保存颜色。
+  @override
+  List<String> get customConstraints => [
+    "CHECK (module != 'notes' OR kind != 'tag' OR color_value IS NULL)",
+  ];
 
   /// 用户排序值。
   IntColumn get sortOrder => integer().withDefault(const Constant<int>(0))();
@@ -750,7 +756,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 22;
+  int get schemaVersion => 23;
 
   /// 创建数据库并从旧版本安全升级。
   @override
@@ -967,6 +973,19 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         )) {
           await migrator.addColumn(taxonomyEntries, taxonomyEntries.iconEmoji);
         }
+      }
+      if (from < 23) {
+        // 重建为可空共享列并只清除笔记标签颜色，保留其他业务字段和关联。
+        await migrator.alterTable(
+          TableMigration(
+            taxonomyEntries,
+            columnTransformer: {
+              taxonomyEntries.colorValue: const CustomExpression<int>(
+                "CASE WHEN module = 'notes' AND kind = 'tag' THEN NULL ELSE color_value END",
+              ),
+            },
+          ),
+        );
       }
       if (from == 17) {
         // 内部试用版本可能已经具有候选列，逐列检查避免重复升级。

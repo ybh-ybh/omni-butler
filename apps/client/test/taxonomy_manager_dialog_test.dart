@@ -8,6 +8,7 @@ import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
+import 'package:omni_butler/features/notes/data/note_tag_emoji_catalog.dart';
 import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
 
 /// 验证分类标签管理器只保留直接维护清单所需操作。
@@ -22,6 +23,73 @@ void main() {
     database = AppDatabase.forTesting(NativeDatabase.memory());
     repository = TaxonomyRepository(database);
   });
+
+  for (final TargetPlatform platform in [
+    TargetPlatform.windows,
+    TargetPlatform.android,
+  ]) {
+    testWidgets('笔记管理器新增、修改和移除表情，始终没有颜色入口：$platform', (tester) async {
+      await tester.runAsync(() => NoteTagEmojiCatalog.load());
+      await _pumpManager(
+        tester,
+        database,
+        platform: platform,
+        module: TaxonomyModule.notes,
+      );
+      expect(find.bySemanticsLabel('修改颜色'), findsNothing);
+      await tester.tap(find.text('新增标签'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('notes-tag-name')),
+        '灵感',
+      );
+      await tester.tap(find.byKey(const ValueKey('notes-tag-icon-button')));
+      await tester.pump();
+      // 资源 Future 的回调在真实异步区完成后再刷新选择器。
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 30)),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('notes-tag-emoji-search')),
+        '😀',
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('notes-tag-emoji-😀')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('notes-tag-emoji-😀')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('notes-tag-save')));
+      await _pumpUi(tester);
+      await tester.pumpAndSettle();
+      expect(find.text('灵感'), findsOneWidget);
+      expect(find.text('😀'), findsOneWidget);
+      expect(find.bySemanticsLabel('修改颜色'), findsNothing);
+      // 直接从管理器的表情入口打开同一选择器。
+      await tester.tap(find.byTooltip('修改表情'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('notes-tag-emoji-picker')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('notes-tag-emoji-remove')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('notes-tag-name')),
+        '新灵感',
+      );
+      await tester.tap(find.byKey(const ValueKey('notes-tag-save')));
+      await _pumpUi(tester);
+      // 移除和改名一起提交，颜色不会重新出现。
+      final TaxonomyEntry tag = await (database.select(
+        database.taxonomyEntries,
+      )..where((table) => table.module.equals('notes'))).getSingle();
+      expect(tag.name, '新灵感');
+      expect(tag.iconEmoji, isNull);
+      expect(tag.colorValue, isNull);
+      await _disposeHarness(tester);
+      await database.close();
+    });
+  }
 
   testWidgets('管理器移除启停和完成按钮并支持内联新增重命名', (WidgetTester tester) async {
     await _pumpManager(tester, database);
@@ -285,6 +353,7 @@ Future<void> _pumpManager(
   AppDatabase database, {
   TargetPlatform platform = TargetPlatform.windows,
   Size size = const Size(800, 700),
+  TaxonomyModule module = TaxonomyModule.inventory,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -302,7 +371,7 @@ Future<void> _pumpManager(
               child: TextButton(
                 onPressed: () => TaxonomyManagerDialog.show(
                   context,
-                  module: TaxonomyModule.inventory,
+                  module: module,
                   kind: TaxonomyKind.tag,
                 ),
                 child: const Text('打开标签设置'),

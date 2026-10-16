@@ -2803,7 +2803,7 @@ class _AbsoluteTimeEntryDialogState
     // 类别名称对应的配置颜色，供下拉选项和选中值共同使用。
     final Map<String, Color> categoryColors = <String, Color>{
       for (final TaxonomyEntry category in categories)
-        category.name: Color(category.colorValue),
+        category.name: Color(category.colorValue ?? 0xFF3370FF),
     };
     // 已移除类别沿用时间模块的默认颜色。
     final Color fallbackCategoryColor = OmniColors.of(context).time;

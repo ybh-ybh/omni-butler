@@ -133,7 +133,7 @@ void main() {
             module: 'notes',
             kind: 'tag',
             name: '保留定义',
-            colorValue: 0,
+            colorValue: const Value(null),
             createdAt: now,
             updatedAt: now,
           ),

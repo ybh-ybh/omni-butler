@@ -19,6 +19,8 @@ NestJS 11 + Prisma 7 + PowerSync 的个人自托管同步 API。服务不提供�
 
 当前是重整后的测试基线，旧版服务器数据库不可原地套用。测试数据可清空后重建业务库与 PowerSync 状态库，并在客户端清除旧测试数据、重新连接；不要对其他项目的数据执行清理。
 
+笔记标签颜色已退休：`20261016010000_retire_note_tag_colors` 仅清空 `module=notes AND kind=tag` 的 `color_value`（含软删除记录），并添加数据库 CHECK 约束，防止再次写入。共享颜色列保留，物品、时间与会员模块的颜色不受影响。旧笔记标签 PUT、PATCH 和换服快照在执行副本上归一为 `null`，不修改原始幂等负载。先备份并执行增量迁移，再更新 API、最后升级全部客户端到同步结构 v8；PowerSync 下行查询字段不变。
+
 ## 设备连接接口
 
 - `POST /omni-butler/api/v1/auth/connect`：提交 `syncKey`，建立设备会话。
@@ -30,9 +32,9 @@ NestJS 11 + Prisma 7 + PowerSync 的个人自托管同步 API。服务不提供�
 
 `POST /omni-butler/api/v1/sync/operations` 接收 `{clientId, transactionId, operations}`。事务重试必须保留身份和内容；每个本地事务整体提交，最大 100000 条、32 MB。PUT 只创建，PATCH 修改已有记录，DELETE 保留永久删除墓碑。缺失记录 PATCH 返回 409，不能假确认成功。
 
-当前同步结构为 `syncSchemaVersion=7`。增量上传、全量替换和 PowerSync 凭证接口均要求 `X-Omni-Sync-Schema: 7`，版本不兼容返回 `409 SYNC_SCHEMA_MISMATCH`；客户端必须保留本地数据及待上传事务并停止同步。预检、连接、刷新、会话与凭证响应包含当前版本。发布时先升级数据库、API 与 PowerSync 规则，再升级各客户端；这次增量迁移保留已有数据，无需重置数据库。
+当前同步结构为 `syncSchemaVersion=8`。增量上传、全量替换和 PowerSync 凭证接口均要求 `X-Omni-Sync-Schema: 8`，版本不兼容返回 `409 SYNC_SCHEMA_MISMATCH`；客户端必须保留本地数据及待上传事务并停止同步。预检、连接、刷新、会话与凭证响应包含当前版本。发布时先升级数据库、API 与 PowerSync 规则，再升级各客户端；这次增量迁移保留已有数据，无需重置数据库。
 
-标签图标使用可空 `taxonomy_entries.icon_emoji` 文本列，完整保存组合 emoji，`null` 表示默认 `#`。PATCH 缺失该列时保留已有图标，显式 `null` 才移除；名称、置顶和排序的独立更新不会覆盖图标。升级时先备份，再执行 `npm run prisma:migrate:deploy` 应用 `20261016000000_note_tag_icon_emoji`，更新 API 与 `deploy/powersync/sync-config.yaml` 的下行查询，最后升级参与同步的所有客户端。服务端 v7 会拒绝 v6 及更旧客户端的写入和下行凭证，升级期间允许客户端保留本地离线操作。
+标签图标使用可空 `taxonomy_entries.icon_emoji` 文本列，完整保存组合 emoji，`null` 表示默认 `#`。PATCH 缺失该列时保留已有图标，显式 `null` 才移除；名称、置顶和排序的独立更新不会覆盖图标。升级时先备份，再执行 `npm run prisma:migrate:deploy` 应用 `20261016000000_note_tag_icon_emoji`，更新 API 与 `deploy/powersync/sync-config.yaml` 的下行查询，最后升级参与同步的所有客户端。服务端 v8 会拒绝 v7 及更旧客户端的写入和下行凭证，升级期间允许客户端保留本地离线操作。
 
 客户端本地快照格式升至 v7，恢复 v1–v6 时由客户端为历史标签补 `icon_emoji: null`。换服网络协议继续使用 `snapshotVersion=3`（无笔记旧请求仍支持 v2），完整标签行必须包含 `icon_emoji`，不要将本地快照格式 v7 直接作为换服协议号。部署后在隔离环境验证一台设备设置组合 emoji，另一台设备接收、改名及清空，确认两个方向均生效后再推广客户端。
 

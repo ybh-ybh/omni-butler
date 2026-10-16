@@ -7,6 +7,7 @@ import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
+import 'package:omni_butler/features/notes/presentation/windows_note_tag_editor.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 分类标签行菜单操作。
@@ -97,6 +98,37 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
   /// 当前操作反馈浮动消息。
   OmniMessageHandle? _feedbackMessage;
 
+  /// 仅笔记标签使用表情，其余模块保持颜色编辑。
+  bool get _usesEmoji => widget.module == TaxonomyModule.notes;
+
+  /// 新增和编辑共用笔记已有的名称、表情草稿与原子保存。
+  Future<void> _editNoteTag({TaxonomyEntry? entry, bool picker = false}) =>
+      showWindowsNoteTagEditor(
+        context: context,
+        anchorContext: context,
+        tag: entry,
+        startWithPicker: picker,
+        onCreate: (name, emoji) => ref
+            .read(taxonomyRepositoryProvider)
+            .save(
+              TaxonomyDraft(
+                module: TaxonomyModule.notes,
+                kind: TaxonomyKind.tag,
+                name: name,
+                iconEmoji: emoji,
+                sortOrder:
+                    ref
+                        .read(
+                          taxonomyEntriesProvider((widget.module, widget.kind)),
+                        )
+                        .asData
+                        ?.value
+                        .length ??
+                    0,
+              ),
+            ),
+      );
+
   /// 释放名称编辑控制器。
   @override
   void dispose() {
@@ -128,6 +160,10 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
 
   /// 进入新增状态。
   void _startAdding() {
+    if (_usesEmoji) {
+      unawaited(_editNoteTag());
+      return;
+    }
     setState(() {
       _adding = true;
       _editingId = null;
@@ -139,6 +175,10 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
 
   /// 进入重命名状态。
   void _startRenaming(TaxonomyEntry entry) {
+    if (_usesEmoji) {
+      unawaited(_editNoteTag(entry: entry));
+      return;
+    }
     setState(() {
       _adding = false;
       _editingId = entry.id;
@@ -602,10 +642,17 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
                     ),
                   ),
                 ),
-                _buildColorPicker(
-                  color: Color(entry.colorValue),
-                  onSelected: (Color color) => _changeColor(entry, color),
-                ),
+                if (_usesEmoji)
+                  OmniIconButton(
+                    tooltip: '修改表情',
+                    icon: NoteTagIcon(emoji: entry.iconEmoji),
+                    onPressed: () => _editNoteTag(entry: entry, picker: true),
+                  )
+                else
+                  _buildColorPicker(
+                    color: Color(entry.colorValue ?? 0xFF3370FF),
+                    onSelected: (Color color) => _changeColor(entry, color),
+                  ),
                 const SizedBox(width: OmniSpacing.sm),
                 Expanded(
                   child: OmniInkWell(
@@ -629,7 +676,7 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
                       <PopupMenuEntry<_TaxonomyRowAction>>[
                         OmniPopupMenuItem<_TaxonomyRowAction>(
                           value: _TaxonomyRowAction.rename,
-                          label: '重命名',
+                          label: _usesEmoji ? '编辑名称/图标' : '重命名',
                           icon: Icons.edit_outlined,
                         ),
                         OmniPopupMenuItem<_TaxonomyRowAction>(

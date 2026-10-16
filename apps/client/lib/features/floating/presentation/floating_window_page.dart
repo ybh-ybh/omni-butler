@@ -1493,7 +1493,7 @@ class _FloatingTimeComposerState extends ConsumerState<_FloatingTimeComposer> {
                               width: 6,
                               height: 6,
                               decoration: BoxDecoration(
-                                color: Color(category.colorValue),
+                                color: Color(category.colorValue ?? 0xFF3370FF),
                                 shape: BoxShape.circle,
                               ),
                             ),

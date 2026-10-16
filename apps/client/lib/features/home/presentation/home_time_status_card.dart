@@ -99,7 +99,7 @@ class _HomeTimeStatusCardState extends ConsumerState<HomeTimeStatusCard> {
     // 时间类别颜色映射。
     final Map<String, Color> categoryColors = <String, Color>{
       for (final TaxonomyEntry category in categories)
-        category.name: Color(category.colorValue),
+        category.name: Color(category.colorValue ?? 0xFF3370FF),
     };
     // 裁切到今天的自然日分段。
     final List<TimeEntryRecord> todaySegments = splitTimeEntriesForRange(

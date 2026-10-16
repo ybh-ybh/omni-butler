@@ -96,7 +96,7 @@ class TimelineReviewContent extends ConsumerWidget {
     // 时间类别颜色映射。
     final Map<String, Color> categoryColors = <String, Color>{
       for (final TaxonomyEntry category in categories)
-        category.name: Color(category.colorValue),
+        category.name: Color(category.colorValue ?? 0xFF3370FF),
     };
     // 当前周期记录分钟数。
     final int trackedMinutes = _sumMinutes(records);
@@ -1236,7 +1236,7 @@ class TimelineDetailsContent extends ConsumerWidget {
     // 时间类别颜色映射。
     final Map<String, Color> categoryColors = <String, Color>{
       for (final TaxonomyEntry category in categories)
-        category.name: Color(category.colorValue),
+        category.name: Color(category.colorValue ?? 0xFF3370FF),
     };
     return LayoutBuilder(
       key: const ValueKey<String>('timeline-details-content'),

@@ -1014,7 +1014,8 @@ void main() {
           .color,
       NoteComposerStyle.border,
     );
-    expect(tester.getSize(surface).height, greaterThanOrEqualTo(240));
+    // 默认整卡高度减半，正文和工具仍采用自然布局。
+    expect(tester.getSize(surface).height, 122);
     expect(tester.getSize(action), NoteComposerStyle.actionSize);
     expect(
       _composerButton(tester, tag).style!.foregroundColor!.resolve({}),
@@ -4323,7 +4324,7 @@ Future<void> _seed(AppDatabase database) async {
             module: 'notes',
             kind: item.$2,
             name: item.$3,
-            colorValue: 0xff6280ff,
+            colorValue: const Value(null),
             createdAt: now,
             updatedAt: now,
           ),

@@ -36,6 +36,18 @@ export function validateNoteTagOperation(operation: SyncOperationDto): SyncOpera
 
 /// 正文修订只在基线匹配时采用；所有并发候选仍完整同步。
 export async function normalizeNoteOperation(transaction: Prisma.TransactionClient, userId: string, operation: SyncOperationDto): Promise<SyncOperationDto> {
+  if (operation.table === 'taxonomy_entries' && operation.op === 'PATCH') {
+    // PATCH 可能只有旧颜色，必须以持久身份识别模块，不能影响其他模块颜色。
+    const current = await transaction.taxonomyEntry.findFirst({ where: { userId, id: operation.id } });
+    // 转入笔记模块时也按更新后的模块判定是否退休颜色。
+    const module = operation.data?.module ?? current?.module;
+    // 类型优先使用当前请求，覆盖从其他模块转入笔记标签的情况。
+    const kind = operation.data?.kind ?? current?.kind;
+    if (module === 'notes' && kind === 'tag' &&
+        (Object.hasOwn(operation.data ?? {}, 'color_value') || operation.data?.module !== undefined || operation.data?.kind !== undefined)) {
+      return { ...operation, data: { ...operation.data, color_value: null } };
+    }
+  }
   if (operation.table === 'note_images' && operation.op === 'PATCH' && operation.data?.note_id !== undefined) {
     // 图片子记录身份不可转移，防止离线操作把同一文件挪到其他笔记。
     const current = await transaction.noteImage.findFirst({ where: { userId, id: operation.id } });

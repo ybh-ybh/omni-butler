@@ -20,8 +20,8 @@ abstract final class NoteComposerStyle {
   /// 高亮文字在明暗主题均使用深灰，确保浅黄背景上的可读性。
   static const Color highlightInk = Color(0xFF494949);
 
-  /// 正文留白保持参考图的输入卡片高度。
-  static const double bodyHeight = 160;
+  /// Windows 新增卡片由 244dp 减半至 122dp，扣除 84dp 内边距与工具区。
+  static const double bodyHeight = 38;
 
   /// 发布按钮比普通方形工具按钮更宽。
   static const Size actionSize = Size(48, 30);

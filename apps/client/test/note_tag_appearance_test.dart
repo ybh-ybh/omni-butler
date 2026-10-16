@@ -39,7 +39,7 @@ void main() {
       expect(restored.name, '家庭');
       expect(restored.iconEmoji, '👩🏽‍💻');
       expect(restored.id, 'tag');
-      expect(restored.colorValue, 42);
+      expect(restored.colorValue, isNull);
       expect(restored.sortOrder, 7);
       expect(restored.isPinned, isTrue);
       expect(restored.isEnabled, isFalse);
@@ -155,7 +155,7 @@ void main() {
       expect(
         (await database.customSelect('PRAGMA user_version').getSingle())
             .read<int>('user_version'),
-        22,
+        23,
       );
       await TaxonomyRepository(database)
           .updateNoteTagAppearance('tag', iconEmoji: const Value('🏳️‍🌈'));
@@ -207,7 +207,7 @@ void main() {
         version == 7 ? '👩🏽‍💻' : null,
       );
       expect(original.containsKey('icon_emoji'), version == 7);
-      expect(restored.toJson()['version'], 7);
+      expect(restored.toJson()['version'], 8);
     }
     expect(SyncSnapshot.migrationProtocolVersion, 3);
   });
@@ -230,7 +230,7 @@ Future<void> _insertTag(
           module: module,
           kind: 'tag',
           name: name,
-          colorValue: 42,
+          colorValue: Value(module == 'notes' ? null : 42),
           sortOrder: const Value(7),
           isPinned: const Value(true),
           isEnabled: const Value(false),

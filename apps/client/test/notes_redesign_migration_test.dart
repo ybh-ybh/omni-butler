@@ -54,7 +54,7 @@ void main() {
       expect(
         (await database.customSelect('PRAGMA user_version').getSingle())
             .read<int>('user_version'),
-        22,
+        23,
       );
     } finally {
       await database.close();
@@ -100,7 +100,9 @@ void main() {
                 module: item.$2,
                 kind: item.$3,
                 name: item.$1,
-                colorValue: 0,
+                colorValue: Value(
+                  item.$2 == 'notes' && item.$3 == 'tag' ? null : 0,
+                ),
                 createdAt: now,
                 updatedAt: now,
               ),
@@ -215,7 +217,7 @@ void main() {
     );
     expect(restored.tables['record_taxonomy_links'], isEmpty);
     expect(restored.tables['note_local_drafts'], isEmpty);
-    expect(SyncSnapshot.version, 7);
+    expect(SyncSnapshot.version, 8);
     expect(SyncSnapshot.migrationProtocolVersion, 3);
   });
 

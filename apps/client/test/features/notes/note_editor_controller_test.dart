@@ -135,7 +135,7 @@ void main() {
               module: 'notes',
               kind: 'tag',
               name: id,
-              colorValue: 0,
+              colorValue: const Value(null),
               createdAt: now,
               updatedAt: now,
             ),

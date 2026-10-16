@@ -3861,9 +3861,9 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
   late final GeneratedColumn<int> colorValue = GeneratedColumn<int>(
     'color_value',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.int,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _sortOrderMeta = const VerificationMeta(
     'sortOrder',
@@ -4012,8 +4012,6 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
         _colorValueMeta,
         colorValue.isAcceptableOrUnknown(data['color_value']!, _colorValueMeta),
       );
-    } else if (isInserting) {
-      context.missing(_colorValueMeta);
     }
     if (data.containsKey('sort_order')) {
       context.handle(
@@ -4089,7 +4087,7 @@ class $TaxonomyEntriesTable extends TaxonomyEntries
       colorValue: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}color_value'],
-      )!,
+      ),
       sortOrder: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}sort_order'],
@@ -4140,8 +4138,8 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
   /// 显示名称。
   final String name;
 
-  /// ARGB 颜色值。
-  final int colorValue;
+  /// 其他模块的 ARGB 颜色值；笔记标签必须为空。
+  final int? colorValue;
 
   /// 用户排序值。
   final int sortOrder;
@@ -4168,7 +4166,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     required this.module,
     required this.kind,
     required this.name,
-    required this.colorValue,
+    this.colorValue,
     required this.sortOrder,
     required this.isPinned,
     this.iconEmoji,
@@ -4184,7 +4182,9 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     map['module'] = Variable<String>(module);
     map['kind'] = Variable<String>(kind);
     map['name'] = Variable<String>(name);
-    map['color_value'] = Variable<int>(colorValue);
+    if (!nullToAbsent || colorValue != null) {
+      map['color_value'] = Variable<int>(colorValue);
+    }
     map['sort_order'] = Variable<int>(sortOrder);
     map['is_pinned'] = Variable<bool>(isPinned);
     if (!nullToAbsent || iconEmoji != null) {
@@ -4205,7 +4205,9 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
       module: Value(module),
       kind: Value(kind),
       name: Value(name),
-      colorValue: Value(colorValue),
+      colorValue: colorValue == null && nullToAbsent
+          ? const Value.absent()
+          : Value(colorValue),
       sortOrder: Value(sortOrder),
       isPinned: Value(isPinned),
       iconEmoji: iconEmoji == null && nullToAbsent
@@ -4230,7 +4232,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
       module: serializer.fromJson<String>(json['module']),
       kind: serializer.fromJson<String>(json['kind']),
       name: serializer.fromJson<String>(json['name']),
-      colorValue: serializer.fromJson<int>(json['colorValue']),
+      colorValue: serializer.fromJson<int?>(json['colorValue']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
       isPinned: serializer.fromJson<bool>(json['isPinned']),
       iconEmoji: serializer.fromJson<String?>(json['iconEmoji']),
@@ -4248,7 +4250,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
       'module': serializer.toJson<String>(module),
       'kind': serializer.toJson<String>(kind),
       'name': serializer.toJson<String>(name),
-      'colorValue': serializer.toJson<int>(colorValue),
+      'colorValue': serializer.toJson<int?>(colorValue),
       'sortOrder': serializer.toJson<int>(sortOrder),
       'isPinned': serializer.toJson<bool>(isPinned),
       'iconEmoji': serializer.toJson<String?>(iconEmoji),
@@ -4264,7 +4266,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     String? module,
     String? kind,
     String? name,
-    int? colorValue,
+    Value<int?> colorValue = const Value.absent(),
     int? sortOrder,
     bool? isPinned,
     Value<String?> iconEmoji = const Value.absent(),
@@ -4277,7 +4279,7 @@ class TaxonomyEntry extends DataClass implements Insertable<TaxonomyEntry> {
     module: module ?? this.module,
     kind: kind ?? this.kind,
     name: name ?? this.name,
-    colorValue: colorValue ?? this.colorValue,
+    colorValue: colorValue.present ? colorValue.value : this.colorValue,
     sortOrder: sortOrder ?? this.sortOrder,
     isPinned: isPinned ?? this.isPinned,
     iconEmoji: iconEmoji.present ? iconEmoji.value : this.iconEmoji,
@@ -4362,7 +4364,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
   final Value<String> module;
   final Value<String> kind;
   final Value<String> name;
-  final Value<int> colorValue;
+  final Value<int?> colorValue;
   final Value<int> sortOrder;
   final Value<bool> isPinned;
   final Value<String?> iconEmoji;
@@ -4391,7 +4393,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     required String module,
     required String kind,
     required String name,
-    required int colorValue,
+    this.colorValue = const Value.absent(),
     this.sortOrder = const Value.absent(),
     this.isPinned = const Value.absent(),
     this.iconEmoji = const Value.absent(),
@@ -4404,7 +4406,6 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
        module = Value(module),
        kind = Value(kind),
        name = Value(name),
-       colorValue = Value(colorValue),
        createdAt = Value(createdAt),
        updatedAt = Value(updatedAt);
   static Insertable<TaxonomyEntry> custom({
@@ -4444,7 +4445,7 @@ class TaxonomyEntriesCompanion extends UpdateCompanion<TaxonomyEntry> {
     Value<String>? module,
     Value<String>? kind,
     Value<String>? name,
-    Value<int>? colorValue,
+    Value<int?>? colorValue,
     Value<int>? sortOrder,
     Value<bool>? isPinned,
     Value<String?>? iconEmoji,
@@ -17764,7 +17765,7 @@ typedef $$TaxonomyEntriesTableCreateCompanionBuilder =
       required String module,
       required String kind,
       required String name,
-      required int colorValue,
+      Value<int?> colorValue,
       Value<int> sortOrder,
       Value<bool> isPinned,
       Value<String?> iconEmoji,
@@ -17780,7 +17781,7 @@ typedef $$TaxonomyEntriesTableUpdateCompanionBuilder =
       Value<String> module,
       Value<String> kind,
       Value<String> name,
-      Value<int> colorValue,
+      Value<int?> colorValue,
       Value<int> sortOrder,
       Value<bool> isPinned,
       Value<String?> iconEmoji,
@@ -18098,7 +18099,7 @@ class $$TaxonomyEntriesTableTableManager
                 Value<String> module = const Value.absent(),
                 Value<String> kind = const Value.absent(),
                 Value<String> name = const Value.absent(),
-                Value<int> colorValue = const Value.absent(),
+                Value<int?> colorValue = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
                 Value<bool> isPinned = const Value.absent(),
                 Value<String?> iconEmoji = const Value.absent(),
@@ -18128,7 +18129,7 @@ class $$TaxonomyEntriesTableTableManager
                 required String module,
                 required String kind,
                 required String name,
-                required int colorValue,
+                Value<int?> colorValue = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
                 Value<bool> isPinned = const Value.absent(),
                 Value<String?> iconEmoji = const Value.absent(),

@@ -21,8 +21,11 @@ const double _pickerMaxHeight = 320;
 Future<void> showWindowsNoteTagEditor({
   required BuildContext context,
   required BuildContext anchorContext,
-  required TaxonomyEntry tag,
+  TaxonomyEntry? tag,
+  Future<void> Function(String name, String? emoji)? onCreate,
+  bool startWithPicker = false,
 }) {
+  assert(tag != null || onCreate != null);
   // 只在入口仍挂载时读取渲染对象，关闭动画不再访问旧元素。
   final RenderObject? anchorObject = anchorContext.findRenderObject();
   // 定位坐标与弹窗使用同一个根导航覆盖层。
@@ -43,6 +46,8 @@ Future<void> showWindowsNoteTagEditor({
     useSafeArea: false,
     builder: (_) => _NoteTagAppearanceEditor(
       tag: tag,
+      onCreate: onCreate,
+      startWithPicker: startWithPicker,
       anchor: () {
         if (anchorObject is RenderBox &&
             overlayObject is RenderBox &&
@@ -105,10 +110,21 @@ class NoteTagIcon extends StatelessWidget {
 /// 一个路由同时管理编辑面板和下方的表情面板，避免遮罩相互拦截。
 class _NoteTagAppearanceEditor extends ConsumerStatefulWidget {
   /// 接收原标签快照和可随窗口变化重新计算的锚点。
-  const _NoteTagAppearanceEditor({required this.tag, required this.anchor});
+  const _NoteTagAppearanceEditor({
+    required this.tag,
+    required this.anchor,
+    required this.onCreate,
+    required this.startWithPicker,
+  });
 
   /// 打开时的标签值，用来判断哪些字段真正被用户修改。
-  final TaxonomyEntry tag;
+  final TaxonomyEntry? tag;
+
+  /// 管理器新增标签时复用同一名称与表情草稿。
+  final Future<void> Function(String name, String? emoji)? onCreate;
+
+  /// 点击管理器图标时直接展开表情选择器。
+  final bool startWithPicker;
 
   /// 当前覆盖层坐标中的更多按钮位置。
   final Rect Function() anchor;
@@ -124,7 +140,7 @@ class _NoteTagAppearanceEditorState
     extends ConsumerState<_NoteTagAppearanceEditor> {
   /// 标签名称的未提交输入。
   late final TextEditingController _name = TextEditingController(
-    text: widget.tag.name,
+    text: widget.tag?.name ?? '',
   );
 
   /// 表情检索与侧栏筛选、笔记搜索互相独立。
@@ -140,7 +156,7 @@ class _NoteTagAppearanceEditorState
   final FocusNode _iconFocus = FocusNode();
 
   /// 当前草稿图标，null 代表默认井号。
-  late String? _emoji = widget.tag.iconEmoji;
+  late String? _emoji = widget.tag?.iconEmoji;
 
   /// 选择器的显隐不改变名称及已选表情。
   bool _pickerOpen = false;
@@ -153,6 +169,17 @@ class _NoteTagAppearanceEditorState
 
   /// 保存错误保持在名称面板内，允许修正或重试。
   String? _error;
+
+  /// 管理器的图标入口可直接显示既有表情面板。
+  @override
+  void initState() {
+    super.initState();
+    if (widget.startWithPicker) {
+      _pickerOpen = true;
+      _catalog = NoteTagEmojiCatalog.load();
+      _catalog!.ignore();
+    }
+  }
 
   /// 释放本浮层持有的输入和焦点。
   @override
@@ -229,17 +256,21 @@ class _NoteTagAppearanceEditorState
       _error = null;
     });
     try {
-      await ref
-          .read(taxonomyRepositoryProvider)
-          .updateNoteTagAppearance(
-            widget.tag.id,
-            name: _name.text.trim() == widget.tag.name
-                ? const Value.absent()
-                : Value(_name.text),
-            iconEmoji: _emoji == widget.tag.iconEmoji
-                ? const Value.absent()
-                : Value(_emoji),
-          );
+      if (widget.tag == null) {
+        await widget.onCreate!(_name.text, _emoji);
+      } else {
+        await ref
+            .read(taxonomyRepositoryProvider)
+            .updateNoteTagAppearance(
+              widget.tag!.id,
+              name: _name.text.trim() == widget.tag!.name
+                  ? const Value.absent()
+                  : Value(_name.text),
+              iconEmoji: _emoji == widget.tag!.iconEmoji
+                  ? const Value.absent()
+                  : Value(_emoji),
+            );
+      }
       if (mounted) Navigator.of(context).pop();
     } on Object catch (error) {
       if (mounted) {

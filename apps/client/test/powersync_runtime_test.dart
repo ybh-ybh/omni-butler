@@ -76,7 +76,7 @@ void main() {
         );
       }
       await runtime.database.customStatement(
-        "INSERT INTO taxonomy_entries(id,module,kind,name,color_value,created_at,updated_at) VALUES('legacy-tag','notes','tag','旧标签',42,'2026-10-15T00:00:00Z','2026-10-15T00:00:00Z')",
+        "INSERT INTO taxonomy_entries(id,module,kind,name,color_value,created_at,updated_at) VALUES('legacy-tag','notes','tag','旧标签',NULL,'2026-10-15T00:00:00Z','2026-10-15T00:00:00Z')",
       );
       await (await runtime.powerSync.getNextCrudTransaction())!.complete();
       await runtime.database.customStatement(
@@ -163,7 +163,7 @@ void main() {
         );
       }
       await runtime.database.customStatement(
-        "INSERT INTO taxonomy_entries(id,module,kind,name,color_value,sort_order,is_pinned,created_at,updated_at) VALUES('legacy-tag','notes','tag','旧标签',42,7,1,'2026-10-15T00:00:00Z','2026-10-15T00:00:00Z')",
+        "INSERT INTO taxonomy_entries(id,module,kind,name,color_value,sort_order,is_pinned,created_at,updated_at) VALUES('legacy-tag','notes','tag','旧标签',NULL,7,1,'2026-10-15T00:00:00Z','2026-10-15T00:00:00Z')",
       );
       await (await runtime.powerSync.getNextCrudTransaction())!.complete();
       await runtime.database.customStatement(
@@ -184,7 +184,7 @@ void main() {
       expect(upgraded.name, '升级前改名');
       expect(upgraded.iconEmoji, isNull);
       expect(upgraded.isPinned, isTrue);
-      expect(upgraded.colorValue, 42);
+      expect(upgraded.colorValue, isNull);
       expect(upgraded.sortOrder, 7);
       expect((await runtime.powerSync.getUploadQueueStats()).count, 1);
       // 已持久化的旧队列保持身份及原始差量，不能被升级改写。

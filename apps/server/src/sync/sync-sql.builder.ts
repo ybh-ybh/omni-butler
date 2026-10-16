@@ -192,6 +192,10 @@ export class SyncSqlBuilder {
     }
     // 客户端提交的数据。
     const data = { ...operation.data };
+    if (operation.table === 'taxonomy_entries' && data.module === 'notes' && data.kind === 'tag') {
+      // 兼容升级前完整上传和换服快照，仅清除笔记标签的退休颜色。
+      data.color_value = null;
+    }
     if (operation.table === 'taxonomy_entries' && Object.hasOwn(data, 'icon_emoji') && data.icon_emoji !== null && typeof data.icon_emoji !== 'string') {
       throw new BadRequestException('标签图标必须为空或完整的表情文字');
     }

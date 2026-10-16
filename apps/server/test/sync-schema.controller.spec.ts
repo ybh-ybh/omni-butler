@@ -36,14 +36,14 @@ describe('同步结构版本 HTTP 边界', () => {
   // 可观察的下行凭证签发边界。
   const issuePowerSyncToken = jest
     .fn()
-    .mockResolvedValue({ syncSchemaVersion: 7 });
+    .mockResolvedValue({ syncSchemaVersion: 8 });
   // 预检必须可让旧客户端得到可解释的版本结果。
   const preview = jest
     .fn()
     .mockResolvedValue({
       protocolVersion: 1,
       snapshotVersion: 3,
-      syncSchemaVersion: 7,
+      syncSchemaVersion: 8,
     });
   // 升级前待确认迁移可在升级后继续查询原回执。
   const status = jest
@@ -139,13 +139,13 @@ describe('同步结构版本 HTTP 边界', () => {
   it.each(requests)(
     '%s 对缺失、旧版和未知新版协议头拒绝且不写入',
     async (path, body) => {
-      for (const version of [undefined, '1', '2', '3', '4', '5', '6', '8']) {
+      for (const version of [undefined, '1', '2', '3', '4', '5', '6', '7', '9']) {
         // 请求协议不兼容时，响应提供准确的服务器版本。
         const response = await post(path, body, version);
         expect(response.status).toBe(409);
         expect(await response.json()).toMatchObject({
           code: 'SYNC_SCHEMA_MISMATCH',
-          syncSchemaVersion: 7,
+          syncSchemaVersion: 8,
         });
       }
       expect(applyBatch).not.toHaveBeenCalled();
@@ -157,13 +157,13 @@ describe('同步结构版本 HTTP 边界', () => {
   it.each(requests)(
     '%s 接受新版请求，步骤表可以通过DTO白名单',
     async (path, body) => {
-      expect((await post(path, body, '7')).status).toBe(200);
+      expect((await post(path, body, '8')).status).toBe(200);
     },
   );
 
   it('会话与预检返回结构版本，旧回执查询不受版本门禁阻断', async () => {
     expect(await (await fetch(`${baseUrl}/auth/session`)).json()).toMatchObject(
-      { sub: user.sub, syncSchemaVersion: 7 },
+      { sub: user.sub, syncSchemaVersion: 8 },
     );
     expect(
       await (
@@ -171,7 +171,7 @@ describe('同步结构版本 HTTP 边界', () => {
           syncKey: 'valid-test-sync-key',
         })
       ).json(),
-    ).toMatchObject({ syncSchemaVersion: 7, snapshotVersion: 3 });
+    ).toMatchObject({ syncSchemaVersion: 8, snapshotVersion: 3 });
     expect(
       await (
         await post('/sync/migrations/status', {
@@ -188,7 +188,7 @@ describe('同步结构版本 HTTP 边界', () => {
         await post(
           '/sync/migrations',
           { ...requests[1]![1], snapshotVersion: 1 },
-          '7',
+          '8',
         )
       ).status,
     ).toBe(400);

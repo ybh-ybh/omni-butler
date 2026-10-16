@@ -672,7 +672,6 @@ Future<void> main(List<String> arguments) async {
             module: 'notes',
             kind: 'tag',
             name: '探针标签$index',
-            colorValue: 0xff6280ff,
             createdAt: now,
             updatedAt: now,
           ),

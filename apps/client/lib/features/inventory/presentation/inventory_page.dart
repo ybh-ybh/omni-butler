@@ -1900,7 +1900,7 @@ class _InventoryStatistics extends StatelessWidget {
     // 分类名称到颜色的映射。
     final Map<String, Color> categoryColors = <String, Color>{
       for (final TaxonomyEntry category in categories)
-        category.name.trim(): Color(category.colorValue),
+        category.name.trim(): Color(category.colorValue ?? 0xFF3370FF),
     };
     // 分类名称到金额的映射。
     final Map<String, int> values = <String, int>{};

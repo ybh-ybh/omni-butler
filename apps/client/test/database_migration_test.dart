@@ -188,7 +188,7 @@ void main() {
             module: 'timeline',
             kind: 'category',
             name: '工作',
-            colorValue: 0xFF477087,
+            colorValue: Value(0xFF477087),
             createdAt: DateTime(2026, 9, 25),
             updatedAt: DateTime(2026, 9, 25),
           ),

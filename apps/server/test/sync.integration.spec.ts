@@ -212,6 +212,26 @@ integration('SyncService PostgreSQL 集成', () => {
         );
         legacyTagIcon = seeded.rows[0]!.row;
       }
+      if (migration === '20261016010000_retire_note_tag_colors') {
+        // 在真实旧表中构造含颜色的软删除笔记标签及其他模块标签。
+        const colorOwner = randomUUID();
+        await database.query('INSERT INTO sync_owners (id) VALUES ($1)', [colorOwner]);
+        for (const module of ['notes', 'inventory', 'timeline', 'membership']) {
+          await database.query(`INSERT INTO taxonomy_entries
+            (id,user_id,module,kind,name,color_value,icon_emoji,is_pinned,sort_order,updated_at,deleted_at)
+            VALUES ($1,$2,$3,'tag',$3,4294967295,'👩🏽‍💻',true,7,$4,$4)`,
+          [randomUUID(), colorOwner, module, timestamp]);
+        }
+        await database.query(readFileSync(join(__dirname, '../prisma/migrations', migration, 'migration.sql'), 'utf8'));
+        // 只允许笔记标签颜色变空；其他字段和其他模块颜色全部保留。
+        const colors = await database.query<{ module: string; color_value: string | null; icon_emoji: string; sort_order: number; is_pinned: boolean }>(
+          'SELECT module,color_value,icon_emoji,sort_order,is_pinned FROM taxonomy_entries WHERE user_id = $1', [colorOwner]);
+        expect(colors.rows).toHaveLength(4);
+        for (const row of colors.rows) {
+          expect(row).toMatchObject({ color_value: row.module === 'notes' ? null : '4294967295', icon_emoji: '👩🏽‍💻', sort_order: 7, is_pinned: true });
+        }
+        continue;
+      }
       await database.query(
         readFileSync(
           join(__dirname, '../prisma/migrations', migration, 'migration.sql'),
@@ -743,6 +763,20 @@ integration('SyncService PostgreSQL 集成', () => {
     expect((await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).iconEmoji).toBe(emoji);
     await service.applyBatch(ownerId, batch([{ op: 'PATCH', table: 'taxonomy_entries', id: tag.id, data: { icon_emoji: null } }]));
     expect(await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } })).toMatchObject({ name: '另一端改名', sortOrder: 9, isPinned: true, iconEmoji: null });
+  });
+
+  it('笔记颜色的旧PUT与PATCH归零，直接SQL受约束，其他模块颜色继续可写', async () => {
+    // 同一事务混合多个模块，颜色清理不能扩大范围。
+    const tags = ['notes', 'inventory', 'timeline', 'membership'].map((module) =>
+      put('taxonomy_entries', { module, kind: 'tag', name: module, color_value: 4294967295, icon_emoji: '👩🏽‍💻' }));
+    await service.applyBatch(ownerId, batch(tags));
+    for (const tag of tags) {
+      await service.applyBatch(ownerId, batch([{ op: 'PATCH', table: tag.table, id: tag.id, data: { color_value: 42 } }]));
+      expect(await prisma!.taxonomyEntry.findUniqueOrThrow({ where: { id: tag.id } }))
+        .toMatchObject({ colorValue: tag.data!.module === 'notes' ? null : 42n, iconEmoji: '👩🏽‍💻' });
+    }
+    await expect(database!.query('UPDATE taxonomy_entries SET color_value = 42 WHERE id = $1', [tags[0]!.id]))
+      .rejects.toThrow('note_tags_have_no_color');
   });
 
   it('换服协议v3完整快照保留标签图标且不接受缺失图标列', async () => {

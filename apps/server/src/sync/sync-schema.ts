@@ -1,7 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 
-/// 笔记标签图标参与同步，所有参与者必须保留完整 Unicode 字符串。
-export const syncSchemaVersion = 7;
+/// 笔记标签颜色已退休，客户端必须支持可空的共享颜色列。
+export const syncSchemaVersion = 8;
 
 /// 在写入和签发下行凭证前阻止旧客户端解释新版任务。
 export function requireSyncSchemaVersion(version: string | undefined): void {

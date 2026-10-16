@@ -3,7 +3,7 @@ import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 /// 不携带同步检查点、客户端身份或设备密钥的完整业务快照。
 class SyncSnapshot {
   /// 当前快照持久化格式版本。
-  static const int version = 7;
+  static const int version = 8;
 
   /// 服务端换服协议独立于本机备份格式，草稿不进入请求。
   static const int migrationProtocolVersion = 3;
@@ -20,6 +20,7 @@ class SyncSnapshot {
   /// 从迁移控制文件恢复快照，拒绝不支持的格式和未知表。
   factory SyncSnapshot.fromJson(Map<String, dynamic> json) {
     if (json['version'] != version &&
+        json['version'] != 7 &&
         json['version'] != 6 &&
         json['version'] != 5 &&
         json['version'] != 4 &&
@@ -95,6 +96,12 @@ class SyncSnapshot {
                   row as Map,
                 );
                 if (table == 'events') restored.remove('description');
+                if (table == 'taxonomy_entries' &&
+                    restored['module'] == 'notes' &&
+                    restored['kind'] == 'tag') {
+                  // 旧备份仅在恢复副本清除退休颜色，其他模块原样保留。
+                  restored['color_value'] = null;
+                }
                 if (table == 'taxonomy_entries' && json['version'] != version) {
                   // SQLite 布尔列在原始快照中使用整数，旧文件仅在内存补默认值。
                   restored.putIfAbsent('is_pinned', () => 0);
