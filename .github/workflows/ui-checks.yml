@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # 与发布流程和锁文件保持同一包源及依赖版本。
+  PUB_HOSTED_URL: "https://pub.dev"
+
 jobs:
   ui-contracts:
     runs-on: ubuntu-latest
@@ -22,7 +26,7 @@ jobs:
           cache: true
       - name: Resolve client packages
         working-directory: apps/client
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
       - name: Check design-system boundaries
         working-directory: apps/client
         run: dart tool/check_ui_style.dart

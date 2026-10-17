@@ -10,6 +10,8 @@ permissions:
 
 env:
   FLUTTER_VERSION: "3.47.2"
+  # 与锁文件使用同一包源，禁止发布时重新解析依赖。
+  PUB_HOSTED_URL: "https://pub.dev"
 
 jobs:
   validate:
@@ -46,16 +48,16 @@ jobs:
 
       - name: Install Flutter dependencies
         working-directory: apps/client
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Analyze client
         working-directory: apps/client
-        run: flutter analyze
+        run: flutter analyze --no-pub
 
       - name: Run stable release smoke tests
         working-directory: apps/client
         run: >-
-          flutter test
+          flutter test --no-pub
           test/android_management_navigation_test.dart
           test/home_window_resize_test.dart
           test/responsive_shell_sync_status_test.dart
@@ -108,13 +110,13 @@ jobs:
 
       - name: Install Flutter dependencies
         working-directory: apps/client
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Build signed APK and app bundle
         working-directory: apps/client
         run: |
-          flutter build apk --release
-          flutter build appbundle --release
+          flutter build apk --release --no-pub
+          flutter build appbundle --release --no-pub
 
       - name: Collect Android release files
         shell: bash
@@ -147,11 +149,11 @@ jobs:
 
       - name: Install Flutter dependencies
         working-directory: apps/client
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Build Windows application
         working-directory: apps/client
-        run: flutter build windows --release
+        run: flutter build windows --release --no-pub
 
       - name: Install Inno Setup
         shell: powershell

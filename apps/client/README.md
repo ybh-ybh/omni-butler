@@ -2,6 +2,12 @@
 
 Flutter 客户端，当前支持 Windows 桌面布局和 Android 紧凑布局。应用本地优先：第一期六个业务模块直接写入 SQLite；用户可在设置中显式连接自托管同步服务。
 
+## 依赖与发布验证
+
+`pubspec.lock` 统一使用 `https://pub.dev`，本机验证与 CI 必须使用相同版本和归档摘要。在 PowerShell 中先设置 `$env:PUB_HOSTED_URL = 'https://pub.dev'`，再运行 `flutter pub get --enforce-lockfile`；依赖就绪后，分析、测试及构建均添加 `--no-pub`。包源不匹配或锁文件校验失败时应停止发布，不删除锁文件重新解析依赖。
+
+v0.6.2 的 Android 启动故障来自 CI 重新解析依赖后引入的新插件及 Release JNI 签名不兼容。v0.6.3 恢复锁定的 `shared_preferences_android 2.4.28`，并在两个 CI 工作流中强制锁文件校验。Android 发布验收需包含最终签名 APK 的真机冷启动与再次启动；Widget 测试或构建成功不能替代原生插件启动验证。
+
 ## 当前能力
 
 - 首页、每日待办、事件管理、物品管理、24 小时时间记录、会员管理、笔记和设置。
