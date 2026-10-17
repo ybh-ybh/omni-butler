@@ -248,9 +248,9 @@ void main() {
     });
   }
 
-  // 菜单取消与选择后都保留真实焦点，入口仍不应残留浅蓝底色。
+  // 鼠标菜单还原原焦点，键盘菜单回到入口，两种路径均不得残留底色。
   for (final Brightness brightness in Brightness.values) {
-    testWidgets('年份点击及菜单关闭后保留焦点但无底色 ${brightness.name}', (tester) async {
+    testWidgets('年份菜单按输入来源恢复焦点且无底色 ${brightness.name}', (tester) async {
       await mountStatistics(
         tester,
         () => Stream.value([statisticNote('a', currentDate(1), '正文')]),
@@ -266,6 +266,8 @@ void main() {
           tester.getBottomLeft(yearMenu) + const Offset(2, -2);
       // 点击前的画布颜色作为无底色基准。
       final Color before = await statisticsPixel(tester, sample);
+      // 鼠标打开不应强制聚焦年份，关闭时恢复打开前的实际节点。
+      final FocusNode? focusBeforeMenu = FocusManager.instance.primaryFocus;
       // 点击并停留的鼠标与用户轨迹一致。
       final TestGesture mouse = await tester.createGesture(
         kind: ui.PointerDeviceKind.mouse,
@@ -284,14 +286,7 @@ void main() {
         findsOneWidget,
       );
       expect(await statisticsPixel(tester, sample), before);
-      expect(
-        Focus.of(
-          tester.element(
-            find.byKey(const ValueKey('notes-statistics-selected-year')),
-          ),
-        ).hasFocus,
-        isTrue,
-      );
+      expect(FocusManager.instance.primaryFocus, same(focusBeforeMenu));
       // 再打开并选择当前年份，关闭后同样不得残留焦点底色。
       await mouse.down(tester.getCenter(yearMenu));
       await mouse.up();
@@ -301,7 +296,30 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(await statisticsPixel(tester, sample), before);
+      expect(FocusManager.instance.primaryFocus, same(focusBeforeMenu));
       await mouse.removePointer();
+      // 使用真实Tab遍历到年份入口，确认键盘关闭菜单后仍可继续操作。
+      final FocusNode yearFocus = Focus.of(
+        tester.element(
+          find.byKey(const ValueKey('notes-statistics-selected-year')),
+        ),
+      );
+      // 遍历有界，避免入口意外失去键盘可达性时测试永久等待。
+      for (int attempt = 0; attempt < 12 && !yearFocus.hasFocus; attempt++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+      }
+      expect(yearFocus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(ValueKey('notes-statistics-option-${DateTime.now().year}')),
+        findsOneWidget,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(yearFocus.hasFocus, isTrue);
+      expect(await statisticsPixel(tester, sample), before);
     });
   }
 

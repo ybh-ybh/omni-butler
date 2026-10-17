@@ -16,6 +16,9 @@ import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
+/// 提醒样例始终位于未来，避免真实仓储按执行日期拒绝过期夹具。
+final int _testYear = DateTime.now().year + 1;
+
 /// 验证待办时间设置的可选状态、真实选择保存及宽窄屏布局。
 void main() {
   setUpAll(() async {
@@ -93,7 +96,7 @@ void main() {
     // 未选择的默认小时不能意外写成真实截止或提醒。
     final TodoRecord saved =
         (await database.select(database.todoItems).get()).single;
-    expect(saved.scheduledDate, DateTime(2026, 10, 7));
+    expect(saved.scheduledDate, DateTime(_testYear, 10, 7));
     expect(saved.dueAt, isNull);
     expect(saved.reminderAt, isNull);
     expect(saved.repeatRule, isNull);
@@ -128,16 +131,16 @@ void main() {
     final String summary = tester
         .widget<Text>(find.textContaining('计划 '))
         .data!;
-    expect(summary, matches(RegExp(r'计划 (10月9日|2026/10/9)')));
-    expect(summary, matches(RegExp(r'截止 (10月15日|2026/10/15) 18:30')));
-    expect(summary, matches(RegExp(r'提醒 (10月14日|2026/10/14) 09:30')));
+    expect(summary, matches(RegExp('计划 (10月9日|$_testYear/10/9)')));
+    expect(summary, matches(RegExp('截止 (10月15日|$_testYear/10/15) 18:30')));
+    expect(summary, matches(RegExp('提醒 (10月14日|$_testYear/10/14) 09:30')));
     await _saveEditor(tester);
     // 数据库值验证选择器回调及保存路径都使用用户实际选择。
     final TodoRecord saved =
         (await database.select(database.todoItems).get()).single;
-    expect(saved.scheduledDate, DateTime(2026, 10, 9));
-    expect(saved.dueAt, DateTime(2026, 10, 15, 18, 30));
-    expect(saved.reminderAt, DateTime(2026, 10, 14, 9, 30));
+    expect(saved.scheduledDate, DateTime(_testYear, 10, 9));
+    expect(saved.dueAt, DateTime(_testYear, 10, 15, 18, 30));
+    expect(saved.reminderAt, DateTime(_testYear, 10, 14, 9, 30));
     expect(saved.repeatRule, TodoRepeatRule.weekly.name);
   });
 
@@ -322,7 +325,7 @@ void main() {
     expect(saved.scheduledDate, parent.scheduledDate);
     expect(saved.priorityQuadrant, parent.priorityQuadrant);
     expect(saved.repeatRule, isNull);
-    expect(saved.dueAt, DateTime(2026, 10, 15, 18));
+    expect(saved.dueAt, DateTime(_testYear, 10, 15, 18));
     expect(saved.reminderAt, isNull);
   });
 
@@ -407,7 +410,7 @@ Future<GlobalKey> _openEditor(
                     context,
                     record: record,
                     parent: parent,
-                    initialDate: DateTime(2026, 10, 7),
+                    initialDate: DateTime(_testYear, 10, 7),
                   ),
                 ),
               ),
@@ -425,14 +428,16 @@ Future<GlobalKey> _openEditor(
 /// 创建可在编辑弹窗中修改的普通任务，避免重复系列确认干扰清除回归。
 Future<TodoRecord> _createScheduledTodo(
   AppDatabase database, {
-  int year = 2026,
+  int? year,
 }) async {
+  // 跨年场景可显式覆盖，普通夹具与新增入口保持同一未来年份。
+  final int fixtureYear = year ?? _testYear;
   await TodoRepository(database).save(
     TodoDraft(
       title: '整理本周发票',
-      scheduledDate: DateTime(year, 10, 7),
-      dueAt: DateTime(year, 10, 15, 18, 30),
-      reminderAt: DateTime(year, 10, 14, 9, 30),
+      scheduledDate: DateTime(fixtureYear, 10, 7),
+      dueAt: DateTime(fixtureYear, 10, 15, 18, 30),
+      reminderAt: DateTime(fixtureYear, 10, 14, 9, 30),
     ),
   );
   return (await database.select(database.todoItems).get()).single;

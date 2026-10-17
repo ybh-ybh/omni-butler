@@ -205,7 +205,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('移动端展开较长待办后仅正文滚动且模块导航固定', (WidgetTester tester) async {
+  testWidgets('移动端长待办先滚动名言再保持导航吸顶与正文滚动', (WidgetTester tester) async {
     // 移动端也使用真实待办树与完整首页。
     final AppDatabase database = AppDatabase.forTesting(
       NativeDatabase.memory(),
@@ -228,11 +228,11 @@ void main() {
       find.byKey(ValueKey<String>('home-todo-tree-toggle-${roots.first.id}')),
     );
     await tester.pumpAndSettle();
-    // 待办模块内部只使用一个正文滚动容器。
+    // 当前模块接入嵌套主滚动，不再包裹独立滚动条。
     final Finder card = find.byKey(const ValueKey<String>('home-todo-card'));
     expect(
       find.descendant(of: card, matching: find.byType(Scrollbar)),
-      findsOneWidget,
+      findsNothing,
     );
     expect(
       find.descendant(of: card, matching: find.byType(Scrollable)),
@@ -248,7 +248,34 @@ void main() {
     );
     // 仍位于屏幕内的首条子任务。
     final Finder firstChild = find.text('第1组子任务 1');
-    // 滚动前固定记录两个元素的位置。
+    // 名言先随外层滚动退出，模块导航随后吸顶。
+    final double expandedHeaderTop = tester.getTopLeft(header).dy;
+    await tester.drag(
+      find.byKey(const ValueKey<String>('home-quote-card')),
+      const Offset(0, -280),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(header).dy, lessThan(expandedHeaderTop));
+    expect(
+      tester.getTopLeft(header).dy,
+      closeTo(
+        tester
+            .getTopLeft(
+              find.byKey(const ValueKey<String>('home-mobile-vertical-layout')),
+            )
+            .dy,
+        0.1,
+      ),
+    );
+    // 外层手势可能同时推动正文；只复位内部位置，保留名言收起状态。
+    final ScrollableState bodyScroll = tester.state<ScrollableState>(
+      find.descendant(of: card, matching: find.byType(Scrollable)),
+    );
+    bodyScroll.position.jumpTo(0);
+    await tester.pumpAndSettle();
+    expect(bodyScroll.position.maxScrollExtent, greaterThan(30));
+    expect(firstChild.hitTestable(), findsOneWidget);
+    // 从正文起点再次真实拖动，验证导航保持吸顶而非剩余边界位移。
     final double headerBefore = tester.getTopLeft(header).dy;
     // 首条子任务的起始纵坐标。
     final double childBefore = tester.getTopLeft(firstChild).dy;
