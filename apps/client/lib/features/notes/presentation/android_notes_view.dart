@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:drift/drift.dart' hide Column;
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/physics.dart';
@@ -14,10 +15,12 @@ import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/core/sync/sync_preferences.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
 import 'package:omni_butler/features/settings/presentation/recycle_bin_section.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
+import 'package:omni_butler/shared/ui/omni_modal_bottom_sheet.dart';
 
 import '../audio/note_recorder_service.dart';
 import '../data/note_editor_controller.dart';
@@ -26,12 +29,15 @@ import '../data/note_providers.dart';
 import '../data/note_repository.dart';
 import '../data/note_search_filter.dart';
 import '../data/note_search_history.dart';
+import '../data/note_statistics.dart';
+import '../data/note_tag_actions.dart';
+import '../data/note_tag_emoji_catalog.dart';
 import '../markdown/note_markdown.dart';
 import 'note_audio_card.dart';
 import 'note_markdown_text.dart';
 import 'note_rich_editor.dart';
 import 'windows_note_statistics_dialog.dart';
-import 'windows_note_tags.dart';
+import 'windows_note_tag_editor.dart' show NoteTagIcon;
 
 part 'android_note_editor.dart';
 part 'android_note_actions.dart';
@@ -42,6 +48,9 @@ part 'android_note_search.dart';
 part 'android_note_search_filter.dart';
 part 'android_note_search_history.dart';
 part 'android_note_sidebar.dart';
+part 'android_note_sidebar_tags.dart';
+part 'android_note_tag_pages.dart';
+part 'android_note_statistics.dart';
 part 'android_note_widgets.dart';
 
 /// Android 以正式笔记列表为入口，覆盖层与应用底部导航分离。
@@ -62,6 +71,12 @@ class _AndroidNotesViewState extends ConsumerState<AndroidNotesView>
     with WidgetsBindingObserver {
   /// 主列表滚动位置不随搜索或编辑重置。
   final ScrollController _scroll = ScrollController();
+
+  /// 抽屉关闭后继续保留用户浏览标签的位置。
+  final ScrollController _sidebarScroll = _AndroidSidebarScrollController();
+
+  /// 同一标签两处入口只高亮实际点选的那一行。
+  String _sidebarOrigin = 'all';
 
   /// 当前列表的标签和日期条件。
   NoteSearchFilter _filter = const NoteSearchFilter.empty();
@@ -168,6 +183,7 @@ class _AndroidNotesViewState extends ConsumerState<AndroidNotesView>
     _router?.routeInformationProvider.removeListener(_routeChanged);
     unawaited(_returns?.cancel());
     _scroll.dispose();
+    _sidebarScroll.dispose();
     super.dispose();
   }
 
@@ -280,7 +296,7 @@ class _AndroidNotesViewState extends ConsumerState<AndroidNotesView>
                     reducedMotion: OmniMotion.reduce(context),
                   )
                 : _AndroidComposerRoute(
-                    voice: record || session.recorder.state.isActive,
+                    reducedMotion: OmniMotion.reduce(context),
                     builder: editorPage,
                   ),
           );
@@ -425,11 +441,38 @@ class _AndroidNotesViewState extends ConsumerState<AndroidNotesView>
     }
     // 数据加载与错误分别展示，统计不使用筛选后的集合。
     final AsyncValue<List<NoteEntryRecord>> notes = ref.watch(notesProvider);
+    // 只有成功加载的标签事实才能清除失效筛选。
+    final AsyncValue<List<TaxonomyEntry>> taxonomy = ref.watch(
+      noteTaxonomiesProvider,
+    );
     // 当前可用的有效标签集合。
-    final List<TaxonomyEntry> tags =
-        (ref.watch(noteTaxonomiesProvider).value ?? [])
-            .where((tag) => tag.kind == 'tag' && tag.deletedAt == null)
-            .toList();
+    final List<TaxonomyEntry> tags = (taxonomy.value ?? [])
+        .where((tag) => tag.kind == 'tag' && tag.deletedAt == null)
+        .toList();
+    if (taxonomy.hasValue &&
+        !taxonomy.hasError &&
+        !taxonomy.isLoading &&
+        _filter.tagIds.any((id) => !tags.any((tag) => tag.id == id))) {
+      // 固定筛选身份，帧尾不能覆盖用户刚选择的另一行。
+      final NoteSearchFilter previous = _filter;
+      // 固定本轮资料库，旧订阅不能清除新资料库条件。
+      final AppDatabase source = ref.read(appDatabaseProvider);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted ||
+            !identical(_filter, previous) ||
+            !identical(ref.read(appDatabaseProvider), source)) {
+          return;
+        }
+        _update(() {
+          _filter = previous.copyWith(
+            tagIds: previous.tagIds.intersection(
+              tags.map((tag) => tag.id).toSet(),
+            ),
+          );
+          _sidebarOrigin = 'all';
+        });
+      });
+    }
     // 当前采集器的实际状态快照。
     final NoteRecordingState recording =
         ref.watch(noteRecordingProvider).value ?? editor.recorder.state;

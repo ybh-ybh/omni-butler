@@ -201,12 +201,21 @@ void main() {
     );
     await tester.tap(primaryButton);
     await tester.pumpAndSettle();
-    expect(find.text('结束并保存'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('time-entry-finish-submit')),
+      findsOneWidget,
+    );
+    expect(
+      tester.getSize(find.byType(Dialog)),
+      tester.view.physicalSize / tester.view.devicePixelRatio,
+    );
     await tester.enterText(
-      find.widgetWithText(TextFormField, '例如：睡眠、学习 Text2SQL'),
+      find.byKey(const ValueKey<String>('time-entry-activity')),
       '专注工作',
     );
-    await tester.tap(find.text('结束并保存'));
+    await tester.tap(
+      find.byKey(const ValueKey<String>('time-entry-finish-submit')),
+    );
     await tester.pumpAndSettle();
 
     expect(
@@ -270,7 +279,10 @@ void main() {
     expect(find.text('结束记录'), findsNWidgets(2));
     await tester.tap(find.descendant(of: banner, matching: find.text('结束记录')));
     await tester.pumpAndSettle();
-    expect(find.text('结束并保存'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('time-entry-finish-submit')),
+      findsOneWidget,
+    );
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);

@@ -531,6 +531,61 @@ class TaxonomyRepository {
     });
   }
 
+  /// 仅排序有效笔记标签，新增追加、删除移出且不回写名称和置顶。
+  Future<void> reorderNoteTags(List<String> ids) =>
+      _database.transaction(() async {
+        if (ids.toSet().length != ids.length) {
+          throw const FormatException('标签排序包含重复项目');
+        }
+        // 保存时重新读取有效笔记标签，远端删除不会被排序复活。
+        final List<TaxonomyEntry> active =
+            await (_database.select(_database.taxonomyEntries)
+                  ..where(
+                    (table) =>
+                        table.module.equals('notes') &
+                        table.kind.equals('tag') &
+                        table.deletedAt.isNull(),
+                  )
+                  ..orderBy([
+                    (table) => OrderingTerm.asc(table.sortOrder),
+                    (table) => OrderingTerm.asc(table.name),
+                  ]))
+                .get();
+        // 只接受笔记标签身份，其他模块不能通过这个接口排序。
+        final List<TaxonomyEntry> supplied = ids.isEmpty
+            ? []
+            : await (_database.select(
+                _database.taxonomyEntries,
+              )..where((table) => table.id.isIn(ids))).get();
+        if (supplied.any((tag) => tag.module != 'notes' || tag.kind != 'tag')) {
+          throw const FormatException('只能调整笔记标签');
+        }
+        // 删除项目移出，新项目按当前仓储顺序追加，用户拖动顺序优先。
+        final Set<String> valid = active.map((tag) => tag.id).toSet();
+        // 事务内的完整规范顺序。
+        final List<String> order = [
+          ...ids.where(valid.contains),
+          ...active.map((tag) => tag.id).where((id) => !ids.contains(id)),
+        ];
+        // 同一提交使用一致的修改时间。
+        final DateTime now = DateTime.now();
+        for (int index = 0; index < order.length; index++) {
+          await (_database.update(_database.taxonomyEntries)..where(
+                (table) =>
+                    table.id.equals(order[index]) &
+                    table.module.equals('notes') &
+                    table.kind.equals('tag') &
+                    table.deletedAt.isNull(),
+              ))
+              .write(
+                TaxonomyEntriesCompanion(
+                  sortOrder: Value(index),
+                  updatedAt: Value(now),
+                ),
+              );
+        }
+      });
+
   /// 单独修改有效笔记标签的置顶状态，避免覆盖其他设备的改名和排序。
   Future<void> setPinned(String id, bool pinned) async {
     // 带业务范围和删除条件的原子更新不允许复活失效标签。

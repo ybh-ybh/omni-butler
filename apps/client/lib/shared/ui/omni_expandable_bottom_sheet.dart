@@ -40,7 +40,10 @@ class _OmniExpandableBottomSheetRoute<T> extends ModalBottomSheetRoute<T> {
          barrierLabel: MaterialLocalizations.of(context)
              .modalBarrierDismissLabel,
          constraints: const BoxConstraints(),
-         sheetAnimationStyle: OmniMotion.reduce(context)
+         sheetAnimationStyle:
+             Theme.of(context).platform == TargetPlatform.android
+             ? OmniMotion.androidModalStyle(context)
+             : OmniMotion.reduce(context)
              ? AnimationStyle.noAnimation
              : const AnimationStyle(
                  duration: OmniMotion.panel,

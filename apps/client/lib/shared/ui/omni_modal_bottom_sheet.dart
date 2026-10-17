@@ -18,7 +18,9 @@ Future<T?> showOmniModalBottomSheet<T>({
     ),
   ),
   clipBehavior: Clip.antiAlias,
-  sheetAnimationStyle: OmniMotion.reduce(context)
+  sheetAnimationStyle: Theme.of(context).platform == TargetPlatform.android
+      ? OmniMotion.androidModalStyle(context)
+      : OmniMotion.reduce(context)
       ? AnimationStyle.noAnimation
       : const AnimationStyle(duration: OmniMotion.panel),
   builder: builder,

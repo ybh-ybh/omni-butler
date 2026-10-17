@@ -207,75 +207,85 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     );
   }
 
-  /// 以短时卡牌翻转动效打开物品详情。
+  /// 安卓统一底部进出，桌面保留详情卡牌翻转。
   Future<void> _openDetails(InventoryRecord item) async {
+    // 不同平台共享详情内容及后续操作结果。
+    Widget buildDetails(BuildContext context) => _InventoryDetailDialog(
+      item: item,
+      onEdit: () => Navigator.of(context).pop(_InventoryDetailAction.edit),
+      onAccessories: () =>
+          Navigator.of(context).pop(_InventoryDetailAction.accessories),
+    );
     // 详情卡关闭后需要继续执行的操作。
-    final _InventoryDetailAction? action =
-        await showGeneralDialog<_InventoryDetailAction>(
-          context: context,
-          barrierDismissible: true,
-          barrierLabel: '关闭物品详情',
-          barrierColor: Colors.black54,
-          transitionDuration: OmniMotion.duration(context, OmniMotion.panel),
-          pageBuilder:
-              (
-                BuildContext context,
-                Animation<double> animation,
-                Animation<double> secondaryAnimation,
-              ) => _InventoryDetailDialog(
-                item: item,
-                onEdit: () =>
-                    Navigator.of(context).pop(_InventoryDetailAction.edit),
-                onAccessories: () =>
-                    Navigator.of(context)
-                        .pop(_InventoryDetailAction.accessories),
-              ),
-          transitionBuilder:
-              (
-                BuildContext context,
-                Animation<double> animation,
-                Animation<double> secondaryAnimation,
-                Widget child,
-              ) {
-                // 尊重系统的减少动态效果设置，仅保留轻量淡入淡出。
-                final bool disableAnimations = OmniMotion.reduce(context);
-                // 弹性较弱的缓动避免翻转显得拖沓。
-                final Animation<double> curvedAnimation = CurvedAnimation(
-                  parent: animation,
-                  curve: OmniMotion.standardCurve,
-                  reverseCurve: Curves.easeInCubic,
-                );
-                if (disableAnimations) {
-                  return FadeTransition(opacity: curvedAnimation, child: child);
-                }
-                return AnimatedBuilder(
-                  animation: curvedAnimation,
-                  child: child,
-                  builder: (BuildContext context, Widget? child) {
-                    // 从略微侧转的位置翻到正面，兼顾卡牌感与内容可读性。
-                    final double angle =
-                        (1 - curvedAnimation.value) * -math.pi / 2;
-                    if (curvedAnimation.status == AnimationStatus.completed) {
-                      // 完成后移除透视变换层，避免静止文字继续被栅格化而发虚。
-                      return child ?? const SizedBox.shrink();
-                    }
-                    // 透视矩阵让 Y 轴旋转具有真实卡牌厚度感。
-                    final Matrix4 transform = Matrix4.identity()
-                      ..setEntry(3, 2, 0.0015)
-                      ..rotateY(angle);
-                    return Opacity(
-                      opacity: curvedAnimation.value.clamp(0.0, 1.0),
-                      child: Transform(
-                        key: const ValueKey<String>('inventory-detail-flip'),
-                        alignment: Alignment.center,
-                        transform: transform,
-                        child: child,
-                      ),
+    final _InventoryDetailAction?
+    action = await (Theme.of(context).platform == TargetPlatform.android
+        ? showOmniDialog<_InventoryDetailAction>(
+            context: context,
+            barrierLabel: '关闭物品详情',
+            barrierColor: Colors.black54,
+            useSafeArea: false,
+            builder: buildDetails,
+          )
+        : showGeneralDialog<_InventoryDetailAction>(
+            context: context,
+            barrierDismissible: true,
+            barrierLabel: '关闭物品详情',
+            barrierColor: Colors.black54,
+            transitionDuration: OmniMotion.duration(context, OmniMotion.panel),
+            pageBuilder: (
+              BuildContext context,
+              Animation<double> animation,
+              Animation<double> secondaryAnimation,
+            ) => buildDetails(context),
+            transitionBuilder:
+                (
+                  BuildContext context,
+                  Animation<double> animation,
+                  Animation<double> secondaryAnimation,
+                  Widget child,
+                ) {
+                  // 尊重系统的减少动态效果设置，仅保留轻量淡入淡出。
+                  final bool disableAnimations = OmniMotion.reduce(context);
+                  // 弹性较弱的缓动避免翻转显得拖沓。
+                  final Animation<double> curvedAnimation = CurvedAnimation(
+                    parent: animation,
+                    curve: OmniMotion.standardCurve,
+                    reverseCurve: Curves.easeInCubic,
+                  );
+                  if (disableAnimations) {
+                    return FadeTransition(
+                      opacity: curvedAnimation,
+                      child: child,
                     );
-                  },
-                );
-              },
-        );
+                  }
+                  return AnimatedBuilder(
+                    animation: curvedAnimation,
+                    child: child,
+                    builder: (BuildContext context, Widget? child) {
+                      // 从略微侧转的位置翻到正面，兼顾卡牌感与内容可读性。
+                      final double angle =
+                          (1 - curvedAnimation.value) * -math.pi / 2;
+                      if (curvedAnimation.status == AnimationStatus.completed) {
+                        // 完成后移除透视变换层，避免静止文字继续被栅格化而发虚。
+                        return child ?? const SizedBox.shrink();
+                      }
+                      // 透视矩阵让 Y 轴旋转具有真实卡牌厚度感。
+                      final Matrix4 transform = Matrix4.identity()
+                        ..setEntry(3, 2, 0.0015)
+                        ..rotateY(angle);
+                      return Opacity(
+                        opacity: curvedAnimation.value.clamp(0.0, 1.0),
+                        child: Transform(
+                          key: const ValueKey<String>('inventory-detail-flip'),
+                          alignment: Alignment.center,
+                          transform: transform,
+                          child: child,
+                        ),
+                      );
+                    },
+                  );
+                },
+          ));
     if (!mounted) {
       return;
     }

@@ -579,7 +579,11 @@ void main() {
     );
     await tester.tap(primaryButton);
     await tester.pumpAndSettle();
-    expect(find.text('结束并保存'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('time-entry-finish-submit')),
+      findsOneWidget,
+    );
+    expect(tester.getSize(find.byType(Dialog)), const Size(412, 915));
 
     await _disposeApp(tester, database, container);
   });

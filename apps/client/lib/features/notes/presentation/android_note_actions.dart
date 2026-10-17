@@ -446,5 +446,6 @@ Future<T?> _androidReadOnlySheet<T>(
     isScrollControlled: true,
     useSafeArea: true,
     backgroundColor: Colors.transparent,
+    sheetAnimationStyle: OmniMotion.androidModalStyle(context),
   ),
 );

@@ -1,6 +1,6 @@
 part of 'android_notes_view.dart';
 
-/// 历史编辑从右侧进入，新建仍使用原有底部覆盖层。
+/// 历史编辑与新建面板统一从底部进出，保留原有全屏布局。
 class _AndroidHistoryRoute extends PageRouteBuilder<void> {
   /// 路由只提供表面，业务会话由编辑器持有。
   _AndroidHistoryRoute({
@@ -9,28 +9,15 @@ class _AndroidHistoryRoute extends PageRouteBuilder<void> {
   }) : super(
          transitionDuration: reducedMotion
              ? Duration.zero
-             : const Duration(milliseconds: 300),
+             : OmniMotion.androidModalEnter,
          reverseTransitionDuration: reducedMotion
              ? Duration.zero
-             : const Duration(milliseconds: 220),
+             : OmniMotion.androidModalExit,
          pageBuilder: (context, _, _) => builder(context),
          transitionsBuilder: (context, animation, _, child) =>
              OmniMotion.reduce(context)
              ? child
-             : SlideTransition(
-                 position:
-                     Tween<Offset>(
-                       begin: const Offset(1, 0),
-                       end: Offset.zero,
-                     ).animate(
-                       CurvedAnimation(
-                         parent: animation,
-                         curve: Curves.easeOutCubic,
-                         reverseCurve: Curves.easeInCubic,
-                       ),
-                     ),
-                 child: child,
-               ),
+             : OmniModalSlideTransition(animation: animation, child: child),
        );
 }
 

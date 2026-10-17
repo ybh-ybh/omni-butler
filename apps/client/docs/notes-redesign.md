@@ -1,6 +1,26 @@
 # 笔记界面改版交付与验证
 
-更新：2026-10-16。需求以 [笔记 PRD v2.18](../../../spec/笔记功能PRD.md) 为准，没有部署正式服务或启动新的付费转写；设备补验保留用户已有正式笔记。
+更新：2026-10-17。需求以 [笔记 PRD v2.19](../../../spec/笔记功能PRD.md) 为准，没有部署正式服务或启动新的付费转写；设备补验保留用户已有正式笔记。
+
+## Android 侧栏、统计与标签 v2.19
+
+按侧栏视频重做五处安卓生产界面。抽屉保留82%／360dp根覆盖层，主题色选中、触屏常驻菜单、响应式标签工具及关闭重开滚动；置顶与全部标签只高亮实际点选分区，取消置顶回退全部。正式统计不受列表筛选影响，远端删除会清理失效筛选，恢复标签不重新激活旧筛选；管理不抢占草稿或其他篇录音。
+
+统计改为近全高底部表面，月／年分页横滑与分段同步，各自保留滚动。月视图只显示有记录月份且倒序，使用共享NoteStatistics及归档日期；年视图纵向三张真实图表。换年份清滚动缓存，空日不可选，选日同时退出统计和抽屉。空、加载、失败重试分别显示，未挂载分页不响应切换；窄屏大字号轴刻度按真实字宽保留空间，必要时图表横向查看。
+
+标签排序与名称图标为普通二级导航，300ms右入／220ms原路退出，保留底层抽屉与列表；不改变其他统一模态动效。排序只暂存本页，保存调用新增reorderNoteTags事务，限定有效notes/tag、仅更新sortOrder和updatedAt，删除移出、新增追加、保全名称／emoji／置顶，SQL失败整批回滚重试。名称图标复用现有差量原子接口与离线目录，默认不弹键盘，平铺分类网格、中英文搜索、默认井号和取消草稿；没有多级标签说明、恢复默认或反馈入口。
+
+标签菜单复用Omni根浮层，在同一块圆角表面横向切换删除子页，保留两种既有确认、NoteTagActions及prepareForDeletion；固定源和ID并在异步后核验，失败原位重试。源切换先退出本抽屉之上的页面／菜单再退出抽屉，防止残留空页或旧表单写到新库。新增呈现分片为android_note_sidebar_tags.dart、android_note_tag_pages.dart、android_note_statistics.dart；Windows与数据协议保持原样。
+
+串行回归：完整笔记页面152项通过，标签仓储／新排序事务／名称图标／删除／离线目录／统计及Windows图标编辑66项通过。另2项Windows年份菜单关闭后焦点断言在未修改HEAD `b7b7f0b`同样复现，分别见build/android-sidebar-domain-regression.log和android-sidebar-head-focus.log；未修改Windows焦点或重录基线。最终侧栏20项复验通过，包含真实拖动、取消、立即保存、SQL失败重试、远端增删、源切换、原子改名图标、冻结草稿及其他篇录音保护；日志为android-sidebar-visual-final.log，完整页面为android-sidebar-page-regression.log。
+
+模拟器补验复现了“松手立即保存”可能提交旧顺序：SDK先播放落位动画，之后才回调重排。现在保存等待真实落位，期间防重复及退出；取消、远端集合变化或页面销毁均解除等待，不用固定延时猜测。新增两项真实指针回归及原排序重试共3项通过（android-sidebar-drop-fix.log）；测试先pump建立ticker时基再推进动画，避免零进度反转让回调同步完成而漏掉竞态。
+
+83张生产组件中文截图及五处100／200／300ms过渡关键帧位于build/android-sidebar-preview/，含六份总览及overview-transition.jpg；参考视频帧位于build/android-sidebar-reference/。覆盖390dp、320dp／1.6深色、短屏／1.6、横屏、宽屏、减少动画及键盘占位，额外验证窄／短屏滚动到完整图标触控候选。键盘矩阵仅模拟系统inset，真实模拟器IME截图另存android-sidebar-device/；预览字体来自Windows，emoji的实际样式以Android系统字体为准。
+
+最终全客户端静态分析无问题、29项受控样式、10个相关Dart文件格式和diff检查通过（android-sidebar-{analyze,style,format}-final.log）。Android调试构建与设备补验记录在下段，均保留用户正式笔记。未实际完成本人真机的拖动手感、全尺寸系统键盘、后台／锁屏录音及真实在线双设备排序同步；远端变化和失败保护由隔离数据库与生产路由测试覆盖。
+
+最终Android Debug APK完整安装到emulator-5554：build/app/outputs/flutter-apk/app-debug.apk，构建16.3秒，SHA256=15ABFF22AB4DAA64A08129EA8D06E030C1D481AE81E75E22BA698D54F7C0004E。设备实测侧栏覆盖／横拖、统计月年及返回、两条临时标签的真实拖动与返回丢弃、松手立即保存、同块删除子菜单、名称图标及smile搜索、真实IME首次返回留在编辑页／再次返回取消；临时标签以仅移除方式清理，保留原4篇笔记。修前sort-drag.xml与sort-saved.xml、修后fixed-sort-saved.xml保留顺序对照，截图、清理及logcat在build/android-sidebar-device/。本机IME为浮动手写模式，不能据此声称全尺寸真机键盘或线上同步已验收。
 
 ## Android 已有笔记菜单与全屏编辑 v2.18
 

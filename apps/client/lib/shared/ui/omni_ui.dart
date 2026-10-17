@@ -7,6 +7,7 @@ export 'omni_icon_button.dart';
 export 'omni_hover_reveal.dart';
 export 'omni_input.dart';
 export 'omni_message.dart';
+export 'omni_modal_transition.dart';
 export 'omni_overlay.dart';
 export 'omni_page_header.dart';
 export 'omni_panel.dart';

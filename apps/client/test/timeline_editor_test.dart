@@ -165,10 +165,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(Dialog), findsOneWidget);
     await tester.enterText(
-      find.widgetWithText(TextFormField, '例如：睡眠、学习 Text2SQL'),
+      find.byKey(const ValueKey<String>('time-entry-activity')),
       '深度工作',
     );
-    await tester.tap(find.text('结束并保存'));
+    await tester.tap(
+      android
+          ? find.byKey(const ValueKey<String>('time-entry-finish-submit'))
+          : find.text('结束并保存'),
+    );
     await tester.pumpAndSettle();
 
     record = await testContext.database

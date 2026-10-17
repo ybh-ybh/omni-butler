@@ -113,12 +113,7 @@ class _AndroidNoteSearchState extends ConsumerState<_AndroidNoteSearch> {
               backgroundColor: Colors.transparent,
               modalBarrierColor: Colors.black.withValues(alpha: .42),
               barrierLabel: '取消筛选',
-              sheetAnimationStyle: OmniMotion.reduce(context)
-                  ? AnimationStyle.noAnimation
-                  : const AnimationStyle(
-                      duration: OmniMotion.panel,
-                      reverseDuration: OmniMotion.panel,
-                    ),
+              sheetAnimationStyle: OmniMotion.androidModalStyle(context),
             ),
           );
       if (mounted && filter != null) {

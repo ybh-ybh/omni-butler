@@ -2,8 +2,8 @@ part of 'android_notes_view.dart';
 
 /// 安卓编辑与录音共用一层根导航模糊，底层列表和滚动位置保持挂载。
 class _AndroidComposerRoute extends PopupRoute<void> {
-  /// 此次明确进入录音模式。
-  final bool voice;
+  /// 打开时的系统动画偏好也作用于路由生命周期。
+  final bool reducedMotion;
 
   /// 会话控件持有原草稿身份。
   final WidgetBuilder builder;
@@ -12,15 +12,17 @@ class _AndroidComposerRoute extends PopupRoute<void> {
   Future<void> Function()? requestClose;
 
   /// 创建可跟随系统键盘的独立安卓覆盖层。
-  _AndroidComposerRoute({required this.builder, required this.voice});
+  _AndroidComposerRoute({required this.builder, required this.reducedMotion});
 
-  /// 文字与录音进入节奏分别按参考视频设置。
+  /// 文字与录音统一使用安卓模态进入时长。
   @override
-  Duration get transitionDuration => Duration(milliseconds: voice ? 280 : 300);
+  Duration get transitionDuration =>
+      reducedMotion ? Duration.zero : OmniMotion.androidModalEnter;
 
   /// 关闭沿原路径退出。
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 220);
+  Duration get reverseTransitionDuration =>
+      reducedMotion ? Duration.zero : OmniMotion.androidModalExit;
 
   /// 遮罩动作由可暂存的会话处理。
   @override
@@ -47,7 +49,7 @@ class _AndroidComposerRoute extends PopupRoute<void> {
       // 减少动画即时到达目标，不改变保存或录音行为。
       final double progress = OmniMotion.reduce(context)
           ? 1
-          : Curves.easeOutCubic.transform(animation.value);
+          : OmniMotion.androidModalCurve.transform(animation.value);
       return Material(
         type: MaterialType.transparency,
         child: Stack(
@@ -104,18 +106,10 @@ class _AndroidComposerEntrance extends StatelessWidget {
         ModalRoute.of(context) is _AndroidComposerRoute
         ? ModalRoute.of(context)!.animation!
         : const AlwaysStoppedAnimation(1);
-    return AnimatedBuilder(
+    return OmniModalSlideTransition(
       animation: animation,
+      distance: distance,
       child: child,
-      builder: (context, child) => Transform.translate(
-        offset: Offset(
-          0,
-          OmniMotion.reduce(context)
-              ? 0
-              : distance * (1 - Curves.easeOutCubic.transform(animation.value)),
-        ),
-        child: child,
-      ),
     );
   }
 }

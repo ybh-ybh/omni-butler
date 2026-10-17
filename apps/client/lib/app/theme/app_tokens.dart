@@ -138,6 +138,28 @@ abstract final class OmniMotion {
   /// 常规状态切换时长。
   static const Duration normal = Duration(milliseconds: 180);
 
+  /// 安卓模态弹窗完整滑入屏幕的时长。
+  static const Duration androidModalEnter = Duration(milliseconds: 300);
+
+  /// 安卓模态弹窗沿底部滑出屏幕的时长。
+  static const Duration androidModalExit = Duration(milliseconds: 220);
+
+  /// 进退共用同一位置曲线，反向播放自然加速且中途关闭不跳帧。
+  static const Curve androidModalCurve = Curves.easeOutCubic;
+
+  /// 安卓弹窗共用的原生面板参数，显式覆盖及系统禁用动画优先。
+  static AnimationStyle androidModalStyle(
+    BuildContext context, {
+    AnimationStyle? override,
+  }) => reduce(context)
+      ? AnimationStyle.noAnimation
+      : AnimationStyle(
+          duration: override?.duration ?? androidModalEnter,
+          reverseDuration: override?.reverseDuration ?? androidModalExit,
+          curve: override?.curve ?? androidModalCurve,
+          reverseCurve: override?.reverseCurve ?? androidModalCurve,
+        );
+
   /// 安卓条目按下时，从触点扩散至全部轮廓的时长。
   static const Duration pressSpread = Duration(milliseconds: 280);
 

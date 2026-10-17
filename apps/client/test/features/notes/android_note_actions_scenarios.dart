@@ -823,8 +823,31 @@ void androidNoteActionTests() {
         );
         await tester.pump();
       }
+      // 真实历史编辑的横坐标固定，纵坐标从视口底部连续进入。
+      final Finder historySurface = find.byKey(
+        const ValueKey('android-note-history-editor'),
+      );
+      // 生产路由使用统一时长，减少动画时两端均归零。
+      final ModalRoute<Object?> historyRoute = ModalRoute.of(
+        tester.element(historySurface),
+      )!;
+      expect(
+        historyRoute.transitionDuration,
+        viewport.$5 ? Duration.zero : OmniMotion.androidModalEnter,
+      );
+      expect(
+        historyRoute.reverseTransitionDuration,
+        viewport.$5 ? Duration.zero : OmniMotion.androidModalExit,
+      );
+      // 连续帧保存前一位置，捕捉错误的横向进入或直接跳到终点。
+      double previousTop = tester.getTopLeft(historySurface).dy;
       for (final int frame in [100, 200, 300]) {
         await tester.pump(const Duration(milliseconds: 100));
+        expect(tester.getTopLeft(historySurface).dx, closeTo(0, .01));
+        if (!viewport.$5) {
+          expect(tester.getTopLeft(historySurface).dy, lessThan(previousTop));
+        }
+        previousTop = tester.getTopLeft(historySurface).dy;
         await _capture(tester, app, 'existing-${viewport.$1}-enter-${frame}ms');
       }
       await _settle(tester);
@@ -855,7 +878,43 @@ void androidNoteActionTests() {
       await _capture(tester, app, 'existing-${viewport.$1}-editor-menu');
       await tester.binding.handlePopRoute();
       await _settle(tester);
-      await _closeAndroidComposer(tester);
+      if (viewport.$5) {
+        await _closeAndroidComposer(tester);
+      } else {
+        await tester.tap(find.byTooltip('返回笔记列表'));
+        // 暂存可能需要真实文件I/O；不推进动画时钟，等待业务允许返回。
+        for (
+          int attempt = 0;
+          attempt < 50 &&
+              historyRoute.animation!.status != AnimationStatus.reverse;
+          attempt++
+        ) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          );
+          await tester.pump();
+        }
+        expect(historyRoute.animation!.status, AnimationStatus.reverse);
+        // 先建立退出动画的首帧时基，再按固定间隔检查位移。
+        await tester.pump();
+        previousTop = tester.getTopLeft(historySurface).dy;
+        for (final int frame in [60, 120, 180]) {
+          await tester.pump(const Duration(milliseconds: 60));
+          expect(historySurface, findsOneWidget);
+          expect(tester.getTopLeft(historySurface).dx, closeTo(0, .01));
+          expect(
+            tester.getTopLeft(historySurface).dy,
+            greaterThan(previousTop),
+          );
+          previousTop = tester.getTopLeft(historySurface).dy;
+          await _capture(
+            tester,
+            app,
+            'existing-${viewport.$1}-exit-${frame}ms',
+          );
+        }
+        await _settle(tester);
+      }
       expect(find.byType(NoteRichEditor), findsNothing);
       expect(tester.takeException(), isNull);
       await _dispose(tester, app);

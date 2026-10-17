@@ -3,6 +3,7 @@ import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/shared/ui/omni_button.dart';
 import 'package:omni_butler/shared/ui/omni_icon_button.dart';
+import 'package:omni_butler/shared/ui/omni_modal_transition.dart';
 import 'package:omni_butler/shared/ui/omni_windows_enter_submit.dart';
 
 /// 显示桌面右侧面板或移动端全屏编辑器。
@@ -15,6 +16,25 @@ Future<T?> showOmniSideSheet<T>(
   final bool compact = OmniBreakpoint.isCompact(
     MediaQuery.sizeOf(context).width,
   );
+  if (Theme.of(context).platform == TargetPlatform.android) {
+    return showOmniDialog<T>(
+      context: context,
+      useSafeArea: false,
+      builder: (BuildContext dialogContext) => FocusTraversalGroup(
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: SizedBox(
+            width: compact ? MediaQuery.sizeOf(context).width : desktopWidth,
+            height: MediaQuery.sizeOf(context).height,
+            child: Material(
+              color: Colors.transparent,
+              child: builder(dialogContext),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
   return showGeneralDialog<T>(
     context: context,
     barrierDismissible: true,
@@ -107,6 +127,27 @@ Future<T?> showOmniDialog<T>({
       Theme.of(context).dialogTheme.barrierColor ??
       Colors.black.withValues(alpha: 0.42);
 
+  if (Theme.of(context).platform == TargetPlatform.android) {
+    return navigator.push<T>(
+      _OmniAndroidDialogRoute<T>(
+        context: context,
+        builder: builder,
+        themes: themes,
+        barrierColor: resolvedBarrierColor,
+        barrierDismissible: barrierDismissible,
+        barrierLabel: barrierLabel,
+        useSafeArea: useSafeArea,
+        settings: routeSettings,
+        anchorPoint: anchorPoint,
+        traversalEdgeBehavior:
+            traversalEdgeBehavior ?? TraversalEdgeBehavior.closedLoop,
+        fullscreenDialog: fullscreenDialog,
+        requestFocus: requestFocus,
+        motion: OmniMotion.androidModalStyle(context, override: animationStyle),
+      ),
+    );
+  }
+
   return navigator.push<T>(
     DialogRoute<T>(
       context: context,
@@ -132,6 +173,58 @@ Future<T?> showOmniDialog<T>({
                   reverseCurve: Curves.easeInCubic,
                 ),
     ),
+  );
+}
+
+/// 保留原生弹窗语义、焦点和安全区，仅替换安卓表面进出动画。
+class _OmniAndroidDialogRoute<T> extends DialogRoute<T> {
+  /// 打开时解析的动画偏好及调用方覆盖。
+  final AnimationStyle motion;
+
+  /// 透传原有弹窗参数，不修改业务关闭流程。
+  _OmniAndroidDialogRoute({
+    required super.context,
+    required super.builder,
+    required this.motion,
+    super.themes,
+    super.barrierColor,
+    super.barrierDismissible,
+    super.barrierLabel,
+    super.useSafeArea,
+    super.settings,
+    super.anchorPoint,
+    super.traversalEdgeBehavior,
+    super.fullscreenDialog,
+    super.requestFocus,
+  }) : super(animationStyle: motion);
+
+  /// 显式提供退出时长，避免原生 DialogRoute 忽略 reverseDuration。
+  @override
+  Duration get reverseTransitionDuration => motion.reverseDuration!;
+
+  /// 进入期间吸收触发入口的连续点击，避免图片双击第二下误关遮罩。
+  @override
+  Widget buildModalBarrier() => AnimatedBuilder(
+    animation: animation!,
+    child: super.buildModalBarrier(),
+    builder: (BuildContext context, Widget? child) => AbsorbPointer(
+      absorbing: animation!.status == AnimationStatus.forward,
+      child: child,
+    ),
+  );
+
+  /// 居中及全屏内容均从视口下方进入，遮罩不随内容移动。
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) => OmniModalSlideTransition(
+    animation: animation,
+    curve: motion.curve ?? OmniMotion.androidModalCurve,
+    reverseCurve: motion.reverseCurve ?? OmniMotion.androidModalCurve,
+    child: child,
   );
 }
 

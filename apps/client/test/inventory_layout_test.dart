@@ -626,6 +626,21 @@ void main() {
 
     // 从移动端物品项打开详情卡，卡片边界保持在视口内。
     await tester.tap(find.byKey(ValueKey<String>('inventory-card-$itemId')));
+    await tester.pump();
+    // 安卓详情完整从底部进入，不再播放桌面翻转动画。
+    final Finder detailSurface = find.byKey(
+      const ValueKey<String>('inventory-detail-card'),
+    );
+    expect(tester.getTopLeft(detailSurface).dy, greaterThanOrEqualTo(844));
+    await tester.pump(const Duration(milliseconds: 100));
+    // 保存中间帧位置，避免只验证动画结束后的静态布局。
+    final double enteringTop = tester.getTopLeft(detailSurface).dy;
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(tester.getTopLeft(detailSurface).dy, lessThan(enteringTop));
+    expect(
+      find.byKey(const ValueKey<String>('inventory-detail-flip')),
+      findsNothing,
+    );
     await tester.pumpAndSettle();
     final Rect detailRect = tester.getRect(
       find.byKey(const ValueKey<String>('inventory-detail-card')),
@@ -636,6 +651,14 @@ void main() {
     expect(find.text('保修到期'), findsNothing);
     expect(find.text('购买链接'), findsNothing);
     expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(detailSurface, findsOneWidget);
+    expect(tester.getTopLeft(detailSurface).dy, greaterThan(detailRect.top));
+    await tester.pumpAndSettle();
+    expect(detailSurface, findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();

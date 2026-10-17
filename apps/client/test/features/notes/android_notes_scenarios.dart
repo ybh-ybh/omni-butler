@@ -519,7 +519,7 @@ void androidNoteTests() {
     );
     await tester.tap(find.byKey(const ValueKey('android-notes-menu')));
     await _settle(tester);
-    await tester.tap(find.widgetWithText(OmniListTile, '全部笔记'));
+    await tester.tap(find.text('全部笔记').hitTestable());
     await _settle(tester);
     expect(
       find.byKey(const ValueKey('android-note-card-yesterday')),

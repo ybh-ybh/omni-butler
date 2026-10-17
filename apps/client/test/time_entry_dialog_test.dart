@@ -423,6 +423,207 @@ void main() {
       }
     });
 
+    if (platform == TargetPlatform.android) {
+      testWidgets('安卓结束记录使用全屏分组、开始只读并跨日保存到原记录', (WidgetTester tester) async {
+        // 带秒的跨日开始时间不能被新的时间摘要取整或改写。
+        final DateTime startedAt = DateTime(2026, 10, 6, 23, 57, 17);
+        // 通过公开结束入口打开真实的进行中记录。
+        final _DialogFixture fixture = await _pumpDialog(
+          tester,
+          platform: platform,
+          finishing: true,
+          now: DateTime(2026, 10, 7, 0, 23),
+          seed: TimeEntryDraft(
+            startedAt: startedAt,
+            activity: '进行中的活动',
+            category: '学习',
+            notes: '已有备注',
+          ),
+        );
+        try {
+          // 保存前读取持久化身份，确保结束是在原记录上完成。
+          final TimeEntryRecord original = await fixture.database
+              .select(fixture.database.timeEntries)
+              .getSingle();
+          expect(tester.getSize(find.byType(Dialog)), const Size(390, 844));
+          expect(find.text('结束记录'), findsOneWidget);
+          expect(find.text('保存'), findsOneWidget);
+          expect(
+            find.byKey(const ValueKey<String>('time-entry-details-group')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey<String>('time-previous-entry-banner')),
+            findsNothing,
+          );
+          expect(tester.testTextInput.isVisible, isFalse);
+          expect(_dateButton(tester, 'start').value, startedAt);
+          expect(_dateButton(tester, 'start').onChanged, isNull);
+          expect(
+            tester
+                .widget<TimeEntryEndpointCard>(
+                  find.byKey(const ValueKey<String>('time-start-display')),
+                )
+                .enabled,
+            isFalse,
+          );
+          expect(
+            tester
+                .widget<TimeEntryWheelPicker>(find.byType(TimeEntryWheelPicker))
+                .label,
+            '结束',
+          );
+          await _capture(tester, 'android-finish-light');
+          await _wheelTo(tester, hour: 0, minute: 27);
+          await _enterActivity(tester, '结束后的活动');
+          await tester.ensureVisible(
+            find.byKey(const ValueKey<String>('time-entry-notes')),
+          );
+          await tester.enterText(
+            find.byKey(const ValueKey<String>('time-entry-notes')),
+            '补充结果',
+          );
+          await tester.tap(_saveControl());
+          await tester.pumpAndSettle();
+          expect(find.byType(Dialog), findsNothing);
+          // 精确保留开始时间和记录ID，只有结束时间及本次表单变更被写入。
+          final TimeEntryRecord saved = await fixture.database
+              .select(fixture.database.timeEntries)
+              .getSingle();
+          expect(saved.id, original.id);
+          expect(saved.startedAt, startedAt);
+          expect(saved.endedAt, DateTime(2026, 10, 7, 0, 27));
+          expect(saved.activity, '结束后的活动');
+          expect(saved.category, '学习');
+          expect(saved.notes, '补充结果');
+          expect(tester.takeException(), isNull);
+        } finally {
+          await fixture.dispose(tester);
+        }
+      });
+
+      testWidgets('安卓结束记录错误替换滚轮提示，大字号键盘下取消保留进行中', (WidgetTester tester) async {
+        // 深色表单同时覆盖结束时间校验与取消草稿。
+        final _DialogFixture fixture = await _pumpDialog(
+          tester,
+          platform: platform,
+          brightness: Brightness.dark,
+          finishing: true,
+          seed: TimeEntryDraft(
+            startedAt: DateTime(2026, 10, 7, 9, 20),
+            activity: '仍在记录',
+          ),
+        );
+        try {
+          await _capture(tester, 'android-finish-dark');
+          await _wheelTo(tester, hour: 9, minute: 20);
+          expect(find.text('结束时间必须晚于开始时间'), findsOneWidget);
+          expect(find.text('调整结束时间'), findsNothing);
+          expect(_saveButton(tester).onPressed, isNull);
+          expect(
+            tester
+                .getBottomLeft(
+                  find.byKey(const ValueKey<String>('time-entry-time-error')),
+                )
+                .dy,
+            lessThanOrEqualTo(
+              tester.getTopLeft(find.byType(TimeEntryWheelPicker)).dy,
+            ),
+          );
+          await _capture(tester, 'android-finish-invalid-time');
+          await _wheelTo(tester, hour: 10, minute: 25);
+          expect(find.text('调整结束时间'), findsOneWidget);
+          expect(find.text('共 1.08 小时'), findsOneWidget);
+          tester.view.physicalSize = const Size(360, 800);
+          fixture.media.value = const MediaQueryData(
+            size: Size(360, 800),
+            textScaler: TextScaler.linear(2),
+            viewInsets: EdgeInsets.only(bottom: 260),
+          );
+          await tester.pumpAndSettle();
+          await _enterActivity(tester, '未提交修改');
+          expect(tester.getRect(_saveControl()).bottom, lessThanOrEqualTo(540));
+          expect(
+            _dateButton(tester, 'start').value,
+            DateTime(2026, 10, 7, 9, 20),
+          );
+          expect(
+            _dateButton(tester, 'end').value,
+            DateTime(2026, 10, 7, 10, 25),
+          );
+          await _capture(tester, 'android-finish-large-text-keyboard');
+          await tester.tap(find.text('取消'));
+          await tester.pumpAndSettle();
+          // 取消只关闭界面，记录仍在进行且不写入草稿。
+          final TimeEntryRecord saved = await fixture.database
+              .select(fixture.database.timeEntries)
+              .getSingle();
+          expect(saved.endedAt, isNull);
+          expect(saved.activity, '仍在记录');
+          expect(tester.takeException(), isNull);
+        } finally {
+          await fixture.dispose(tester);
+        }
+      });
+
+      testWidgets('安卓结束记录提交时锁定关闭，失败保留进行中并可重试', (WidgetTester tester) async {
+        // 暂停第一次保存，以验证返回与取消不能打断在途提交。
+        final Completer<void> gate = Completer<void>();
+        // 第一次提交失败后仍复用原记录和输入重试。
+        final _DialogFixture fixture = await _pumpDialog(
+          tester,
+          platform: platform,
+          finishing: true,
+          saveGate: gate,
+          failFirstSave: true,
+          seed: TimeEntryDraft(
+            startedAt: DateTime(2026, 10, 7, 9, 20),
+            activity: '等待结束',
+          ),
+        );
+        try {
+          await _enterActivity(tester, '结束重试');
+          await tester.tap(_saveControl());
+          await tester.pump();
+          expect(_saveButton(tester).onPressed, isNull);
+          expect(
+            tester
+                .widget<OmniButton>(find.widgetWithText(OmniButton, '取消'))
+                .onPressed,
+            isNull,
+          );
+          await tester.binding.handlePopRoute();
+          await tester.pump();
+          expect(find.text('结束记录'), findsOneWidget);
+          gate.complete();
+          await tester.pumpAndSettle();
+          expect(find.text('保存失败，请重试'), findsOneWidget);
+          expect(find.text('结束重试'), findsOneWidget);
+          expect(
+            (await fixture.database
+                    .select(fixture.database.timeEntries)
+                    .getSingle())
+                .endedAt,
+            isNull,
+          );
+          await tester.tap(_saveControl());
+          await tester.pumpAndSettle();
+          expect(find.byType(Dialog), findsNothing);
+          expect(
+            (await fixture.database
+                    .select(fixture.database.timeEntries)
+                    .getSingle())
+                .endedAt,
+            _now,
+          );
+          expect(tester.takeException(), isNull);
+        } finally {
+          if (!gate.isCompleted) gate.complete();
+          await fixture.dispose(tester);
+        }
+      });
+    }
+
     // 默认空闲段覆盖缩短、当前占用、连续占用、跨日及秒级边界。
     for (final (String, List<TimeEntryDraft>, DateTime, DateTime, DateTime)
         scenario
@@ -1680,6 +1881,7 @@ Future<_DialogFixture> _pumpDialog(
   DateTime? now,
   Size? size,
   bool editing = false,
+  bool finishing = false,
   Completer<void>? defaultLoadGate,
   bool failFirstDefaultLoad = false,
   Completer<void>? saveGate,
@@ -1703,6 +1905,12 @@ Future<_DialogFixture> _pumpDialog(
   for (final TimeEntryDraft draft in seeds) {
     await tester.runAsync(() => TimeEntryRepository(database).save(draft));
   }
+  // 结束入口接收真实的进行中记录，保存时继续使用原有记录ID。
+  final TimeEntryRecord? finishingRecord = finishing
+      ? await tester.runAsync(
+          () => database.select(database.timeEntries).getSingle(),
+        )
+      : null;
   // 可覆盖凌晨场景的稳定当前时刻。
   final DateTime effectiveNow = now ?? _now;
   await tester.runAsync(
@@ -1767,11 +1975,16 @@ Future<_DialogFixture> _pumpDialog(
                 : Builder(
                     builder: (BuildContext context) => Center(
                       child: OmniButton(
-                        label: '打开补记',
-                        onPressed: () => showBackfillTimeEntryDialog(
-                          context,
-                          day: effectiveNow,
-                        ),
+                        label: finishing ? '打开结束' : '打开补记',
+                        onPressed: () => finishing
+                            ? showFinishTimeEntryDialog(
+                                context,
+                                record: finishingRecord!,
+                              )
+                            : showBackfillTimeEntryDialog(
+                                context,
+                                day: effectiveNow,
+                              ),
                       ),
                     ),
                   ),
@@ -1793,7 +2006,7 @@ Future<_DialogFixture> _pumpDialog(
     await tester.pumpAndSettle();
     await tester.tap(row);
   } else {
-    await tester.tap(find.text('打开补记'));
+    await tester.tap(find.text(finishing ? '打开结束' : '打开补记'));
   }
   if (defaultLoadGate != null && !defaultLoadGate.isCompleted) {
     await tester.pump(const Duration(milliseconds: 240));
@@ -1907,7 +2120,10 @@ Rect _sliderTrack(WidgetTester tester) {
 /// 通过当前平台实际操作文案定位保存控件。
 Finder _saveControl() => find.byWidgetPredicate(
   (Widget widget) =>
-      widget is OmniButton && (widget.label == '保存' || widget.label == '保存记录'),
+      widget is OmniButton &&
+      (widget.label == '保存' ||
+          widget.label == '保存记录' ||
+          widget.label == '结束并保存'),
 );
 
 /// 返回完整保存按钮状态。

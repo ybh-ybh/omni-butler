@@ -46,7 +46,7 @@
 | D08 | `_QuoteEditorDialog`；同上 | 新增/编辑、正文多行、作者、必填/保存状态 | 已接统一侧栏、表单字段和按钮 | `quote_library_dialog_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | D09 | `TodoEditorDialog`；`lib/features/todos/presentation/todo_editor_dialog.dart` | 新建/编辑/子任务、日期时间、提醒、重复规则、进度结构、重复系列范围、保存失败 | 统一侧栏和控件；时间设置外置标签、空值入口等宽与折叠摘要；进度设置基础字段并排、步骤行内操作/窄屏菜单、短列表完整展示、添加定位聚焦，均适配大字号 | `todo_editor_time_settings_test.dart`、`todo_progress_editor_layout_test.dart`、`todo_progress_ui_test.dart`、`todo_quadrant_ui_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化与中文宽窄屏预览通过；真机手感及完整人工矩阵待验 |
 | D10 | `_TimeEntryEditorDialog`；`lib/features/timeline/presentation/timeline_page.dart` | 区间编辑、日期/分类、备注、多段占用冲突、拖动范围、保存失败 | 共享侧栏/输入/选择；业务范围滑块与冲突图形保留 | `timeline_editor_test.dart`、`timeline_layout_test.dart` | 自动化通过；人工矩阵待验 |
-| D11 | `_AbsoluteTimeEntryDialog`；同上；`time_entry_time_picker.dart` | 半屏/全屏开始记录、完整补记/编辑、结束进行中、Android五分钟滚轮/跨日日期、时间冲突、类别逐项颜色、备注折叠 | Android 开始记录使用 Omni 可展开底部面板，横线独立拖拽/点击，顶部固定取消/开始；半屏只显示活动和类别，全屏才增加开始时间与描述，收起保留输入，键盘避让不改变展开状态；提交期间锁定关闭/拖拽。Android 新增补记与已完成记录编辑共用 OmniFullscreenFormScaffold 根导航全屏弹窗，顶部固定取消/居中业务标题/保存和灰色小时摘要，正文以时间卡片及活动/类别/备注分组呈现，保存期间保护返回、失败保留草稿；补记/已完成编辑保留 Android 双列时分滚轮与 Windows 精确输入/双手柄、连续跨日扩展、占用边界阻挡回弹和默认最近空闲段；共享日期/表单/下拉保留类别左侧色点；结束流程保留原遮罩关闭限制 | `start_time_entry_sheet_test.dart`、`time_entry_dialog_test.dart`、`time_entry_interval_test.dart`、`timeline_android_ui_test.dart`、`timeline_editor_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化、真实中文截图及 API 36 独立包交互通过；实体设备手感/读屏待验 |
+| D11 | `_AbsoluteTimeEntryDialog`；同上；`time_entry_time_picker.dart` | 半屏/全屏开始记录、完整补记/编辑、结束进行中、Android五分钟滚轮/跨日日期、时间冲突、类别逐项颜色、备注折叠 | Android 开始记录使用 Omni 可展开底部面板，横线独立拖拽/点击，顶部固定取消/开始；半屏只显示活动和类别，全屏才增加开始时间与描述，收起保留输入，键盘避让不改变展开状态；提交期间锁定关闭/拖拽。Android 新增补记、已完成记录编辑与结束记录共用 OmniFullscreenFormScaffold 根导航全屏弹窗，顶部固定取消/居中业务标题/保存和灰色小时摘要，正文以时间卡片及活动/类别/备注分组呈现，保存期间保护返回、失败保留草稿；补记/已完成编辑保留 Android 双列时分滚轮与 Windows 精确输入/双手柄、连续跨日扩展、占用边界阻挡回弹和默认最近空闲段；共享日期/表单/下拉保留类别左侧色点；安卓结束记录保持开始端只读、默认逐分钟调整结束端，并保留原关闭与保存保护 | `start_time_entry_sheet_test.dart`、`time_entry_dialog_test.dart`、`time_entry_interval_test.dart`、`timeline_android_ui_test.dart`、`timeline_editor_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化、真实中文截图及 API 36 独立包交互通过；实体设备手感/读屏待验 |
 | D12 | `_EventEditorDialog`；`lib/features/events/presentation/events_page.dart` | 新增/编辑、周期单位/间隔、提醒开关/时间、必填和保存失败 | 已接共享侧栏、表单、下拉、开关和按钮 | `events_layout_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
 | D13 | `_EventHistoryDialog`；同上 | 历史列表、分组、空态、编辑/删除记录 | 已接统一居中弹窗、操作菜单和确认/消息 | `events_layout_test.dart` | 自动化通过；人工矩阵待验 |
 | D14 | `_EventHistoryEditorDialog`；同上 | 历史时间、备注、保存/取消 | 已接统一居中弹窗、日期时间和文本字段 | `events_layout_test.dart`、`windows_dialog_enter_save_test.dart` | 自动化通过；人工矩阵待验 |
@@ -295,3 +295,11 @@
 - 图标使用可空icon_emoji完整字符串，本地DB22、同步结构7、本地快照7；旧快照补null，换服网络协议保持3。专用仓储只提交实际修改字段，保护颜色、排序、置顶、笔记关联及远端独立字段修改。部署需配套升级数据库、API、PowerSync配置和客户端，见服务端README。
 - 客户端数据/迁移/上传/认证8文件73项、PowerSync本地运行时10项通过；目录/浮层/整份笔记页3文件105项通过，追加键盘入口回归先失败后通过，标签相关19项复测通过。服务端真实隔离PostgreSQL及HTTP在内的211项测试通过；临时容器均已清理，MinIO相关20项跳过。
 - flutter analyze --no-pub及UI样式检查通过（29项既有例外，无新增绕过），Windows release构建通过。明暗真实中文及系统emoji字体截图已审查，位于output/note-tag-icons；普通测试未更新Golden。未启动PowerSync服务验证实际双客户端端到端同步，未做真实Windows输入法及辅助技术人工验收。
+
+## 2026-10-17 安卓结束记录与补记布局统一
+
+- 首页和时间页共用结束入口改为根导航全屏弹窗，复用补记的固定取消/居中“结束记录”/主题底白字保存、灰色小时摘要及时间/活动/类别/备注分组。
+- 开始日期和时间保持只读，首次默认调整结束端，保留逐分钟精度和跨日选择；时间错误替换滚轮上方提示。取消保留进行中，提交期间防重并禁止返回/取消，失败保留草稿重试，成功按原ID结束记录。
+- 补记/已完成编辑仍保留五分钟刻度和上次记录接续；Windows结束流程沿用原呈现。本轮未改仓储、数据库或同步。
+- 6个测试文件 **81项通过**（时间弹窗44项，首页/时间页入口、编辑闭环、共享全屏及Windows Enter共37项）；5个改动代码/测试文件定向分析与格式检查通过，样式检查29项受控例外无新增，diff检查通过。
+- 已查看浅色、深色、大字号键盘中文预览，位于`output/finish-time-entry-preview/`。日志：`apps/client/build/finish-time-entry-{tests,entrypoints,analyze,style}.log`。本轮未构建安装APK，实体设备体验待人工验收。

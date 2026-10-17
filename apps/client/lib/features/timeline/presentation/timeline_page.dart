@@ -65,9 +65,13 @@ Future<void> showFinishTimeEntryDialog(
   BuildContext context, {
   required TimeEntryRecord record,
 }) async {
+  // 安卓结束记录与补记共用覆盖根导航的全屏结构。
+  final bool fullscreen = Theme.of(context).platform == TargetPlatform.android;
   await showOmniDialog<void>(
     context: context,
     barrierDismissible: false,
+    useSafeArea: !fullscreen,
+    fullscreenDialog: fullscreen,
     builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
       mode: _TimeEntryEditorMode.finish,
       day: DateUtils.dateOnly(record.startedAt),
@@ -2254,13 +2258,16 @@ class _AbsoluteTimeEntryDialog extends ConsumerStatefulWidget {
 /// 使用绝对时间的居中时间记录弹窗状态。
 class _AbsoluteTimeEntryDialogState
     extends ConsumerState<_AbsoluteTimeEntryDialog> {
-  /// 安卓补记与已完成时间记录编辑共用全屏分组表单。
-  bool get _usesFullscreenCompletedEditor =>
-      widget.mode == _TimeEntryEditorMode.completed &&
+  /// 安卓补记、已完成记录编辑和结束记录共用全屏分组表单。
+  bool get _usesFullscreenRangeEditor =>
+      (widget.mode == _TimeEntryEditorMode.completed ||
+          widget.mode == _TimeEntryEditorMode.finish) &&
       Theme.of(context).platform == TargetPlatform.android;
 
   /// 安卓补记与已完成记录编辑共用常驻横幅和五分钟刻度。
-  bool get _usesPreviousEntryBanner => _usesFullscreenCompletedEditor;
+  bool get _usesPreviousEntryBanner =>
+      widget.mode == _TimeEntryEditorMode.completed &&
+      _usesFullscreenRangeEditor;
 
   /// 仅安卓开始记录使用可展开底部面板。
   bool get _usesExpandableSheet =>
@@ -2346,6 +2353,8 @@ class _AbsoluteTimeEntryDialogState
     // 待编辑记录。
     final TimeEntryRecord? record = widget.record;
     _startedAt = record?.startedAt ?? defaultStart;
+    // 结束记录保持开始端只读，滚轮首次打开即调整结束时刻。
+    _editingStart = widget.mode != _TimeEntryEditorMode.finish;
     _sliderDay = DateUtils.dateOnly(_startedAt);
     _endedAt = switch (widget.mode) {
       _TimeEntryEditorMode.finish =>
@@ -2456,7 +2465,7 @@ class _AbsoluteTimeEntryDialogState
     });
     // 受关闭保护的安卓编辑器须在提交成功后先解除返回拦截。
     final bool guardedEditor =
-        _usesExpandableSheet || _usesFullscreenCompletedEditor;
+        _usesExpandableSheet || _usesFullscreenRangeEditor;
     try {
       await ref
           .read(timeEntryRepositoryProvider)
@@ -2490,7 +2499,7 @@ class _AbsoluteTimeEntryDialogState
       _showError(error.message);
     } catch (error) {
       if (!guardedEditor) rethrow;
-      _showError(_usesFullscreenCompletedEditor ? '保存失败，请重试' : '开始记录失败，请重试');
+      _showError(_usesFullscreenRangeEditor ? '保存失败，请重试' : '开始记录失败，请重试');
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -2503,7 +2512,9 @@ class _AbsoluteTimeEntryDialogState
     if (!mounted) {
       return;
     }
-    if (widget.mode == _TimeEntryEditorMode.completed || _usesExpandableSheet) {
+    if (widget.mode == _TimeEntryEditorMode.completed ||
+        _usesFullscreenRangeEditor ||
+        _usesExpandableSheet) {
       setState(() => _saveError = message);
     } else {
       showOmniMessage(context, message: message, tone: OmniMessageTone.error);
@@ -2818,8 +2829,10 @@ class _AbsoluteTimeEntryDialogState
     final bool hasEndTime =
         widget.mode != _TimeEntryEditorMode.startOnly &&
         widget.mode != _TimeEntryEditorMode.ongoing;
-    // 已完成记录使用重构后的时间区间布局。
-    final bool completed = widget.mode == _TimeEntryEditorMode.completed;
+    // 已完成记录与安卓结束记录共用区间布局、时长摘要和冲突校验。
+    final bool usesRangeEditor =
+        widget.mode == _TimeEntryEditorMode.completed ||
+        _usesFullscreenRangeEditor;
     // 按平台选择输入方式，平板和窄桌面窗口保持各自交互。
     final bool usesWheel = Theme.of(context).platform == TargetPlatform.android;
     // 补记滑动条的基准自然日。
@@ -2837,7 +2850,7 @@ class _AbsoluteTimeEntryDialogState
         ? sliderEndMinute + 360
         : 2880;
     // 固定读取全部可选日期的记录，快速跨日扩展也不丢失阻挡边界。
-    final AsyncValue<List<TimeEntryRecord>> recordsState = completed
+    final AsyncValue<List<TimeEntryRecord>> recordsState = usesRangeEditor
         ? ref.watch(timeEntriesForRangeProvider(_recordRange))
         : const AsyncData<List<TimeEntryRecord>>(<TimeEntryRecord>[]);
     // 查询尚未准备好时不允许拖动或保存。
@@ -2846,7 +2859,7 @@ class _AbsoluteTimeEntryDialogState
     final List<TimeEntryRecord> sliderRecords =
         recordsState.asData?.value ?? const <TimeEntryRecord>[];
     // 投影到连续分钟轴的已占用区间。
-    final List<TimeEntryRecord> occupiedSliderRecords = completed
+    final List<TimeEntryRecord> occupiedSliderRecords = usesRangeEditor
         ? _relativeSliderRecords(
             records: sliderRecords,
             day: sliderDay,
@@ -2855,22 +2868,23 @@ class _AbsoluteTimeEntryDialogState
           )
         : const <TimeEntryRecord>[];
     // 当前滑动选择命中的冲突记录。
-    final TimeEntryRecord? sliderConflict = completed
+    final TimeEntryRecord? sliderConflict = usesRangeEditor
         ? _findTimeConflict(sliderRecords)
         : null;
     // 时间区间与手动输入均合法时才允许保存。
     final bool invalidTime =
-        completed &&
+        usesRangeEditor &&
         (!_endedAt.isAfter(_startedAt) || !_startInputValid || !_endInputValid);
     // 当前页面的活动内容输入，共用校验和原有输入提示。
     final Widget activityField = OmniTextFormField(
       key: const ValueKey<String>('time-entry-activity'),
       controller: _activityController,
-      autofocus: !completed && widget.mode != _TimeEntryEditorMode.startOnly,
-      decoration: _usesFullscreenCompletedEditor
+      autofocus:
+          !usesRangeEditor && widget.mode != _TimeEntryEditorMode.startOnly,
+      decoration: _usesFullscreenRangeEditor
           ? _groupedInputDecoration.copyWith(hintText: '做了什么')
           : InputDecoration(
-              labelText: completed
+              labelText: usesRangeEditor
                   ? null
                   : hasEndTime
                   ? '做了什么 *'
@@ -2886,10 +2900,10 @@ class _AbsoluteTimeEntryDialogState
     final Widget categoryField = OmniDropdownButtonFormField<String>(
       key: const ValueKey<String>('time-entry-category'),
       initialValue: currentCategory.isEmpty ? null : currentCategory,
-      decoration: _usesFullscreenCompletedEditor
+      decoration: _usesFullscreenRangeEditor
           ? _groupedInputDecoration
           : InputDecoration(
-              labelText: completed || _usesExpandableSheet ? null : '类别',
+              labelText: usesRangeEditor || _usesExpandableSheet ? null : '类别',
             ),
       hint: const Text('选择类别'),
       selectionIndicatorPosition:
@@ -3004,7 +3018,7 @@ class _AbsoluteTimeEntryDialogState
             ),
           )
         : SingleChildScrollView(
-            padding: _usesFullscreenCompletedEditor
+            padding: _usesFullscreenRangeEditor
                 ? const EdgeInsets.all(OmniSpacing.md)
                 : EdgeInsets.zero,
             child: Column(
@@ -3038,7 +3052,7 @@ class _AbsoluteTimeEntryDialogState
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: <Widget>[
-                        if (_usesFullscreenCompletedEditor) ...<Widget>[
+                        if (_usesFullscreenRangeEditor) ...<Widget>[
                           _backfillGroup(
                             child: _buildCompletedTimeSection(
                               usesWheel: usesWheel,
@@ -3070,7 +3084,7 @@ class _AbsoluteTimeEntryDialogState
                                   ),
                             ),
                           ],
-                        ] else if (completed) ...<Widget>[
+                        ] else if (usesRangeEditor) ...<Widget>[
                           _buildCompletedTimeSection(
                             usesWheel: usesWheel,
                             sliderDay: sliderDay,
@@ -3245,8 +3259,8 @@ class _AbsoluteTimeEntryDialogState
             invalidTime
         ? null
         : _save;
-    if (_usesFullscreenCompletedEditor) {
-      return _buildFullscreenCompletedEditor(
+    if (_usesFullscreenRangeEditor) {
+      return _buildFullscreenRangeEditor(
         child: editorBody,
         onSave: onSave,
         invalidTime: invalidTime,
@@ -3255,7 +3269,7 @@ class _AbsoluteTimeEntryDialogState
     return OmniDialogScaffold(
       key: const ValueKey<String>('time-entry-editor'),
       title: _title,
-      width: completed ? (usesWheel ? 440 : 680) : 620,
+      width: usesRangeEditor ? (usesWheel ? 440 : 680) : 620,
       onWindowsEnter: onSave,
       actions: <Widget>[
         OmniButton(
@@ -3364,7 +3378,7 @@ class _AbsoluteTimeEntryDialogState
   }
 
   /// 固定全屏弹窗顶部操作和居中时长，正文随键盘避让并独立滚动。
-  Widget _buildFullscreenCompletedEditor({
+  Widget _buildFullscreenRangeEditor({
     required Widget child,
     required VoidCallback? onSave,
     required bool invalidTime,
@@ -3378,8 +3392,16 @@ class _AbsoluteTimeEntryDialogState
       canPop: !_saving,
       child: OmniFullscreenFormScaffold(
         key: const ValueKey<String>('time-entry-editor'),
-        title: widget.record == null ? '补记' : '编辑时间记录',
-        primaryKey: const ValueKey<String>('time-entry-backfill-submit'),
+        title: widget.mode == _TimeEntryEditorMode.finish
+            ? '结束记录'
+            : widget.record == null
+            ? '补记'
+            : '编辑时间记录',
+        primaryKey: ValueKey<String>(
+          widget.mode == _TimeEntryEditorMode.finish
+              ? 'time-entry-finish-submit'
+              : 'time-entry-backfill-submit',
+        ),
         onPrimary: onSave,
         onCancel: _saving ? null : () => Navigator.of(context).pop(),
         loading: _saving,
@@ -3433,7 +3455,8 @@ class _AbsoluteTimeEntryDialogState
             _endedAt,
             DateTime(_startedAt.year, _startedAt.month, _startedAt.day + 1),
           ),
-      enabled: !_saving,
+      enabled:
+          !_saving && !(start && widget.mode == _TimeEntryEditorMode.finish),
       onSelect: () {
         FocusManager.instance.primaryFocus?.unfocus();
         setState(() => _editingStart = start);
@@ -3483,7 +3506,7 @@ class _AbsoluteTimeEntryDialogState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        if (!_usesFullscreenCompletedEditor)
+        if (!_usesFullscreenRangeEditor)
           Wrap(
             alignment: WrapAlignment.spaceBetween,
             crossAxisAlignment: WrapCrossAlignment.center,

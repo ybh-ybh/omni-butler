@@ -219,6 +219,7 @@ class _AndroidRecordingCardState extends ConsumerState<_AndroidRecordingCard>
             isScrollControlled: true,
             useSafeArea: true,
             backgroundColor: Colors.transparent,
+            sheetAnimationStyle: OmniMotion.androidModalStyle(context),
             builder: (context) => Material(
               color: OmniColors.of(context).paper,
               borderRadius: const BorderRadius.vertical(

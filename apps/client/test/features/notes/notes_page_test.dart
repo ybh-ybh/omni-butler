@@ -39,6 +39,7 @@ import 'package:omni_butler/features/notes/presentation/windows_note_search_bar.
 import 'package:omni_butler/features/notes/presentation/windows_note_search_filter.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart';
 import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
 import 'package:omni_butler/features/notes/audio/note_wav.dart';
@@ -52,6 +53,7 @@ part 'android_notes_scenarios.dart';
 part 'android_note_search_scenarios.dart';
 part 'android_note_composer_scenarios.dart';
 part 'android_note_actions_scenarios.dart';
+part 'android_note_sidebar_scenarios.dart';
 
 /// 全应用路径回归：所有音频接口都由替身接管。
 void main() {
@@ -121,6 +123,7 @@ void main() {
   androidSearchTests();
   androidComposerTests();
   androidNoteActionTests();
+  androidSidebarTests();
 
   testWidgets('Windows 统计、热力图、标签与搜索仅使用正式笔记', (tester) async {
     // Windows 真正页面与本机数据库，不访问外部设备。

@@ -527,6 +527,7 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
             isScrollControlled: true,
             useSafeArea: true,
             backgroundColor: Colors.transparent,
+            sheetAnimationStyle: OmniMotion.androidModalStyle(context),
             builder: (context) => PopScope<Set<String>>(
               canPop: false,
               onPopInvokedWithResult: (didPop, _) {
