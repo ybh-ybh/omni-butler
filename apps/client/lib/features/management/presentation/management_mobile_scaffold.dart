@@ -49,10 +49,16 @@ class ManagementMobileScaffold extends StatefulWidget {
   /// 展开后的完整自然高度统计内容。
   final Widget statistics;
 
-  /// 包含搜索和独立滚动列表的正文。
+  /// 搜索与筛选位于统计摘要之前，随正文协调滚出屏幕。
+  final Widget? toolbar;
+
+  /// 摘要右侧的低频管理操作。
+  final Widget? actions;
+
+  /// 独立滚动列表的正文。
   final Widget body;
 
-  /// 保留现有新增及管理菜单。
+  /// 当前分区唯一的新增主操作。
   final Widget? floatingActionButton;
 
   /// 创建移动管理页面。
@@ -61,6 +67,8 @@ class ManagementMobileScaffold extends StatefulWidget {
     required this.summary,
     required this.statistics,
     required this.body,
+    this.toolbar,
+    this.actions,
     this.floatingActionButton,
     super.key,
   });
@@ -303,6 +311,296 @@ class _ManagementMobileScaffoldState extends State<ManagementMobileScaffold>
         MediaQuery.viewInsetsOf(Scaffold.maybeOf(context)?.context ?? context)
                 .bottom >
             0;
+    // 统计面板与列表保持现有几何和展开手势。
+    final Widget panel = LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 摘要高度跟随系统字号，避免缩小文字。
+        final double capsule = math.max(
+          OmniSize.touch,
+          MediaQuery.textScalerOf(context).scale(14) * 1.5 + OmniSpacing.md,
+        );
+        // 标题与底部把手在极短视口中共享唯一可见标题触区。
+        final double header = math.min(capsule, constraints.maxHeight);
+        // 轻量摘要不再额外占用胶囊上下的留白。
+        final double collapsedHeight = header;
+        // 展开时为背景保留空间，短屏详情始终可以滚动。
+        final double limit = math.max(
+          collapsedHeight,
+          constraints.maxHeight * 0.7,
+        );
+        // 正常屏保留独立把手，极短屏通过标题收起。
+        final double handle = limit - collapsedHeight > OmniSize.touch * 2
+            ? OmniSize.touch
+            : 0;
+        // 实际展开高度受自然内容和可用空间双重约束。
+        final double expandedHeight = math.min(
+          limit,
+          collapsedHeight + _detailsHeight + handle,
+        );
+        _travel = math.max(1, expandedHeight - collapsedHeight);
+        // 当前统计面板占用高度，和正文平移严格相同。
+        final double height =
+            collapsedHeight + (expandedHeight - collapsedHeight) * progress;
+        // 背景保持收起时的固定布局高度。
+        final double bodyHeight = math.max(
+          0,
+          constraints.maxHeight - collapsedHeight,
+        );
+        return ClipRect(
+          child: Stack(
+            children: <Widget>[
+              Positioned(
+                key: const ValueKey<String>('management-body-layer'),
+                left: 0,
+                right: 0,
+                top: collapsedHeight,
+                height: bodyHeight,
+                child: Transform.translate(
+                  key: const ValueKey<String>('management-body-translation'),
+                  offset: Offset(0, height - collapsedHeight),
+                  child: ExcludeFocus(
+                    excluding: blocked,
+                    child: ExcludeSemantics(
+                      excluding: blocked,
+                      child: IgnorePointer(
+                        ignoring: blocked,
+                        child: widget.body,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              if (widget.floatingActionButton != null)
+                Positioned(
+                  key: const ValueKey<String>('management-floating-layer'),
+                  right: OmniSpacing.md,
+                  bottom: OmniSpacing.md,
+                  child: IgnorePointer(
+                    ignoring: hideFloating,
+                    child: ExcludeSemantics(
+                      excluding: hideFloating,
+                      child: Opacity(
+                        opacity: hideFloating ? 0 : 1,
+                        child: ExcludeFocus(
+                          excluding: hideFloating,
+                          child: widget.floatingActionButton!,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (blocked)
+                Positioned(
+                  key: const ValueKey<String>('management-scrim-layer'),
+                  left: 0,
+                  right: 0,
+                  // 遮罩铺满内容区，卡片四周与底部统一压暗，卡片仍在其上方。
+                  top: 0,
+                  bottom: 0,
+                  child: Semantics(
+                    button: true,
+                    label: '收起${widget.title}',
+                    onTap: () => unawaited(_settle(false)),
+                    child: GestureDetector(
+                      key: const ValueKey<String>('management-summary-scrim'),
+                      behavior: HitTestBehavior.opaque,
+                      // 读屏只暴露外层收起动作，不生成无效横滚操作。
+                      excludeFromSemantics: true,
+                      onTap: () => unawaited(_settle(false)),
+                      onHorizontalDragStart: _consumeHorizontal,
+                      child: ColoredBox(
+                        color: Colors.black.withValues(alpha: progress * 0.32),
+                      ),
+                    ),
+                  ),
+                ),
+              Positioned(
+                key: const ValueKey<String>('management-summary-layer'),
+                left: OmniSpacing.md,
+                right: OmniSpacing.md,
+                top: 0,
+                height: height,
+                child: GestureDetector(
+                  // 消费横滑不构成读屏操作，内部入口保留各自语义。
+                  excludeFromSemantics: true,
+                  onHorizontalDragStart: _consumeHorizontal,
+                  child: Material(
+                    key: const ValueKey<String>('management-summary-surface'),
+                    color: Color.lerp(
+                      colors.paper,
+                      colors.brandSoft,
+                      progress * 0.55,
+                    ),
+                    borderRadius: BorderRadius.circular(
+                      OmniRadius.dialog * progress,
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Stack(
+                      children: <Widget>[
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          top: header,
+                          height: math.max(
+                            0,
+                            expandedHeight - collapsedHeight - handle,
+                          ),
+                          child: IgnorePointer(
+                            ignoring: progress < 0.99,
+                            child: ExcludeSemantics(
+                              excluding: progress < 0.99,
+                              child: Opacity(
+                                opacity: progress,
+                                child: ScrollConfiguration(
+                                  behavior: ScrollConfiguration.of(context)
+                                      .copyWith(scrollbars: false),
+                                  child: Scrollbar(
+                                    controller: _detailsScroll,
+                                    thumbVisibility: true,
+                                    child: SingleChildScrollView(
+                                      key: const ValueKey<String>(
+                                        'management-summary-details',
+                                      ),
+                                      controller: _detailsScroll,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: OmniSpacing.md,
+                                      ),
+                                      child: _ManagementMeasure(
+                                        onSize: _measureDetails,
+                                        child: ExcludeFocus(
+                                          excluding: progress < 0.99,
+                                          child: widget.statistics,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (handle > 0)
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            height: handle,
+                            child: IgnorePointer(
+                              ignoring: progress < 0.99,
+                              child: ExcludeSemantics(
+                                excluding: progress < 0.99,
+                                child: Opacity(
+                                  opacity: progress,
+                                  child: _dragSurface(
+                                    key: const ValueKey<String>(
+                                      'management-summary-handle',
+                                    ),
+                                    label: '收起${widget.title}',
+                                    child: Center(
+                                      child: Container(
+                                        width: OmniSize.controlLarge,
+                                        height: OmniSpacing.xxs,
+                                        decoration: BoxDecoration(
+                                          color: colors.muted,
+                                          borderRadius: BorderRadius.circular(
+                                            OmniRadius.pill,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        Positioned(
+                          left: 0,
+                          right: widget.actions == null
+                              ? 0
+                              : OmniSize.touch * (1 - progress),
+                          top: 0,
+                          height: header,
+                          child: _dragSurface(
+                            key: const ValueKey<String>(
+                              'management-summary-toggle',
+                            ),
+                            label: '${blocked ? '收起' : '展开'}${widget.title}',
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: OmniSpacing.md * progress,
+                              ),
+                              child: Row(
+                                children: <Widget>[
+                                  Expanded(
+                                    child: Stack(
+                                      alignment: Alignment.centerLeft,
+                                      children: <Widget>[
+                                        ExcludeSemantics(
+                                          excluding: blocked,
+                                          child: Opacity(
+                                            opacity: 1 - progress,
+                                            child: IgnorePointer(
+                                              ignoring: blocked,
+                                              child: ExcludeFocus(
+                                                excluding: blocked,
+                                                child: widget.summary,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        if (blocked)
+                                          Opacity(
+                                            opacity: progress,
+                                            child: Text(
+                                              widget.title,
+                                              key: const ValueKey<String>(
+                                                'management-statistics-title',
+                                              ),
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleMedium,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                  ExcludeSemantics(
+                                    child: SizedBox(
+                                      key: const ValueKey<String>(
+                                        'management-summary-arrow',
+                                      ),
+                                      width: OmniSize.touch,
+                                      child: Icon(
+                                        blocked
+                                            ? Icons.keyboard_arrow_up_rounded
+                                            : Icons.keyboard_arrow_down_rounded,
+                                        color: colors.muted,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (widget.actions != null && !blocked)
+                          Positioned(
+                            right: 0,
+                            top: 0,
+                            width: OmniSize.touch,
+                            height: header,
+                            child: widget.actions!,
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
     return PopScope<Object?>(
       canPop: !_active || !blocked,
       onPopInvokedWithResult: (bool didPop, Object? result) {
@@ -310,295 +608,54 @@ class _ManagementMobileScaffoldState extends State<ManagementMobileScaffold>
       },
       child: ColoredBox(
         color: colors.paper,
-        child: LayoutBuilder(
-          builder: (BuildContext context, BoxConstraints constraints) {
-            // 胶囊高度跟随系统字号，避免缩小文字。
-            final double capsule = math.max(
-              OmniSize.touch,
-              MediaQuery.textScalerOf(context).scale(14) * 1.5 + OmniSpacing.md,
-            );
-            // 标题与底部把手在极短视口中共享唯一可见标题触区。
-            final double header = math.min(capsule, constraints.maxHeight);
-            // 面板在上下各留八像素，正文起点固定。
-            final double collapsedHeight = math.min(
-              constraints.maxHeight,
-              header + OmniSpacing.md,
-            );
-            // 展开时为背景保留空间，短屏详情始终可以滚动。
-            final double limit = math.max(
-              collapsedHeight,
-              constraints.maxHeight * 0.7,
-            );
-            // 正常屏保留独立把手，极短屏通过标题收起。
-            final double handle = limit - collapsedHeight > OmniSize.touch * 2
-                ? OmniSize.touch
-                : 0;
-            // 实际展开高度受自然内容和可用空间双重约束。
-            final double expandedHeight = math.min(
-              limit,
-              collapsedHeight + _detailsHeight + handle,
-            );
-            _travel = math.max(1, expandedHeight - collapsedHeight);
-            // 当前统计面板占用高度，和正文平移严格相同。
-            final double height =
-                collapsedHeight + (expandedHeight - collapsedHeight) * progress;
-            // 背景保持收起时的固定布局高度。
-            final double bodyHeight = math.max(
-              0,
-              constraints.maxHeight - collapsedHeight,
-            );
-            return ClipRect(
-              child: Stack(
-                children: <Widget>[
-                  Positioned(
-                    key: const ValueKey<String>('management-body-layer'),
-                    left: 0,
-                    right: 0,
-                    top: collapsedHeight,
-                    height: bodyHeight,
-                    child: Transform.translate(
-                      key: const ValueKey<String>(
-                        'management-body-translation',
-                      ),
-                      offset: Offset(0, height - collapsedHeight),
-                      child: ExcludeFocus(
-                        excluding: blocked,
-                        child: ExcludeSemantics(
-                          excluding: blocked,
-                          child: IgnorePointer(
-                            ignoring: blocked,
-                            child: widget.body,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (widget.floatingActionButton != null)
-                    Positioned(
-                      key: const ValueKey<String>('management-floating-layer'),
-                      right: OmniSpacing.md,
-                      bottom: OmniSpacing.md,
-                      child: IgnorePointer(
-                        ignoring: hideFloating,
-                        child: ExcludeSemantics(
-                          excluding: hideFloating,
-                          child: Opacity(
-                            opacity: hideFloating ? 0 : 1,
-                            child: ExcludeFocus(
-                              excluding: hideFloating,
-                              child: widget.floatingActionButton!,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (blocked)
-                    Positioned(
-                      key: const ValueKey<String>('management-scrim-layer'),
-                      left: 0,
-                      right: 0,
-                      // 遮罩铺满内容区，卡片四周与底部统一压暗，卡片仍在其上方。
-                      top: 0,
-                      bottom: 0,
-                      child: Semantics(
-                        button: true,
-                        label: '收起${widget.title}',
-                        onTap: () => unawaited(_settle(false)),
-                        child: GestureDetector(
-                          key: const ValueKey<String>(
-                            'management-summary-scrim',
-                          ),
-                          behavior: HitTestBehavior.opaque,
-                          // 读屏只暴露外层收起动作，不生成无效横滚操作。
-                          excludeFromSemantics: true,
-                          onTap: () => unawaited(_settle(false)),
-                          onHorizontalDragStart: _consumeHorizontal,
-                          child: ColoredBox(
-                            color: Colors.black.withValues(
-                              alpha: progress * 0.32,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  Positioned(
-                    key: const ValueKey<String>('management-summary-layer'),
-                    left: OmniSpacing.md,
-                    right: OmniSpacing.md,
-                    top: OmniSpacing.xs,
-                    height: math.max(0, height - OmniSpacing.md),
-                    child: GestureDetector(
-                      // 消费横滑不构成读屏操作，内部入口保留各自语义。
-                      excludeFromSemantics: true,
-                      onHorizontalDragStart: _consumeHorizontal,
-                      child: Material(
-                        key: const ValueKey<String>(
-                          'management-summary-surface',
-                        ),
-                        color: Color.lerp(
-                          colors.canvas,
-                          colors.brandSoft,
-                          progress * 0.55,
-                        ),
-                        borderRadius: BorderRadius.circular(
-                          capsule / 2 +
-                              (OmniRadius.dialog - capsule / 2) * progress,
-                        ),
-                        clipBehavior: Clip.antiAlias,
+        child: widget.toolbar == null
+            ? panel
+            : NestedScrollView(
+                key: const ValueKey<String>('management-coordinated-scroll'),
+                physics: blocked ? const NeverScrollableScrollPhysics() : null,
+                headerSliverBuilder:
+                    (BuildContext context, bool innerScrolled) => <Widget>[
+                      SliverToBoxAdapter(
                         child: Stack(
                           children: <Widget>[
-                            Positioned(
-                              left: 0,
-                              right: 0,
-                              top: header,
-                              height: math.max(
-                                0,
-                                expandedHeight - collapsedHeight - handle,
-                              ),
-                              child: IgnorePointer(
-                                ignoring: progress < 0.99,
-                                child: ExcludeSemantics(
-                                  excluding: progress < 0.99,
-                                  child: Opacity(
-                                    opacity: progress,
-                                    child: ScrollConfiguration(
-                                      behavior: ScrollConfiguration.of(context)
-                                          .copyWith(scrollbars: false),
-                                      child: Scrollbar(
-                                        controller: _detailsScroll,
-                                        thumbVisibility: true,
-                                        child: SingleChildScrollView(
-                                          key: const ValueKey<String>(
-                                            'management-summary-details',
-                                          ),
-                                          controller: _detailsScroll,
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: OmniSpacing.md,
-                                          ),
-                                          child: _ManagementMeasure(
-                                            onSize: _measureDetails,
-                                            child: ExcludeFocus(
-                                              excluding: progress < 0.99,
-                                              child: widget.statistics,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            if (handle > 0)
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                height: handle,
+                            ExcludeFocus(
+                              excluding: blocked,
+                              child: ExcludeSemantics(
+                                excluding: blocked,
                                 child: IgnorePointer(
-                                  ignoring: progress < 0.99,
-                                  child: ExcludeSemantics(
-                                    excluding: progress < 0.99,
-                                    child: Opacity(
-                                      opacity: progress,
-                                      child: _dragSurface(
-                                        key: const ValueKey<String>(
-                                          'management-summary-handle',
-                                        ),
-                                        label: '收起${widget.title}',
-                                        child: Center(
-                                          child: Container(
-                                            width: OmniSize.controlLarge,
-                                            height: OmniSpacing.xxs,
-                                            decoration: BoxDecoration(
-                                              color: colors.muted,
-                                              borderRadius:
-                                                  BorderRadius.circular(
-                                                    OmniRadius.pill,
-                                                  ),
-                                            ),
-                                          ),
-                                        ),
+                                  ignoring: blocked,
+                                  child: widget.toolbar!,
+                                ),
+                              ),
+                            ),
+                            if (blocked)
+                              Positioned.fill(
+                                child: Semantics(
+                                  button: true,
+                                  label: '收起${widget.title}',
+                                  onTap: () => unawaited(_settle(false)),
+                                  child: GestureDetector(
+                                    key: const ValueKey<String>(
+                                      'management-toolbar-scrim',
+                                    ),
+                                    excludeFromSemantics: true,
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () => unawaited(_settle(false)),
+                                    onHorizontalDragStart: _consumeHorizontal,
+                                    child: ColoredBox(
+                                      color: Colors.black.withValues(
+                                        alpha: progress * 0.32,
                                       ),
                                     ),
                                   ),
                                 ),
                               ),
-                            Positioned(
-                              left: 0,
-                              right: 0,
-                              top: 0,
-                              height: header,
-                              child: _dragSurface(
-                                key: const ValueKey<String>(
-                                  'management-summary-toggle',
-                                ),
-                                label:
-                                    '${blocked ? '收起' : '展开'}${widget.title}',
-                                child: Padding(
-                                  padding: const EdgeInsets.only(
-                                    left: OmniSpacing.md,
-                                  ),
-                                  child: Row(
-                                    children: <Widget>[
-                                      Expanded(
-                                        child: Stack(
-                                          alignment: Alignment.centerLeft,
-                                          children: <Widget>[
-                                            ExcludeSemantics(
-                                              excluding: blocked,
-                                              child: Opacity(
-                                                opacity: 1 - progress,
-                                                child: IgnorePointer(
-                                                  ignoring: blocked,
-                                                  child: ExcludeFocus(
-                                                    excluding: blocked,
-                                                    child: widget.summary,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                            if (blocked)
-                                              Opacity(
-                                                opacity: progress,
-                                                child: Text(
-                                                  widget.title,
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .titleMedium,
-                                                ),
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-                                      ExcludeSemantics(
-                                        child: SizedBox(
-                                          width: OmniSize.touch,
-                                          child: Icon(
-                                            blocked
-                                                ? Icons
-                                                      .keyboard_arrow_up_rounded
-                                                : Icons
-                                                      .keyboard_arrow_down_rounded,
-                                            color: colors.muted,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
                           ],
                         ),
                       ),
-                    ),
-                  ),
-                ],
+                    ],
+                body: panel,
               ),
-            );
-          },
-        ),
       ),
     );
   }
@@ -695,7 +752,7 @@ class ManagementSummaryLine extends StatelessWidget {
                   ),
                 ],
               ),
-              style: Theme.of(context).textTheme.bodyMedium,
+              style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
         ],
@@ -742,7 +799,7 @@ class ManagementSearchToolbar extends StatelessWidget {
   /// 可单独移除的已应用条件。
   final List<ManagementFilterSelection> filters;
 
-  /// 创建常驻搜索行。
+  /// 创建可随正文滚动离屏的搜索行。
   const ManagementSearchToolbar({
     required this.controller,
     required this.hintText,
@@ -754,75 +811,141 @@ class ManagementSearchToolbar extends StatelessWidget {
     super.key,
   });
 
-  /// 让搜索拥有剩余宽度，已选条件只在存在时占据第二行。
+  /// 搜索和筛选共用浅底容器，已选条件才占据第二行。
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(
-      OmniSpacing.md,
-      0,
-      OmniSpacing.md,
-      OmniSpacing.xs,
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: OmniTextField(
-                key: const ValueKey<String>('management-search'),
-                controller: controller,
-                onChanged: onChanged,
-                textInputAction: TextInputAction.search,
-                onSubmitted: (String _) =>
-                    FocusManager.instance.primaryFocus?.unfocus(),
-                decoration: InputDecoration(
-                  hintText: hintText,
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: controller.text.isEmpty
-                      ? null
-                      : OmniIconButton(
-                          tooltip: '清空搜索',
-                          onPressed: onClear,
-                          icon: const Icon(Icons.close_rounded),
-                        ),
+  Widget build(BuildContext context) {
+    // 当前主题语义色。
+    final OmniColors colors = OmniColors.of(context);
+    // 标准底色由56dp缩短20%，大字号按文字高度自然扩展。
+    final double height = math.max(
+      (OmniSize.touch + OmniSpacing.xs) * 0.8,
+      MediaQuery.textScalerOf(context).scale(16) * 1.5 + OmniSpacing.xs,
+    );
+    // 底色与触控热区独立，筛选和清空仍有至少48dp触区。
+    final double touchHeight = math.max(OmniSize.touch, height);
+    // 提示与输入共享字号和行高，避免仅按基线对齐造成提示偏上。
+    final TextStyle? textStyle = Theme.of(context).textTheme.bodyMedium;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        OmniSpacing.md,
+        OmniSpacing.xs,
+        OmniSpacing.md,
+        0,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Stack(
+            alignment: Alignment.center,
+            children: <Widget>[
+              Positioned.fill(
+                child: Center(
+                  child: Container(
+                    key: const ValueKey<String>('management-search-surface'),
+                    height: height,
+                    decoration: BoxDecoration(
+                      color: colors.canvas,
+                      borderRadius: BorderRadius.circular(height / 2),
+                    ),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: OmniSpacing.xs),
-            Semantics(
-              label: '筛选，已选 $filterCount 项',
-              child: OmniButton(
-                key: const ValueKey<String>('management-filter-button'),
-                label: filterCount == 0 ? '筛选' : '筛选 $filterCount',
-                variant: OmniButtonVariant.text,
-                onPressed: () {
-                  FocusManager.instance.primaryFocus?.unfocus();
-                  onFilter();
-                },
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: OmniTextField(
+                      key: const ValueKey<String>('management-search'),
+                      controller: controller,
+                      onChanged: onChanged,
+                      textInputAction: TextInputAction.search,
+                      textAlignVertical: TextAlignVertical.center,
+                      style: textStyle,
+                      onSubmitted: (String _) =>
+                          FocusManager.instance.primaryFocus?.unfocus(),
+                      decoration: InputDecoration(
+                        hintText: hintText,
+                        hintStyle: textStyle?.copyWith(color: colors.muted),
+                        constraints: BoxConstraints.tightFor(
+                          height: touchHeight,
+                        ),
+                        isDense: true,
+                        contentPadding: EdgeInsets.zero,
+                        filled: false,
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        disabledBorder: InputBorder.none,
+                        prefixIconConstraints: BoxConstraints(
+                          minWidth: OmniSize.touch,
+                          minHeight: touchHeight,
+                        ),
+                        suffixIconConstraints: BoxConstraints(
+                          minWidth: OmniSize.touch,
+                          minHeight: touchHeight,
+                        ),
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        suffixIcon: controller.text.isEmpty
+                            ? null
+                            : OmniIconButton(
+                                tooltip: '清空搜索',
+                                onPressed: onClear,
+                                icon: const Icon(Icons.close_rounded),
+                              ),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: OmniSpacing.xxs),
+                    child: OmniIconButton(
+                      key: const ValueKey<String>('management-filter-button'),
+                      tooltip: '筛选，已选 $filterCount 项',
+                      color: filterCount > 0
+                          ? colors.brandStrong
+                          : colors.muted,
+                      icon: Badge(
+                        isLabelVisible: filterCount > 0,
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        textColor: Theme.of(context).colorScheme.onPrimary,
+                        label: Text('$filterCount'),
+                        child: const Icon(Icons.tune_rounded),
+                      ),
+                      onPressed: () {
+                        FocusManager.instance.primaryFocus?.unfocus();
+                        onFilter();
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (filters.isNotEmpty)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: <Widget>[
+                  for (final ManagementFilterSelection filter in filters)
+                    Padding(
+                      padding: const EdgeInsets.only(right: OmniSpacing.xs),
+                      child: OmniFilterChip(
+                        label: Text(filter.label),
+                        selected: true,
+                        showCheckmark: false,
+                        onSelected: (bool _) => filter.onDeleted(),
+                        onDeleted: filter.onDeleted,
+                        deleteIcon: const Icon(Icons.close_rounded),
+                        deleteButtonTooltipMessage: '移除${filter.label}筛选',
+                        materialTapTargetSize: MaterialTapTargetSize.padded,
+                      ),
+                    ),
+                ],
               ),
             ),
-          ],
-        ),
-        if (filters.isNotEmpty)
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: <Widget>[
-                for (final ManagementFilterSelection filter in filters)
-                  OmniButton(
-                    label: filter.label,
-                    icon: Icons.close_rounded,
-                    variant: OmniButtonVariant.text,
-                    onPressed: filter.onDeleted,
-                  ),
-              ],
-            ),
-          ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 }
 
 /// 打开局部草稿筛选，关闭不改变已应用的条件。
@@ -886,23 +1009,51 @@ class _ManagementFilterSheetState<T> extends State<_ManagementFilterSheet<T>> {
         key: const ValueKey<String>('management-filter-sheet'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.md),
-            child: Row(
-              children: <Widget>[
-                Expanded(
-                  child: Text(
-                    '筛选',
-                    style: Theme.of(context).textTheme.titleMedium,
+          Stack(
+            key: const ValueKey<String>('management-filter-header'),
+            alignment: Alignment.center,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: OmniSize.touch * 2,
+                ),
+                child: Text(
+                  '筛选',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              Row(
+                children: <Widget>[
+                  OmniIconButton(
+                    tooltip: '取消筛选',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: Icon(
+                      Icons.keyboard_arrow_down,
+                      color: OmniColors.of(context).ink,
+                    ),
                   ),
-                ),
-                OmniIconButton(
-                  tooltip: '取消筛选',
-                  onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.close_rounded),
-                ),
-              ],
-            ),
+                  const Spacer(),
+                  if (_draft != widget.resetValue)
+                    OmniIconButton(
+                      tooltip: '重置筛选',
+                      onPressed: () =>
+                          setState(() => _draft = widget.resetValue),
+                      icon: Icon(
+                        Icons.restart_alt,
+                        color: OmniColors.of(context).ink,
+                      ),
+                    ),
+                  OmniIconButton(
+                    tooltip: '应用筛选',
+                    onPressed: () => Navigator.of(context).pop(_draft),
+                    icon: Icon(
+                      Icons.check,
+                      color: OmniColors.of(context).brand,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
           const Divider(height: 1),
           Expanded(
@@ -913,28 +1064,6 @@ class _ManagementFilterSheetState<T> extends State<_ManagementFilterSheet<T>> {
                 _draft,
                 (T value) => setState(() => _draft = value),
               ),
-            ),
-          ),
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.all(OmniSpacing.md),
-            child: Row(
-              children: <Widget>[
-                Expanded(
-                  child: OmniButton(
-                    label: '重置',
-                    variant: OmniButtonVariant.secondary,
-                    onPressed: () => setState(() => _draft = widget.resetValue),
-                  ),
-                ),
-                const SizedBox(width: OmniSpacing.sm),
-                Expanded(
-                  child: OmniButton(
-                    label: '应用',
-                    onPressed: () => Navigator.of(context).pop(_draft),
-                  ),
-                ),
-              ],
             ),
           ),
         ],
@@ -968,6 +1097,7 @@ class ManagementFilterOption extends StatelessWidget {
     selected: selected,
     child: OmniButton(
       label: label,
+      visualHeight: OmniSize.control,
       onPressed: onSelected,
       variant: selected
           ? OmniButtonVariant.primary

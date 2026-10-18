@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:ui' show SemanticsRole;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,7 +22,7 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 /// 物品网格列数的本机偏好键。
 const String _inventoryColumnsPreferenceKey = 'inventory.layout_columns';
 
-/// Android 物品新增拆分按钮中的次要操作。
+/// Android 物品页顶部更多菜单中的次要操作。
 enum _InventoryQuickAction {
   /// 打开一键搬家工作台。
   move,
@@ -536,26 +535,55 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
           },
         ),
         statistics: statistics,
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            toolbar,
-            Expanded(child: records),
-          ],
+        toolbar: toolbar,
+        body: records,
+        actions: OmniPopupMenuButton<_InventoryQuickAction>(
+          key: const ValueKey<String>('inventory-mobile-more-actions'),
+          tooltip: '更多物品操作',
+          icon: const Icon(Icons.more_vert_rounded),
+          itemBuilder: (BuildContext context) =>
+              <PopupMenuEntry<_InventoryQuickAction>>[
+                OmniPopupMenuItem<_InventoryQuickAction>(
+                  value: _InventoryQuickAction.move,
+                  label: '一键搬家',
+                  icon: Icons.local_shipping_outlined,
+                ),
+                OmniPopupMenuItem<_InventoryQuickAction>(
+                  value: _InventoryQuickAction.manageTags,
+                  label: '管理标签',
+                  icon: Icons.sell_outlined,
+                ),
+                OmniPopupMenuItem<_InventoryQuickAction>(
+                  value: _InventoryQuickAction.manageLocation,
+                  label: '管理位置',
+                  icon: Icons.place_outlined,
+                ),
+              ],
+          onSelected: (_InventoryQuickAction action) {
+            switch (action) {
+              case _InventoryQuickAction.move:
+                _openMoveDialog();
+              case _InventoryQuickAction.manageTags:
+                TaxonomyManagerDialog.show(
+                  context,
+                  module: TaxonomyModule.inventory,
+                  kind: TaxonomyKind.tag,
+                );
+              case _InventoryQuickAction.manageLocation:
+                TaxonomyManagerDialog.show(
+                  context,
+                  module: TaxonomyModule.inventory,
+                  kind: TaxonomyKind.location,
+                );
+            }
+          },
         ),
-        floatingActionButton: _InventoryCreateSplitButton(
-          onCreate: _openEditor,
-          onMove: _openMoveDialog,
-          onManageTags: () => TaxonomyManagerDialog.show(
-            context,
-            module: TaxonomyModule.inventory,
-            kind: TaxonomyKind.tag,
-          ),
-          onManageLocation: () => TaxonomyManagerDialog.show(
-            context,
-            module: TaxonomyModule.inventory,
-            kind: TaxonomyKind.location,
-          ),
+        floatingActionButton: OmniButton(
+          key: const ValueKey<String>('inventory-mobile-create'),
+          label: '新增物品',
+          icon: Icons.add_rounded,
+          variant: OmniButtonVariant.pagePrimary,
+          onPressed: _openEditor,
         ),
       );
     }
@@ -599,395 +627,6 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                 vertical: OmniSpacing.sm,
               ),
         child: pageContent,
-      ),
-    );
-  }
-}
-
-/// Android 管理页右下角的物品新增拆分按钮。
-class _InventoryCreateSplitButton extends StatefulWidget {
-  /// 执行新增物品的主操作。
-  final VoidCallback onCreate;
-
-  /// 打开一键搬家工作台的回调。
-  final VoidCallback onMove;
-
-  /// 打开物品标签管理器的回调。
-  final VoidCallback onManageTags;
-
-  /// 打开物品位置管理器的回调。
-  final VoidCallback onManageLocation;
-
-  /// 创建物品新增拆分按钮。
-  const _InventoryCreateSplitButton({
-    required this.onCreate,
-    required this.onMove,
-    required this.onManageTags,
-    required this.onManageLocation,
-  });
-
-  /// 创建并维护菜单展开状态。
-  @override
-  State<_InventoryCreateSplitButton> createState() =>
-      _InventoryCreateSplitButtonState();
-}
-
-/// 将菜单生命周期与三横线图标动画同步。
-class _InventoryCreateSplitButtonState
-    extends State<_InventoryCreateSplitButton> {
-  /// 当前次要操作菜单是否展开。
-  bool _menuOpen = false;
-
-  /// 在拆分按钮上方显示右对齐的窄菜单，并从底边向上展开。
-  Future<void> _showActions(BuildContext context) async {
-    if (_menuOpen) {
-      return;
-    }
-    // 完整拆分按钮的实际渲染区域。
-    final RenderBox button = context.findRenderObject()! as RenderBox;
-    // 根导航浮层用于统一弹出菜单和按钮的坐标。
-    final RenderBox overlay =
-        Navigator.of(
-              context,
-              rootNavigator: true,
-            ).overlay!.context.findRenderObject()!
-            as RenderBox;
-    // 按钮在根浮层中的边界。
-    final Rect anchor =
-        button.localToGlobal(Offset.zero, ancestor: overlay) & button.size;
-    // 菜单比整个按钮窄 8px，且与按钮右边缘对齐。
-    final double menuWidth = anchor.width - OmniSpacing.xs;
-    // 用户的减少动画偏好。
-    final bool reduceMotion = OmniMotion.reduce(context);
-    setState(() => _menuOpen = true);
-    // 用户选中的次要操作；点击外部或返回时为空。
-    final _InventoryQuickAction?
-    action = await showGeneralDialog<_InventoryQuickAction>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
-      barrierColor: Colors.transparent,
-      transitionDuration: reduceMotion ? Duration.zero : OmniMotion.normal,
-      transitionBuilder: (_, _, _, Widget child) => child,
-      pageBuilder:
-          (
-            BuildContext menuContext,
-            Animation<double> animation,
-            Animation<double> secondaryAnimation,
-          ) {
-            // 当前主题的菜单背景和描边色。
-            final OmniColors colors = OmniColors.of(menuContext);
-            // 展开进度使用统一减速曲线，收起时反向播放。
-            final Animation<double> progress = animation.drive(
-              CurveTween(curve: OmniMotion.standardCurve),
-            );
-            // 菜单轻微上移，同时始终保留与按钮之间的间隙。
-            final Animation<Offset> slide = Tween<Offset>(
-              begin: const Offset(0, 0.04),
-              end: Offset.zero,
-            ).animate(progress);
-            return Stack(
-              children: <Widget>[
-                Positioned(
-                  right: overlay.size.width - anchor.right,
-                  bottom: overlay.size.height - anchor.top + OmniSpacing.xs,
-                  width: menuWidth,
-                  child: FadeTransition(
-                    key: const ValueKey<String>(
-                      'inventory-mobile-actions-fade',
-                    ),
-                    opacity: progress,
-                    child: SizeTransition(
-                      key: const ValueKey<String>(
-                        'inventory-mobile-actions-expand',
-                      ),
-                      sizeFactor: progress,
-                      alignment: Alignment.bottomRight,
-                      child: SlideTransition(
-                        position: slide,
-                        child: Semantics(
-                          role: SemanticsRole.menu,
-                          explicitChildNodes: true,
-                          child: Material(
-                            key: const ValueKey<String>(
-                              'inventory-mobile-actions-menu',
-                            ),
-                            color: colors.paper,
-                            elevation: 4,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(
-                                OmniRadius.panel,
-                              ),
-                              side: BorderSide(color: colors.line),
-                            ),
-                            clipBehavior: Clip.antiAlias,
-                            child: ConstrainedBox(
-                              constraints: BoxConstraints(
-                                maxHeight: math.max(
-                                  0,
-                                  anchor.top -
-                                      MediaQuery.paddingOf(menuContext).top -
-                                      OmniSpacing.md,
-                                ),
-                              ),
-                              child: SingleChildScrollView(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: OmniSpacing.xxs,
-                                ),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: <Widget>[
-                                    SizedBox(
-                                      height: OmniSize.touch,
-                                      child:
-                                          OmniPopupMenuItem<
-                                            _InventoryQuickAction
-                                          >(
-                                            value: _InventoryQuickAction.move,
-                                            label: '一键搬家',
-                                            icon: Icons.local_shipping_outlined,
-                                          ),
-                                    ),
-                                    Divider(
-                                      height: 1,
-                                      thickness: 1,
-                                      indent: OmniSpacing.sm,
-                                      endIndent: OmniSpacing.sm,
-                                      color: colors.line,
-                                    ),
-                                    SizedBox(
-                                      height: OmniSize.touch,
-                                      child:
-                                          OmniPopupMenuItem<
-                                            _InventoryQuickAction
-                                          >(
-                                            value: _InventoryQuickAction
-                                                .manageTags,
-                                            label: '管理标签',
-                                            icon: Icons.sell_outlined,
-                                          ),
-                                    ),
-                                    Divider(
-                                      height: 1,
-                                      thickness: 1,
-                                      indent: OmniSpacing.sm,
-                                      endIndent: OmniSpacing.sm,
-                                      color: colors.line,
-                                    ),
-                                    SizedBox(
-                                      height: OmniSize.touch,
-                                      child:
-                                          OmniPopupMenuItem<
-                                            _InventoryQuickAction
-                                          >(
-                                            value: _InventoryQuickAction
-                                                .manageLocation,
-                                            label: '管理位置',
-                                            icon: Icons.place_outlined,
-                                          ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            );
-          },
-    );
-    if (!context.mounted) {
-      return;
-    }
-    setState(() => _menuOpen = false);
-    switch (action) {
-      case _InventoryQuickAction.move:
-        widget.onMove();
-      case _InventoryQuickAction.manageTags:
-        widget.onManageTags();
-      case _InventoryQuickAction.manageLocation:
-        widget.onManageLocation();
-      case null:
-        break;
-    }
-  }
-
-  /// 构建共享容器、主操作与次要操作菜单。
-  @override
-  Widget build(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
-    // 拆分按钮的统一圆角。
-    final BorderRadius borderRadius = BorderRadius.circular(OmniRadius.panel);
-    return SizedBox(
-      key: const ValueKey<String>('inventory-mobile-create-split'),
-      height: OmniSize.touch,
-      child: Material(
-        color: colors.brandSoft,
-        borderRadius: borderRadius,
-        clipBehavior: Clip.antiAlias,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Semantics(
-              button: true,
-              label: '新增物品',
-              onTap: widget.onCreate,
-              child: ExcludeSemantics(
-                child: OmniInkWell(
-                  key: const ValueKey<String>('inventory-mobile-create'),
-                  onTap: widget.onCreate,
-                  child: SizedBox(
-                    height: OmniSize.touch,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 6, right: 14),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          Container(
-                            width: 24,
-                            height: 24,
-                            decoration: BoxDecoration(
-                              color: colors.brand,
-                              borderRadius: BorderRadius.circular(
-                                OmniRadius.control,
-                              ),
-                            ),
-                            alignment: Alignment.center,
-                            child: Icon(
-                              Icons.add_rounded,
-                              size: 16,
-                              color: colors.accentInk,
-                            ),
-                          ),
-                          const SizedBox(width: OmniSpacing.xs),
-                          Text(
-                            '新增',
-                            style: Theme.of(context).textTheme.labelLarge
-                                ?.copyWith(
-                                  color: colors.brandStrong,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w400,
-                                ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(
-              width: 1,
-              height: 24,
-              child: ColoredBox(color: colors.brand.withValues(alpha: 0.20)),
-            ),
-            SizedBox.square(
-              dimension: OmniSize.touch,
-              child: MergeSemantics(
-                child: Semantics(
-                  label: '更多物品操作',
-                  child: OmniIconButton(
-                    key: const ValueKey<String>(
-                      'inventory-mobile-more-actions',
-                    ),
-                    tooltip: '更多物品操作',
-                    onPressed: () => _showActions(context),
-                    style: IconButton.styleFrom(
-                      shape: const RoundedRectangleBorder(),
-                    ),
-                    icon: _InventoryMenuToggleIcon(
-                      expanded: _menuOpen,
-                      color: colors.brandStrong,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 按参考动画将三条圆角横线转换为叉号，保留现有图标尺寸和颜色。
-class _InventoryMenuToggleIcon extends StatelessWidget {
-  /// 菜单是否展开。
-  final bool expanded;
-
-  /// 沿用拆分按钮的图标颜色。
-  final Color color;
-
-  /// 创建菜单开关图标。
-  const _InventoryMenuToggleIcon({required this.expanded, required this.color});
-
-  /// 构建 500ms 的横线旋转、位移和收缩动画。
-  @override
-  Widget build(BuildContext context) {
-    // 参考样式的 3em 宽度映射到既有图标尺寸。
-    const double unit = OmniSize.icon / 3;
-    return SizedBox.square(
-      key: const ValueKey<String>('inventory-mobile-toggle-icon'),
-      dimension: OmniSize.icon,
-      child: TweenAnimationBuilder<double>(
-        tween: Tween<double>(begin: 0, end: expanded ? 1 : 0),
-        duration: MediaQuery.disableAnimationsOf(context)
-            ? Duration.zero
-            : const Duration(milliseconds: 500),
-        curve: const Cubic(0.25, 0.1, 0.25, 1),
-        builder: (BuildContext context, double progress, Widget? child) {
-          return Center(
-            child: SizedBox(
-              width: OmniSize.icon,
-              height: 2.3 * unit,
-              child: Stack(
-                children: <Widget>[
-                  for (int index = 0; index < 3; index += 1)
-                    Positioned(
-                      top: index * unit,
-                      left: 0,
-                      child: Transform(
-                        key: ValueKey<String>(
-                          'inventory-mobile-toggle-line-$index',
-                        ),
-                        alignment: index == 2
-                            ? Alignment.centerLeft
-                            : Alignment.center,
-                        transform: index == 2
-                            ? Matrix4.diagonal3Values(1 - progress, 1, 1)
-                            : (Matrix4.identity()
-                                ..rotateZ(
-                                  (index == 0 ? 1 : -1) *
-                                      math.pi /
-                                      4 *
-                                      progress,
-                                )
-                                ..translateByDouble(
-                                  (index == 0 ? 0.7 : 0.1) * unit * progress,
-                                  (index == 0 ? 0.7 : 0) * unit * progress,
-                                  0,
-                                  1,
-                                )),
-                        child: Container(
-                          width: OmniSize.icon,
-                          height: 0.3 * unit,
-                          decoration: BoxDecoration(
-                            color: color,
-                            borderRadius: BorderRadius.circular(10 * unit),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          );
-        },
       ),
     );
   }
@@ -1081,7 +720,7 @@ class _InventoryToolbar extends StatelessWidget {
     if (embeddedInManagement) {
       return ManagementSearchToolbar(
         controller: searchController,
-        hintText: '搜索名称、分类、位置或标签',
+        hintText: '搜索物品',
         onChanged: onSearchChanged,
         onClear: onClearSearch,
         onFilter: () => _openMobileFilters(context),

@@ -45,7 +45,10 @@ void main() {
     expect(find.text('更换滤芯'), findsOneWidget);
     expect(find.text('检查药箱'), findsOneWidget);
     expect(
-      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      tester
+          .widget<TextField>(find.byType(TextField, skipOffstage: false))
+          .controller!
+          .text,
       '',
     );
     expect(tester.takeException(), isNull);
@@ -76,7 +79,7 @@ void main() {
     await _openFilter(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ManagementFilterOption, '已归档'));
-    await tester.tap(find.text('应用'));
+    await tester.tap(find.byTooltip('应用筛选'));
     await tester.pumpAndSettle();
     expect(find.text('旧证件整理'), findsOneWidget);
     expect(find.text('更换滤芯'), findsNothing);
@@ -185,7 +188,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('没有符合条件的事件'), findsNothing);
     expect(
-      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      tester
+          .widget<TextField>(find.byType(TextField, skipOffstage: false))
+          .controller!
+          .text,
       isEmpty,
     );
     expect(tester.takeException(), isNull);

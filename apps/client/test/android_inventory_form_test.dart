@@ -172,11 +172,11 @@ void main() {
       );
       await _openInventoryCreate(tester);
       // 键盘和滚动只改变正文可用高度，顶部操作仍可触达。
-      final Rect header = tester.getRect(find.text('新增物品'));
+      final Rect header = tester.getRect(find.text('新增物品').hitTestable());
       await _enterInventory(tester, 'inventory-create-name', '布局检查');
       tester.view.viewInsets = const FakeViewPadding(bottom: 240);
       await tester.pumpAndSettle();
-      expect(tester.getRect(find.text('新增物品')), header);
+      expect(tester.getRect(find.text('新增物品').hitTestable()), header);
       expect(_key('inventory-create-submit').hitTestable(), findsOneWidget);
       expect(find.text('取消').hitTestable(), findsOneWidget);
       await _toggleInventorySupplement(tester);

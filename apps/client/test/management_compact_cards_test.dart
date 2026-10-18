@@ -11,12 +11,13 @@ import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/events/data/event_repository.dart';
 import 'package:omni_butler/features/inventory/data/inventory_repository.dart';
 import 'package:omni_butler/features/memberships/data/membership_repository.dart';
+import 'package:omni_butler/features/management/presentation/management_mobile_scaffold.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证 Android 管理页三类平铺记录、固定摘要及展开与筛选视觉基线。
 void main() {
-  testWidgets('安卓管理三分区平铺、固定搜索、独立滚动与九种视觉状态', (WidgetTester tester) async {
+  testWidgets('安卓管理三分区平铺、搜索随滚动退出、独立滚动与九种视觉状态', (WidgetTester tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
@@ -248,7 +249,7 @@ void main() {
         }
         expect(tester.takeException(), isNull);
         await _scrollToTop(tester, list);
-        await _expectFixedSummaryAndSearch(tester, list);
+        await _expectScrollingSearch(tester, list);
         if (viewport.scale == 2) {
           await _exerciseExpandedAndFilter(tester);
           expect(tester.takeException(), isNull);
@@ -276,6 +277,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(_visibleKey('management-filter-button'));
       await tester.pumpAndSettle();
+      await _expectCompactFilterButtons(tester);
       await expectLater(
         find.byType(OmniButlerApp),
         matchesGoldenFile(
@@ -340,36 +342,56 @@ Future<void> _revealRecord(
 
 /// 截图前恢复列表首屏，避免确保可见动作改变视觉基线。
 Future<void> _scrollToTop(WidgetTester tester, Finder list) async {
+  // 外层搜索和内层记录分别归零，避免上一轮滚动影响截图。
+  final NestedScrollViewState coordinated = tester.state<NestedScrollViewState>(
+    find.descendant(
+      of: find.byWidgetPredicate(
+        (Widget widget) => widget is ManagementMobileScope && widget.active,
+      ),
+      matching: _key('management-coordinated-scroll'),
+    ),
+  );
   _listPosition(tester, list).jumpTo(0);
+  coordinated.outerController.jumpTo(0);
   await tester.pumpAndSettle();
 }
 
-/// 纵向滚动只移动列表，摘要与搜索均保持在原位置。
-Future<void> _expectFixedSummaryAndSearch(
-  WidgetTester tester,
-  Finder list,
-) async {
-  // 当前摘要的固定顶部位置。
-  final double summaryTop = tester
-      .getTopLeft(_visibleKey('management-summary-toggle'))
-      .dy;
-  // 当前搜索的固定顶部位置。
-  final double searchTop = tester
-      .getTopLeft(_visibleKey('management-search'))
-      .dy;
-  // 拖动前的实际列表滚动位置。
-  final double before = _listPosition(tester, list).pixels;
+/// 搜索随着真实列表滚动退出，顶部标签不移动，反向滑动可恢复搜索。
+Future<void> _expectScrollingSearch(WidgetTester tester, Finder list) async {
+  await _scrollToTop(tester, list);
+  // 搜索背景与统计摘要之间保持先后顺序。
+  final Rect summary = tester.getRect(_visibleKey('management-summary-toggle'));
+  // 搜索底色的实测几何，标准字号缩短20%。
+  final Rect surface = tester.getRect(_activeKey('management-search-surface'));
+  expect(surface.bottom, lessThanOrEqualTo(summary.top));
+  expect(surface.left, 16);
+  expect(surface.right, tester.view.physicalSize.width - 16);
+  if (MediaQuery.textScalerOf(tester.element(_visibleKey('management-search')))
+          .scale(16) ==
+      16) {
+    expect(surface.height, closeTo(56 * 0.8, 0.1));
+  }
+  // 提示文字的真实布局中心与搜索背景中心对齐。
+  final Finder hint = find.descendant(
+    of: _visibleKey('management-search'),
+    matching: find.byWidgetPredicate(
+      (Widget widget) =>
+          widget is Text && (widget.data?.startsWith('搜索') ?? false),
+    ),
+  );
+  expect(tester.getRect(hint).center.dy, closeTo(surface.center.dy, 1));
+  _expectTouchTarget(tester, _visibleKey('management-filter-button'));
+  // 顶部业务标签保持固定，不参与搜索和记录的协调滚动。
+  final Rect tabs = tester.getRect(_key('management-section-control'));
   await tester.drag(list, const Offset(0, -250));
   await tester.pumpAndSettle();
-  expect(_listPosition(tester, list).pixels, greaterThan(before));
-  expect(
-    tester.getTopLeft(_visibleKey('management-summary-toggle')).dy,
-    closeTo(summaryTop, 0.1),
-  );
-  expect(
-    tester.getTopLeft(_visibleKey('management-search')).dy,
-    closeTo(searchTop, 0.1),
-  );
+  expect(_listPosition(tester, list).pixels, greaterThan(0));
+  expect(_visibleKey('management-search'), findsNothing);
+  expect(tester.getRect(_key('management-section-control')), tabs);
+  // 反向滚回时搜索重新出现，不产生新的输入状态或列表子树。
+  await tester.drag(list, const Offset(0, 350));
+  await tester.pumpAndSettle();
+  expect(_visibleKey('management-search'), findsOneWidget);
   expect(tester.takeException(), isNull);
   await _scrollToTop(tester, list);
 }
@@ -380,12 +402,27 @@ Future<void> _exerciseExpandedAndFilter(WidgetTester tester) async {
   await tester.pumpAndSettle();
   expect(_key('management-summary-scrim'), findsOneWidget);
   expect(tester.takeException(), isNull);
-  await tester.tap(_visibleKey('management-summary-toggle'));
+  // 展开后的标题与箭头恢复卡片内部左右16dp留白。
+  final Rect statistics = tester.getRect(
+    _activeKey('management-summary-surface'),
+  );
+  expect(
+    tester.getRect(_activeKey('management-statistics-title')).left,
+    closeTo(statistics.left + 16, 0.1),
+  );
+  expect(
+    tester.getRect(_activeKey('management-summary-arrow')).right,
+    closeTo(statistics.right - 16, 0.1),
+  );
+  // 搜索上方的遮罩同样收起统计，不能误激活后方输入或筛选。
+  expect(_visibleKey('management-search'), findsNothing);
+  await tester.tap(_visibleKey('management-toolbar-scrim'));
   await tester.pumpAndSettle();
   await tester.tap(_visibleKey('management-filter-button'));
   await tester.pumpAndSettle();
   expect(_key('management-filter-sheet'), findsOneWidget);
   expect(tester.takeException(), isNull);
+  await _expectCompactFilterButtons(tester);
   await tester.tap(find.byTooltip('取消筛选'));
   await tester.pumpAndSettle();
 }
@@ -408,4 +445,94 @@ void _expectWithinViewport(
   final Rect rect = tester.getRect(finder);
   expect(rect.left, greaterThanOrEqualTo(0));
   expect(rect.right, lessThanOrEqualTo(viewportWidth));
+}
+
+/// 读取当前分区的装饰或文字几何，不要求该装饰层单独参与触摸命中。
+Finder _activeKey(String value) => find.descendant(
+  of: find.byWidgetPredicate(
+    (Widget widget) => widget is ManagementMobileScope && widget.active,
+  ),
+  matching: _key(value),
+);
+
+/// 验证顶栏固定居中、条件重置入口和筛选选项的紧凑触控布局。
+Future<void> _expectCompactFilterButtons(WidgetTester tester) async {
+  // 标题独立居中，不随右侧重置入口出现或消失而移动。
+  final Finder title = find.descendant(
+    of: _key('management-filter-header'),
+    matching: find.text('筛选'),
+  );
+  // 默认条件下的标题几何，供修改草稿后比较。
+  final Rect titleRect = tester.getRect(title);
+  expect(
+    titleRect.center.dx,
+    closeTo(tester.getRect(_key('management-filter-sheet')).center.dx, 0.1),
+  );
+  expect(find.byTooltip('重置筛选'), findsNothing);
+  expect(find.text('重置'), findsNothing);
+  expect(find.text('应用'), findsNothing);
+  _expectTouchTarget(tester, find.byTooltip('取消筛选'));
+  _expectTouchTarget(tester, find.byTooltip('应用筛选'));
+  expect(
+    find.descendant(
+      of: find.byTooltip('取消筛选'),
+      matching: find.byIcon(Icons.keyboard_arrow_down),
+    ),
+    findsOneWidget,
+  );
+  expect(
+    find.descendant(
+      of: find.byTooltip('应用筛选'),
+      matching: find.byIcon(Icons.check),
+    ),
+    findsOneWidget,
+  );
+  expect(
+    tester.getRect(find.byTooltip('取消筛选')).right,
+    lessThanOrEqualTo(titleRect.left),
+  );
+  // 选择非默认条件，验证重置实时出现及标题位置稳定。
+  final Finder unselected = find
+      .byWidgetPredicate(
+        (Widget widget) => widget is ManagementFilterOption && !widget.selected,
+      )
+      .first;
+  await tester.tap(unselected);
+  await tester.pumpAndSettle();
+  expect(find.byTooltip('重置筛选'), findsOneWidget);
+  expect(tester.getRect(title), titleRect);
+  _expectTouchTarget(tester, find.byTooltip('重置筛选'));
+  expect(
+    tester.getRect(find.byTooltip('重置筛选')).left,
+    greaterThanOrEqualTo(titleRect.right),
+  );
+  expect(
+    tester.getRect(find.byTooltip('重置筛选')).right,
+    lessThanOrEqualTo(tester.getRect(find.byTooltip('应用筛选')).left),
+  );
+  await tester.tap(find.byTooltip('重置筛选'));
+  await tester.pumpAndSettle();
+  expect(find.byTooltip('重置筛选'), findsNothing);
+  expect(tester.getRect(title), titleRect);
+  expect(_key('management-filter-sheet'), findsOneWidget);
+  // 仅测量当前底部筛选弹窗内的按钮。
+  final Finder buttons = find.descendant(
+    of: _key('management-filter-sheet'),
+    matching: find.byType(OmniButton),
+  );
+  // 每个选项都使用同一视觉高度规则。
+  for (int index = 0; index < buttons.evaluate().length; index++) {
+    // 当前按钮的完整触控区域。
+    final Finder button = buttons.at(index);
+    _expectTouchTarget(tester, button);
+    // 真实绘制的按钮材质，不以配置参数代替视觉几何。
+    final double visualHeight = tester
+        .getSize(find.descendant(of: button, matching: find.byType(Material)))
+        .height;
+    if (MediaQuery.textScalerOf(tester.element(button)).scale(14) == 14) {
+      expect(visualHeight, closeTo(32, 0.1));
+    } else {
+      expect(visualHeight, greaterThanOrEqualTo(32));
+    }
+  }
 }

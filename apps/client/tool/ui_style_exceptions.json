@@ -48,8 +48,8 @@
     "reason": "用户可选择的业务分类色盘或统计类别颜色，属于数据语义而非品牌控件样式。"
   },
   "lib/features/inventory/presentation/inventory_page.dart :: showGeneralDialog": {
-    "count": 2,
-    "reason": "物品详情卡翻转及新增拆分菜单保留原定位，使用统一主题与减少动效策略。"
+    "count": 1,
+    "reason": "物品详情卡翻转保留原定位，使用统一主题与减少动效策略。"
   },
   "lib/features/todos/presentation/todo_editor_dialog.dart :: Dialog": {
     "count": 1,

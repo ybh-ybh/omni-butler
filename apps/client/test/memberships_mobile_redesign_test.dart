@@ -96,15 +96,15 @@ void main() {
 
   testWidgets('会员摘要保持全量口径，完整统计保留支出趋势和续费', (WidgetTester tester) async {
     await _pumpMemberships(tester);
-    expect(find.text('本月 ¥96.00', findRichText: true), findsOneWidget);
-    expect(find.text('年度 ¥114.00', findRichText: true), findsOneWidget);
+    expect(find.text('本月 ¥96', findRichText: true), findsOneWidget);
+    expect(find.text('年度 ¥114', findRichText: true), findsOneWidget);
     expect(find.text('3天续费 1', findRichText: true), findsOneWidget);
 
     await tester.enterText(_searchField(), '音乐');
     await tester.pumpAndSettle();
     expect(find.text('音乐会员'), findsOneWidget);
     expect(find.text('设计会员'), findsNothing);
-    expect(find.text('本月 ¥96.00', findRichText: true), findsOneWidget);
+    expect(find.text('本月 ¥96', findRichText: true), findsOneWidget);
 
     await tester.tap(_key('management-summary-toggle'));
     await tester.pumpAndSettle();
@@ -117,12 +117,29 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('收缩摘要隐藏角分但展开仍显示原始精确金额', (WidgetTester tester) async {
+    await _pumpMemberships(
+      tester,
+      firstPriceCents: 9649,
+      manualPriceCents: 1886,
+    );
+    expect(find.text('本月 ¥96', findRichText: true), findsOneWidget);
+    expect(find.text('年度 ¥115', findRichText: true), findsOneWidget);
+    await tester.tap(_key('management-summary-toggle'));
+    await tester.pumpAndSettle();
+    expect(find.text('¥ 96.49'), findsOneWidget);
+    expect(find.text('¥ 115.35'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('会员筛选草稿取消不提交，应用和移除条件实时更新列表', (WidgetTester tester) async {
     await _pumpMemberships(tester);
     await tester.tap(_key('management-filter-button'));
     await tester.pumpAndSettle();
+    expect(find.byTooltip('重置筛选'), findsNothing);
     await tester.tap(find.text('自动续费 1'));
     await tester.pumpAndSettle();
+    expect(find.byTooltip('重置筛选'), findsOneWidget);
     await tester.tap(find.byTooltip('取消筛选'));
     await tester.pumpAndSettle();
     expect(find.text('设计会员'), findsOneWidget);
@@ -134,22 +151,25 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('办公工具 1'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('应用'));
+    await tester.tap(find.byTooltip('应用筛选'));
     await tester.pumpAndSettle();
     expect(find.text('设计会员'), findsOneWidget);
     expect(find.text('音乐会员'), findsNothing);
-    expect(find.text('筛选 2'), findsOneWidget);
+    expect(find.byTooltip('筛选，已选 2 项'), findsOneWidget);
 
     await tester.tap(_key('management-filter-button'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('重置'));
+    expect(find.byTooltip('重置筛选'), findsOneWidget);
+    await tester.tap(find.byTooltip('重置筛选'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('重置筛选'), findsNothing);
     await tester.tap(find.byTooltip('取消筛选'));
     await tester.pumpAndSettle();
-    expect(find.text('筛选 2'), findsOneWidget);
+    expect(find.byTooltip('筛选，已选 2 项'), findsOneWidget);
 
     await tester.tap(find.text('自动续费'));
     await tester.pumpAndSettle();
-    expect(find.text('筛选 1'), findsOneWidget);
+    expect(find.byTooltip('筛选，已选 1 项'), findsOneWidget);
     await tester.tap(find.text('办公工具'));
     await tester.pumpAndSettle();
     expect(find.text('音乐会员'), findsOneWidget);
@@ -308,6 +328,7 @@ Future<_MembershipFixture> _pumpMemberships(
   Size size = const Size(390, 844),
   double textScale = 1,
   int manualPriceCents = 1800,
+  int firstPriceCents = 9600,
   bool paymentError = false,
   bool paymentLoading = false,
 }) async {
@@ -325,7 +346,7 @@ Future<_MembershipFixture> _pumpMemberships(
       name: '设计会员',
       category: '办公工具',
       description: '团队协作',
-      priceCents: 9600,
+      priceCents: firstPriceCents,
       purchaseDate: DateTime(2026, 9, 1),
       expirationDate: DateTime(2027, 9, 1),
       isPermanent: false,

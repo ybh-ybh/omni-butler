@@ -80,7 +80,7 @@ void main() {
         matching: find.text('书房'),
       ),
     );
-    await tester.tap(find.text('应用'));
+    await tester.tap(find.byTooltip('应用筛选'));
     await tester.pumpAndSettle();
     expect(
       find.byKey(ValueKey<String>('inventory-card-${fixture.keyboardId}')),
@@ -102,18 +102,18 @@ void main() {
         matching: find.text('摄影'),
       ),
     );
-    await tester.tap(find.text('应用'));
+    await tester.tap(find.byTooltip('应用筛选'));
     await tester.pumpAndSettle();
     await tester.tap(filter);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('重置'));
+    await tester.tap(find.byTooltip('重置筛选'));
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(find.text('标签：摄影'), findsOneWidget);
     await tester.tap(filter);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('重置'));
-    await tester.tap(find.text('应用'));
+    await tester.tap(find.byTooltip('重置筛选'));
+    await tester.tap(find.byTooltip('应用筛选'));
     await tester.pumpAndSettle();
     expect(find.text('标签：摄影'), findsNothing);
     expect(
@@ -244,7 +244,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('没有找到匹配的物品'), findsNothing);
     expect(
-      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      tester
+          .widget<TextField>(find.byType(TextField, skipOffstage: false))
+          .controller!
+          .text,
       isEmpty,
     );
     expect(tester.takeException(), isNull);

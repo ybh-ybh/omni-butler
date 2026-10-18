@@ -405,9 +405,9 @@ void main() {
       final SemanticsNode create = tester.getSemantics(
         find.bySemanticsLabel('新增物品'),
       );
-      // 读屏热区不能超过可见拆分按钮。
+      // 读屏热区不能超过可见新增按钮。
       final Size size = tester.getSize(
-        find.byKey(const ValueKey<String>('inventory-mobile-create-split')),
+        find.byKey(const ValueKey<String>('inventory-mobile-create')),
       );
       expect(create.rect.isEmpty, isFalse);
       expect(create.rect.width, lessThanOrEqualTo(size.width));
@@ -465,6 +465,10 @@ void main() {
       await tester.pumpAndSettle();
       offsets[section] = _managementListOffset(tester, listKey);
       expect(offsets[section], greaterThan(0));
+      expect(
+        find.byKey(const ValueKey<String>('management-search')).hitTestable(),
+        findsNothing,
+      );
     }
     for (final (String section, String listKey, String query) in sections) {
       await tester.tap(
@@ -472,10 +476,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(
-        tester
-            .widget<TextField>(find.byType(TextField).hitTestable())
-            .controller!
-            .text,
+        tester.widget<TextField>(_managementSearchField()).controller!.text,
         query,
       );
       expect(
@@ -538,10 +539,7 @@ void main() {
     await tester.pumpAndSettle();
     _expectManagementCollapsed(tester);
     expect(
-      tester
-          .widget<TextField>(find.byType(TextField).hitTestable())
-          .controller!
-          .text,
+      tester.widget<TextField>(_managementSearchField()).controller!.text,
       '测试物品',
     );
     expect(
@@ -561,10 +559,7 @@ void main() {
     await tester.pumpAndSettle();
     _expectManagementCollapsed(tester);
     expect(
-      tester
-          .widget<TextField>(find.byType(TextField).hitTestable())
-          .controller!
-          .text,
+      tester.widget<TextField>(_managementSearchField()).controller!.text,
       '测试物品',
     );
     expect(
@@ -722,7 +717,7 @@ void main() {
     await _disposeManagementApp(tester, app);
   });
 
-  testWidgets('Android 物品拆分按钮保留次要操作并使用底部筛选', (WidgetTester tester) async {
+  testWidgets('Android 物品独立新增与页头菜单保留次要操作和底部筛选', (WidgetTester tester) async {
     await _configureAndroidView(tester);
     // 用于验证拆分按钮无障碍语义的句柄。
     final SemanticsHandle semanticsHandle = tester.ensureSemantics();
@@ -796,9 +791,9 @@ void main() {
     final Finder searchField = find.byKey(
       const ValueKey<String>('management-search'),
     );
-    // Android 物品新增拆分按钮。
-    final Finder splitButton = find.byKey(
-      const ValueKey<String>('inventory-mobile-create-split'),
+    // Android 物品独立新增按钮。
+    final Finder primaryButton = find.byKey(
+      const ValueKey<String>('inventory-mobile-create'),
     );
     // Android 物品新增主操作。
     final Finder createButton = find.byKey(
@@ -825,14 +820,14 @@ void main() {
     expect(filterRect.width, greaterThanOrEqualTo(OmniSize.touch));
     expect(searchRect.height, OmniSize.touch);
     expect(searchRect.width, greaterThan(250));
-    expect(searchRect.top, closeTo(filterRect.top, 0.1));
-    expect(tester.getSize(splitButton).height, OmniSize.touch);
+    expect(searchRect.center.dy, closeTo(filterRect.center.dy, 0.1));
+    expect(tester.getSize(primaryButton).height, OmniSize.touch);
     expect(createButtonRect.height, OmniSize.touch);
     expect(moreActionsButtonRect.size, const Size.square(OmniSize.touch));
-    expect(createButtonRect.right, lessThan(moreActionsButtonRect.left));
-    expect(find.text('新增'), findsOneWidget);
+    expect(moreActionsButtonRect.bottom, lessThan(createButtonRect.top));
+    expect(find.text('新增物品'), findsOneWidget);
     expect(find.bySemanticsLabel('新增物品'), findsOneWidget);
-    expect(find.bySemanticsLabel(RegExp('更多物品操作')), findsOneWidget);
+    expect(find.byTooltip('更多物品操作'), findsOneWidget);
     _expectManagementScrollableLayout(
       tester,
       find.byKey(const PageStorageKey<String>('inventory-management-list')),
@@ -850,90 +845,26 @@ void main() {
       findsNothing,
     );
 
-    // 图标外框保持原尺寸，关闭状态第三条横线完整显示。
-    final Finder toggleIcon = find.byKey(
-      const ValueKey<String>('inventory-mobile-toggle-icon'),
-    );
-    // 第三条横线的缩放变换用于确认展开与收起的实际动画进度。
-    final Finder thirdLine = find.byKey(
-      const ValueKey<String>('inventory-mobile-toggle-line-2'),
-    );
-    expect(tester.getSize(toggleIcon), const Size.square(OmniSize.icon));
-    expect(tester.widget<Transform>(thirdLine).transform.entry(0, 0), 1);
-
+    // 更多菜单与摘要同层，新增保留在右下角。
+    expect(moreActionsButtonRect.top, greaterThanOrEqualTo(searchRect.bottom));
     await tester.tap(moreActionsButton);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 60));
-    // 菜单展开途中应处于部分透明、部分展开状态。
-    final FadeTransition menuFade = tester.widget<FadeTransition>(
-      find.byKey(const ValueKey<String>('inventory-mobile-actions-fade')),
-    );
-    // 由底边向上展开的菜单动画。
-    final SizeTransition menuExpansion = tester.widget<SizeTransition>(
-      find.byKey(const ValueKey<String>('inventory-mobile-actions-expand')),
-    );
-    expect(menuFade.opacity.value, inExclusiveRange(0, 1));
-    expect(menuExpansion.sizeFactor.value, inExclusiveRange(0, 1));
-    expect(menuExpansion.alignment, Alignment.bottomRight);
-    expect(
-      tester.widget<Transform>(thirdLine).transform.entry(0, 0),
-      inExclusiveRange(0, 1),
-    );
-    // 菜单完成展开后，图标仍按独立的 500ms 时长继续变形。
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(
-      tester.widget<Transform>(thirdLine).transform.entry(0, 0),
-      inExclusiveRange(0, 1),
-    );
     await tester.pumpAndSettle();
-    expect(tester.widget<Transform>(thirdLine).transform.entry(0, 0), 0);
-    // 第一条线完成顺时针 45 度旋转，与第二条线形成叉号。
-    expect(
-      tester
-          .widget<Transform>(
-            find.byKey(
-              const ValueKey<String>('inventory-mobile-toggle-line-0'),
-            ),
-          )
-          .transform
-          .entry(1, 0),
-      closeTo(0.7071, 0.001),
-    );
-    // 完整展开的菜单边界必须位于按钮上方，宽度更窄且右侧对齐。
-    final Rect menuRect = tester.getRect(
-      find.byKey(const ValueKey<String>('inventory-mobile-actions-menu')),
-    );
-    // 菜单打开后原拆分按钮仍保持原位置和尺寸。
-    final Rect splitRect = tester.getRect(splitButton);
-    expect(menuRect.bottom, closeTo(splitRect.top - OmniSpacing.xs, 0.1));
-    expect(menuRect.width, lessThan(splitRect.width));
-    expect(menuRect.right, closeTo(splitRect.right, 0.1));
-    expect(tester.getRect(createButton), createButtonRect);
     expect(find.text('一键搬家'), findsOneWidget);
     expect(find.text('管理标签'), findsOneWidget);
     expect(find.text('管理位置'), findsOneWidget);
-    // 菜单项按主次动作约定从上至下排列。
     expect(
-      tester.getRect(find.text('管理标签')).top,
-      greaterThan(tester.getRect(find.text('一键搬家')).bottom),
+      tester.getRect(find.text('一键搬家')).top,
+      greaterThanOrEqualTo(moreActionsButtonRect.bottom),
     );
     expect(
       tester.getRect(find.text('管理位置')).top,
       greaterThan(tester.getRect(find.text('管理标签')).bottom),
     );
-
-    // 点击菜单外部会收起菜单，且不会触发新增。
+    // 点击外部仅取消菜单，新增按钮的几何不改变。
     await tester.tapAt(const Offset(20, 400));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 60));
-    expect(
-      tester.widget<Transform>(thirdLine).transform.entry(0, 0),
-      inExclusiveRange(0, 1),
-    );
     await tester.pumpAndSettle();
-    expect(tester.widget<Transform>(thirdLine).transform.entry(0, 0), 1);
     expect(find.text('管理标签'), findsNothing);
-    expect(find.text('新增物品'), findsNothing);
+    expect(tester.getRect(createButton), createButtonRect);
     await tester.tap(moreActionsButton);
     await tester.pumpAndSettle();
 
@@ -942,7 +873,6 @@ void main() {
     expect(find.text('物品标签'), findsOneWidget);
     await tester.tap(find.byTooltip('关闭'));
     await tester.pumpAndSettle();
-    expect(tester.widget<Transform>(thirdLine).transform.entry(0, 0), 1);
 
     await tester.tap(moreActionsButton);
     await tester.pumpAndSettle();
@@ -978,7 +908,7 @@ void main() {
           .filterCount,
       0,
     );
-    await tester.tap(find.text('应用'));
+    await tester.tap(find.byTooltip('应用筛选'));
     await tester.pumpAndSettle();
     expect(filterSheet, findsNothing);
     expect(
@@ -1059,7 +989,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
 
-    // 搜索靠左，独立筛选按钮在右侧保留完整触区。
+    // 搜索靠左，嵌入右侧的筛选按钮保留完整触区。
     final Finder searchField = find
         .byKey(const ValueKey<String>('management-search'))
         .hitTestable();
@@ -1071,9 +1001,9 @@ void main() {
     final Rect searchRect = tester.getRect(searchField);
     // 当前筛选按钮的实际边界。
     final Rect filterRect = tester.getRect(filterToggle);
-    // 菜单打开后仍可读取几何的拆分按钮。
-    final Finder splitButton = find.byKey(
-      const ValueKey<String>('membership-mobile-create-split'),
+    // 独立新增按钮保持原触控高度。
+    final Finder primaryButton = find.byKey(
+      const ValueKey<String>('membership-mobile-create'),
     );
     // 分类管理菜单的可触控入口。
     final Finder moreActionsButton = find
@@ -1086,8 +1016,8 @@ void main() {
     expect(searchRect.height, OmniSize.touch);
     expect(filterRect.height, OmniSize.touch);
     expect(filterRect.width, greaterThanOrEqualTo(OmniSize.touch));
-    expect(searchRect.right, lessThan(filterRect.left));
-    expect(tester.getSize(splitButton).height, OmniSize.touch);
+    expect(searchRect.right, lessThanOrEqualTo(filterRect.left));
+    expect(tester.getSize(primaryButton).height, OmniSize.touch);
     _expectManagementScrollableLayout(
       tester,
       find.byKey(const ValueKey<String>('membership-card-grid')).hitTestable(),
@@ -1096,7 +1026,7 @@ void main() {
     await tester.pumpAndSettle();
     await _tapManagementOption(tester, '自动续费');
     await _tapManagementOption(tester, categories.first);
-    await tester.tap(find.text('应用'));
+    await tester.tap(find.byTooltip('应用筛选'));
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('management-filter-sheet')),
@@ -1115,18 +1045,17 @@ void main() {
       '/memberships',
     );
 
+    // 弹层出现前缓存当前入口几何。
+    final Rect moreActionRect = tester.getRect(moreActionsButton);
     await tester.tap(moreActionsButton);
     await tester.pumpAndSettle();
     expect(find.text('管理分类'), findsOneWidget);
-    // 单项菜单仍沿用物品拆分按钮的上方窄列表位置。
-    final Rect menuRect = tester.getRect(
-      find.byKey(const ValueKey<String>('membership-mobile-actions-menu')),
+    // 分类管理从摘要右侧向下展开，不再和右下角新增共享容器。
+    expect(
+      tester.getRect(find.text('管理分类')).top,
+      greaterThanOrEqualTo(moreActionRect.bottom),
     );
-    // 拆分按钮的实际位置。
-    final Rect splitRect = tester.getRect(splitButton);
-    expect(menuRect.bottom, closeTo(splitRect.top - OmniSpacing.xs, 0.1));
-    expect(menuRect.width, lessThan(splitRect.width));
-    expect(menuRect.right, closeTo(splitRect.right, 0.1));
+    expect(moreActionRect.bottom, lessThan(tester.getRect(primaryButton).top));
     await tester.tap(find.text('管理分类'));
     await tester.pumpAndSettle();
     expect(find.text('会员分类'), findsOneWidget);
@@ -1510,3 +1439,13 @@ Future<void> _disposeManagementApp(
   await app.database.close();
   debugDefaultTargetPlatformOverride = null;
 }
+
+/// 搜索滚出视口后仍从当前分区读取保活的输入状态。
+Finder _managementSearchField() => find.descendant(
+  of: find.byWidgetPredicate(
+    (Widget widget) => widget is ManagementMobileScope && widget.active,
+    skipOffstage: false,
+  ),
+  matching: find.byType(TextField, skipOffstage: false),
+  skipOffstage: false,
+);

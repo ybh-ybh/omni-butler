@@ -49,9 +49,6 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
   /// 搜索控制器。
   final TextEditingController _searchController = TextEditingController();
 
-  /// 移动会员列表独立保留滚动位置。
-  final ScrollController _mobileScrollController = ScrollController();
-
   /// 当前搜索词。
   String _query = '';
 
@@ -71,7 +68,6 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
   @override
   void dispose() {
     _searchController.dispose();
-    _mobileScrollController.dispose();
     super.dispose();
   }
 
@@ -332,9 +328,6 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
           payments: payments.asData?.value ?? const <MembershipPaymentRecord>[],
           useTwoColumns: _useTwoColumns,
           compactCards: widget.embeddedInManagement,
-          scrollController: widget.embeddedInManagement
-              ? _mobileScrollController
-              : null,
           safeBottomPadding: widget.embeddedInManagement
               ? _mobileActionClearance
               : 0,
@@ -375,21 +368,14 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
           summaryOnly: true,
         ),
         statistics: statistics,
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            toolbar,
-            Expanded(child: records),
-          ],
-        ),
-        floatingActionButton: OmniSplitActionButton<TaxonomyKind>(
-          keyPrefix: 'membership-mobile',
-          label: '新增',
-          primarySemanticsLabel: '新增会员',
-          menuTooltip: '更多会员操作',
-          onPressed: () => _openEditor(context),
-          actions: const <OmniSplitAction<TaxonomyKind>>[
-            OmniSplitAction<TaxonomyKind>(
+        toolbar: toolbar,
+        body: records,
+        actions: OmniPopupMenuButton<TaxonomyKind>(
+          key: const ValueKey<String>('membership-mobile-more-actions'),
+          tooltip: '更多会员操作',
+          icon: const Icon(Icons.more_vert_rounded),
+          itemBuilder: (BuildContext context) => <PopupMenuEntry<TaxonomyKind>>[
+            OmniPopupMenuItem<TaxonomyKind>(
               value: TaxonomyKind.category,
               label: '管理分类',
               icon: Icons.category_outlined,
@@ -400,6 +386,13 @@ class _MembershipsPageState extends ConsumerState<MembershipsPage> {
             module: TaxonomyModule.membership,
             kind: kind,
           ),
+        ),
+        floatingActionButton: OmniButton(
+          key: const ValueKey<String>('membership-mobile-create'),
+          label: '新增会员',
+          icon: Icons.add_rounded,
+          variant: OmniButtonVariant.pagePrimary,
+          onPressed: () => _openEditor(context),
         ),
       );
     }
@@ -660,12 +653,12 @@ class _MembershipSpendingSummary extends ConsumerWidget {
         metrics: <ManagementSummaryMetric>[
           ManagementSummaryMetric(
             label: '本月',
-            value: '¥${(monthCents / 100).toStringAsFixed(2)}',
+            value: '¥${monthCents ~/ 100}',
             color: colors.member,
           ),
           ManagementSummaryMetric(
             label: '年度',
-            value: '¥${(yearCents / 100).toStringAsFixed(2)}',
+            value: '¥${yearCents ~/ 100}',
             color: colors.brand,
           ),
           ManagementSummaryMetric(
@@ -1132,7 +1125,7 @@ class _MembershipToolbar extends StatelessWidget {
     if (embeddedInManagement) {
       return ManagementSearchToolbar(
         controller: searchController,
-        hintText: '搜索会员名称、分类或描述',
+        hintText: '搜索会员',
         onChanged: onSearchChanged,
         onClear: onClearSearch,
         filterCount:
@@ -1726,9 +1719,6 @@ class _MembershipSearchField extends StatelessWidget {
 
 /// 自适应单双列会员卡片区域。
 class _MembershipCardGrid extends StatelessWidget {
-  /// 移动列表的独立滚动控制器。
-  final ScrollController? scrollController;
-
   /// 当前过滤后的会员。
   final List<MembershipRecord> memberships;
 
@@ -1771,7 +1761,6 @@ class _MembershipCardGrid extends StatelessWidget {
     required this.onDelete,
     required this.onHistory,
     required this.onRenew,
-    this.scrollController,
   });
 
   /// 构建可滚动的会员卡片流。
@@ -1791,8 +1780,7 @@ class _MembershipCardGrid extends StatelessWidget {
     if (compactCards) {
       return ListView.separated(
         key: const ValueKey<String>('membership-card-grid'),
-        controller: scrollController,
-        primary: false,
+        primary: true,
         padding: EdgeInsets.only(bottom: safeBottomPadding),
         itemCount: memberships.length,
         separatorBuilder: (BuildContext context, int index) => Divider(

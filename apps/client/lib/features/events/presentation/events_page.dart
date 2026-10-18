@@ -296,30 +296,25 @@ class _EventsPageState extends ConsumerState<EventsPage> {
           variant: OmniButtonVariant.pagePrimary,
           onPressed: _openEditor,
         ),
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            ManagementSearchToolbar(
-              controller: _searchController,
-              hintText: '搜索事件名称或备注',
-              onChanged: (String value) => setState(() => _query = value),
-              onClear: () {
-                _searchController.clear();
-                setState(() => _query = '');
-              },
-              onFilter: _openMobileFilters,
-              filterCount: _showArchived ? 1 : 0,
-              filters: <ManagementFilterSelection>[
-                if (_showArchived)
-                  ManagementFilterSelection(
-                    label: '已归档',
-                    onDeleted: () => setState(() => _showArchived = false),
-                  ),
-              ],
-            ),
-            Expanded(child: records),
+        toolbar: ManagementSearchToolbar(
+          controller: _searchController,
+          hintText: '搜索事件',
+          onChanged: (String value) => setState(() => _query = value),
+          onClear: () {
+            _searchController.clear();
+            setState(() => _query = '');
+          },
+          onFilter: _openMobileFilters,
+          filterCount: _showArchived ? 1 : 0,
+          filters: <ManagementFilterSelection>[
+            if (_showArchived)
+              ManagementFilterSelection(
+                label: '已归档',
+                onDeleted: () => setState(() => _showArchived = false),
+              ),
           ],
         ),
+        body: records,
       );
     }
     // 桌面继续使用原有页头、统计卡和工具栏布局。
