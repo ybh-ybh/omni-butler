@@ -34,6 +34,8 @@ function resolvePublicBaseUrl(value: unknown): string {
 
 /// 应用启动所需的环境变量结构。
 interface EnvironmentVariables {
+  /// AI 独立加密密钥复用持久卷目录，不复用 JWT 密钥。
+  JWT_KEYS_DIR: string;
   /// 云端识别厂商与凭证只存在后端。
   NOTE_ASR_PROVIDER: string;
   NOTE_ASR_MODEL: string;
@@ -171,6 +173,7 @@ export function validateEnvironment(
   const keys = resolveJwtKeys(keysDirectory);
   return {
     ...keys,
+    JWT_KEYS_DIR: keysDirectory,
     NOTE_ASR_PROVIDER: noteProvider,
     NOTE_ASR_MODEL: typeof source.NOTE_ASR_MODEL === 'string' ? source.NOTE_ASR_MODEL : '16k_zh',
     NOTE_ASR_PUBLIC_URL: notePublicUrl,

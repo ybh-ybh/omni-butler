@@ -86,7 +86,7 @@ void main() {
       expect(
         (await database.customSelect('PRAGMA user_version').getSingle())
             .read<int>('user_version'),
-        25,
+        26,
       );
       expect(
         await database.customSelect('PRAGMA foreign_key_check').get(),
@@ -139,7 +139,7 @@ void main() {
     expect(note.containsKey('record_time_seconds'), isFalse);
     expect(draft.containsKey('record_utc_offset_minutes'), isFalse);
     expect(restored.pendingOperations, 2);
-    expect(restored.toJson()['version'], 10);
+    expect(restored.toJson()['version'], 11);
     expect(SyncSnapshot.migrationProtocolVersion, 3);
     // 正式同步白名单包括秒数和偏移，本机草稿仍不进入换服操作。
     final Map<String, Object?> operation = restored.operations.single;

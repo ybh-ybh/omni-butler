@@ -155,7 +155,7 @@ void main() {
       expect(
         (await database.customSelect('PRAGMA user_version').getSingle())
             .read<int>('user_version'),
-        25,
+        26,
       );
       await TaxonomyRepository(database)
           .updateNoteTagAppearance('tag', iconEmoji: const Value('🏳️‍🌈'));
@@ -207,7 +207,7 @@ void main() {
         version == 7 ? '👩🏽‍💻' : null,
       );
       expect(original.containsKey('icon_emoji'), version == 7);
-      expect(restored.toJson()['version'], 10);
+      expect(restored.toJson()['version'], 11);
     }
     expect(SyncSnapshot.migrationProtocolVersion, 3);
   });

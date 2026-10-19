@@ -20,6 +20,7 @@ import 'package:omni_butler/core/attachments/image_sync_service.dart';
 import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
 import 'package:omni_butler/features/home/presentation/home_card_manager.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
+import 'package:omni_butler/features/settings/presentation/ai_settings_section.dart';
 import 'package:omni_butler/features/settings/presentation/recycle_bin_section.dart';
 import 'package:omni_butler/features/settings/presentation/sync_connection_dialog.dart';
 import 'package:omni_butler/features/settings/presentation/sync_backup_dialog.dart';
@@ -50,6 +51,9 @@ enum _SettingsCategory {
   /// 通知提醒。
   notifications,
 
+  /// 第三方模型服务与笔记整理。
+  ai,
+
   /// 数据同步。
   sync,
 
@@ -65,6 +69,7 @@ extension _SettingsCategoryPresentation on _SettingsCategory {
     _SettingsCategory.features => '功能管理',
     _SettingsCategory.appearance => '外观与主题',
     _SettingsCategory.notifications => '通知提醒',
+    _SettingsCategory.ai => 'AI 设置',
     _SettingsCategory.sync => '数据同步',
     _SettingsCategory.storage => '回收站',
   };
@@ -75,6 +80,7 @@ extension _SettingsCategoryPresentation on _SettingsCategory {
     _SettingsCategory.features => '只保留你真正使用的功能，关闭后数据仍会安全保留。',
     _SettingsCategory.appearance => '调整当前设备的显示模式与视觉体验。',
     _SettingsCategory.notifications => '管理当前设备上的系统提醒。',
+    _SettingsCategory.ai => '配置模型服务，自动整理语音识别后的笔记文本。',
     _SettingsCategory.sync => '连接自托管服务，在多个设备之间同步数据。',
     _SettingsCategory.storage => '查看并处理已删除的数据。',
   };
@@ -85,16 +91,18 @@ extension _SettingsCategoryPresentation on _SettingsCategory {
     _SettingsCategory.features => Icons.widgets_outlined,
     _SettingsCategory.appearance => Icons.palette_outlined,
     _SettingsCategory.notifications => Icons.notifications_outlined,
+    _SettingsCategory.ai => Icons.auto_awesome_outlined,
     _SettingsCategory.sync => Icons.cloud_sync_outlined,
     _SettingsCategory.storage => Icons.delete_outline_rounded,
   };
 
-  /// 使用随明暗模式适配的语义色区分六个设置入口。
+  /// 使用随明暗模式适配的语义色区分设置入口。
   Color iconColor(OmniColors colors) => switch (this) {
     _SettingsCategory.home => colors.time,
     _SettingsCategory.features => colors.item,
     _SettingsCategory.appearance => colors.todo,
     _SettingsCategory.notifications => colors.warning,
+    _SettingsCategory.ai => colors.brand,
     _SettingsCategory.sync => colors.success,
     _SettingsCategory.storage => colors.event,
   };
@@ -397,6 +405,7 @@ class _AndroidSettingsOverview extends StatelessWidget {
         _SettingsCategory.notifications,
       ],
       <_SettingsCategory>[_SettingsCategory.sync, _SettingsCategory.storage],
+      <_SettingsCategory>[_SettingsCategory.ai],
     ];
 
     return ColoredBox(
@@ -848,6 +857,7 @@ class _SettingsCategoryContent extends ConsumerWidget {
         preference: ref.watch(themeControllerProvider),
       ),
       _SettingsCategory.notifications => const _NotificationCard(),
+      _SettingsCategory.ai => const AiSettingsSection(),
       _SettingsCategory.sync => _SyncSettingsCard(colors: colors),
       _SettingsCategory.storage => const RecycleBinSection(),
     };

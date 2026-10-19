@@ -8,6 +8,7 @@ import type { NoteRecognitionJob } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NoteAudioStore } from './note-audio-store';
 import { SpeechProviderError, SpeechRecognitionProvider } from './speech-provider';
+import { AiService } from '../ai/ai.service';
 
 /// 30 分钟单声道 WAV 仍可完整上传，保留余量但不接受无界文件。
 export const NOTE_AUDIO_MAX_BYTES = 128 * 1024 * 1024;
@@ -40,11 +41,11 @@ export class NotesService implements OnModuleInit, OnModuleDestroy {
   /// 当前扫描任务，在退出时等待其提交状态。
   private activeTick: Promise<void> | undefined;
   /// 注入数据库、私有对象存储与可替换语音适配器。
-  constructor(private readonly prisma: PrismaService, private readonly config: ConfigService, private readonly store: NoteAudioStore, private readonly speech: SpeechRecognitionProvider, private readonly auth: AuthService) {}
+  constructor(private readonly prisma: PrismaService, private readonly config: ConfigService, private readonly store: NoteAudioStore, private readonly speech: SpeechRecognitionProvider, private readonly auth: AuthService, private readonly ai: AiService) {}
 
   /// 返回语音与原音能力，配置缺失不影响纯文本笔记。
-  capabilities(): { audioUpload: boolean; recognition: boolean; provider: string; maxBytes: number; maxSegmentDurationMs: number; maxNoteDurationMs: number } {
-    return { audioUpload: true, recognition: this.speech.configured(), provider: this.speech.name, maxBytes: NOTE_AUDIO_MAX_BYTES, maxSegmentDurationMs: 1800000, maxNoteDurationMs: 3600000 };
+  capabilities(): { audioUpload: boolean; recognition: boolean; aiPolish: boolean; provider: string; maxBytes: number; maxSegmentDurationMs: number; maxNoteDurationMs: number } {
+    return { audioUpload: true, recognition: this.speech.configured(), aiPolish: true, provider: this.speech.name, maxBytes: NOTE_AUDIO_MAX_BYTES, maxSegmentDurationMs: 1800000, maxNoteDurationMs: 3600000 };
   }
   /// 启动持久队列恢复和文件清理，不让缺少 ASR 密钥阻止服务器启动。
   onModuleInit(): void {
@@ -145,6 +146,7 @@ export class NotesService implements OnModuleInit, OnModuleDestroy {
       if (segment.byteSize > 5 * 1024 * 1024 && !this.config.get<string>('NOTE_ASR_PUBLIC_URL')) throw new ServiceUnavailableException({ code: 'ASR_PUBLIC_URL_REQUIRED', message: '长录音识别需要配置服务器公网 API 地址' });
       // 完整持久保存厂商和模型，之后部署变更不能改变已提交任务。
       const job = await transaction.noteRecognitionJob.create({ data: { id: operationId, userId: user.sub, segmentId, provider: this.speech.name, model: this.config.get<string>('NOTE_ASR_MODEL') ?? '16k_zh', status: 'queued' } });
+      await this.ai.capture(transaction, job);
       return this.result(job, segment.transcript);
     });
   }
@@ -163,6 +165,7 @@ export class NotesService implements OnModuleInit, OnModuleDestroy {
     this.uuid(segmentId);
     return this.prisma.$transaction(async (transaction) => {
       await transaction.$queryRaw`SELECT id FROM sync_owners WHERE id = ${user.sub}::uuid FOR UPDATE`;
+      await this.ai.cancelJobs(transaction, user.sub, segmentId);
       // 当前有效或不确定任务。
       const job = await transaction.noteRecognitionJob.findFirst({ where: { userId: user.sub, segmentId, status: { in: ['queued', 'submitting', 'processing', 'submissionUnknown'] } }, orderBy: { createdAt: 'desc' } });
       if (!job) return { cancelled: false, alreadySubmitted: false };
@@ -279,6 +282,7 @@ export class NotesService implements OnModuleInit, OnModuleDestroy {
         const changed = await transaction.noteRecognitionJob.updateMany({ where: { id: job.id, status: 'processing' }, data: { status: result.status, transcript: result.transcript ?? null, errorCode: result.errorCode ?? null } });
         // 同一原音第一次成功的原文不可被重试覆盖，新候选留在任务结果。
         if (changed.count && result.status === 'succeeded' && segment.transcript === null) await transaction.noteAudioSegment.update({ where: { id: segment.id }, data: { transcript: result.transcript ?? '', updatedAt: new Date() } });
+        if (changed.count) await this.ai.recognized(transaction, job.id, result.transcript ?? null, result.status === 'succeeded');
       });
     } catch { /* 只读失败不重复提交，保留 taskId 等下一轮查询。 */ }
   }

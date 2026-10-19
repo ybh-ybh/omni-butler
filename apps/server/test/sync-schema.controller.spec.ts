@@ -14,6 +14,9 @@ import { SyncController } from '../src/sync/sync.controller';
 import { SyncService } from '../src/sync/sync.service';
 import { SyncMigrationController } from '../src/sync/sync-migration.controller';
 import { SyncMigrationService } from '../src/sync/sync-migration.service';
+import { NotesController } from '../src/notes/notes.controller';
+import { NotesService } from '../src/notes/notes.service';
+import { AiService } from '../src/ai/ai.service';
 
 /// 真实路由、请求头提取和DTO验证共同阻止旧客户端破坏新版数据。
 describe('同步结构版本 HTTP 边界', () => {
@@ -33,17 +36,23 @@ describe('同步结构版本 HTTP 边界', () => {
     .mockResolvedValue({ applied: 1, ignored: 0, replayed: false });
   // 可观察的全量替换边界。
   const replace = jest.fn().mockResolvedValue({ status: 'committed' });
+  // 旧客户端不能继续提交付费识别或读取会被提前插入的原文。
+  const recognize = jest.fn().mockResolvedValue({ status: 'queued' });
+  // 任务读取边界不能绕过同一结构门禁。
+  const current = jest.fn().mockResolvedValue({ status: 'succeeded', transcript: '原文' });
+  // 旧端仍可撤回已提交的授权。
+  const cancel = jest.fn().mockResolvedValue({ cancelled: true });
   // 可观察的下行凭证签发边界。
   const issuePowerSyncToken = jest
     .fn()
-    .mockResolvedValue({ syncSchemaVersion: 10 });
+    .mockResolvedValue({ syncSchemaVersion: 11 });
   // 预检必须可让旧客户端得到可解释的版本结果。
   const preview = jest
     .fn()
     .mockResolvedValue({
       protocolVersion: 1,
       snapshotVersion: 3,
-      syncSchemaVersion: 10,
+      syncSchemaVersion: 11,
     });
   // 升级前待确认迁移可在升级后继续查询原回执。
   const status = jest
@@ -53,11 +62,13 @@ describe('同步结构版本 HTTP 边界', () => {
   beforeAll(async () => {
     // 以生产DTO验证管道处理真实HTTP请求。
     const module = await Test.createTestingModule({
-      controllers: [AuthController, SyncController, SyncMigrationController],
+      controllers: [AuthController, SyncController, SyncMigrationController, NotesController],
       providers: [
         { provide: AuthService, useValue: { issuePowerSyncToken } },
         { provide: JwksService, useValue: {} },
         { provide: SyncService, useValue: { applyBatch } },
+        { provide: NotesService, useValue: { recognize, current, cancel } },
+        { provide: AiService, useValue: {} },
         {
           provide: SyncMigrationService,
           useValue: { replace, preview, status },
@@ -139,13 +150,13 @@ describe('同步结构版本 HTTP 边界', () => {
   it.each(requests)(
     '%s 对缺失、旧版和未知新版协议头拒绝且不写入',
     async (path, body) => {
-      for (const version of [undefined, '1', '2', '3', '4', '5', '6', '7', '8', '9', '11']) {
+      for (const version of [undefined, '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '12']) {
         // 请求协议不兼容时，响应提供准确的服务器版本。
         const response = await post(path, body, version);
         expect(response.status).toBe(409);
         expect(await response.json()).toMatchObject({
           code: 'SYNC_SCHEMA_MISMATCH',
-          syncSchemaVersion: 10,
+          syncSchemaVersion: 11,
         });
       }
       expect(applyBatch).not.toHaveBeenCalled();
@@ -157,13 +168,13 @@ describe('同步结构版本 HTTP 边界', () => {
   it.each(requests)(
     '%s 接受新版请求，步骤表可以通过DTO白名单',
     async (path, body) => {
-      expect((await post(path, body, '10')).status).toBe(200);
+      expect((await post(path, body, '11')).status).toBe(200);
     },
   );
 
   it('会话与预检返回结构版本，旧回执查询不受版本门禁阻断', async () => {
     expect(await (await fetch(`${baseUrl}/auth/session`)).json()).toMatchObject(
-      { sub: user.sub, syncSchemaVersion: 10 },
+      { sub: user.sub, syncSchemaVersion: 11 },
     );
     expect(
       await (
@@ -171,7 +182,7 @@ describe('同步结构版本 HTTP 边界', () => {
           syncKey: 'valid-test-sync-key',
         })
       ).json(),
-    ).toMatchObject({ syncSchemaVersion: 10, snapshotVersion: 3 });
+    ).toMatchObject({ syncSchemaVersion: 11, snapshotVersion: 3 });
     expect(
       await (
         await post('/sync/migrations/status', {
@@ -188,10 +199,24 @@ describe('同步结构版本 HTTP 边界', () => {
         await post(
           '/sync/migrations',
           { ...requests[1]![1], snapshotVersion: 1 },
-          '10',
+          '11',
         )
       ).status,
     ).toBe(400);
     expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('ASR 提交和原文读取拒绝旧端，撤回仍允许旧端执行', async () => {
+    // 实际原音路由形状，不需要创建外部计费任务。
+    const path = `/notes/audio/${randomUUID()}/recognitions`;
+    for (const version of [undefined, '10']) {
+      expect((await post(path, { operationId: randomUUID(), consent: true }, version)).status).toBe(409);
+      expect((await fetch(`${baseUrl}${path}/current`, { headers: version ? { 'X-Omni-Sync-Schema': version } : {} })).status).toBe(409);
+    }
+    expect(recognize).not.toHaveBeenCalled(); expect(current).not.toHaveBeenCalled();
+    expect((await post(path, { operationId: randomUUID(), consent: true }, '11')).status).toBe(201);
+    expect((await fetch(`${baseUrl}${path}/current`, { headers: { 'X-Omni-Sync-Schema': '11' } })).status).toBe(200);
+    expect((await fetch(`${baseUrl}${path}/current`, { method: 'DELETE', headers: { 'X-Omni-Sync-Schema': '10' } })).status).toBe(200);
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 });

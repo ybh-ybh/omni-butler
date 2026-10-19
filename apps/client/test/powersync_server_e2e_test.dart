@@ -89,6 +89,7 @@ class _EndToEndAuth extends AuthRepository {
     Object? data,
     Map<String, dynamic>? queryParameters,
     ResponseType? responseType,
+    Duration? receiveTimeout,
     bool preserveTransportErrors = false,
   }) async {
     if (path == '/sync/operations') {

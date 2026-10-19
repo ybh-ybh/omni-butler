@@ -756,7 +756,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 25;
+  int get schemaVersion => 26;
 
   /// 创建数据库并从旧版本安全升级。
   @override
@@ -1059,6 +1059,31 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         ).get()).map((row) => row.read<String>('name')).toSet();
         if (!columns.contains('is_pinned')) {
           await migrator.addColumn(noteEntries, noteEntries.isPinned);
+        }
+      }
+      if (from < 26) {
+        // 中断升级及降版测试可能已有部分整理列，仅补齐缺失列。
+        final Set<String> columns = (await customSelect(
+          'PRAGMA table_info(note_audio_local_files)',
+        ).get()).map((row) => row.read<String>('name')).toSet();
+        // 本机任务不进入同步业务表，旧录音默认保留原始转写行为。
+        final List<GeneratedColumn<Object>> additions = [
+          noteAudioLocalFiles.polishId,
+          noteAudioLocalFiles.polishOperationId,
+          noteAudioLocalFiles.polishState,
+          noteAudioLocalFiles.polishedText,
+          noteAudioLocalFiles.polishAdoptedHash,
+          noteAudioLocalFiles.polishError,
+          noteAudioLocalFiles.polishRecognitionId,
+          noteAudioLocalFiles.polishSourceHash,
+          noteAudioLocalFiles.fallbackRevision,
+          noteAudioLocalFiles.fallbackStart,
+          noteAudioLocalFiles.fallbackEnd,
+        ];
+        for (final GeneratedColumn<Object> column in additions) {
+          if (!columns.contains(column.name)) {
+            await migrator.addColumn(noteAudioLocalFiles, column);
+          }
         }
       }
     },

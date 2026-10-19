@@ -12741,6 +12741,130 @@ class $NoteAudioLocalFilesTable extends NoteAudioLocalFiles
         type: DriftSqlType.string,
         requiredDuringInsert: false,
       );
+  static const VerificationMeta _polishIdMeta = const VerificationMeta(
+    'polishId',
+  );
+  @override
+  late final GeneratedColumn<String> polishId = GeneratedColumn<String>(
+    'polish_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _polishOperationIdMeta = const VerificationMeta(
+    'polishOperationId',
+  );
+  @override
+  late final GeneratedColumn<String> polishOperationId =
+      GeneratedColumn<String>(
+        'polish_operation_id',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _polishStateMeta = const VerificationMeta(
+    'polishState',
+  );
+  @override
+  late final GeneratedColumn<String> polishState = GeneratedColumn<String>(
+    'polish_state',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('disabled'),
+  );
+  static const VerificationMeta _polishedTextMeta = const VerificationMeta(
+    'polishedText',
+  );
+  @override
+  late final GeneratedColumn<String> polishedText = GeneratedColumn<String>(
+    'polished_text',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _polishAdoptedHashMeta = const VerificationMeta(
+    'polishAdoptedHash',
+  );
+  @override
+  late final GeneratedColumn<String> polishAdoptedHash =
+      GeneratedColumn<String>(
+        'polish_adopted_hash',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _polishErrorMeta = const VerificationMeta(
+    'polishError',
+  );
+  @override
+  late final GeneratedColumn<String> polishError = GeneratedColumn<String>(
+    'polish_error',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _polishRecognitionIdMeta =
+      const VerificationMeta('polishRecognitionId');
+  @override
+  late final GeneratedColumn<String> polishRecognitionId =
+      GeneratedColumn<String>(
+        'polish_recognition_id',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _polishSourceHashMeta = const VerificationMeta(
+    'polishSourceHash',
+  );
+  @override
+  late final GeneratedColumn<String> polishSourceHash = GeneratedColumn<String>(
+    'polish_source_hash',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _fallbackRevisionMeta = const VerificationMeta(
+    'fallbackRevision',
+  );
+  @override
+  late final GeneratedColumn<String> fallbackRevision = GeneratedColumn<String>(
+    'fallback_revision',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _fallbackStartMeta = const VerificationMeta(
+    'fallbackStart',
+  );
+  @override
+  late final GeneratedColumn<int> fallbackStart = GeneratedColumn<int>(
+    'fallback_start',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _fallbackEndMeta = const VerificationMeta(
+    'fallbackEnd',
+  );
+  @override
+  late final GeneratedColumn<int> fallbackEnd = GeneratedColumn<int>(
+    'fallback_end',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -12752,6 +12876,17 @@ class $NoteAudioLocalFilesTable extends NoteAudioLocalFiles
     consent,
     insertedRevision,
     candidateTranscript,
+    polishId,
+    polishOperationId,
+    polishState,
+    polishedText,
+    polishAdoptedHash,
+    polishError,
+    polishRecognitionId,
+    polishSourceHash,
+    fallbackRevision,
+    fallbackStart,
+    fallbackEnd,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -12833,6 +12968,102 @@ class $NoteAudioLocalFilesTable extends NoteAudioLocalFiles
         ),
       );
     }
+    if (data.containsKey('polish_id')) {
+      context.handle(
+        _polishIdMeta,
+        polishId.isAcceptableOrUnknown(data['polish_id']!, _polishIdMeta),
+      );
+    }
+    if (data.containsKey('polish_operation_id')) {
+      context.handle(
+        _polishOperationIdMeta,
+        polishOperationId.isAcceptableOrUnknown(
+          data['polish_operation_id']!,
+          _polishOperationIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('polish_state')) {
+      context.handle(
+        _polishStateMeta,
+        polishState.isAcceptableOrUnknown(
+          data['polish_state']!,
+          _polishStateMeta,
+        ),
+      );
+    }
+    if (data.containsKey('polished_text')) {
+      context.handle(
+        _polishedTextMeta,
+        polishedText.isAcceptableOrUnknown(
+          data['polished_text']!,
+          _polishedTextMeta,
+        ),
+      );
+    }
+    if (data.containsKey('polish_adopted_hash')) {
+      context.handle(
+        _polishAdoptedHashMeta,
+        polishAdoptedHash.isAcceptableOrUnknown(
+          data['polish_adopted_hash']!,
+          _polishAdoptedHashMeta,
+        ),
+      );
+    }
+    if (data.containsKey('polish_error')) {
+      context.handle(
+        _polishErrorMeta,
+        polishError.isAcceptableOrUnknown(
+          data['polish_error']!,
+          _polishErrorMeta,
+        ),
+      );
+    }
+    if (data.containsKey('polish_recognition_id')) {
+      context.handle(
+        _polishRecognitionIdMeta,
+        polishRecognitionId.isAcceptableOrUnknown(
+          data['polish_recognition_id']!,
+          _polishRecognitionIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('polish_source_hash')) {
+      context.handle(
+        _polishSourceHashMeta,
+        polishSourceHash.isAcceptableOrUnknown(
+          data['polish_source_hash']!,
+          _polishSourceHashMeta,
+        ),
+      );
+    }
+    if (data.containsKey('fallback_revision')) {
+      context.handle(
+        _fallbackRevisionMeta,
+        fallbackRevision.isAcceptableOrUnknown(
+          data['fallback_revision']!,
+          _fallbackRevisionMeta,
+        ),
+      );
+    }
+    if (data.containsKey('fallback_start')) {
+      context.handle(
+        _fallbackStartMeta,
+        fallbackStart.isAcceptableOrUnknown(
+          data['fallback_start']!,
+          _fallbackStartMeta,
+        ),
+      );
+    }
+    if (data.containsKey('fallback_end')) {
+      context.handle(
+        _fallbackEndMeta,
+        fallbackEnd.isAcceptableOrUnknown(
+          data['fallback_end']!,
+          _fallbackEndMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -12881,6 +13112,50 @@ class $NoteAudioLocalFilesTable extends NoteAudioLocalFiles
         DriftSqlType.string,
         data['${effectivePrefix}candidate_transcript'],
       ),
+      polishId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}polish_id'],
+      ),
+      polishOperationId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}polish_operation_id'],
+      ),
+      polishState: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}polish_state'],
+      )!,
+      polishedText: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}polished_text'],
+      ),
+      polishAdoptedHash: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}polish_adopted_hash'],
+      ),
+      polishError: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}polish_error'],
+      ),
+      polishRecognitionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}polish_recognition_id'],
+      ),
+      polishSourceHash: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}polish_source_hash'],
+      ),
+      fallbackRevision: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}fallback_revision'],
+      ),
+      fallbackStart: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}fallback_start'],
+      ),
+      fallbackEnd: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}fallback_end'],
+      ),
     );
   }
 
@@ -12918,6 +13193,39 @@ class NoteAudioLocalFileRecord extends DataClass
 
   /// 重新转写的本机候选，不覆盖共享原始转写。
   final String? candidateTranscript;
+
+  /// 后端整理任务身份，仅属于当前服务器。
+  final String? polishId;
+
+  /// 显式重试在提交前持久化的幂等操作身份。
+  final String? polishOperationId;
+
+  /// 整理状态；历史录音默认沿用未启用行为。
+  final String polishState;
+
+  /// 独立于原始转写的整理候选。
+  final String? polishedText;
+
+  /// 已采用整理结果的指纹，重试与重新识别候选分别去重。
+  final String? polishAdoptedHash;
+
+  /// 本次整理失败原因。
+  final String? polishError;
+
+  /// 整理结果所对应的识别任务身份。
+  final String? polishRecognitionId;
+
+  /// 整理输入摘要，防止迟到结果串到其他原文。
+  final String? polishSourceHash;
+
+  /// 回退原文仍可安全替换的正文版本。
+  final String? fallbackRevision;
+
+  /// 回退原文在正文中的起点，包含该段前面的自动分隔符。
+  final int? fallbackStart;
+
+  /// 回退原文在正文中的结束位置。
+  final int? fallbackEnd;
   const NoteAudioLocalFileRecord({
     required this.id,
     this.localPath,
@@ -12928,6 +13236,17 @@ class NoteAudioLocalFileRecord extends DataClass
     required this.consent,
     this.insertedRevision,
     this.candidateTranscript,
+    this.polishId,
+    this.polishOperationId,
+    required this.polishState,
+    this.polishedText,
+    this.polishAdoptedHash,
+    this.polishError,
+    this.polishRecognitionId,
+    this.polishSourceHash,
+    this.fallbackRevision,
+    this.fallbackStart,
+    this.fallbackEnd,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -12950,6 +13269,37 @@ class NoteAudioLocalFileRecord extends DataClass
     }
     if (!nullToAbsent || candidateTranscript != null) {
       map['candidate_transcript'] = Variable<String>(candidateTranscript);
+    }
+    if (!nullToAbsent || polishId != null) {
+      map['polish_id'] = Variable<String>(polishId);
+    }
+    if (!nullToAbsent || polishOperationId != null) {
+      map['polish_operation_id'] = Variable<String>(polishOperationId);
+    }
+    map['polish_state'] = Variable<String>(polishState);
+    if (!nullToAbsent || polishedText != null) {
+      map['polished_text'] = Variable<String>(polishedText);
+    }
+    if (!nullToAbsent || polishAdoptedHash != null) {
+      map['polish_adopted_hash'] = Variable<String>(polishAdoptedHash);
+    }
+    if (!nullToAbsent || polishError != null) {
+      map['polish_error'] = Variable<String>(polishError);
+    }
+    if (!nullToAbsent || polishRecognitionId != null) {
+      map['polish_recognition_id'] = Variable<String>(polishRecognitionId);
+    }
+    if (!nullToAbsent || polishSourceHash != null) {
+      map['polish_source_hash'] = Variable<String>(polishSourceHash);
+    }
+    if (!nullToAbsent || fallbackRevision != null) {
+      map['fallback_revision'] = Variable<String>(fallbackRevision);
+    }
+    if (!nullToAbsent || fallbackStart != null) {
+      map['fallback_start'] = Variable<int>(fallbackStart);
+    }
+    if (!nullToAbsent || fallbackEnd != null) {
+      map['fallback_end'] = Variable<int>(fallbackEnd);
     }
     return map;
   }
@@ -12975,6 +13325,37 @@ class NoteAudioLocalFileRecord extends DataClass
       candidateTranscript: candidateTranscript == null && nullToAbsent
           ? const Value.absent()
           : Value(candidateTranscript),
+      polishId: polishId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(polishId),
+      polishOperationId: polishOperationId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(polishOperationId),
+      polishState: Value(polishState),
+      polishedText: polishedText == null && nullToAbsent
+          ? const Value.absent()
+          : Value(polishedText),
+      polishAdoptedHash: polishAdoptedHash == null && nullToAbsent
+          ? const Value.absent()
+          : Value(polishAdoptedHash),
+      polishError: polishError == null && nullToAbsent
+          ? const Value.absent()
+          : Value(polishError),
+      polishRecognitionId: polishRecognitionId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(polishRecognitionId),
+      polishSourceHash: polishSourceHash == null && nullToAbsent
+          ? const Value.absent()
+          : Value(polishSourceHash),
+      fallbackRevision: fallbackRevision == null && nullToAbsent
+          ? const Value.absent()
+          : Value(fallbackRevision),
+      fallbackStart: fallbackStart == null && nullToAbsent
+          ? const Value.absent()
+          : Value(fallbackStart),
+      fallbackEnd: fallbackEnd == null && nullToAbsent
+          ? const Value.absent()
+          : Value(fallbackEnd),
     );
   }
 
@@ -12995,6 +13376,23 @@ class NoteAudioLocalFileRecord extends DataClass
       candidateTranscript: serializer.fromJson<String?>(
         json['candidateTranscript'],
       ),
+      polishId: serializer.fromJson<String?>(json['polishId']),
+      polishOperationId: serializer.fromJson<String?>(
+        json['polishOperationId'],
+      ),
+      polishState: serializer.fromJson<String>(json['polishState']),
+      polishedText: serializer.fromJson<String?>(json['polishedText']),
+      polishAdoptedHash: serializer.fromJson<String?>(
+        json['polishAdoptedHash'],
+      ),
+      polishError: serializer.fromJson<String?>(json['polishError']),
+      polishRecognitionId: serializer.fromJson<String?>(
+        json['polishRecognitionId'],
+      ),
+      polishSourceHash: serializer.fromJson<String?>(json['polishSourceHash']),
+      fallbackRevision: serializer.fromJson<String?>(json['fallbackRevision']),
+      fallbackStart: serializer.fromJson<int?>(json['fallbackStart']),
+      fallbackEnd: serializer.fromJson<int?>(json['fallbackEnd']),
     );
   }
   @override
@@ -13010,6 +13408,17 @@ class NoteAudioLocalFileRecord extends DataClass
       'consent': serializer.toJson<bool>(consent),
       'insertedRevision': serializer.toJson<String?>(insertedRevision),
       'candidateTranscript': serializer.toJson<String?>(candidateTranscript),
+      'polishId': serializer.toJson<String?>(polishId),
+      'polishOperationId': serializer.toJson<String?>(polishOperationId),
+      'polishState': serializer.toJson<String>(polishState),
+      'polishedText': serializer.toJson<String?>(polishedText),
+      'polishAdoptedHash': serializer.toJson<String?>(polishAdoptedHash),
+      'polishError': serializer.toJson<String?>(polishError),
+      'polishRecognitionId': serializer.toJson<String?>(polishRecognitionId),
+      'polishSourceHash': serializer.toJson<String?>(polishSourceHash),
+      'fallbackRevision': serializer.toJson<String?>(fallbackRevision),
+      'fallbackStart': serializer.toJson<int?>(fallbackStart),
+      'fallbackEnd': serializer.toJson<int?>(fallbackEnd),
     };
   }
 
@@ -13023,6 +13432,17 @@ class NoteAudioLocalFileRecord extends DataClass
     bool? consent,
     Value<String?> insertedRevision = const Value.absent(),
     Value<String?> candidateTranscript = const Value.absent(),
+    Value<String?> polishId = const Value.absent(),
+    Value<String?> polishOperationId = const Value.absent(),
+    String? polishState,
+    Value<String?> polishedText = const Value.absent(),
+    Value<String?> polishAdoptedHash = const Value.absent(),
+    Value<String?> polishError = const Value.absent(),
+    Value<String?> polishRecognitionId = const Value.absent(),
+    Value<String?> polishSourceHash = const Value.absent(),
+    Value<String?> fallbackRevision = const Value.absent(),
+    Value<int?> fallbackStart = const Value.absent(),
+    Value<int?> fallbackEnd = const Value.absent(),
   }) => NoteAudioLocalFileRecord(
     id: id ?? this.id,
     localPath: localPath.present ? localPath.value : this.localPath,
@@ -13039,6 +13459,29 @@ class NoteAudioLocalFileRecord extends DataClass
     candidateTranscript: candidateTranscript.present
         ? candidateTranscript.value
         : this.candidateTranscript,
+    polishId: polishId.present ? polishId.value : this.polishId,
+    polishOperationId: polishOperationId.present
+        ? polishOperationId.value
+        : this.polishOperationId,
+    polishState: polishState ?? this.polishState,
+    polishedText: polishedText.present ? polishedText.value : this.polishedText,
+    polishAdoptedHash: polishAdoptedHash.present
+        ? polishAdoptedHash.value
+        : this.polishAdoptedHash,
+    polishError: polishError.present ? polishError.value : this.polishError,
+    polishRecognitionId: polishRecognitionId.present
+        ? polishRecognitionId.value
+        : this.polishRecognitionId,
+    polishSourceHash: polishSourceHash.present
+        ? polishSourceHash.value
+        : this.polishSourceHash,
+    fallbackRevision: fallbackRevision.present
+        ? fallbackRevision.value
+        : this.fallbackRevision,
+    fallbackStart: fallbackStart.present
+        ? fallbackStart.value
+        : this.fallbackStart,
+    fallbackEnd: fallbackEnd.present ? fallbackEnd.value : this.fallbackEnd,
   );
   NoteAudioLocalFileRecord copyWithCompanion(
     NoteAudioLocalFilesCompanion data,
@@ -13063,6 +13506,37 @@ class NoteAudioLocalFileRecord extends DataClass
       candidateTranscript: data.candidateTranscript.present
           ? data.candidateTranscript.value
           : this.candidateTranscript,
+      polishId: data.polishId.present ? data.polishId.value : this.polishId,
+      polishOperationId: data.polishOperationId.present
+          ? data.polishOperationId.value
+          : this.polishOperationId,
+      polishState: data.polishState.present
+          ? data.polishState.value
+          : this.polishState,
+      polishedText: data.polishedText.present
+          ? data.polishedText.value
+          : this.polishedText,
+      polishAdoptedHash: data.polishAdoptedHash.present
+          ? data.polishAdoptedHash.value
+          : this.polishAdoptedHash,
+      polishError: data.polishError.present
+          ? data.polishError.value
+          : this.polishError,
+      polishRecognitionId: data.polishRecognitionId.present
+          ? data.polishRecognitionId.value
+          : this.polishRecognitionId,
+      polishSourceHash: data.polishSourceHash.present
+          ? data.polishSourceHash.value
+          : this.polishSourceHash,
+      fallbackRevision: data.fallbackRevision.present
+          ? data.fallbackRevision.value
+          : this.fallbackRevision,
+      fallbackStart: data.fallbackStart.present
+          ? data.fallbackStart.value
+          : this.fallbackStart,
+      fallbackEnd: data.fallbackEnd.present
+          ? data.fallbackEnd.value
+          : this.fallbackEnd,
     );
   }
 
@@ -13077,7 +13551,18 @@ class NoteAudioLocalFileRecord extends DataClass
           ..write('lastError: $lastError, ')
           ..write('consent: $consent, ')
           ..write('insertedRevision: $insertedRevision, ')
-          ..write('candidateTranscript: $candidateTranscript')
+          ..write('candidateTranscript: $candidateTranscript, ')
+          ..write('polishId: $polishId, ')
+          ..write('polishOperationId: $polishOperationId, ')
+          ..write('polishState: $polishState, ')
+          ..write('polishedText: $polishedText, ')
+          ..write('polishAdoptedHash: $polishAdoptedHash, ')
+          ..write('polishError: $polishError, ')
+          ..write('polishRecognitionId: $polishRecognitionId, ')
+          ..write('polishSourceHash: $polishSourceHash, ')
+          ..write('fallbackRevision: $fallbackRevision, ')
+          ..write('fallbackStart: $fallbackStart, ')
+          ..write('fallbackEnd: $fallbackEnd')
           ..write(')'))
         .toString();
   }
@@ -13093,6 +13578,17 @@ class NoteAudioLocalFileRecord extends DataClass
     consent,
     insertedRevision,
     candidateTranscript,
+    polishId,
+    polishOperationId,
+    polishState,
+    polishedText,
+    polishAdoptedHash,
+    polishError,
+    polishRecognitionId,
+    polishSourceHash,
+    fallbackRevision,
+    fallbackStart,
+    fallbackEnd,
   );
   @override
   bool operator ==(Object other) =>
@@ -13106,7 +13602,18 @@ class NoteAudioLocalFileRecord extends DataClass
           other.lastError == this.lastError &&
           other.consent == this.consent &&
           other.insertedRevision == this.insertedRevision &&
-          other.candidateTranscript == this.candidateTranscript);
+          other.candidateTranscript == this.candidateTranscript &&
+          other.polishId == this.polishId &&
+          other.polishOperationId == this.polishOperationId &&
+          other.polishState == this.polishState &&
+          other.polishedText == this.polishedText &&
+          other.polishAdoptedHash == this.polishAdoptedHash &&
+          other.polishError == this.polishError &&
+          other.polishRecognitionId == this.polishRecognitionId &&
+          other.polishSourceHash == this.polishSourceHash &&
+          other.fallbackRevision == this.fallbackRevision &&
+          other.fallbackStart == this.fallbackStart &&
+          other.fallbackEnd == this.fallbackEnd);
 }
 
 class NoteAudioLocalFilesCompanion
@@ -13120,6 +13627,17 @@ class NoteAudioLocalFilesCompanion
   final Value<bool> consent;
   final Value<String?> insertedRevision;
   final Value<String?> candidateTranscript;
+  final Value<String?> polishId;
+  final Value<String?> polishOperationId;
+  final Value<String> polishState;
+  final Value<String?> polishedText;
+  final Value<String?> polishAdoptedHash;
+  final Value<String?> polishError;
+  final Value<String?> polishRecognitionId;
+  final Value<String?> polishSourceHash;
+  final Value<String?> fallbackRevision;
+  final Value<int?> fallbackStart;
+  final Value<int?> fallbackEnd;
   final Value<int> rowid;
   const NoteAudioLocalFilesCompanion({
     this.id = const Value.absent(),
@@ -13131,6 +13649,17 @@ class NoteAudioLocalFilesCompanion
     this.consent = const Value.absent(),
     this.insertedRevision = const Value.absent(),
     this.candidateTranscript = const Value.absent(),
+    this.polishId = const Value.absent(),
+    this.polishOperationId = const Value.absent(),
+    this.polishState = const Value.absent(),
+    this.polishedText = const Value.absent(),
+    this.polishAdoptedHash = const Value.absent(),
+    this.polishError = const Value.absent(),
+    this.polishRecognitionId = const Value.absent(),
+    this.polishSourceHash = const Value.absent(),
+    this.fallbackRevision = const Value.absent(),
+    this.fallbackStart = const Value.absent(),
+    this.fallbackEnd = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   NoteAudioLocalFilesCompanion.insert({
@@ -13143,6 +13672,17 @@ class NoteAudioLocalFilesCompanion
     this.consent = const Value.absent(),
     this.insertedRevision = const Value.absent(),
     this.candidateTranscript = const Value.absent(),
+    this.polishId = const Value.absent(),
+    this.polishOperationId = const Value.absent(),
+    this.polishState = const Value.absent(),
+    this.polishedText = const Value.absent(),
+    this.polishAdoptedHash = const Value.absent(),
+    this.polishError = const Value.absent(),
+    this.polishRecognitionId = const Value.absent(),
+    this.polishSourceHash = const Value.absent(),
+    this.fallbackRevision = const Value.absent(),
+    this.fallbackStart = const Value.absent(),
+    this.fallbackEnd = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id);
   static Insertable<NoteAudioLocalFileRecord> custom({
@@ -13155,6 +13695,17 @@ class NoteAudioLocalFilesCompanion
     Expression<bool>? consent,
     Expression<String>? insertedRevision,
     Expression<String>? candidateTranscript,
+    Expression<String>? polishId,
+    Expression<String>? polishOperationId,
+    Expression<String>? polishState,
+    Expression<String>? polishedText,
+    Expression<String>? polishAdoptedHash,
+    Expression<String>? polishError,
+    Expression<String>? polishRecognitionId,
+    Expression<String>? polishSourceHash,
+    Expression<String>? fallbackRevision,
+    Expression<int>? fallbackStart,
+    Expression<int>? fallbackEnd,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -13168,6 +13719,18 @@ class NoteAudioLocalFilesCompanion
       if (insertedRevision != null) 'inserted_revision': insertedRevision,
       if (candidateTranscript != null)
         'candidate_transcript': candidateTranscript,
+      if (polishId != null) 'polish_id': polishId,
+      if (polishOperationId != null) 'polish_operation_id': polishOperationId,
+      if (polishState != null) 'polish_state': polishState,
+      if (polishedText != null) 'polished_text': polishedText,
+      if (polishAdoptedHash != null) 'polish_adopted_hash': polishAdoptedHash,
+      if (polishError != null) 'polish_error': polishError,
+      if (polishRecognitionId != null)
+        'polish_recognition_id': polishRecognitionId,
+      if (polishSourceHash != null) 'polish_source_hash': polishSourceHash,
+      if (fallbackRevision != null) 'fallback_revision': fallbackRevision,
+      if (fallbackStart != null) 'fallback_start': fallbackStart,
+      if (fallbackEnd != null) 'fallback_end': fallbackEnd,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -13182,6 +13745,17 @@ class NoteAudioLocalFilesCompanion
     Value<bool>? consent,
     Value<String?>? insertedRevision,
     Value<String?>? candidateTranscript,
+    Value<String?>? polishId,
+    Value<String?>? polishOperationId,
+    Value<String>? polishState,
+    Value<String?>? polishedText,
+    Value<String?>? polishAdoptedHash,
+    Value<String?>? polishError,
+    Value<String?>? polishRecognitionId,
+    Value<String?>? polishSourceHash,
+    Value<String?>? fallbackRevision,
+    Value<int?>? fallbackStart,
+    Value<int?>? fallbackEnd,
     Value<int>? rowid,
   }) {
     return NoteAudioLocalFilesCompanion(
@@ -13194,6 +13768,17 @@ class NoteAudioLocalFilesCompanion
       consent: consent ?? this.consent,
       insertedRevision: insertedRevision ?? this.insertedRevision,
       candidateTranscript: candidateTranscript ?? this.candidateTranscript,
+      polishId: polishId ?? this.polishId,
+      polishOperationId: polishOperationId ?? this.polishOperationId,
+      polishState: polishState ?? this.polishState,
+      polishedText: polishedText ?? this.polishedText,
+      polishAdoptedHash: polishAdoptedHash ?? this.polishAdoptedHash,
+      polishError: polishError ?? this.polishError,
+      polishRecognitionId: polishRecognitionId ?? this.polishRecognitionId,
+      polishSourceHash: polishSourceHash ?? this.polishSourceHash,
+      fallbackRevision: fallbackRevision ?? this.fallbackRevision,
+      fallbackStart: fallbackStart ?? this.fallbackStart,
+      fallbackEnd: fallbackEnd ?? this.fallbackEnd,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -13228,6 +13813,41 @@ class NoteAudioLocalFilesCompanion
     if (candidateTranscript.present) {
       map['candidate_transcript'] = Variable<String>(candidateTranscript.value);
     }
+    if (polishId.present) {
+      map['polish_id'] = Variable<String>(polishId.value);
+    }
+    if (polishOperationId.present) {
+      map['polish_operation_id'] = Variable<String>(polishOperationId.value);
+    }
+    if (polishState.present) {
+      map['polish_state'] = Variable<String>(polishState.value);
+    }
+    if (polishedText.present) {
+      map['polished_text'] = Variable<String>(polishedText.value);
+    }
+    if (polishAdoptedHash.present) {
+      map['polish_adopted_hash'] = Variable<String>(polishAdoptedHash.value);
+    }
+    if (polishError.present) {
+      map['polish_error'] = Variable<String>(polishError.value);
+    }
+    if (polishRecognitionId.present) {
+      map['polish_recognition_id'] = Variable<String>(
+        polishRecognitionId.value,
+      );
+    }
+    if (polishSourceHash.present) {
+      map['polish_source_hash'] = Variable<String>(polishSourceHash.value);
+    }
+    if (fallbackRevision.present) {
+      map['fallback_revision'] = Variable<String>(fallbackRevision.value);
+    }
+    if (fallbackStart.present) {
+      map['fallback_start'] = Variable<int>(fallbackStart.value);
+    }
+    if (fallbackEnd.present) {
+      map['fallback_end'] = Variable<int>(fallbackEnd.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -13246,6 +13866,17 @@ class NoteAudioLocalFilesCompanion
           ..write('consent: $consent, ')
           ..write('insertedRevision: $insertedRevision, ')
           ..write('candidateTranscript: $candidateTranscript, ')
+          ..write('polishId: $polishId, ')
+          ..write('polishOperationId: $polishOperationId, ')
+          ..write('polishState: $polishState, ')
+          ..write('polishedText: $polishedText, ')
+          ..write('polishAdoptedHash: $polishAdoptedHash, ')
+          ..write('polishError: $polishError, ')
+          ..write('polishRecognitionId: $polishRecognitionId, ')
+          ..write('polishSourceHash: $polishSourceHash, ')
+          ..write('fallbackRevision: $fallbackRevision, ')
+          ..write('fallbackStart: $fallbackStart, ')
+          ..write('fallbackEnd: $fallbackEnd, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -22827,6 +23458,17 @@ typedef $$NoteAudioLocalFilesTableCreateCompanionBuilder =
       Value<bool> consent,
       Value<String?> insertedRevision,
       Value<String?> candidateTranscript,
+      Value<String?> polishId,
+      Value<String?> polishOperationId,
+      Value<String> polishState,
+      Value<String?> polishedText,
+      Value<String?> polishAdoptedHash,
+      Value<String?> polishError,
+      Value<String?> polishRecognitionId,
+      Value<String?> polishSourceHash,
+      Value<String?> fallbackRevision,
+      Value<int?> fallbackStart,
+      Value<int?> fallbackEnd,
       Value<int> rowid,
     });
 typedef $$NoteAudioLocalFilesTableUpdateCompanionBuilder =
@@ -22840,6 +23482,17 @@ typedef $$NoteAudioLocalFilesTableUpdateCompanionBuilder =
       Value<bool> consent,
       Value<String?> insertedRevision,
       Value<String?> candidateTranscript,
+      Value<String?> polishId,
+      Value<String?> polishOperationId,
+      Value<String> polishState,
+      Value<String?> polishedText,
+      Value<String?> polishAdoptedHash,
+      Value<String?> polishError,
+      Value<String?> polishRecognitionId,
+      Value<String?> polishSourceHash,
+      Value<String?> fallbackRevision,
+      Value<int?> fallbackStart,
+      Value<int?> fallbackEnd,
       Value<int> rowid,
     });
 
@@ -22894,6 +23547,61 @@ class $$NoteAudioLocalFilesTableFilterComposer
 
   ColumnFilters<String> get candidateTranscript => $composableBuilder(
     column: $table.candidateTranscript,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get polishId => $composableBuilder(
+    column: $table.polishId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get polishOperationId => $composableBuilder(
+    column: $table.polishOperationId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get polishState => $composableBuilder(
+    column: $table.polishState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get polishedText => $composableBuilder(
+    column: $table.polishedText,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get polishAdoptedHash => $composableBuilder(
+    column: $table.polishAdoptedHash,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get polishError => $composableBuilder(
+    column: $table.polishError,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get polishRecognitionId => $composableBuilder(
+    column: $table.polishRecognitionId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get polishSourceHash => $composableBuilder(
+    column: $table.polishSourceHash,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get fallbackRevision => $composableBuilder(
+    column: $table.fallbackRevision,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get fallbackStart => $composableBuilder(
+    column: $table.fallbackStart,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get fallbackEnd => $composableBuilder(
+    column: $table.fallbackEnd,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -22951,6 +23659,61 @@ class $$NoteAudioLocalFilesTableOrderingComposer
     column: $table.candidateTranscript,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get polishId => $composableBuilder(
+    column: $table.polishId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get polishOperationId => $composableBuilder(
+    column: $table.polishOperationId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get polishState => $composableBuilder(
+    column: $table.polishState,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get polishedText => $composableBuilder(
+    column: $table.polishedText,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get polishAdoptedHash => $composableBuilder(
+    column: $table.polishAdoptedHash,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get polishError => $composableBuilder(
+    column: $table.polishError,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get polishRecognitionId => $composableBuilder(
+    column: $table.polishRecognitionId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get polishSourceHash => $composableBuilder(
+    column: $table.polishSourceHash,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get fallbackRevision => $composableBuilder(
+    column: $table.fallbackRevision,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get fallbackStart => $composableBuilder(
+    column: $table.fallbackStart,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get fallbackEnd => $composableBuilder(
+    column: $table.fallbackEnd,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$NoteAudioLocalFilesTableAnnotationComposer
@@ -22996,6 +23759,59 @@ class $$NoteAudioLocalFilesTableAnnotationComposer
 
   GeneratedColumn<String> get candidateTranscript => $composableBuilder(
     column: $table.candidateTranscript,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get polishId =>
+      $composableBuilder(column: $table.polishId, builder: (column) => column);
+
+  GeneratedColumn<String> get polishOperationId => $composableBuilder(
+    column: $table.polishOperationId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get polishState => $composableBuilder(
+    column: $table.polishState,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get polishedText => $composableBuilder(
+    column: $table.polishedText,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get polishAdoptedHash => $composableBuilder(
+    column: $table.polishAdoptedHash,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get polishError => $composableBuilder(
+    column: $table.polishError,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get polishRecognitionId => $composableBuilder(
+    column: $table.polishRecognitionId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get polishSourceHash => $composableBuilder(
+    column: $table.polishSourceHash,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get fallbackRevision => $composableBuilder(
+    column: $table.fallbackRevision,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get fallbackStart => $composableBuilder(
+    column: $table.fallbackStart,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get fallbackEnd => $composableBuilder(
+    column: $table.fallbackEnd,
     builder: (column) => column,
   );
 }
@@ -23052,6 +23868,17 @@ class $$NoteAudioLocalFilesTableTableManager
                 Value<bool> consent = const Value.absent(),
                 Value<String?> insertedRevision = const Value.absent(),
                 Value<String?> candidateTranscript = const Value.absent(),
+                Value<String?> polishId = const Value.absent(),
+                Value<String?> polishOperationId = const Value.absent(),
+                Value<String> polishState = const Value.absent(),
+                Value<String?> polishedText = const Value.absent(),
+                Value<String?> polishAdoptedHash = const Value.absent(),
+                Value<String?> polishError = const Value.absent(),
+                Value<String?> polishRecognitionId = const Value.absent(),
+                Value<String?> polishSourceHash = const Value.absent(),
+                Value<String?> fallbackRevision = const Value.absent(),
+                Value<int?> fallbackStart = const Value.absent(),
+                Value<int?> fallbackEnd = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => NoteAudioLocalFilesCompanion(
                 id: id,
@@ -23063,6 +23890,17 @@ class $$NoteAudioLocalFilesTableTableManager
                 consent: consent,
                 insertedRevision: insertedRevision,
                 candidateTranscript: candidateTranscript,
+                polishId: polishId,
+                polishOperationId: polishOperationId,
+                polishState: polishState,
+                polishedText: polishedText,
+                polishAdoptedHash: polishAdoptedHash,
+                polishError: polishError,
+                polishRecognitionId: polishRecognitionId,
+                polishSourceHash: polishSourceHash,
+                fallbackRevision: fallbackRevision,
+                fallbackStart: fallbackStart,
+                fallbackEnd: fallbackEnd,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -23076,6 +23914,17 @@ class $$NoteAudioLocalFilesTableTableManager
                 Value<bool> consent = const Value.absent(),
                 Value<String?> insertedRevision = const Value.absent(),
                 Value<String?> candidateTranscript = const Value.absent(),
+                Value<String?> polishId = const Value.absent(),
+                Value<String?> polishOperationId = const Value.absent(),
+                Value<String> polishState = const Value.absent(),
+                Value<String?> polishedText = const Value.absent(),
+                Value<String?> polishAdoptedHash = const Value.absent(),
+                Value<String?> polishError = const Value.absent(),
+                Value<String?> polishRecognitionId = const Value.absent(),
+                Value<String?> polishSourceHash = const Value.absent(),
+                Value<String?> fallbackRevision = const Value.absent(),
+                Value<int?> fallbackStart = const Value.absent(),
+                Value<int?> fallbackEnd = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => NoteAudioLocalFilesCompanion.insert(
                 id: id,
@@ -23087,6 +23936,17 @@ class $$NoteAudioLocalFilesTableTableManager
                 consent: consent,
                 insertedRevision: insertedRevision,
                 candidateTranscript: candidateTranscript,
+                polishId: polishId,
+                polishOperationId: polishOperationId,
+                polishState: polishState,
+                polishedText: polishedText,
+                polishAdoptedHash: polishAdoptedHash,
+                polishError: polishError,
+                polishRecognitionId: polishRecognitionId,
+                polishSourceHash: polishSourceHash,
+                fallbackRevision: fallbackRevision,
+                fallbackStart: fallbackStart,
+                fallbackEnd: fallbackEnd,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

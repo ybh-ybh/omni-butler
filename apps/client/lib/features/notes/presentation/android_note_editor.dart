@@ -1252,6 +1252,7 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
                     updatedAt: audio.startedAt,
                   ),
                   draftLocal: NoteAudioLocalFileRecord(
+                    polishState: 'disabled',
                     id: audio.id,
                     localPath: audio.localPath,
                     uploadState: 'local',

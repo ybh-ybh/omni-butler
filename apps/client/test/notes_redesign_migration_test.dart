@@ -54,7 +54,7 @@ void main() {
       expect(
         (await database.customSelect('PRAGMA user_version').getSingle())
             .read<int>('user_version'),
-        25,
+        26,
       );
     } finally {
       await database.close();
@@ -217,7 +217,7 @@ void main() {
     );
     expect(restored.tables['record_taxonomy_links'], isEmpty);
     expect(restored.tables['note_local_drafts'], isEmpty);
-    expect(SyncSnapshot.version, 10);
+    expect(SyncSnapshot.version, 11);
     expect(SyncSnapshot.migrationProtocolVersion, 3);
   });
 

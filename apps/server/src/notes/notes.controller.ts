@@ -1,4 +1,6 @@
-import { BadRequestException, Body, Controller, Delete, Get, Headers, Param, Post, Put, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Headers, Param, ParseUUIDPipe, Post, Put, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { AiService } from '../ai/ai.service';
+import { NotePolishDto } from '../ai/ai.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import type { AuthUser } from '../auth/auth.types';
@@ -6,12 +8,19 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { NoteAudioStageDto, NoteAudioUploadDto, NoteRecognitionDto } from './notes.dto';
 import { NOTE_AUDIO_MAX_BYTES, NotesService } from './notes.service';
+import { requireSyncSchemaVersion } from '../sync/sync-schema';
 
 /// 与已有设备会话共用归属授权，原音不是公共静态文件。
 @Controller('notes/audio')
 export class NotesController {
   /// 注入持久原音和识别服务。
-  constructor(private readonly notes: NotesService) {}
+  constructor(private readonly notes: NotesService, private readonly ai: AiService) {}
+  /// 整理任务独立于识别完成状态继续轮询。
+  @Get(':segmentId/polish') @UseGuards(JwtAuthGuard)
+  polish(@CurrentUser() user: AuthUser, @Param('segmentId', ParseUUIDPipe) segmentId: string, @Query('recognitionId', ParseUUIDPipe) recognitionId: string): ReturnType<AiService['current']> { return this.ai.current(user.sub, segmentId, recognitionId); }
+  /// 显式新尝试允许用户在失败后重新整理，操作身份保证幂等。
+  @Post(':segmentId/polish') @UseGuards(JwtAuthGuard)
+  retryPolish(@CurrentUser() user: AuthUser, @Param('segmentId', ParseUUIDPipe) segmentId: string, @Body() input: NotePolishDto): ReturnType<AiService['retry']> { return this.ai.retry(user.sub, segmentId, input.recognitionId, input.operationId); }
   /// 配置缺失时客户端仍能纯本地记录。
   @Get('capabilities') @UseGuards(JwtAuthGuard)
   capabilities(): ReturnType<NotesService['capabilities']> { return this.notes.capabilities(); }
@@ -37,10 +46,10 @@ export class NotesController {
   async download(@CurrentUser() user: AuthUser, @Param('segmentId') segmentId: string, @Headers('range') range: string | undefined, @Res() response: Response): Promise<void> { this.send(response, await this.notes.download(user.sub, segmentId), range); }
   /// 创建或重放当前云端识别。
   @Post(':segmentId/recognitions') @UseGuards(JwtAuthGuard)
-  recognize(@CurrentUser() user: AuthUser, @Param('segmentId') segmentId: string, @Body() input: NoteRecognitionDto): ReturnType<NotesService['recognize']> { return this.notes.recognize(user, segmentId, input.operationId, input.consent); }
+  recognize(@CurrentUser() user: AuthUser, @Param('segmentId') segmentId: string, @Body() input: NoteRecognitionDto, @Headers('x-omni-sync-schema') version: string | undefined): ReturnType<NotesService['recognize']> { requireSyncSchemaVersion(version); return this.notes.recognize(user, segmentId, input.operationId, input.consent); }
   /// 轮询本系统任务不触发服务商提交。
   @Get(':segmentId/recognitions/current') @UseGuards(JwtAuthGuard)
-  current(@CurrentUser() user: AuthUser, @Param('segmentId') segmentId: string): ReturnType<NotesService['current']> { return this.notes.current(user, segmentId); }
+  current(@CurrentUser() user: AuthUser, @Param('segmentId') segmentId: string, @Headers('x-omni-sync-schema') version: string | undefined): ReturnType<NotesService['current']> { requireSyncSchemaVersion(version); return this.notes.current(user, segmentId); }
   /// 在线送达后撤销尚未发送工作，已提交结果停止进入笔记。
   @Delete(':segmentId/recognitions/current') @UseGuards(JwtAuthGuard)
   cancel(@CurrentUser() user: AuthUser, @Param('segmentId') segmentId: string): ReturnType<NotesService['cancel']> { return this.notes.cancel(user, segmentId); }

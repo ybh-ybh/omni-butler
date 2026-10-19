@@ -142,8 +142,22 @@ class NoteEditorController extends ChangeNotifier {
   /// 完成录音的持久化订阅。
   late final StreamSubscription<NoteRecordingResult> _completed;
 
-  /// 自动转写只授权新录音，历史不追溯纳入。
+  /// 新录音的默认转写授权，历史不追溯纳入。
   bool voiceConsent = false;
+
+  /// 显式授权开关可覆盖当前所属片段，历史录音和其他草稿不追溯授权。
+  void setVoiceConsent(bool enabled, {bool includeCurrentRecording = false}) {
+    if (committing || _cancelling) return;
+    voiceConsent = enabled;
+    if (includeCurrentRecording &&
+        recorder.state.isActive &&
+        recorder.state.noteId == draft.id &&
+        recorder.state.draftId == _draftId &&
+        _recordingDraftId == _draftId) {
+      _recordingConsent = enabled;
+    }
+    _notify();
+  }
 
   /// 当前正在保存的原音任务，退出时排空。
   Future<void> _audioWrites = Future.value();
@@ -155,7 +169,7 @@ class NoteEditorController extends ChangeNotifier {
   /// 活跃录音开始时固定的草稿上下文。
   NoteDraft? _recordingDraft;
 
-  /// 仅录音开始时已有明确授权的本段可以自动转写。
+  /// 本段自动转写授权，Windows 当前录音的显式开关可以更新。
   bool _recordingConsent = false;
 
   /// 草稿是否已形成持久笔记。

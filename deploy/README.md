@@ -366,6 +366,22 @@ API 文档：局域网为 `http://<服务器IP>:<API端口>/omni-butler/api/v1/d
 本机数据库升至20、快照升至5（可读取旧1–4），换服 wire snapshotVersion 保持3。正式图片子记录参与业务快照；本机图片原件、草稿及缓存纳入校验备份和候选源独立文件恢复。使用服务器数据时不混入旧本机草稿。正式部署尚未执行。
 
 
+## 2026-10-19 大模型设置与笔记 AI 整理（schema 11）
+
+先完整备份 PostgreSQL、MinIO 原音/图片及存储凭据和 `api-keys` 卷，部署增量迁移 `20261019020000_ai_note_polish` 与 API，再升级 Windows/Android 全部客户端。客户端 SQLite26、本机快照11（兼容1–10），换服 wire3保持。AI配置和持久任务为后端私有表，不向 PowerSync publication 或 bucket 查询加入这些表；沿用既有业务下行配置。
+
+首次保存模型 Key 时在 `/app/keys/ai-encryption-key-v1` 生成独立加密密钥，使用现有 `api-keys` 持久卷，不需新增供应商环境变量。启动后从“设置 → AI 设置”填写供应商、Base URL、模型和 Key，测试并保存；首个模型自动设为当前使用，开启整理直接提交。第三方服务必须为公网 HTTPS；不接受 localhost、内网或重定向地址。
+
+### Responses API 协议更新
+
+模型连接与笔记整理只使用 `POST {baseUrl}/responses`，无Chat Completions回退。智谱预设为 `https://open.bigmodel.cn/api/v1` / `glm-5.3`，DeepSeek预设为 `https://api.deepseek.com` / `deepseek-flash`；自定义服务必须支持Responses。基址可包含自定义路径前缀，也可填写完整 `/responses` 地址；旧 `/chat/completions` 地址不再接受。官方协议说明：[OpenAI](https://developers.openai.com/api/docs/guides/migrate-to-responses)、[智谱](https://docs.bigmodel.cn/cn/guide/develop/responses/introduction)、[DeepSeek](https://api-docs.deepseek.com/guides/responses_api/)。
+
+此协议更新不增加数据库迁移，保留现有卷及其他业务数据。在 `deploy/` 执行 `docker compose up -d --build --no-deps --wait api` 重建API，再重新构建客户端更新供应商预设。测试阶段本机在切换前模型配置为0、整理关闭，无旧配置需要清理；不要添加每次启动清配置的逻辑，也不要删除密钥卷。测试连接使用固定短文本、非流式且 `store:false`，结果在原表单显示；实际调用可能产生供应商费用。
+
+完整恢复必须同时恢复数据库和同批 `api-keys`。不要删除加密密钥来处理解密错误；密钥丢失后需重新设置模型 Key。模型配置不随客户端业务快照迁移到另一台服务器；业务原文、候选和已采用正文仍可备份，恢复不会重启旧任务或继承云端执行授权。
+
+旧客户端会被 schema11 门禁阻止同步及提交/查询识别，应保留离线数据和队列并升级。先验证一段录音成功整理、失败回退、重试不重复及双端接收，再开启日常自动整理。本轮不自动部署生产服务，不提供真实模型账单或在线双端验收结论。
+
 ## 2026-10-19 笔记记录时间与置顶（schema 10）
 
 先完整备份PostgreSQL、MinIO图片及原音、存储凭据和API密钥，再依次部署增量迁移 `20261019000000_note_record_time`、`20261019010000_note_pinning`、API及PowerSync下行配置，最后升级Windows与Android全部客户端。SQLite25、本机快照10（兼容1–9），换服wire3不变；旧客户端受schema10门禁限制，保留离线数据及原队列，不通过清库解决版本不兼容。

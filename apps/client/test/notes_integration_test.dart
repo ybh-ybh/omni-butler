@@ -41,6 +41,7 @@ class _FixtureAuth extends AuthRepository {
     Object? data,
     Map<String, dynamic>? queryParameters,
     ResponseType? responseType,
+    Duration? receiveTimeout,
     bool preserveTransportErrors = false,
   }) async {
     expect(method, 'POST');
@@ -142,6 +143,18 @@ void main() {
             recognitionId: const Value('old-task'),
             recognitionState: const Value('running'),
             candidateTranscript: const Value('旧来源重识别候选'),
+            polishId: const Value('old-polish'),
+            polishOperationId: const Value('old-retry-operation'),
+            polishState: const Value('processing'),
+            polishedText: const Value('整理候选保留'),
+            polishRecognitionId: const Value('old-asr-source'),
+            polishSourceHash: Value(
+              sha256.convert(utf8.encode('原始转写独有词')).toString(),
+            ),
+            insertedRevision: const Value('waiting:old-revision'),
+            fallbackRevision: const Value('old-revision'),
+            fallbackStart: const Value(0),
+            fallbackEnd: const Value(5),
           ),
         );
     return file;
@@ -180,6 +193,19 @@ void main() {
     expect(local.recognitionState, 'idle');
     expect(local.consent, isFalse);
     expect(local.candidateTranscript, isNull);
+    expect(local.polishId, isNull);
+    expect(local.polishOperationId, isNull);
+    expect(local.polishRecognitionId, isNull);
+    expect(local.insertedRevision, isNull);
+    expect(local.fallbackRevision, isNull);
+    expect(local.fallbackStart, isNull);
+    expect(local.fallbackEnd, isNull);
+    expect(local.polishedText, '整理候选保留');
+    expect(local.polishState, 'succeeded');
+    expect(
+      local.polishSourceHash,
+      sha256.convert(utf8.encode('原始转写独有词')).toString(),
+    );
     expect(
       local.localPath,
       isNot(snapshot.tables['note_audio_local_files']!.single['local_path']),
@@ -192,6 +218,50 @@ void main() {
     ).writeAsBytes([4, 3, 2, 1]);
     expect(await findMissingMigrationNoteAudio(snapshot), hasLength(1));
     expect(await File(local.localPath!).readAsBytes(), [1, 2, 3, 4]);
+  });
+
+  test('恢复重识别整理候选保留关联输入但不恢复任何付费任务授权', () async {
+    await seedNote();
+    // 仅整理候选依赖的重识别输入需要跨源保留。
+    await source.database
+        .update(source.database.noteAudioLocalFiles)
+        .write(
+          NoteAudioLocalFilesCompanion(
+            polishSourceHash: Value(
+              sha256.convert(utf8.encode('旧来源重识别候选')).toString(),
+            ),
+          ),
+        );
+    await source.freezeWrites();
+    // 快照文件和任务状态来自真实生产导出路径。
+    final SyncSnapshot snapshot = await backupMigrationNoteAudio(
+      await source.exportSnapshot(),
+      Directory('${directory.path}/backup'),
+    );
+    candidate = await OmniSyncRuntime.createCandidate(
+      auth,
+      '${directory.path}/candidate.sqlite',
+      snapshot,
+      'new-owner',
+      mergeInitial: true,
+      useLocalData: true,
+    );
+    // 原文候选与整理正文关联保留，但任务身份和授权全部清除。
+    final NoteAudioLocalFileRecord local = await candidate!.database
+        .select(candidate!.database.noteAudioLocalFiles)
+        .getSingle();
+    expect(local.candidateTranscript, '旧来源重识别候选');
+    expect(local.polishedText, '整理候选保留');
+    expect(local.polishId, isNull);
+    expect(local.polishOperationId, isNull);
+    expect(local.recognitionId, isNull);
+    expect(local.polishRecognitionId, isNull);
+    expect(local.consent, isFalse);
+    expect(local.polishState, 'succeeded');
+    // 恢复后不自动写入或重新提交付费请求。
+    final NoteRepository repository = NoteRepository(candidate!.database);
+    await repository.insertReadyTranscripts('note');
+    expect((await repository.find('note'))!.body, '会议素材');
   });
 
   test('v1与v2快照补齐空笔记表而不修改原控制文件', () async {
@@ -243,6 +313,12 @@ void main() {
               if (entry.opData != null)
                 'data': <String, Object?>{
                   ...entry.opData!,
+                  // 笔记置顶的wire协议使用JSON布尔，SDK本地列仍为整数。
+                  if (entry.table == 'note_entries' &&
+                      entry.opData!.containsKey('is_pinned'))
+                    'is_pinned':
+                        entry.opData!['is_pinned'] == 1 ||
+                        entry.opData!['is_pinned'] == true,
                   // 仅预期映射读取SDK持久前态，导出仍使用真实connector请求。
                   if (entry.table == 'note_entries' &&
                       entry.op == UpdateType.patch &&

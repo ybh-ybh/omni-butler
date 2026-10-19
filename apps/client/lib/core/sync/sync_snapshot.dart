@@ -3,7 +3,7 @@ import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 /// 不携带同步检查点、客户端身份或设备密钥的完整业务快照。
 class SyncSnapshot {
   /// 当前快照持久化格式版本。
-  static const int version = 10;
+  static const int version = 11;
 
   /// 服务端换服协议独立于本机备份格式，草稿不进入请求。
   static const int migrationProtocolVersion = 3;
@@ -20,6 +20,7 @@ class SyncSnapshot {
   /// 从迁移控制文件恢复快照，拒绝不支持的格式和未知表。
   factory SyncSnapshot.fromJson(Map<String, dynamic> json) {
     if (json['version'] != version &&
+        json['version'] != 10 &&
         json['version'] != 9 &&
         json['version'] != 8 &&
         json['version'] != 7 &&
@@ -113,6 +114,23 @@ class SyncSnapshot {
                   restored.putIfAbsent('record_time_seconds', () => null);
                   restored.putIfAbsent('record_utc_offset_minutes', () => null);
                 }
+                if (table == 'note_audio_local_files') {
+                  restored.putIfAbsent('polish_state', () => 'disabled');
+                  for (final String field in <String>[
+                    'polish_id',
+                    'polish_operation_id',
+                    'polished_text',
+                    'polish_adopted_hash',
+                    'polish_error',
+                    'polish_recognition_id',
+                    'polish_source_hash',
+                    'fallback_revision',
+                    'fallback_start',
+                    'fallback_end',
+                  ]) {
+                    restored.putIfAbsent(field, () => null);
+                  }
+                }
                 if (table == 'note_entries') {
                   restored.putIfAbsent('is_pinned', () => 0);
                   restored.remove('category_id');
@@ -141,23 +159,63 @@ class SyncSnapshot {
     'note_draft_images',
   ];
 
-  /// 按同步白名单生成服务器可接受的完整 PUT 列表。
-  List<Map<String, Object?>> get operations => <Map<String, Object?>>[
-    for (final table in omniSyncSchema.rawTables)
-      for (final Map<String, Object?> row
-          in tables[table.name] ?? <Map<String, Object?>>[])
-        <String, Object?>{
-          'op': 'PUT',
-          'table': table.name,
-          'id': row['id'],
-          'data': <String, Object?>{
-            for (final String column in table.schema!.syncedColumns!)
-              column: table.name == 'note_entries' && column == 'is_pinned'
-                  ? row[column] == true || row[column] == 1
-                  : row[column],
-          },
+  /// 迁移副本排除已不存在业务记录的遗留标签关联，原始备份保持完整。
+  Map<String, List<Map<String, Object?>>> get migrationTables {
+    // 多态关联必须在自身模块对应的业务表内找到记录，软删除记录仍保留。
+    const Map<String, String> recordTables = <String, String>{
+      'inventory': 'inventory_items',
+      'timeline': 'time_entries',
+      'membership': 'memberships',
+      'notes': 'note_entries',
+    };
+    // UUID 大小写与服务端身份校验一致，不以其他模块的同名身份补齐引用。
+    final Map<String, Set<String>> recordIds = <String, Set<String>>{
+      for (final MapEntry<String, String> entry in recordTables.entries)
+        entry.key: <String>{
+          for (final Map<String, Object?> row
+              in tables[entry.value] ?? <Map<String, Object?>>[])
+            if (row['id'] is String) (row['id']! as String).toLowerCase(),
         },
-  ];
+    };
+    return <String, List<Map<String, Object?>>>{
+      ...tables,
+      'record_taxonomy_links':
+          (tables['record_taxonomy_links'] ?? <Map<String, Object?>>[])
+              .where((Map<String, Object?> row) {
+                // 未知模块或损坏身份仍交由严格校验拒绝，不猜测如何修复。
+                final Set<String>? ids = recordIds[row['module']];
+                // 已永久删除业务记录的关联无法恢复，迁移时不再重建。
+                final Object? recordId = row['record_id'];
+                return ids == null ||
+                    recordId is! String ||
+                    ids.contains(recordId.toLowerCase());
+              })
+              .toList(growable: false),
+    };
+  }
+
+  /// 按同步白名单生成服务器可接受的完整 PUT 列表。
+  List<Map<String, Object?>> get operations {
+    // 上传与候选导入使用同一个引用闭合副本，磁盘快照及其摘要不变。
+    final Map<String, List<Map<String, Object?>>> transferable =
+        migrationTables;
+    return <Map<String, Object?>>[
+      for (final table in omniSyncSchema.rawTables)
+        for (final Map<String, Object?> row
+            in transferable[table.name] ?? <Map<String, Object?>>[])
+          <String, Object?>{
+            'op': 'PUT',
+            'table': table.name,
+            'id': row['id'],
+            'data': <String, Object?>{
+              for (final String column in table.schema!.syncedColumns!)
+                column: table.name == 'note_entries' && column == 'is_pinned'
+                    ? row[column] == true || row[column] == 1
+                    : row[column],
+            },
+          },
+    ];
+  }
 
   /// 每张同步表包含软删除在内的总记录数。
   Map<String, int> get counts => <String, int>{

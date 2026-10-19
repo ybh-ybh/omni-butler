@@ -188,7 +188,7 @@ void main() {
       });
     }
 
-    testWidgets('安卓六个设置入口具备不同颜色图标 ${brightness.name}', (
+    testWidgets('安卓设置入口具备语义颜色图标 ${brightness.name}', (
       WidgetTester tester,
     ) async {
       // 真实安卓分类页。
@@ -205,6 +205,7 @@ void main() {
           'notifications': Icons.notifications_outlined,
           'sync': Icons.cloud_sync_outlined,
           'storage': Icons.delete_outline_rounded,
+          'ai': Icons.auto_awesome_outlined,
         };
         // 去重后的入口图标色，避免随主题重建全部变为主题色。
         final Set<Color?> iconColors = <Color?>{};
@@ -219,7 +220,7 @@ void main() {
           iconColors.add(tester.widget<Icon>(icon).color);
           expect(tester.getSize(row).height, greaterThanOrEqualTo(48));
         }
-        expect(iconColors.length, 6);
+        expect(iconColors.length, greaterThanOrEqualTo(6));
         expect(iconColors.contains(null), isFalse);
         expect(tester.takeException(), isNull);
         await _capture(

@@ -1,5 +1,11 @@
 # 笔记原音与语音识别
 
+## ASR 后的 AI 整理
+
+模型配置位于客户端“设置 → AI 设置”，后端共享且默认关闭。开启后，仅新建的已授权 ASR 任务固定整理配置；原文仍保存到 `transcript`/`canonicalTranscript`，整理状态和结果独立存储。客户端通过 `GET /notes/audio/:segmentId/polish?recognitionId=...` 查询，使用 `POST` 同路径及 `{operationId,recognitionId}` 显式重试；不会重新识别原音。
+
+识别提交与结果查询要求同步版本11请求头；撤回接口保留旧设备兼容并取消关联整理。整理中等待正文写入，成功按录音顺序采用、失败使用原文，未保存草稿或正文版本变化保留候选。密钥、配置、计费未知恢复和部署要求见[服务端说明](../../README.md#大模型设置与笔记-ai-整理)。
+
 `NotesService` 只依赖 `SpeechRecognitionProvider` 和 `NoteAudioStore`。新增语音厂商时实现 `submit`、`poll` 并在 `NotesModule` 注册适配器；客户端和笔记存储不依赖腾讯字段。
 
 设备接口都使用现有 JWT：

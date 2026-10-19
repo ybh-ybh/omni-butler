@@ -1,7 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 
-/// 笔记置顶与记录时间均为独立元数据，客户端必须保留完整同步字段。
-export const syncSchemaVersion = 10;
+/// AI 整理期间原文不得被旧客户端提前采用，所有客户端必须支持整理任务。
+export const syncSchemaVersion = 11;
 
 /// 在写入和签发下行凭证前阻止旧客户端解释新版任务。
 export function requireSyncSchemaVersion(version: string | undefined): void {

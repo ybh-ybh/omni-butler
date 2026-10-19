@@ -1,4 +1,5 @@
 import 'note_record_time_picker.dart';
+import 'note_polish_actions.dart';
 import 'note_pin_indicator.dart';
 
 import 'dart:async';

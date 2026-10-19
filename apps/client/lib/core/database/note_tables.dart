@@ -207,6 +207,40 @@ class NoteAudioLocalFiles extends Table {
   /// 重新转写的本机候选，不覆盖共享原始转写。
   TextColumn get candidateTranscript => text().nullable()();
 
+  /// 后端整理任务身份，仅属于当前服务器。
+  TextColumn get polishId => text().nullable()();
+
+  /// 显式重试在提交前持久化的幂等操作身份。
+  TextColumn get polishOperationId => text().nullable()();
+
+  /// 整理状态；历史录音默认沿用未启用行为。
+  TextColumn get polishState =>
+      text().withDefault(const Constant('disabled'))();
+
+  /// 独立于原始转写的整理候选。
+  TextColumn get polishedText => text().nullable()();
+
+  /// 已采用整理结果的指纹，重试与重新识别候选分别去重。
+  TextColumn get polishAdoptedHash => text().nullable()();
+
+  /// 本次整理失败原因。
+  TextColumn get polishError => text().nullable()();
+
+  /// 整理结果所对应的识别任务身份。
+  TextColumn get polishRecognitionId => text().nullable()();
+
+  /// 整理输入摘要，防止迟到结果串到其他原文。
+  TextColumn get polishSourceHash => text().nullable()();
+
+  /// 回退原文仍可安全替换的正文版本。
+  TextColumn get fallbackRevision => text().nullable()();
+
+  /// 回退原文在正文中的起点，包含该段前面的自动分隔符。
+  IntColumn get fallbackStart => integer().nullable()();
+
+  /// 回退原文在正文中的结束位置。
+  IntColumn get fallbackEnd => integer().nullable()();
+
   /// 主键。
   @override
   Set<Column<Object>> get primaryKey => {id};

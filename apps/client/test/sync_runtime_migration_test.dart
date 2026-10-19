@@ -75,6 +75,109 @@ void main() {
         ),
       );
 
+  test('遗留悬空标签关联不进入候选或上传，原库和可恢复快照完整保留', () async {
+    await source.database
+        .into(source.database.inventoryItems)
+        .insert(
+          InventoryItemsCompanion.insert(
+            id: 'preserved',
+            name: '回收站内仍需恢复的物品',
+            deletedAt: Value(now),
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    await source.database
+        .into(source.database.taxonomyEntries)
+        .insert(
+          TaxonomyEntriesCompanion.insert(
+            id: 'tag',
+            module: 'inventory',
+            kind: 'tag',
+            name: '保留标签',
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    for (final String id in <String>['valid', 'orphan', 'deleted-orphan']) {
+      await source.database
+          .into(source.database.recordTaxonomyLinks)
+          .insert(
+            RecordTaxonomyLinksCompanion.insert(
+              id: id,
+              module: 'inventory',
+              taxonomyId: 'tag',
+              recordId: id == 'valid' ? 'preserved' : 'permanently-deleted',
+              deletedAt: Value(id == 'deleted-orphan' ? now : null),
+              createdAt: now,
+            ),
+          );
+    }
+    await source.freezeWrites();
+    // 模拟失败迁移重启，从未修改的原始持久快照恢复。
+    final String original = jsonEncode(
+      (await source.exportSnapshot()).toJson(),
+    );
+    final SyncSnapshot snapshot = SyncSnapshot.fromJson(
+      jsonDecode(original) as Map<String, dynamic>,
+    );
+    for (final bool merge in <bool>[true, false]) {
+      // 首次合并与替换服务器共用同一候选导入边界。
+      final OmniSyncRuntime candidate = await OmniSyncRuntime.createCandidate(
+        auth,
+        '${directory.path}/links-$merge.sqlite',
+        snapshot,
+        'B',
+        mergeInitial: merge,
+        useLocalData: true,
+      );
+      candidates.add(candidate);
+      expect(
+        (await candidate.database
+                .select(candidate.database.recordTaxonomyLinks)
+                .get())
+            .map((RecordTaxonomyLink row) => row.id),
+        <String>['valid'],
+      );
+      expect(
+        await candidate.database
+            .select(candidate.database.taxonomyEntries)
+            .get(),
+        hasLength(1),
+      );
+      expect(
+        await candidate.database
+            .select(candidate.database.inventoryItems)
+            .get(),
+        hasLength(1),
+      );
+      // 队列不能把孤立关系作为 PUT 重新上传。
+      final CrudTransaction? upload = await candidate.powerSync
+          .getNextCrudTransaction();
+      if (merge) {
+        expect(
+          upload!.crud
+              .where((CrudEntry row) => row.table == 'record_taxonomy_links')
+              .map((CrudEntry row) => row.id),
+          <String>['valid'],
+        );
+      } else {
+        expect(upload, isNull);
+      }
+    }
+    expect(jsonEncode(snapshot.toJson()), original);
+    expect(
+      await source.database.select(source.database.recordTaxonomyLinks).get(),
+      hasLength(3),
+    );
+    expect(
+      (await source.exportSnapshot()).operations.where(
+        (Map<String, Object?> row) => row['table'] == 'record_taxonomy_links',
+      ),
+      hasLength(1),
+    );
+  });
+
   test('笔记图片备份与候选缓存各自拥有原件，缺图明确报告且草稿仅本机恢复', () async {
     // 真实文件和摘要验证备份路径隔离，避免仅测试元数据形状。
     final File image = File('${directory.path}/note.png');

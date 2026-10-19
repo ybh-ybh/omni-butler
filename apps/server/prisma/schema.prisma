@@ -50,6 +50,10 @@ model SyncOwner {
   noteImages           NoteImage[]
   noteAudioAssets      NoteAudioAsset[]
   noteRecognitionJobs  NoteRecognitionJob[]
+  /// 模型密钥与整理任务只存后端，不进入业务同步。
+  aiSettings AiSettings?
+  aiProfiles AiProfile[]
+  notePolishJobs NotePolishJob[]
 
   @@map("sync_owners")
 }
@@ -132,6 +136,7 @@ model NoteAudioSegment {
   note NoteEntry @relation(fields: [userId, noteId], references: [userId, id], onDelete: Cascade)
   asset NoteAudioAsset?
   recognitionJobs NoteRecognitionJob[]
+  polishJobs NotePolishJob[]
   @@unique([userId, id])
   @@index([userId, noteId, sortOrder])
   @@map("note_audio_segments")
@@ -164,9 +169,67 @@ model NoteRecognitionJob {
   nextPollAt DateTime @default(now()) @map("next_poll_at") @db.Timestamptz(3)
   user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
   segment NoteAudioSegment @relation(fields: [userId, segmentId], references: [userId, id], onDelete: Cascade)
+  polishJobs NotePolishJob[]
   @@index([userId, segmentId, createdAt])
   @@index([status, nextPollAt])
   @@map("note_recognition_jobs")
+}
+
+/// 后端共享设置通过总版本号避免多设备静默覆盖。
+model AiSettings {
+  userId String @id @map("user_id") @db.Uuid
+  revision Int @default(0)
+  activeProfileId String? @map("active_profile_id") @db.Uuid
+  notePolishEnabled Boolean @default(false) @map("note_polish_enabled")
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("ai_settings")
+}
+
+/// 供应商配置和加密密钥，不参与 PowerSync。
+model AiProfile {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  name String @db.VarChar(80)
+  provider String @db.VarChar(16)
+  baseUrl String @map("base_url") @db.VarChar(2048)
+  model String @db.VarChar(128)
+  encryptedApiKey String? @map("encrypted_api_key")
+  revision Int @default(1)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, createdAt])
+  @@map("ai_profiles")
+}
+
+/// 每次整理尝试固定配置和原文摘要，未知提交只允许用户显式重试。
+model NotePolishJob {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  segmentId String @map("segment_id") @db.Uuid
+  recognitionId String @map("recognition_id") @db.Uuid
+  /// 归属锁内递增，避免同毫秒重试排序被 UUID 随机性影响。
+  attempt Int @default(0)
+  enabled Boolean
+  status String @db.VarChar(32)
+  profileId String? @map("profile_id") @db.Uuid
+  profileRevision Int? @map("profile_revision")
+  provider String? @db.VarChar(16)
+  baseUrl String? @map("base_url")
+  model String? @db.VarChar(128)
+  encryptedApiKey String? @map("encrypted_api_key")
+  promptVersion Int @default(1) @map("prompt_version")
+  sourceHash String? @map("source_hash") @db.VarChar(64)
+  text String?
+  errorCode String? @map("error_code") @db.VarChar(128)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  segment NoteAudioSegment @relation(fields: [userId, segmentId], references: [userId, id], onDelete: Cascade)
+  recognition NoteRecognitionJob @relation(fields: [recognitionId], references: [id], onDelete: Cascade)
+  @@index([userId, segmentId, recognitionId, createdAt], map: "note_polish_jobs_recognition_lookup_idx")
+  @@index([status, createdAt])
+  @@unique([recognitionId, attempt])
+  @@map("note_polish_jobs")
 }
 
 /// 独立于归属和记录生命周期的文件清理回执。

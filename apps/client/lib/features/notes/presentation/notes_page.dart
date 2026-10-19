@@ -1,4 +1,5 @@
 import 'note_record_time_picker.dart';
+import 'note_polish_actions.dart';
 import '../data/note_repository.dart';
 
 import 'dart:async';
@@ -747,6 +748,19 @@ class _NotesPageState extends ConsumerState<_NotesWorkspace>
   }) {
     // 历史编辑按实际内容撑高，顶部新建输入保留既有留白。
     final bool historyEditing = inline && _expandedNoteId == editor.draft.id;
+    // Windows 只操作当前草稿的录音，避免浏览其他笔记时结束或取消错篇。
+    final bool ownsRecording =
+        recording.noteId == editor.draft.id &&
+        recording.draftId == editor.draftId;
+    // 启停和提交期间禁止重复点击，暂停/继续保持同一采集身份。
+    final bool recordingBlocked =
+        _committing ||
+        editor.committing ||
+        editor.recordingStarting ||
+        (recording.isActive &&
+            recording.phase != NoteRecordingPhase.recording &&
+            recording.phase != NoteRecordingPhase.paused) ||
+        (_windows && recording.isActive && !ownsRecording);
     // 桌面内嵌编辑器由外层列表负责滚动。
     final Widget content = Padding(
       padding: inline
@@ -910,19 +924,36 @@ class _NotesPageState extends ConsumerState<_NotesWorkspace>
                         : '暂停',
                     visualHeight: OmniSize.control,
                     variant: OmniButtonVariant.secondary,
-                    onPressed: () => _perform(
-                      recording.phase == NoteRecordingPhase.paused
-                          ? editor.recorder.resume
-                          : editor.recorder.pause,
-                    ),
+                    onPressed: recordingBlocked
+                        ? null
+                        : () => _perform(
+                            recording.phase == NoteRecordingPhase.paused
+                                ? editor.recorder.resume
+                                : editor.recorder.pause,
+                          ),
                   ),
                   OmniButton(
                     label: '结束录音',
                     visualHeight: OmniSize.control,
-                    onPressed: () => _perform(() async {
-                      await editor.recorder.stop();
-                    }),
+                    onPressed: recordingBlocked
+                        ? null
+                        : _windows
+                        ? () => _finishEdit(editor)
+                        : () => _perform(() async {
+                            await editor.recorder.stop();
+                          }),
                   ),
+                  if (_windows &&
+                      ownsRecording &&
+                      recording.phase == NoteRecordingPhase.paused)
+                    OmniButton(
+                      label: '取消录音',
+                      visualHeight: OmniSize.control,
+                      variant: OmniButtonVariant.secondary,
+                      onPressed: recordingBlocked
+                          ? null
+                          : () => _cancelPausedRecording(editor),
+                    ),
                   if (recording.noteId != editor.draft.id)
                     OmniButton(
                       label: '返回正在录音的笔记',
@@ -938,7 +969,25 @@ class _NotesPageState extends ConsumerState<_NotesWorkspace>
                     visualHeight: OmniSize.control,
                     onPressed: () => _perform(editor.recover),
                   ),
-                if (!inline || recording.isActive)
+                if (_windows && (!inline || recording.isActive))
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('自动转文字'),
+                      const SizedBox(width: OmniSpacing.xs),
+                      Semantics(
+                        label: '自动转文字',
+                        child: OmniSwitch(
+                          key: const ValueKey('note-auto-transcribe-switch'),
+                          value: editor.voiceConsent,
+                          onChanged: recordingBlocked
+                              ? null
+                              : (_) => _enableVoice(editor),
+                        ),
+                      ),
+                    ],
+                  )
+                else if (!inline || recording.isActive)
                   OmniButton(
                     label: editor.voiceConsent ? '关闭自动转文字' : '开启自动转文字',
                     variant: OmniButtonVariant.text,
@@ -985,6 +1034,10 @@ class _NotesPageState extends ConsumerState<_NotesWorkspace>
                     recordingActive: recording.isActive,
                     onRecognize: () => _recognize(segment),
                     onCancel: () => _cancelRecognition(segment),
+                    onRetryPolish: () =>
+                        unawaited(retryNotePolish(context, ref, segment)),
+                    onAdoptPolish: () =>
+                        unawaited(adoptNotePolish(context, ref, segment)),
                     onInsert: (text) => _insertTranscript(segment, text),
                   ),
                 ),
@@ -1127,21 +1180,24 @@ class _NotesPageState extends ConsumerState<_NotesWorkspace>
   String _duration(Duration duration) =>
       '${duration.inMinutes.toString().padLeft(2, '0')}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}';
 
-  /// 首次明确授权，只覆盖之后新录音。
+  /// 明确授权默认只覆盖新录音，Windows 开关同时覆盖当前所属片段。
   Future<void> _enableVoice(NoteEditorController editor) async {
     if (editor.voiceConsent) {
-      setState(() => editor.voiceConsent = false);
+      editor.setVoiceConsent(false, includeCurrentRecording: _windows);
       return;
     }
     // 未连接时说明如何启用服务，录音仍可本地使用。
     final bool confirmed = await showOmniConfirmDialog(
       context,
       title: '开启语音转文字',
-      message:
-          '之后的新录音将通过你连接的服务器提交给其配置的语音识别服务，原音和转写仍分别保留。需在设置中连接并开启同步；历史录音需要逐段授权。',
+      message: _windows
+          ? '当前及之后的新录音将通过你连接的服务器提交给其配置的语音识别服务，原音和转写仍分别保留。需在设置中连接并开启同步；历史录音需要逐段授权。'
+          : '之后的新录音将通过你连接的服务器提交给其配置的语音识别服务，原音和转写仍分别保留。需在设置中连接并开启同步；历史录音需要逐段授权。',
       confirmLabel: '开启',
     );
-    if (confirmed && mounted) setState(() => editor.voiceConsent = true);
+    if (confirmed && mounted) {
+      editor.setVoiceConsent(true, includeCurrentRecording: _windows);
+    }
   }
 
   /// 单段明确授权或重新识别；复用未知提交身份，禁止重复付费。

@@ -20,6 +20,8 @@ import { PrismaModule } from '../src/prisma/prisma.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { SyncModule } from '../src/sync/sync.module';
 import { canonicalize, SyncService } from '../src/sync/sync.service';
+import { AiService } from '../src/ai/ai.service';
+import { AiProvider, AiProviderError } from '../src/ai/ai-provider';
 import type { SyncOperationDto } from '../src/sync/dto/sync-operation.dto';
 
 /// 只读取显式隔离数据库，默认测试不能接触用户数据。
@@ -77,6 +79,10 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
   const submit = jest.fn<Promise<string>, [{ model: string; bytes?: Buffer; audioUrl?: string }]>().mockResolvedValue('12345');
   // 持久相同 taskId 的查询结果。
   const poll = jest.fn().mockResolvedValue({ status: 'succeeded', transcript: '今天写了日报。' });
+  // 唯一替换的模型网络，测试不会对真实供应商产生费用。
+  const polish = jest.fn<Promise<string>, unknown[]>().mockResolvedValue('今天完成日报。');
+  // 连接测试始终使用独立短文本边界，不需要真实密钥。
+  const testModel = jest.fn().mockResolvedValue({ ok: true, message: '模型服务连接成功' });
 
   beforeAll(async () => {
     // 测试目标只允许本机显式 test 库，绝不清理已有 schema。
@@ -98,7 +104,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
       store = new TestAudioStore(new MinioNoteAudioStore(minio));
     } else store = new TestAudioStore(new DiskTestNoteAudioStore(join(directory, 'audio')));
     // 实际模块保留控制器、DTO、数据库、鉴权和文件实现。
-    const module = await Test.createTestingModule({ imports: [ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true, load: [(): typeof config => config] }), PrismaModule, AuthModule, NotesModule, SyncModule] }).overrideProvider(SpeechRecognitionProvider).useValue({ name: 'tencent', configured: (): boolean => true, submit, poll }).overrideProvider(NoteAudioStore).useValue(store).compile();
+    const module = await Test.createTestingModule({ imports: [ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true, load: [(): typeof config => config] }), PrismaModule, AuthModule, NotesModule, SyncModule] }).overrideProvider(SpeechRecognitionProvider).useValue({ name: 'tencent', configured: (): boolean => true, submit, poll }).overrideProvider(NoteAudioStore).useValue(store).overrideProvider(AiProvider).useValue({ polish, test: testModel }).compile();
     app = module.createNestApplication(); app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     await app.listen(0, '127.0.0.1'); baseUrl = await app.getUrl();
     prisma = app.get(PrismaService); notes = app.get(NotesService); sync = app.get(SyncService);
@@ -107,6 +113,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
     if (!ownsSchema) throw new Error('测试库未初始化');
     await database.query('TRUNCATE sync_owners CASCADE'); await database.query('TRUNCATE sync_migration_receipts, note_audio_staging, note_audio_garbage');
     submit.mockReset().mockResolvedValue('12345'); poll.mockReset().mockResolvedValue({ status: 'succeeded', transcript: '今天写了日报。' }); store.failDelete = false; store.failPut = false;
+      polish.mockReset().mockResolvedValue('今天完成日报。'); testModel.mockClear();
     app.get(ConfigService).set('NOTE_ASR_PUBLIC_URL', '');
     await prisma.syncOwner.create({ data: {} });
     tokens = await app.get(AuthService).connect(syncKey);
@@ -156,7 +163,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
   });
 
   /// 用实际 token 请求 HTTP，undefined JSON 不添加无关 body。
-  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '10', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
+  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '11', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
   /// 构造稳定真实同步操作。
   function batch(operations: SyncOperationDto[]): { clientId: string; transactionId: string; operations: SyncOperationDto[] } { return { clientId: randomUUID(), transactionId: randomUUID(), operations }; }
   /// 构造可回听的测试 WAV，仅测试存储不向厂商发送此合成文件。
@@ -795,6 +802,127 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
     // 接管以后出现旧GC扫描也必须再次检查资产引用。
     await prisma.noteAudioGarbage.create({ data: { objectKey: staged.objectKey } }); await notes.tick(); expect((await store.get(staged.objectKey)).length).toBe(sample.bytes.length);
   });
+  /// 真实设置接口创建并开启当前测试模型，所有密钥均为测试夹具。
+  async function enableAi(): Promise<Awaited<ReturnType<AiService['settings']>>> {
+    expect((await request('/ai/profiles', 'POST', { revision: 0, name: '集成模型', provider: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'test-original-model', apiKey: 'integration-only-key' })).status).toBe(201);
+    // 读取固定掩码后的配置身份，不从响应获取 Key。
+    const snapshot = await app.get(AiService).settings(user.sub);
+    return app.get(AiService).updateSettings(user.sub, { revision: snapshot.revision, activeProfileId: snapshot.profiles[0]!.id, notePolishEnabled: true });
+  }
+
+  /// 完成 ASR 的真实数据库链路，只替换厂商网络。
+  async function finishAsr(sample: Awaited<ReturnType<typeof seed>>, operationId = randomUUID()): Promise<string> {
+    await upload(sample); await notes.recognize(user, sample.segmentId, operationId, true); await notes.tick();
+    await prisma.noteRecognitionJob.update({ where: { id: operationId }, data: { nextPollAt: new Date(0) } });
+    await notes.tick();
+    expect((await prisma.noteRecognitionJob.findUniqueOrThrow({ where: { id: operationId } })).status).toBe('succeeded');
+    return operationId;
+  }
+
+  it('AI 配置跨设备共享、总版本冲突、密钥不回传且删除当前配置关闭整理', async () => {
+    // 两台设备共用数据归属和设置，凭据本身保持独立。
+    const deviceB = await app.get(AuthService).connect(syncKey);
+    expect((await request('/ai/settings', 'GET', undefined, null)).status).toBe(401);
+    // 默认版本从零开始且整理关闭。
+    expect(await (await request('/ai/settings')).json()).toMatchObject({ revision: 0, notePolishEnabled: false, profiles: [] });
+    // 创建并开启后，另一设备只得到掩码。
+    const snapshot = await enableAi();
+    // 加密密文既不等于明文，也不出现在任何响应。
+    const stored = await prisma.aiProfile.findFirstOrThrow({ where: { userId: user.sub } });
+    expect(stored.encryptedApiKey).not.toContain('integration-only-key');
+    // 两设备共享读取相同总版本。
+    const shared = await (await request('/ai/settings', 'GET', undefined, deviceB.accessToken)).json() as typeof snapshot;
+    expect(shared).toEqual(snapshot); expect(shared.profiles[0]).toMatchObject({ hasApiKey: true, maskedApiKey: '••••••••' });
+    expect(JSON.stringify(shared)).not.toContain('integration-only-key'); expect(JSON.stringify(shared)).not.toContain(stored.encryptedApiKey!);
+    expect((await request('/ai/settings', 'PUT', { revision: 0, activeProfileId: stored.id, notePolishEnabled: false })).status).toBe(409);
+    // 留空保留 Key，测试连接不增加配置版本。
+    expect((await request('/ai/profiles/' + stored.id, 'PUT', { revision: snapshot.revision, name: stored.name, provider: stored.provider, baseUrl: stored.baseUrl, model: stored.model, apiKey: '' })).status).toBe(200);
+    expect((await prisma.aiProfile.findUniqueOrThrow({ where: { id: stored.id } })).encryptedApiKey).toBe(stored.encryptedApiKey);
+    expect((await request('/ai/test', 'POST', { profileId: stored.id, provider: stored.provider, baseUrl: stored.baseUrl, model: stored.model, apiKey: '' })).status).toBe(201);
+    expect(testModel).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'integration-only-key' }));
+    // 删除后开关和选择一次关闭，不能静默选择另一个模型。
+    const latest = await app.get(AiService).settings(user.sub);
+    expect((await request('/ai/profiles/' + stored.id, 'DELETE', { revision: latest.revision })).status).toBe(200);
+    expect(await app.get(AiService).settings(user.sub)).toMatchObject({ activeProfileId: null, notePolishEnabled: false, profiles: [] });
+  });
+
+  it('ASR 固定 AI 配置快照，整理保留原文且不直接修改用户正文', async () => {
+    // 识别任务创建时固定原模型与加密 Key。
+    const snapshot = await enableAi();
+    // 已同步并上传的实际原音。
+    const sample = await seed(); await upload(sample);
+    // 新任务身份在供应商真正提交前已持久。
+    const recognitionId = randomUUID();
+    await notes.recognize(user, sample.segmentId, recognitionId, true);
+    expect(await app.get(AiService).current(user.sub, sample.segmentId, recognitionId)).toMatchObject({ enabled: true, status: 'waiting' });
+    // 编辑配置后旧任务仍调用原模型，不能被新目标改写。
+    await app.get(AiService).saveProfile(user.sub, { revision: snapshot.revision, name: '已修改', provider: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'test-new-model', apiKey: 'replacement-test-key' }, snapshot.activeProfileId!);
+    await notes.tick(); await prisma.noteRecognitionJob.update({ where: { id: recognitionId }, data: { nextPollAt: new Date(0) } }); await notes.tick();
+    await app.get(AiService).tick();
+    expect(polish).toHaveBeenCalledTimes(1); expect(polish).toHaveBeenCalledWith(expect.objectContaining({ model: 'test-original-model', apiKey: 'integration-only-key' }), '今天写了日报。', expect.any(AbortSignal));
+    expect(await app.get(AiService).current(user.sub, sample.segmentId, recognitionId)).toMatchObject({ status: 'succeeded', text: '今天完成日报。', sourceHash: createHash('sha256').update('今天写了日报。').digest('hex') });
+    expect((await prisma.notePolishJob.findFirstOrThrow({ where: { recognitionId } })).encryptedApiKey).toBeNull();
+    expect((await prisma.noteAudioSegment.findUniqueOrThrow({ where: { id: sample.segmentId } })).transcript).toBe('今天写了日报。');
+    expect((await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).body).toBe('用户已经编辑的正文');
+  });
+
+  it('关闭时创建的 ASR 永远 disabled，之后开启不追溯处理', async () => {
+    // 关闭情况下正常完成原始识别。
+    const sample = await seed();
+    // 整理任务 disabled 事实和 ASR 同时持久。
+    const recognitionId = await finishAsr(sample);
+    await enableAi(); await app.get(AiService).tick();
+    expect(await app.get(AiService).current(user.sub, sample.segmentId, recognitionId)).toMatchObject({ enabled: false, status: 'disabled', text: null });
+    expect(polish).not.toHaveBeenCalled();
+  });
+
+  it('整理超时和处理中崩溃不自动重付费，显式 retry 重放只调用一次', async () => {
+    await enableAi();
+    // 原始 ASR 成功后整理收到超时未知提交。
+    const sample = await seed();
+    // 固定本次 ASR 和之后的新整理尝试身份。
+    const recognitionId = await finishAsr(sample);
+    polish.mockRejectedValueOnce(new AiProviderError('AI_TIMEOUT', true));
+    await app.get(AiService).tick(); await app.get(AiService).tick();
+    expect(polish).toHaveBeenCalledTimes(1);
+    expect(await app.get(AiService).current(user.sub, sample.segmentId, recognitionId)).toMatchObject({ status: 'submissionUnknown', errorCode: 'AI_TIMEOUT', text: null });
+    expect((await prisma.notePolishJob.findFirstOrThrow({ where: { recognitionId } })).encryptedApiKey).toBeNull();
+    // 一次显式 retry 的 HTTP 重放不会重复新增任务或再次识别音频。
+    const operationId = randomUUID();
+    expect((await request(`/notes/audio/${sample.segmentId}/polish`, 'POST', { operationId, recognitionId })).status).toBe(201);
+    expect((await request(`/notes/audio/${sample.segmentId}/polish`, 'POST', { operationId, recognitionId })).status).toBe(201);
+    await app.get(AiService).tick();
+    expect(polish).toHaveBeenCalledTimes(2); expect(submit).toHaveBeenCalledTimes(1);
+    expect(await app.get(AiService).retry(user.sub, sample.segmentId, recognitionId, operationId)).toMatchObject({ id: operationId, status: 'succeeded' });
+    // 模拟进程在已提交状态崩溃，恢复只能标记未知，不再调用。
+    await prisma.notePolishJob.update({ where: { id: operationId }, data: { status: 'processing', updatedAt: new Date(Date.now() - 180000) } });
+    await app.get(AiService).tick();
+    expect(polish).toHaveBeenCalledTimes(2);
+    expect(await app.get(AiService).current(user.sub, sample.segmentId, recognitionId)).toMatchObject({ status: 'submissionUnknown' });
+  });
+
+  it('关闭和撤回识别阻止未提交任务及迟到成功结果重新出现', async () => {
+    // 开启并正常取得成功结果。
+    const settings = await enableAi();
+    // 原文和成功整理持久保存。
+    const sample = await seed();
+    // 整理成功后的身份仍可由客户端继续轮询。
+    const recognitionId = await finishAsr(sample);
+    await app.get(AiService).tick();
+    expect(await app.get(AiService).current(user.sub, sample.segmentId, recognitionId)).toMatchObject({ status: 'succeeded' });
+    await app.get(AiService).updateSettings(user.sub, { revision: settings.revision, activeProfileId: settings.activeProfileId, notePolishEnabled: false });
+    expect(await app.get(AiService).current(user.sub, sample.segmentId, recognitionId)).toMatchObject({ status: 'cancelled', text: null });
+    // 再开启也不会把以前的成功结果恢复成可自动采用。
+    const latest = await app.get(AiService).settings(user.sub);
+    await app.get(AiService).updateSettings(user.sub, { revision: latest.revision, activeProfileId: latest.activeProfileId, notePolishEnabled: true });
+    expect(await app.get(AiService).current(user.sub, sample.segmentId, recognitionId)).toMatchObject({ status: 'cancelled', text: null });
+    // 显式重试创建后撤回识别，即使 ASR 已成功也要取消整理。
+    await app.get(AiService).retry(user.sub, sample.segmentId, recognitionId, randomUUID());
+    await notes.cancel(user, sample.segmentId); await app.get(AiService).tick();
+    expect(polish).toHaveBeenCalledTimes(1);
+    expect(await app.get(AiService).current(user.sub, sample.segmentId, recognitionId)).toMatchObject({ status: 'cancelled', text: null });
+  });
+
   it('云端临时链接绑定任务与期限，无JWT可取有效原音，撤回或签名篡改立即失效', async () => {
     // 使用大文件URL路径时不暴露设备Token。
     const sample = await seed(); await upload(sample); app.get(ConfigService).set('NOTE_ASR_PUBLIC_URL', publicAudioUrl);

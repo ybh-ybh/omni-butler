@@ -8,7 +8,7 @@ import 'package:omni_butler/core/auth/auth_models.dart';
 const String fixedApiPath = '/omni-butler/api/v1';
 
 /// 当前客户端支持的业务同步结构版本。
-const int syncSchemaVersion = 10;
+const int syncSchemaVersion = 11;
 
 /// 完整设备会话使用同一个安全存储键，避免写入中断造成凭证混搭。
 const String _sessionKey = 'sync.device_session';
@@ -126,6 +126,7 @@ class AuthRepository {
     Object? data,
     Map<String, dynamic>? queryParameters,
     ResponseType? responseType,
+    Duration? receiveTimeout,
     bool preserveTransportErrors = false,
   }) {
     if (generation != _generation) {
@@ -137,6 +138,7 @@ class AuthRepository {
       data: data,
       queryParameters: queryParameters,
       responseType: responseType,
+      receiveTimeout: receiveTimeout,
       preserveTransportErrors: preserveTransportErrors,
     );
   }
@@ -408,6 +410,7 @@ class AuthRepository {
     Object? data,
     Map<String, dynamic>? queryParameters,
     ResponseType? responseType,
+    Duration? receiveTimeout,
     bool preserveTransportErrors = false,
   }) async {
     // 请求从读取会话起就固定所属代次。
@@ -428,6 +431,7 @@ class AuthRepository {
         data: data,
         queryParameters: queryParameters,
         responseType: responseType,
+        receiveTimeout: receiveTimeout,
       );
       await _assertUnchangedSession(saved, generation);
       return response;
@@ -454,6 +458,7 @@ class AuthRepository {
             data: data is FormData ? data.clone() : data,
             queryParameters: queryParameters,
             responseType: responseType,
+            receiveTimeout: receiveTimeout,
           );
           await _assertUnchangedSession(saved, generation);
           return response;
@@ -495,6 +500,7 @@ class AuthRepository {
     Object? data,
     Map<String, dynamic>? queryParameters,
     ResponseType? responseType,
+    Duration? receiveTimeout,
   }) {
     return _dio(baseUrl).request<T>(
       path,
@@ -503,6 +509,7 @@ class AuthRepository {
       options: Options(
         method: method,
         responseType: responseType,
+        receiveTimeout: receiveTimeout,
         headers: <String, String>{'Authorization': 'Bearer $token'},
       ),
     );

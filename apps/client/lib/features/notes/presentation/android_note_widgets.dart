@@ -719,6 +719,8 @@ class _AndroidNoteAudio extends ConsumerWidget {
         onDelete: onDelete,
         onRecognize: () => _recognize(context, ref),
         onCancel: () => _cancel(context, ref),
+        onRetryPolish: () => unawaited(retryNotePolish(context, ref, segment)),
+        onAdoptPolish: () => unawaited(adoptNotePolish(context, ref, segment)),
         onInsert: (text) => onInsert?.call(text),
       ),
     );

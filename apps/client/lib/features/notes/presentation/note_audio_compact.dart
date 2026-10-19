@@ -67,6 +67,12 @@ extension _CompactNoteAudioCard on _NoteAudioCardState {
             _updateCompact(() => _detailsExpanded = !_detailsExpanded),
       ),
     );
+    // 原文、候选或任务状态任一存在时才表示有过识别，授权本身不算开始。
+    final bool hasRecognition =
+        widget.segment.transcript?.trim().isNotEmpty == true ||
+        widget.local?.candidateTranscript?.trim().isNotEmpty == true ||
+        widget.local?.recognitionId != null ||
+        (widget.local != null && widget.local!.recognitionState != 'idle');
     // 首次原始转写与重新识别候选分开保存，展开不会改写正文。
     final Widget details = Padding(
       padding: const EdgeInsets.fromLTRB(
@@ -92,7 +98,7 @@ extension _CompactNoteAudioCard on _NoteAudioCardState {
             ),
           if (widget.local?.lastError != null)
             Text(
-              widget.local!.lastError!,
+              noteAudioTransferErrorMessage(widget.local!.lastError!),
               style: Theme.of(context).textTheme.bodySmall
                   ?.copyWith(color: colors.danger),
             ),
@@ -102,60 +108,86 @@ extension _CompactNoteAudioCard on _NoteAudioCardState {
               style: Theme.of(context).textTheme.bodySmall
                   ?.copyWith(color: muted),
             ),
+          _polishControls(showResultAction: false),
           const SizedBox(height: OmniSpacing.lg),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Wrap(
-                  spacing: OmniSpacing.xxs,
-                  runSpacing: OmniSpacing.xxs,
-                  children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // 文字操作共用同一组，在可用宽度内自然换行。
+              final Widget actions = Wrap(
+                spacing: OmniSpacing.xxs,
+                runSpacing: OmniSpacing.xxs,
+                children: [
+                  OmniNoteAudioLink(
+                    key: ValueKey('note-audio-recognize-${widget.segment.id}'),
+                    label: hasRecognition ? '重新识别' : '开始识别',
+                    onPressed: recognizing || !widget.recognitionEnabled
+                        ? null
+                        : widget.onRecognize,
+                  ),
+                  OmniNoteAudioLink(
+                    key: ValueKey('note-audio-download-${widget.segment.id}'),
+                    label: _exporting ? '下载中…' : '下载',
+                    onPressed: _fileAvailable == true && !_exporting
+                        ? () => unawaited(_downloadAudio())
+                        : null,
+                  ),
+                  if (widget.local?.polishState != 'disabled' &&
+                      widget.local?.polishedText?.trim().isNotEmpty == true)
                     OmniNoteAudioLink(
                       key: ValueKey(
-                        'note-audio-recognize-${widget.segment.id}',
+                        'note-audio-polish-result-${widget.segment.id}',
                       ),
-                      label: '重新识别',
-                      onPressed: recognizing || !widget.recognitionEnabled
-                          ? null
-                          : widget.onRecognize,
+                      label: '查看AI转录',
+                      onPressed: () => unawaited(
+                        _showPolishedText(widget.local!.polishedText!),
+                      ),
                     ),
+                  if (widget.editing)
                     OmniNoteAudioLink(
-                      key: ValueKey('note-audio-download-${widget.segment.id}'),
-                      label: _exporting ? '下载中…' : '下载',
-                      onPressed: _fileAvailable == true && !_exporting
-                          ? () => unawaited(_downloadAudio())
+                      key: ValueKey('note-audio-insert-${widget.segment.id}'),
+                      label: '插入正文',
+                      onPressed:
+                          widget.editEnabled &&
+                              (widget.local?.candidateTranscript ??
+                                      widget.segment.transcript ??
+                                      '')
+                                  .trim()
+                                  .isNotEmpty
+                          ? () => widget.onInsert(
+                              widget.local?.candidateTranscript ??
+                                  widget.segment.transcript!,
+                            )
                           : null,
                     ),
-                    if (widget.editing)
-                      OmniNoteAudioLink(
-                        key: ValueKey('note-audio-insert-${widget.segment.id}'),
-                        label: '插入正文',
-                        onPressed:
-                            widget.editEnabled &&
-                                (widget.local?.candidateTranscript ??
-                                        widget.segment.transcript ??
-                                        '')
-                                    .trim()
-                                    .isNotEmpty
-                            ? () => widget.onInsert(
-                                widget.local?.candidateTranscript ??
-                                    widget.segment.transcript!,
-                              )
-                            : null,
-                      ),
+                ],
+              );
+              if (!widget.editing) return actions;
+              // 删除单独靠右，大字号与窄窗时放到下一行，避免挤压查看结果。
+              final Widget deletion = OmniNoteAudioLink(
+                key: ValueKey('note-audio-delete-${widget.segment.id}'),
+                label: '删除录音',
+                leadingIcon: Icons.delete_outline,
+                color: colors.danger,
+                onPressed: widget.editEnabled ? widget.onDelete : null,
+              );
+              if (constraints.maxWidth < 360 ||
+                  MediaQuery.textScalerOf(context).scale(12) > 18) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    actions,
+                    Align(alignment: Alignment.centerRight, child: deletion),
                   ],
-                ),
-              ),
-              if (widget.editing)
-                OmniNoteAudioLink(
-                  key: ValueKey('note-audio-delete-${widget.segment.id}'),
-                  label: '删除录音',
-                  leadingIcon: Icons.delete_outline,
-                  color: colors.danger,
-                  onPressed: widget.editEnabled ? widget.onDelete : null,
-                ),
-            ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: actions),
+                  deletion,
+                ],
+              );
+            },
           ),
         ],
       ),

@@ -135,7 +135,7 @@ void main() {
       expect(
         (await legacy.customSelect('PRAGMA user_version').getSingle())
             .read<int>('user_version'),
-        25,
+        26,
       );
     } finally {
       await legacy.close();
@@ -168,7 +168,7 @@ void main() {
     );
     expect(roundTrip.tables['note_entries']!.single['is_pinned'], 1);
     expect((roundTrip.operations.single['data'] as Map)['is_pinned'], true);
-    expect(SyncSnapshot.version, 10);
+    expect(SyncSnapshot.version, 11);
     expect(SyncSnapshot.migrationProtocolVersion, 3);
   });
 }

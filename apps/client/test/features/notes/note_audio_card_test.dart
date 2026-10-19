@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:crypto/crypto.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -12,6 +13,7 @@ import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_export_service.dart';
+import 'package:omni_butler/features/notes/data/note_repository.dart';
 import 'package:omni_butler/app/theme/note_composer_style.dart';
 import 'package:omni_butler/features/notes/presentation/note_audio_card.dart';
 import 'package:omni_butler/shared/ui/omni_button.dart';
@@ -229,6 +231,9 @@ NoteAudioLocalFileRecord _local(
   String? inserted,
   String? error,
   String? candidate,
+  String polishState = 'disabled',
+  String? polishedText,
+  String? polishError,
 }) => NoteAudioLocalFileRecord(
   id: id,
   localPath: path,
@@ -238,6 +243,9 @@ NoteAudioLocalFileRecord _local(
   insertedRevision: inserted,
   lastError: error,
   candidateTranscript: candidate,
+  polishState: polishState,
+  polishedText: polishedText,
+  polishError: polishError,
 );
 
 /// 测试使用产品主题，窄屏溢出由布局异常直接发现。
@@ -277,6 +285,304 @@ void main() {
   tearDown(() async {
     await player.dispose();
     await directory.delete(recursive: true);
+  });
+
+  // 首次入口根据真实识别事实命名，已授权但未开始不冒充重新识别。
+  for (final (
+        String name,
+        String? transcript,
+        NoteAudioLocalFileRecord? local,
+        String label,
+        bool enabled,
+      )
+      in <(String, String?, NoteAudioLocalFileRecord?, String, bool)>[
+        ('无本机任务', null, null, '开始识别', true),
+        ('初始状态', null, _local('label'), '开始识别', true),
+        ('授权但未开始', null, _local('label', consent: true), '开始识别', true),
+        ('同步原文', '已识别的原文', _local('label'), '重新识别', true),
+        ('本机候选', null, _local('label', candidate: '候选文字'), '重新识别', true),
+        ('空结果成功', null, _local('label', status: 'succeeded'), '重新识别', true),
+        ('失败重试', null, _local('label', status: 'failed'), '重新识别', true),
+        ('任务排队', null, _local('label', status: 'queued'), '重新识别', false),
+        (
+          '回执未知',
+          null,
+          _local('label', status: 'submissionUnknown'),
+          '重新识别',
+          false,
+        ),
+      ]) {
+    testWidgets('$name使用正确识别名称并保留原按钮行为', (tester) async {
+      // 仅统计用户点击，不调用转录服务。
+      int recognitions = 0;
+      await tester.pumpWidget(
+        _app(
+          NoteAudioCard(
+            compact: true,
+            segment: _segment('label', transcript: transcript),
+            local: local,
+            player: player,
+            recordingActive: false,
+            onRecognize: () => recognitions++,
+            onCancel: () {},
+            onInsert: (_) {},
+          ),
+        ),
+      );
+      await _settle(tester);
+      await tester.tap(find.text('更多'));
+      await tester.pumpAndSettle();
+      expect(find.text(label), findsOneWidget);
+      expect(find.text(label == '开始识别' ? '重新识别' : '开始识别'), findsNothing);
+      expect(
+        tester
+                .widget<TextButton>(find.widgetWithText(TextButton, label))
+                .onPressed !=
+            null,
+        enabled,
+      );
+      if (enabled) await tester.tap(find.text(label));
+      expect(recognitions, enabled ? 1 : 0);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('紧凑音频整理进度随原文折叠，展开也不提供重复提交', (tester) async {
+    await tester.pumpWidget(
+      _app(
+        NoteAudioCard(
+          compact: true,
+          segment: _segment('ai', transcript: '嗯，原文。'),
+          local: _local(
+            'ai',
+            status: 'succeeded',
+            consent: true,
+            polishState: 'processing',
+          ),
+          player: player,
+          onRecognize: () {},
+          onCancel: () {},
+          onInsert: (_) {},
+          onRetryPolish: () => fail('进行中不得重试'),
+          recordingActive: false,
+        ),
+        scale: 2,
+      ),
+    );
+    await _settle(tester);
+    expect(find.text('AI 整理中').hitTestable(), findsNothing);
+    await tester.tap(find.text('更多'));
+    await tester.pumpAndSettle();
+    expect(find.text('AI 整理中').hitTestable(), findsOneWidget);
+    expect(find.text('重试整理'), findsNothing);
+    await tester.tap(find.text('收起'));
+    await tester.pumpAndSettle();
+    expect(find.text('AI 整理中').hitTestable(), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('整理失败重试独立于ASR，原文和错误可见', (tester) async {
+    // 只统计整理重试，不应调用重新识别。
+    int retries = 0;
+    await tester.pumpWidget(
+      _app(
+        NoteAudioCard(
+          compact: true,
+          segment: _segment('ai', transcript: '嗯，原文。'),
+          local: _local(
+            'ai',
+            status: 'succeeded',
+            consent: true,
+            polishState: 'failed',
+            polishError: '模型额度不足',
+          ),
+          player: player,
+          onRecognize: () => fail('整理重试不得启动ASR'),
+          onCancel: () {},
+          onInsert: (_) {},
+          onRetryPolish: () => retries++,
+          recordingActive: false,
+        ),
+      ),
+    );
+    await _settle(tester);
+    expect(find.text('重试整理').hitTestable(), findsNothing);
+    expect(find.text('模型额度不足').hitTestable(), findsNothing);
+    await tester.tap(find.text('更多'));
+    await tester.pumpAndSettle();
+    expect(find.text('AI 整理失败，原始转写已保留'), findsOneWidget);
+    expect(find.text('模型额度不足'), findsOneWidget);
+    await tester.tap(find.text('重试整理'));
+    expect(retries, 1);
+  });
+
+  testWidgets('整理参数不兼容显示明确原因且不会自动重试', (tester) async {
+    await tester.pumpWidget(
+      _app(
+        NoteAudioCard(
+          compact: true,
+          segment: _segment('ai', transcript: '保留的原始转写'),
+          local: _local(
+            'ai',
+            status: 'succeeded',
+            consent: true,
+            polishState: 'failed',
+            polishError: 'AI_REASONING_UNSUPPORTED',
+          ),
+          player: player,
+          onRecognize: () => fail('显示错误不得重新转写'),
+          onCancel: () {},
+          onInsert: (_) => fail('错误结果不得插入正文'),
+          onRetryPolish: () => fail('显示错误不得自动重试'),
+          recordingActive: false,
+        ),
+        scale: 2,
+      ),
+    );
+    await _settle(tester);
+    expect(find.text('重试整理').hitTestable(), findsNothing);
+    await tester.tap(find.text('更多'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('该模型始终开启思考，不支持关闭思考（reasoning.effort=none）。'),
+      findsOneWidget,
+    );
+    expect(find.text('AI 整理失败，原始转写已保留'), findsOneWidget);
+    expect(find.text('保留的原始转写'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('旧原文已插入仍展示新整理候选，采用由父页面执行', (tester) async {
+    // 原始ASR已采用不能误判为本次整理也已采用。
+    int adoptions = 0;
+    await tester.pumpWidget(
+      _app(
+        NoteAudioCard(
+          compact: true,
+          segment: _segment('ai', transcript: '嗯，原文。'),
+          local: _local(
+            'ai',
+            status: 'succeeded',
+            consent: true,
+            inserted: 'old-revision',
+            polishState: 'succeeded',
+            polishedText: '整理后的正文。',
+          ),
+          player: player,
+          onRecognize: () {},
+          onCancel: () {},
+          onInsert: (_) {},
+          onAdoptPolish: () => adoptions++,
+          recordingActive: false,
+        ),
+      ),
+    );
+    await _settle(tester);
+    expect(find.text('采用整理结果').hitTestable(), findsNothing);
+    expect(find.text('查看AI转录').hitTestable(), findsNothing);
+    await tester.tap(find.text('更多'));
+    await tester.pumpAndSettle();
+    expect(find.text('AI 整理完成，待采用'), findsOneWidget);
+    await tester.tap(find.text('采用整理结果'));
+    expect(adoptions, 1);
+    await tester.tap(find.text('查看AI转录'));
+    await tester.pumpAndSettle();
+    expect(find.text('整理后的正文。'), findsOneWidget);
+  });
+
+  testWidgets('已采用不显示状态文字，查看AI转录仍随原文折叠且旧网络错误不泄漏', (tester) async {
+    // 真实指纹模拟当前整理结果已被采用，不触发正文写入。
+    final NoteAudioLocalFileRecord result = _local(
+      'adopted',
+      status: 'succeeded',
+      consent: true,
+      polishState: 'succeeded',
+      polishedText: '已采用的整理正文。',
+    );
+    // 收起状态必须同时隐藏视觉内容和辅助功能节点。
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    try {
+      await tester.pumpWidget(
+        _app(
+          NoteAudioCard(
+            compact: true,
+            segment: _segment('adopted', transcript: '原始转写'),
+            local: result.copyWith(
+              polishAdoptedHash: Value(notePolishFingerprint(result)),
+              lastError: const Value(
+                'DioException [connection error]: HttpException: Connection closed before full header was received, uri = https://private.example.test/polish?key=unit-secret',
+              ),
+            ),
+            player: player,
+            onRecognize: () => fail('折叠不得重新识别'),
+            onCancel: () {},
+            onInsert: (_) => fail('折叠不得修改正文'),
+            onAdoptPolish: () => fail('已采用的正文不得重复采用'),
+            recordingActive: false,
+          ),
+        ),
+      );
+      await _settle(tester);
+      expect(
+        tester
+            .getSize(find.byKey(const ValueKey('note-audio-bar-adopted')))
+            .height,
+        48,
+      );
+      expect(find.text('AI 整理已采用').hitTestable(), findsNothing);
+      expect(find.text('查看AI转录').hitTestable(), findsNothing);
+      expect(find.semantics.byLabel('AI 整理已采用'), findsNothing);
+      await tester.tap(find.text('更多'));
+      await tester.pumpAndSettle();
+      expect(find.text('AI 整理已采用'), findsNothing);
+      expect(find.semantics.byLabel('AI 整理已采用'), findsNothing);
+      expect(find.text('查看AI转录').hitTestable(), findsOneWidget);
+      expect(find.textContaining('DioException'), findsNothing);
+      expect(find.textContaining('private.example.test'), findsNothing);
+      expect(find.textContaining('服务器连接中断'), findsOneWidget);
+      expect(find.text('采用整理结果'), findsNothing);
+      // 查看结果与下载使用同一尺寸，并在同一行紧邻右侧。
+      final Rect download = tester.getRect(
+        find.widgetWithText(TextButton, '下载'),
+      );
+      // 结果入口只出现一次，避免状态区和底部行同时渲染。
+      final Rect resultButton = tester.getRect(
+        find.widgetWithText(TextButton, '查看AI转录'),
+      );
+      expect(resultButton.height, download.height);
+      expect(resultButton.center.dy, closeTo(download.center.dy, .1));
+      expect(resultButton.left, greaterThan(download.right));
+      // 实际按钮文字样式相同，不仅检查外层组件类型。
+      final TextButton view = tester.widget(
+        find.widgetWithText(TextButton, '查看AI转录'),
+      );
+      // 对照下载按钮的生产样式。
+      final TextButton downloadButton = tester.widget(
+        find.widgetWithText(TextButton, '下载'),
+      );
+      expect(
+        view.style!.textStyle!.resolve({})!.fontSize,
+        downloadButton.style!.textStyle!.resolve({})!.fontSize,
+      );
+      await tester.tap(find.text('查看AI转录'));
+      await tester.pumpAndSettle();
+      expect(find.text('已采用的整理正文。'), findsOneWidget);
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('收起'));
+      await tester.pumpAndSettle();
+      expect(find.text('查看AI转录').hitTestable(), findsNothing);
+      expect(find.semantics.byLabel('AI 整理已采用'), findsNothing);
+      expect(
+        tester
+            .getSize(find.byKey(const ValueKey('note-audio-bar-adopted')))
+            .height,
+        48,
+      );
+      expect(tester.takeException(), isNull);
+    } finally {
+      semantics.dispose();
+    }
   });
 
   testWidgets('紧凑音频条展开动画、原文、下载副本及悬停交互', (tester) async {
@@ -480,7 +786,11 @@ void main() {
           editing: true,
           onDelete: () {},
           segment: _segment('narrow', transcript: '原始音频文字' * 30),
-          local: null,
+          local: _local(
+            'narrow',
+            polishState: 'succeeded',
+            polishedText: '通顺的整理正文。',
+          ),
           player: player,
           recordingActive: false,
           onRecognize: () {},

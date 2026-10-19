@@ -54,6 +54,9 @@ void main() {
   /// 网络回应可由屏障控制返回时刻。
   late Future<Object?> Function(RequestOptions) respond;
 
+  /// 整理接口与已有 ASR 假服务分开，便于验证独立付费链路。
+  late Future<Object?> Function(RequestOptions) polishRespond;
+
   /// 原平台路径提供器，结束时精确恢复避免串测试。
   late PathProviderPlatform originalPathProvider;
 
@@ -100,6 +103,17 @@ void main() {
         'transcript': null,
       };
     };
+    polishRespond = (request) async => {
+      'id': null,
+      'recognitionId':
+          request.queryParameters['recognitionId'] ??
+          (request.data as Map?)?['recognitionId'],
+      'enabled': false,
+      'status': 'disabled',
+      'text': null,
+      'errorCode': null,
+      'sourceHash': null,
+    };
     auth = AuthRepository(
       const FlutterSecureStorage(),
       clientFactory: (baseUrl) {
@@ -114,7 +128,9 @@ void main() {
                   Response<dynamic>(
                     requestOptions: request,
                     statusCode: 200,
-                    data: await respond(request),
+                    data: await (request.path.endsWith('/polish')
+                        ? polishRespond(request)
+                        : respond(request)),
                   ),
                 );
               } on DioException catch (failure) {
@@ -183,6 +199,163 @@ void main() {
   Future<NoteAudioLocalFileRecord> local() =>
       database.select(database.noteAudioLocalFiles).getSingle();
 
+  /// 只统计真正经过生产授权仓储发出的语音识别计费请求。
+  List<RequestOptions> submits() => requests
+      .where(
+        (request) =>
+            request.method == 'POST' && request.path.endsWith('/recognitions'),
+      )
+      .toList();
+
+  /// 为已完成 ASR 保留自动插入起点，使用生产数据库与真实文件。
+  Future<void> seedPolish() async {
+    await seed(recognitionState: 'succeeded', transcript: '嗯，今天阅读了一小时，嗯。');
+    // 固定当时正文版本，后台不能越过后续人工编辑。
+    final NoteEntryRecord note = (await repository.find('note'))!;
+    await (database.update(
+      database.noteAudioLocalFiles,
+    )..where((table) => table.id.equals('segment'))).write(
+      NoteAudioLocalFilesCompanion(
+        insertedRevision: Value('waiting:${note.revision}'),
+      ),
+    );
+    service = NoteAudioTransferService(database, auth);
+  }
+
+  /// 每次回应的来源摘要必须对应真实原始转写。
+  Map<String, Object?> polishResult(String state, {String? text}) => {
+    'id': 'polish-job',
+    'recognitionId': 'operation',
+    'enabled': true,
+    'status': state,
+    'text': text,
+    'errorCode': state == 'failed' ? 'AI_PROVIDER_ERROR' : null,
+    'sourceHash': sha256.convert(utf8.encode('嗯，今天阅读了一小时，嗯。')).toString(),
+  };
+
+  test('ASR已成功仍轮询整理，等待时不插原文，成功只采用一次', () async {
+    await seedPolish();
+    polishRespond = (_) async => polishResult('processing');
+    await service.tick();
+    expect((await repository.find('note'))!.body, '人工正文');
+    expect((await local()).polishState, 'processing');
+    polishRespond = (_) async => polishResult('succeeded', text: '今天阅读了一小时。');
+    await service.tick();
+    await service.tick();
+    expect((await repository.find('note'))!.body, '人工正文\n\n今天阅读了一小时。');
+    expect(
+      (await database.select(database.noteAudioSegments).getSingle())
+          .transcript,
+      '嗯，今天阅读了一小时，嗯。',
+    );
+    expect(submits(), isEmpty);
+  });
+
+  // 查询断连前已采用与尚在等待的结果都应保持，连接恢复后清除旧错误。
+  for (final bool alreadyAdopted in [false, true]) {
+    test('整理状态查询断连只记录简短原因，恢复后清除错误：已采用$alreadyAdopted', () async {
+      await seedPolish();
+      polishRespond = (_) async => polishResult('succeeded', text: '今天阅读了一小时。');
+      if (alreadyAdopted) await service.tick();
+      polishRespond = (request) async => throw DioException(
+        requestOptions: request,
+        type: DioExceptionType.connectionError,
+        message: 'private unit-secret',
+        error: HttpException(
+          'Connection closed before full header was received',
+          uri: Uri.parse('https://private.example.test/polish?key=unit-secret'),
+        ),
+      );
+      await service.tick();
+      expect((await local()).lastError, '服务器连接中断，稍后会自动重试连接；原音和已保存文字仍保留。');
+      expect((await local()).lastError, isNot(contains('unit-secret')));
+      expect((await local()).recognitionState, 'succeeded');
+      expect((await local()).recognitionId, 'operation');
+      if (alreadyAdopted) {
+        expect((await local()).polishedText, '今天阅读了一小时。');
+        expect((await local()).polishAdoptedHash, isNotNull);
+      }
+      polishRespond = (_) async => polishResult('succeeded', text: '今天阅读了一小时。');
+      await service.tick();
+      expect((await local()).lastError, isNull);
+      expect((await local()).polishError, isNull);
+      expect((await repository.find('note'))!.body, '人工正文\n\n今天阅读了一小时。');
+      expect(submits(), isEmpty);
+      expect(
+        requests.where(
+          (request) =>
+              request.method == 'POST' && request.path.endsWith('/polish'),
+        ),
+        isEmpty,
+      );
+    });
+  }
+
+  test('旧版本保存的原始连接异常在查询恢复后清除', () async {
+    await seedPolish();
+    await (database.update(
+      database.noteAudioLocalFiles,
+    )..where((table) => table.id.equals('segment'))).write(
+      const NoteAudioLocalFilesCompanion(
+        lastError: Value('DioException: uri=https://private.example.test'),
+      ),
+    );
+    polishRespond = (_) async => polishResult('processing');
+    await service.tick();
+    expect((await local()).lastError, isNull);
+    expect((await local()).polishState, 'processing');
+    expect((await repository.find('note'))!.body, '人工正文');
+  });
+
+  test('整理失败回退原文，显式重试只调用整理并精确替换原范围', () async {
+    await seedPolish();
+    polishRespond = (_) async => polishResult('failed');
+    await service.tick();
+    expect((await repository.find('note'))!.body, '人工正文\n\n嗯，今天阅读了一小时，嗯。');
+    polishRespond = (_) async => polishResult('succeeded', text: '今天阅读了一小时。');
+    await service.retryPolish('segment');
+    expect((await repository.find('note'))!.body, '人工正文\n\n今天阅读了一小时。');
+    expect(submits(), isEmpty);
+    expect(
+      requests.where(
+        (request) =>
+            request.method == 'POST' && request.path.endsWith('/polish'),
+      ),
+      hasLength(1),
+    );
+  });
+
+  test('等待整理时人工修改，成功结果保候选不覆盖正文', () async {
+    await seedPolish();
+    polishRespond = (_) async => polishResult('processing');
+    await service.tick();
+    // 人工保存产生新的正文版本，不能被模型响应替换。
+    final NoteEntryRecord before = (await repository.find('note'))!;
+    await repository.save(
+      NoteDraft(
+        id: before.id,
+        body: '人工后来修改',
+        dayKey: before.dayKey,
+        baseRevision: before.revision,
+      ),
+    );
+    polishRespond = (_) async => polishResult('succeeded', text: '今天阅读了一小时。');
+    await service.tick();
+    expect((await repository.find('note'))!.body, '人工后来修改');
+    expect((await local()).polishedText, '今天阅读了一小时。');
+  });
+
+  test('整理来源摘要不匹配时回退原文，不采用错误结果', () async {
+    await seedPolish();
+    polishRespond = (_) async => {
+      ...polishResult('succeeded', text: '错误段落'),
+      'sourceHash': 'another-source',
+    };
+    await service.tick();
+    expect((await local()).polishState, 'failed');
+    expect((await repository.find('note'))!.body, '人工正文\n\n嗯，今天阅读了一小时，嗯。');
+  });
+
   /// 模拟用户撤回操作，与产品使用相同持久字段。
   Future<void> withdraw() =>
       (database.update(
@@ -194,13 +367,148 @@ void main() {
         ),
       );
 
-  /// 只统计真正经过生产授权仓储发出的计费请求。
-  List<RequestOptions> submits() => requests
-      .where(
+  test('整理POST回执丢失后重放相同operationId，不重新ASR', () async {
+    await seedPolish();
+    polishRespond = (_) async => polishResult('failed');
+    await service.tick();
+    // 首次整理POST只丢失回执，保留持久操作身份供恢复。
+    int posts = 0;
+    polishRespond = (request) async {
+      if (request.method == 'POST' && ++posts == 1) {
+        throw DioException(
+          requestOptions: request,
+          type: DioExceptionType.receiveTimeout,
+        );
+      }
+      return polishResult('succeeded', text: '今天阅读了一小时。');
+    };
+    await service.retryPolish('segment');
+    // 未知回执不会清空身份，也不会再次插入原文。
+    final String? operationId = (await local()).polishOperationId;
+    expect(operationId, isNotNull);
+    await service.tick();
+    // 所有重发只对应同一次用户明确要求的尝试。
+    final List<RequestOptions> attempts = requests
+        .where(
+          (request) =>
+              request.path.endsWith('/polish') && request.method == 'POST',
+        )
+        .toList();
+    expect(attempts, hasLength(2));
+    expect(
+      attempts.map((request) => (request.data as Map)['operationId']).toSet(),
+      {operationId},
+    );
+    expect((await local()).polishOperationId, isNull);
+    expect((await repository.find('note'))!.body, '人工正文\n\n今天阅读了一小时。');
+    expect(submits(), isEmpty);
+  });
+
+  test('快速双击整理重试只分配一次操作身份', () async {
+    await seedPolish();
+    polishRespond = (_) async => polishResult('failed');
+    await service.tick();
+    // 原请求处于在途时第二次点击不得另建计费尝试。
+    final Completer<void> entered = Completer<void>();
+    final Completer<Object?> release = Completer<Object?>();
+    polishRespond = (_) {
+      entered.complete();
+      return release.future;
+    };
+    // 第一点击保留网络屏障，第二点击复用已持久身份。
+    final Future<void> first = service.retryPolish('segment');
+    await entered.future;
+    final String? operationId = (await local()).polishOperationId;
+    await service.retryPolish('segment');
+    expect((await local()).polishOperationId, operationId);
+    release.complete(polishResult('succeeded', text: '今天阅读了一小时。'));
+    await first;
+    expect(
+      requests.where(
         (request) =>
-            request.method == 'POST' && request.path.endsWith('/recognitions'),
-      )
-      .toList();
+            request.path.endsWith('/polish') && request.method == 'POST',
+      ),
+      hasLength(1),
+    );
+  });
+
+  test('整理重试确定4xx拒绝后停止自动POST', () async {
+    await seedPolish();
+    polishRespond = (_) async => polishResult('failed');
+    await service.tick();
+    polishRespond = (request) async {
+      if (request.method == 'POST') {
+        throw DioException(
+          requestOptions: request,
+          type: DioExceptionType.badResponse,
+          response: Response(
+            requestOptions: request,
+            statusCode: 400,
+            data: {'message': '请先开启笔记 AI 整理'},
+          ),
+        );
+      }
+      return polishResult('failed');
+    };
+    await service.retryPolish('segment');
+    expect((await local()).polishState, 'failed');
+    expect((await local()).polishOperationId, isNull);
+    expect((await local()).polishError, '请先开启笔记 AI 整理');
+    await service.tick();
+    expect(
+      requests.where(
+        (request) =>
+            request.path.endsWith('/polish') && request.method == 'POST',
+      ),
+      hasLength(1),
+    );
+  });
+
+  for (final bool changeSource in [false, true]) {
+    test('整理GET在途${changeSource ? '换服' : '撤回'}不采用迟到结果', () async {
+      await seedPolish();
+      // 屏障固定网络结果晚于本机撤回或换服。
+      final Completer<void> entered = Completer<void>();
+      final Completer<Object?> release = Completer<Object?>();
+      polishRespond = (_) {
+        entered.complete();
+        return release.future;
+      };
+      // 保留生产传输与实际授权仓储的全部代次校验。
+      final Future<void> pending = service.tick();
+      await entered.future;
+      if (changeSource) {
+        await auth.clearSession();
+      } else {
+        await withdraw();
+      }
+      release.complete(polishResult('succeeded', text: '迟到结果'));
+      await pending;
+      expect((await repository.find('note'))!.body, '人工正文');
+      expect((await local()).polishedText, isNull);
+    });
+  }
+
+  test('原音损坏也先送达撤回，不下载或重复计费', () async {
+    await seedPolish();
+    await withdraw();
+    // 损坏原件仍保留供恢复，撤回不应先经过文件校验。
+    final String path = (await local()).localPath!;
+    await File(path).writeAsBytes([0, 1, 2]);
+    await service.tick();
+    expect(
+      requests.where((request) => request.method == 'DELETE'),
+      hasLength(1),
+    );
+    expect(
+      requests.where(
+        (request) => request.path.endsWith('/file') || request.method == 'PUT',
+      ),
+      isEmpty,
+    );
+    expect((await local()).polishState, 'cancelled');
+    expect(submits(), isEmpty);
+  });
 
   for (final bool duringPost in [true, false]) {
     test('在途${duringPost ? 'POST' : 'poll'}撤回不被迟到成功覆盖，下一轮真正DELETE', () async {

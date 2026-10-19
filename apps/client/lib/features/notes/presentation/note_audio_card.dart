@@ -12,6 +12,8 @@ import 'package:omni_butler/app/theme/note_composer_style.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_export_service.dart';
+import 'package:omni_butler/features/notes/data/note_repository.dart';
+import 'package:omni_butler/features/notes/data/note_audio_transfer_service.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:omni_butler/shared/ui/omni_note_audio_controls.dart';
 import 'package:omni_butler/shared/ui/omni_note_composer_button.dart';
@@ -34,6 +36,8 @@ class NoteAudioCard extends StatefulWidget {
     this.editEnabled = true,
     this.recognitionEnabled = true,
     this.onDelete,
+    this.onRetryPolish,
+    this.onAdoptPolish,
     this.exporter = const NoteAudioExportService(),
     super.key,
   });
@@ -73,6 +77,12 @@ class NoteAudioCard extends StatefulWidget {
 
   /// 删除由父编辑器暂存，只有显式保存才修改正式记录。
   final VoidCallback? onDelete;
+
+  /// 父页面负责重试已保存的 ASR 文本整理。
+  final VoidCallback? onRetryPolish;
+
+  /// 父页面负责整理候选的版本检查和明确采用。
+  final VoidCallback? onAdoptPolish;
 
   /// 下载只导出已核验原音副本，测试可替换系统保存边界。
   final NoteAudioExportService exporter;
@@ -511,6 +521,7 @@ class _NoteAudioCardState extends State<NoteAudioCard> {
               liveRegion: true,
               child: Text(_recognitionLabel(widget.local?.recognitionState)),
             ),
+            _polishControls(),
             if (widget.local?.lastError != null)
               Padding(
                 padding: const EdgeInsets.only(top: OmniSpacing.xs),
@@ -521,7 +532,7 @@ class _NoteAudioCardState extends State<NoteAudioCard> {
                       ? '转写失败'
                       : widget.local?.uploadState == 'failed'
                       ? '原音同步失败'
-                      : '处理异常'}：${widget.local!.lastError}',
+                      : '处理异常'}：${noteAudioTransferErrorMessage(widget.local!.lastError!)}',
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ),
@@ -614,6 +625,127 @@ class _NoteAudioCardState extends State<NoteAudioCard> {
   /// 格式化实际播放或录音时长。
   String _format(Duration duration) =>
       '${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}';
+
+  /// 整理状态独立于 ASR，紧凑音频条可将结果入口放入底部操作行。
+  Widget _polishControls({bool showResultAction = true}) {
+    // 本机持久状态反映后台任务，不使用模型文字判断是否成功。
+    final NoteAudioLocalFileRecord? local = widget.local;
+    if (local == null || local.polishState == 'disabled') {
+      return const SizedBox.shrink();
+    }
+    // 输入和输出的指纹区分旧原文采用与本次整理采用，避免隐藏新候选。
+    final bool adopted =
+        local.polishAdoptedHash != null &&
+        local.polishAdoptedHash == notePolishFingerprint(local);
+    // 失败和付费回执未知只允许显式重试。
+    final bool retryable = const {
+      'failed',
+      'submissionUnknown',
+    }.contains(local.polishState);
+    // 给出用户能理解的状态，错误码保留在详细说明。
+    final String? label = switch (local.polishState) {
+      'waiting' || 'queued' || 'processing' => 'AI 整理中',
+      'succeeded' => adopted ? null : 'AI 整理完成，待采用',
+      'cancelled' => 'AI 整理已停止，原始转写已保留',
+      'submissionUnknown' => 'AI 整理结果待核实，原始转写已保留',
+      _ => 'AI 整理失败，原始转写已保留',
+    };
+    if (label == null && local.polishError == null && !showResultAction) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: OmniSpacing.xs),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (label != null)
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                label,
+                key: ValueKey('note-polish-status-${widget.segment.id}'),
+              ),
+            ),
+          if (local.polishError != null)
+            Text(
+              _polishErrorLabel(local.polishError!),
+              style: TextStyle(color: OmniColors.of(context).danger),
+            ),
+          Wrap(
+            spacing: OmniSpacing.sm,
+            children: [
+              if (retryable && widget.onRetryPolish != null)
+                OmniButton(
+                  label: '重试整理',
+                  variant: OmniButtonVariant.text,
+                  onPressed: widget.recognitionEnabled && local.consent
+                      ? widget.onRetryPolish
+                      : null,
+                ),
+              if (showResultAction &&
+                  local.polishedText?.trim().isNotEmpty == true)
+                OmniButton(
+                  label: '查看AI转录',
+                  variant: OmniButtonVariant.text,
+                  onPressed: () =>
+                      unawaited(_showPolishedText(local.polishedText!)),
+                ),
+              if (local.polishState == 'succeeded' &&
+                  !adopted &&
+                  widget.onAdoptPolish != null)
+                OmniButton(
+                  label: '采用整理结果',
+                  variant: OmniButtonVariant.text,
+                  onPressed: widget.editEnabled ? widget.onAdoptPolish : null,
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 全文预览与复制不会触发正文写入。
+  Future<void> _showPolishedText(String text) => showOmniDialog<void>(
+    context: context,
+    builder: (dialogContext) => OmniDialogScaffold(
+      title: 'AI 整理结果',
+      width: 560,
+      actions: [
+        OmniButton(
+          label: '复制',
+          variant: OmniButtonVariant.secondary,
+          onPressed: () => unawaited(_copy(text, label: 'AI 整理结果')),
+        ),
+        OmniButton(
+          label: '关闭',
+          variant: OmniButtonVariant.text,
+          onPressed: () => Navigator.of(dialogContext).pop(),
+        ),
+      ],
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(dialogContext).height * .55,
+        ),
+        child: SingleChildScrollView(child: SelectableText(text)),
+      ),
+    ),
+  );
+
+  /// 固定后端错误码转换为可操作说明，本机中文校验错误直接保留。
+  String _polishErrorLabel(String code) => switch (code) {
+    'AI_REASONING_UNSUPPORTED' => '该模型始终开启思考，不支持关闭思考（reasoning.effort=none）。',
+    'AI_AUTH_FAILED' => '模型 API Key 无效或没有访问权限，请检查 AI 设置。',
+    'AI_MODEL_OR_URL_INVALID' => '模型名称或 API 地址无效，请检查 AI 设置。',
+    'AI_TIMEOUT' || 'AI_SUBMISSION_UNKNOWN' => '模型请求结果暂无法确认，可能已计费，可手动重试整理。',
+    'AI_RATE_LIMITED' => '模型请求受限，请检查服务商额度或稍后重试。',
+    'AI_KEY_DECRYPTION_FAILED' ||
+    'AI_KEY_STORAGE_FAILED' => '服务器无法读取模型密钥，请恢复密钥备份或重新配置 API Key。',
+    'AI_OUTPUT_TRUNCATED' || 'AI_OUTPUT_TOO_LONG' => '整理结果超出长度限制，原始转写已保留。',
+    'AI_EMPTY_OUTPUT' || 'AI_INVALID_RESPONSE' => '模型没有返回完整正文，原始转写已保留。',
+    'AI_CANCELLED' => '整理已停止，已保存的原文和正文仍可使用。',
+    _ => code.startsWith('AI_') ? '模型服务暂不可用，请检查设置后重试。' : code,
+  };
 
   /// 原音同步与厂商识别是两种独立状态。
   String _uploadLabel(String? state) => switch (state) {

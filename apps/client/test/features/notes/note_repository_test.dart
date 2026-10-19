@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
@@ -392,6 +393,250 @@ void main() {
         (row) => !row.insertedRevision!.startsWith('waiting:'),
       ),
       isTrue,
+    );
+  });
+
+  test('AI整理等待首段并按录音顺序采用候选，原文保持完整', () async {
+    await add('first-ai', 1000);
+    // 两段共享同一个原始正文起点。
+    final NoteEntryRecord base = (await repository.find('note'))!;
+    await add('second-ai', 1000, draft: next(base, base.body));
+    await database
+        .update(database.noteAudioLocalFiles)
+        .write(
+          NoteAudioLocalFilesCompanion(
+            consent: const Value(true),
+            insertedRevision: Value('waiting:${base.revision}'),
+            polishState: const Value('processing'),
+          ),
+        );
+    await database
+        .update(database.noteAudioSegments)
+        .write(const NoteAudioSegmentsCompanion(transcript: Value('嗯原始转写')));
+    await (database.update(
+      database.noteAudioLocalFiles,
+    )..where((row) => row.id.equals('second-ai'))).write(
+      const NoteAudioLocalFilesCompanion(
+        polishState: Value('succeeded'),
+        polishedText: Value('第二段笔记'),
+      ),
+    );
+    await repository.insertReadyTranscripts('note');
+    expect((await repository.find('note'))!.body, base.body);
+    await (database.update(
+      database.noteAudioLocalFiles,
+    )..where((row) => row.id.equals('first-ai'))).write(
+      const NoteAudioLocalFilesCompanion(
+        polishState: Value('succeeded'),
+        polishedText: Value('第一段笔记'),
+      ),
+    );
+    await repository.insertReadyTranscripts('note');
+    await repository.insertReadyTranscripts('note');
+    expect((await repository.find('note'))!.body, '人工正文\n\n第一段笔记\n\n第二段笔记');
+    expect(
+      (await database.select(database.noteAudioSegments).get()).every(
+        (row) => row.transcript == '嗯原始转写',
+      ),
+      isTrue,
+    );
+  });
+
+  test('AI失败回退原文，重试只替换精确范围且后续段范围继续有效', () async {
+    await add('first-ai', 1000);
+    // 两段均回退，用后续替换验证自动追加后的锚点推进。
+    final NoteEntryRecord base = (await repository.find('note'))!;
+    await add('second-ai', 1000, draft: next(base, base.body));
+    await database
+        .update(database.noteAudioLocalFiles)
+        .write(
+          NoteAudioLocalFilesCompanion(
+            consent: const Value(true),
+            insertedRevision: Value('waiting:${base.revision}'),
+            polishState: const Value('failed'),
+          ),
+        );
+    await database
+        .update(database.noteAudioSegments)
+        .write(const NoteAudioSegmentsCompanion(transcript: Value('同样原文')));
+    await repository.insertReadyTranscripts('note');
+    expect((await repository.find('note'))!.body, '人工正文\n\n同样原文\n\n同样原文');
+    await (database.update(
+      database.noteAudioLocalFiles,
+    )..where((row) => row.id.equals('first-ai'))).write(
+      const NoteAudioLocalFilesCompanion(
+        polishState: Value('succeeded'),
+        polishedText: Value('第一段整理较长'),
+      ),
+    );
+    expect(await repository.adoptPolishedTranscript('first-ai'), isTrue);
+    expect(await repository.adoptPolishedTranscript('first-ai'), isFalse);
+    await (database.update(
+      database.noteAudioLocalFiles,
+    )..where((row) => row.id.equals('second-ai'))).write(
+      const NoteAudioLocalFilesCompanion(
+        polishState: Value('succeeded'),
+        polishedText: Value('第二段整理'),
+      ),
+    );
+    expect(await repository.adoptPolishedTranscript('second-ai'), isTrue);
+    expect((await repository.find('note'))!.body, '人工正文\n\n第一段整理较长\n\n第二段整理');
+  });
+
+  test('AI原文回退后人工修改阻止自动替换，明确采用仅追加一次', () async {
+    await add('ai', 1000);
+    // 固定一次合法自动采用的起点。
+    final NoteEntryRecord base = (await repository.find('note'))!;
+    await database
+        .update(database.noteAudioLocalFiles)
+        .write(
+          NoteAudioLocalFilesCompanion(
+            consent: const Value(true),
+            insertedRevision: Value('waiting:${base.revision}'),
+            polishState: const Value('failed'),
+          ),
+        );
+    await database
+        .update(database.noteAudioSegments)
+        .write(const NoteAudioSegmentsCompanion(transcript: Value('原文')));
+    await repository.insertReadyTranscripts('note');
+    await repository.save(next((await repository.find('note'))!, '人工更改'));
+    await database
+        .update(database.noteAudioLocalFiles)
+        .write(
+          const NoteAudioLocalFilesCompanion(
+            polishState: Value('succeeded'),
+            polishedText: Value('整理候选'),
+          ),
+        );
+    await repository.insertReadyTranscripts('note');
+    expect(await repository.adoptPolishedTranscript('ai'), isFalse);
+    expect((await repository.find('note'))!.body, '人工更改');
+    expect(
+      await repository.adoptPolishedTranscript('ai', allowAppend: true),
+      isTrue,
+    );
+    expect(
+      await repository.adoptPolishedTranscript('ai', allowAppend: true),
+      isFalse,
+    );
+    expect((await repository.find('note'))!.body, '人工更改\n\n整理候选');
+  });
+
+  test('AI候选摘要不匹配时不能自动采用或手动写入正文', () async {
+    await add('ai', 1000);
+    // 明确授权仍不能绕过输入摘要一致性校验。
+    final NoteEntryRecord base = (await repository.find('note'))!;
+    await database
+        .update(database.noteAudioLocalFiles)
+        .write(
+          NoteAudioLocalFilesCompanion(
+            consent: const Value(true),
+            insertedRevision: Value('waiting:${base.revision}'),
+            polishState: const Value('succeeded'),
+            polishedText: const Value('别的原文生成的结果'),
+            polishSourceHash: const Value('different-input-hash'),
+          ),
+        );
+    await database
+        .update(database.noteAudioSegments)
+        .write(const NoteAudioSegmentsCompanion(transcript: Value('当前原文')));
+    await repository.insertReadyTranscripts('note');
+    expect(
+      await repository.adoptPolishedTranscript('ai', allowAppend: true),
+      isFalse,
+    );
+    expect((await repository.find('note'))!.body, base.body);
+  });
+
+  test('预览候选指纹变化时拒绝采用，重新确认最新结果后才允许写入', () async {
+    await add('ai', 1000);
+    await database
+        .update(database.noteAudioSegments)
+        .write(const NoteAudioSegmentsCompanion(transcript: Value('原始转写')));
+    await database
+        .update(database.noteAudioLocalFiles)
+        .write(
+          const NoteAudioLocalFilesCompanion(
+            polishState: Value('succeeded'),
+            polishedText: Value('用户预览的候选A'),
+          ),
+        );
+    // 用户打开弹窗时固定候选A的身份。
+    final String previewFingerprint = notePolishFingerprint(
+      await database.select(database.noteAudioLocalFiles).getSingle(),
+    )!;
+    await database
+        .update(database.noteAudioLocalFiles)
+        .write(
+          const NoteAudioLocalFilesCompanion(polishedText: Value('后台更新后的候选B')),
+        );
+    expect(
+      await repository.adoptPolishedTranscript(
+        'ai',
+        allowAppend: true,
+        expectedFingerprint: previewFingerprint,
+      ),
+      isFalse,
+    );
+    expect((await repository.find('note'))!.body, '人工正文');
+    // 只有重新预览确认B，才可以采用当前结果。
+    final String latestFingerprint = notePolishFingerprint(
+      await database.select(database.noteAudioLocalFiles).getSingle(),
+    )!;
+    expect(
+      await repository.adoptPolishedTranscript(
+        'ai',
+        allowAppend: true,
+        expectedFingerprint: latestFingerprint,
+      ),
+      isTrue,
+    );
+    expect((await repository.find('note'))!.body, '人工正文\n\n后台更新后的候选B');
+  });
+
+  test('重新识别的整理来源匹配候选原文时可以明确采用且不会重复', () async {
+    await add('ai', 1000);
+    // 模拟原始ASR已采用，新的识别只保留本机候选。
+    final NoteEntryRecord base = (await repository.find('note'))!;
+    await database
+        .update(database.noteAudioSegments)
+        .write(const NoteAudioSegmentsCompanion(transcript: Value('旧原文')));
+    await database
+        .update(database.noteAudioLocalFiles)
+        .write(
+          NoteAudioLocalFilesCompanion(
+            insertedRevision: Value(base.revision),
+            candidateTranscript: const Value('重新识别原文'),
+            polishState: const Value('succeeded'),
+            polishedText: const Value('重新识别整理结果'),
+            polishSourceHash: Value(
+              sha256.convert(utf8.encode('重新识别原文')).toString(),
+            ),
+          ),
+        );
+    // 用户明确采用允许使用新候选，但不改变原始转写。
+    final NoteAudioSegmentRecord segment = await database
+        .select(database.noteAudioSegments)
+        .getSingle();
+    // 卡片可区分原ASR采用与新整理候选是否已采用。
+    final NoteAudioLocalFileRecord local = await database
+        .select(database.noteAudioLocalFiles)
+        .getSingle();
+    expect(repository.hasUnadoptedPolishedText(segment, local), isTrue);
+    expect(
+      await repository.adoptPolishedTranscript('ai', allowAppend: true),
+      isTrue,
+    );
+    expect(
+      await repository.adoptPolishedTranscript('ai', allowAppend: true),
+      isFalse,
+    );
+    expect((await repository.find('note'))!.body, '人工正文\n\n重新识别整理结果');
+    expect(
+      (await database.select(database.noteAudioSegments).getSingle())
+          .transcript,
+      '旧原文',
     );
   });
 

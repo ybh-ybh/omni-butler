@@ -1081,7 +1081,13 @@ void main() {
     expect(app.recorder.state.isActive, isTrue);
     expect(find.byTooltip('开始录音'), findsNothing);
     expect(find.text('结束录音'), findsOneWidget);
-    expect(find.text('开启自动转文字'), findsOneWidget);
+    expect(find.text('自动转文字'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('note-auto-transcribe-switch')),
+      findsOneWidget,
+    );
+    expect(find.text('开启自动转文字'), findsNothing);
+    expect(find.text('取消录音'), findsNothing);
     expect(find.byTooltip('发布'), findsOneWidget);
     expect(
       (await tester.runAsync(
@@ -1090,9 +1096,197 @@ void main() {
       isEmpty,
     );
     await tester.tap(find.text('结束录音'));
-    await _settle(tester);
+    await _waitRecordingAction(tester);
     expect(app.recorder.state.isActive, isFalse);
     expect(find.byTooltip('开始录音'), findsOneWidget);
+    expect(app.recorder.starts, 1);
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteEntries).get(),
+      ))!,
+      hasLength(1),
+    );
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteAudioSegments).get(),
+      ))!,
+      hasLength(1),
+    );
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Windows 结束录音自动发布正文原音，开关授权当前片段且迟到事件不重复发布', (tester) async {
+    // 正式编辑器与数据库配合延迟完成事件，不访问麦克风或供应商。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      initialLocation: '/notes',
+      allowRecording: true,
+    );
+    app.recorder.deferCompletion = true;
+    await tester.tap(find.byTooltip('开始录音'));
+    await _settle(tester);
+    await _enterBody(tester, '结束录音后直接发布的正文');
+    await _settle(tester);
+    await tester.tap(find.byKey(const ValueKey('note-auto-transcribe-switch')));
+    await _settle(tester);
+    expect(find.text('开启语音转文字'), findsOneWidget);
+    await tester.tap(find.text('开启'));
+    await _settle(tester);
+    expect(
+      tester
+          .widget<OmniSwitch>(
+            find.byKey(const ValueKey('note-auto-transcribe-switch')),
+          )
+          .value,
+      isTrue,
+    );
+    await tester.tap(find.text('暂停'));
+    await _settle(tester);
+    expect(find.text('取消录音'), findsOneWidget);
+    await _capture(tester, app, 'windows-recording-paused');
+    await tester.tap(find.text('继续'));
+    await _settle(tester);
+    expect(find.text('取消录音'), findsNothing);
+    await tester.tap(find.text('暂停'));
+    await _settle(tester);
+    await tester.tap(find.text('结束录音'));
+    await _waitRecordingAction(tester);
+    expect(app.recorder.state.isActive, isFalse);
+    expect(_bodyText(tester), isEmpty);
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteEntries).get(),
+      ))!.single.body,
+      '结束录音后直接发布的正文',
+    );
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteAudioLocalFiles).get(),
+      ))!.single.consent,
+      isTrue,
+    );
+    // 完成事件晚于发布返回，仍然只能存在同一篇笔记和同一段原音。
+    app.recorder._completed.add(app.recorder.deferred!);
+    await _settle(tester);
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteEntries).get(),
+      ))!,
+      hasLength(1),
+    );
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteAudioSegments).get(),
+      ))!,
+      hasLength(1),
+    );
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteDraftAudioSegments).get(),
+      ))!,
+      isEmpty,
+    );
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Windows 暂停取消只丢弃本段录音，保留文字且迟到原音不能复活', (tester) async {
+    // 同一草稿中的手写文字不随本段取消而丢失。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      initialLocation: '/notes',
+      allowRecording: true,
+    );
+    app.recorder.deferCompletion = true;
+    await tester.tap(find.byTooltip('开始录音'));
+    await _settle(tester);
+    await _enterBody(tester, '取消录音仍保留的正文');
+    await _settle(tester);
+    // 取消前固定代次与片段，结果不能被绑定到后续新篇。
+    final String? draftId = app.container.read(noteEditorProvider).draftId;
+    final String recordingId = app.recorder.state.recordingId!;
+    await tester.tap(find.text('暂停'));
+    await _settle(tester);
+    await tester.tap(find.text('取消录音'));
+    await _waitRecordingAction(tester);
+    app.recorder._completed.add(app.recorder.deferred!);
+    await _settle(tester);
+    expect(app.recorder.state.isActive, isFalse);
+    expect(app.recorder.discarded, contains(recordingId));
+    expect(app.container.read(noteEditorProvider).draftId, draftId);
+    expect(_bodyText(tester), '取消录音仍保留的正文');
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteEntries).get(),
+      ))!,
+      isEmpty,
+    );
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteDraftAudioSegments).get(),
+      ))!,
+      isEmpty,
+    );
+    expect(find.text('取消录音'), findsNothing);
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Windows 录音自动发布失败保留原文原音，可手动重试发布', (tester) async {
+    // 数据库真实拒绝正式写入，录音仍保存在独立草稿。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      initialLocation: '/notes',
+      allowRecording: true,
+    );
+    await tester.tap(find.byTooltip('开始录音'));
+    await _settle(tester);
+    await _enterBody(tester, '发布失败需要保留');
+    await tester.runAsync(
+      () => app.database.customStatement(
+        "CREATE TRIGGER fail_recording_publish BEFORE INSERT ON note_entries BEGIN SELECT RAISE(ABORT, '模拟发布失败'); END",
+      ),
+    );
+    await tester.tap(find.text('结束录音'));
+    await _waitRecordingAction(tester);
+    expect(app.recorder.state.isActive, isFalse);
+    expect(_bodyText(tester), '发布失败需要保留');
+    expect(app.container.read(noteEditorProvider).error, contains('模拟发布失败'));
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteEntries).get(),
+      ))!,
+      isEmpty,
+    );
+    // 暂存记录和实际WAV均存在，重试无需重新录音。
+    final NoteDraftAudioSegmentRecord staged = (await tester.runAsync(
+      () => app.database.select(app.database.noteDraftAudioSegments).get(),
+    ))!.single;
+    expect(
+      await tester.runAsync(() => File(staged.localPath!).exists()),
+      isTrue,
+    );
+    await tester.runAsync(
+      () => app.database.customStatement('DROP TRIGGER fail_recording_publish'),
+    );
+    await tester.tap(find.byTooltip('发布'));
+    await _waitRecordingAction(tester);
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteEntries).get(),
+      ))!.single.body,
+      '发布失败需要保留',
+    );
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteAudioSegments).get(),
+      ))!,
+      hasLength(1),
+    );
     expect(app.recorder.starts, 1);
     await _dispose(tester, app);
     expect(tester.takeException(), isNull);
@@ -4152,6 +4346,28 @@ IconButton _composerButton(WidgetTester tester, Finder button) =>
     tester.widget<IconButton>(
       find.descendant(of: button, matching: find.byType(IconButton)),
     );
+
+/// 录音提交交替等待磁盘与帧，不能在持续加载动画中直接pumpAndSettle。
+Future<void> _waitRecordingAction(WidgetTester tester) async {
+  for (int attempt = 0; attempt < 60; attempt++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    if (find
+        .descendant(
+          of: find.byKey(const ValueKey('note-commit')),
+          matching: find.byType(CircularProgressIndicator),
+        )
+        .evaluate()
+        .isEmpty) {
+      await _settle(tester);
+      await _waitOriginalAudio(tester);
+      return;
+    }
+  }
+  fail('录音操作未在有界等待内完成');
+}
 
 /// 将真实数据库异步事件与动画帧排空。
 Future<void> _settle(

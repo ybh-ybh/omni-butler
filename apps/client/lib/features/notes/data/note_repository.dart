@@ -14,6 +14,18 @@ import 'package:uuid/uuid.dart';
 Set<String> noteTagIds(String encoded) =>
     (jsonDecode(encoded) as List).cast<String>().toSet();
 
+/// 以输入摘要和输出正文标识一次可采用结果，不依赖可变任务状态。
+String? notePolishFingerprint(NoteAudioLocalFileRecord local) {
+  if (local.polishedText == null) return null;
+  return sha256
+      .convert(
+        utf8.encode(
+          '${local.polishSourceHash ?? ''}\u0000${local.polishedText}',
+        ),
+      )
+      .toString();
+}
+
 /// 取消或永久删除只保留代次身份，避免正文和整理信息继续进入本机备份。
 NoteLocalDraftsCompanion noteDraftTombstone() => NoteLocalDraftsCompanion(
   body: const Value(''),
@@ -579,11 +591,11 @@ class NoteRepository {
     });
   }
 
-  /// 正文、原音、转写与候选一起进入回收站。
+  /// 原始转写与整理结果按录音顺序采用，正文和采用标记原子落库。
   Future<void> insertReadyTranscripts(
     String noteId,
   ) => database.transaction(() async {
-    // 即使另一张卡片正在编辑，也不能越过本机持久草稿自动改正文。
+    // 任意未提交编辑器都阻止后台写入正式正文。
     final List<NoteLocalDraftRecord> drafts =
         await (database.select(database.noteLocalDrafts)..where(
               (table) =>
@@ -591,73 +603,270 @@ class NoteRepository {
             ))
             .get();
     if (drafts.isNotEmpty) return;
-    // 当前正式正文与原音顺序。
+    // 正式正文只在本事务中推进版本。
     NoteEntryRecord? note = await find(noteId);
     if (note == null || note.deletedAt != null) return;
+    // 稳定录音顺序防止后完成的首段被跳过。
     final List<NoteAudioSegmentRecord> audio =
         await (database.select(database.noteAudioSegments)
               ..where(
                 (table) =>
                     table.noteId.equals(noteId) & table.deletedAt.isNull(),
               )
-              ..orderBy([(table) => OrderingTerm.asc(table.sortOrder)]))
+              ..orderBy([
+                (table) => OrderingTerm.asc(table.sortOrder),
+                (table) => OrderingTerm.asc(table.id),
+              ]))
             .get();
     for (final NoteAudioSegmentRecord segment in audio) {
-      // 预留起点只存在于新录音，不影响重新转写候选。
+      // 回退后重试成功只替换原范围，不追加第二次。
       final NoteAudioLocalFileRecord? local = await (database.select(
         database.noteAudioLocalFiles,
       )..where((table) => table.id.equals(segment.id))).getSingleOrNull();
-      if (local?.consent != true ||
-          local?.insertedRevision?.startsWith('waiting:') != true) {
+      if (local?.consent != true) continue;
+      if (local!.polishState == 'succeeded' && local.fallbackRevision != null) {
+        await adoptPolishedTranscript(segment.id);
+        note = await find(noteId);
         continue;
       }
-      if (segment.transcript == null) break;
-      // 用户已修改正文时永久保留待插入候选，不覆盖人工内容。
-      final String base = local!.insertedRevision!.substring('waiting:'.length);
+      if (local.insertedRevision?.startsWith('waiting:') != true) continue;
+      if (segment.transcript == null ||
+          const {
+            'waiting',
+            'queued',
+            'processing',
+          }.contains(local.polishState)) {
+        break;
+      }
+      // 人工编辑后的候选仍可预览，但不自动改变正文。
+      final String base = local.insertedRevision!.substring('waiting:'.length);
       if (note!.revision != base) continue;
-      // 无有效人声不能制造空文字或删除音频。
-      final String text = segment.transcript!.trim();
-      final String body = text.isEmpty
-          ? note.body
+      // 成功候选必须来自当前原文；损坏或空结果不能触发正文替换。
+      final bool polished = local.polishState == 'succeeded';
+      if (polished && !_hasValidPolishedText(segment, local)) break;
+      // 仅成功整理采用候选，其余终态按原文回退。
+      final String text = (polished ? local.polishedText! : segment.transcript!)
+          .trim();
+      // 记录包含分隔符的精确范围，重试替换不依赖字符串匹配。
+      final String suffix = text.isEmpty
+          ? ''
           : note.body.isEmpty
           ? text
-          : '${note.body}\n\n$text';
+          : '\n\n$text';
+      // 拼接后仍遵守正文限制，超限保留候选供用户处理。
+      final String body = '${note.body}$suffix';
       if (body.length > 20000) continue;
-      // 正文与版本一同落库，避免重复插入和人工内容覆盖。
-      final NoteEntryRecord? changed = await save(
-        NoteDraft(
-          id: note.id,
-          body: body,
-          dayKey: note.dayKey,
-          recordTimeSeconds: note.recordTimeSeconds,
-          recordUtcOffsetMinutes: note.recordUtcOffsetMinutes,
-          baseRevision: base,
-          tags: noteTagIds(note.tags),
-          originalTags: noteTagIds(note.tags),
-          createdAt: note.createdAt,
-          creationTimezone: note.creationTimezone,
-        ),
-        hasAudio: true,
-      );
+      // 关闭整理的历史流程不创建回退锚点。
+      final bool fallback =
+          !polished && local.polishState != 'disabled' && text.isNotEmpty;
+      // 正文版本、采用标记和回退锚点共同提交。
+      final NoteEntryRecord? changed = await _saveTranscriptBody(note, body);
       if (changed == null || changed.body != body) return;
       await (database.update(
         database.noteAudioLocalFiles,
       )..where((table) => table.id.equals(segment.id))).write(
-        NoteAudioLocalFilesCompanion(insertedRevision: Value(changed.revision)),
+        NoteAudioLocalFilesCompanion(
+          insertedRevision: Value(changed.revision),
+          polishAdoptedHash: polished
+              ? Value(notePolishFingerprint(local))
+              : const Value.absent(),
+          fallbackRevision: Value(fallback ? changed.revision : null),
+          fallbackStart: Value(fallback ? note.body.length : null),
+          fallbackEnd: Value(fallback ? body.length : null),
+        ),
       );
-      // 其余同起点位置承接自动插入产生的新版本，仍按原音顺序处理。
-      await (database.update(database.noteAudioLocalFiles)..where(
-            (table) =>
-                table.id.isIn(audio.map((item) => item.id)) &
-                table.insertedRevision.equals('waiting:$base'),
-          ))
-          .write(
-            NoteAudioLocalFilesCompanion(
-              insertedRevision: Value('waiting:${changed.revision}'),
-            ),
-          );
+      await _advanceTranscriptAnchors(audio, base, changed.revision);
       note = changed;
     }
+  });
+
+  /// 卡片仅展示尚未采用且输入仍匹配的成功整理候选。
+  bool hasUnadoptedPolishedText(
+    NoteAudioSegmentRecord segment,
+    NoteAudioLocalFileRecord local,
+  ) =>
+      local.polishState == 'succeeded' &&
+      _hasValidPolishedText(segment, local) &&
+      local.polishAdoptedHash != notePolishFingerprint(local);
+
+  /// 校验整理候选属于当前原文且可作为正文。
+  bool _hasValidPolishedText(
+    NoteAudioSegmentRecord segment,
+    NoteAudioLocalFileRecord local,
+  ) {
+    // 无输入、空输出和超限输出都只保留候选。
+    final String? text = local.polishedText;
+    if (segment.transcript == null ||
+        text == null ||
+        text.trim().isEmpty ||
+        text.length > 20000) {
+      return false;
+    }
+    return local.polishSourceHash == null ||
+        local.polishSourceHash ==
+            sha256.convert(utf8.encode(segment.transcript!)).toString() ||
+        (local.candidateTranscript != null &&
+            local.polishSourceHash ==
+                sha256
+                    .convert(utf8.encode(local.candidateTranscript!))
+                    .toString());
+  }
+
+  /// 同一自动追加链可推进等待起点与安全回退版本，人工版本不会被推进。
+  Future<void> _advanceTranscriptAnchors(
+    List<NoteAudioSegmentRecord> audio,
+    String before,
+    String after,
+  ) async {
+    await (database.update(database.noteAudioLocalFiles)..where(
+          (table) =>
+              table.id.isIn(audio.map((item) => item.id)) &
+              table.insertedRevision.equals('waiting:$before'),
+        ))
+        .write(
+          NoteAudioLocalFilesCompanion(
+            insertedRevision: Value('waiting:$after'),
+          ),
+        );
+    await (database.update(database.noteAudioLocalFiles)..where(
+          (table) =>
+              table.id.isIn(audio.map((item) => item.id)) &
+              table.fallbackRevision.equals(before),
+        ))
+        .write(NoteAudioLocalFilesCompanion(fallbackRevision: Value(after)));
+  }
+
+  /// 保存转写正文时完整保留记录时间、创建事实和标签。
+  Future<NoteEntryRecord?> _saveTranscriptBody(
+    NoteEntryRecord note,
+    String body,
+  ) => save(
+    NoteDraft(
+      id: note.id,
+      body: body,
+      dayKey: note.dayKey,
+      recordTimeSeconds: note.recordTimeSeconds,
+      recordUtcOffsetMinutes: note.recordUtcOffsetMinutes,
+      baseRevision: note.revision,
+      tags: noteTagIds(note.tags),
+      originalTags: noteTagIds(note.tags),
+      createdAt: note.createdAt,
+      creationTimezone: note.creationTimezone,
+    ),
+    hasAudio: true,
+  );
+
+  /// 安全替换回退原文；明确确认后可将冲突候选追加到当前正文。
+  Future<bool> adoptPolishedTranscript(
+    String segmentId, {
+    bool allowAppend = false,
+    String? expectedFingerprint,
+  }) => database.transaction(() async {
+    // 获取当前原音和任务，禁止删除后的迟到结果复活正文。
+    final NoteAudioSegmentRecord? segment = await (database.select(
+      database.noteAudioSegments,
+    )..where((table) => table.id.equals(segmentId))).getSingleOrNull();
+    // 本机候选不通过远端状态覆盖人工正文。
+    final NoteAudioLocalFileRecord? local = await (database.select(
+      database.noteAudioLocalFiles,
+    )..where((table) => table.id.equals(segmentId))).getSingleOrNull();
+    if (segment == null ||
+        segment.deletedAt != null ||
+        local == null ||
+        local.polishState != 'succeeded' ||
+        !_hasValidPolishedText(segment, local) ||
+        (!allowAppend && !local.consent)) {
+      return false;
+    }
+    // 明确确认只授权预览过的候选，后台更新后必须重新预览。
+    if (expectedFingerprint != null &&
+        expectedFingerprint != notePolishFingerprint(local)) {
+      return false;
+    }
+    // 任何持久草稿阻止后台或卡片绕过编辑器直接提交。
+    final List<NoteLocalDraftRecord> drafts =
+        await (database.select(database.noteLocalDrafts)..where(
+              (table) =>
+                  table.noteId.equals(segment.noteId) &
+                  table.discarded.equals(false),
+            ))
+            .get();
+    if (drafts.isNotEmpty) return false;
+    // 已采用的成功结果不再次追加。
+    if (local.polishAdoptedHash == notePolishFingerprint(local)) {
+      return false;
+    }
+    // 本事务内的正文和精确回退位置。
+    final NoteEntryRecord? note = await find(segment.noteId);
+    if (note == null || note.deletedAt != null) return false;
+    // 范围必须与记录版本完全一致，不使用文本搜索猜测位置。
+    final int? start = local.fallbackStart;
+    final int? end = local.fallbackEnd;
+    // 仅无人工编辑的版本可以安全替换原文。
+    final bool replace =
+        local.fallbackRevision == note.revision &&
+        start != null &&
+        end != null &&
+        start >= 0 &&
+        end >= start &&
+        end <= note.body.length;
+    if (!replace && !allowAppend) return false;
+    // 保持原有自动追加分隔符；显式追加也使用相同段落格式。
+    final String text = local.polishedText!.trim();
+    // 替换范围包含分隔符，因此只根据准确起点生成分隔符。
+    final String replacement = (replace ? start == 0 : note.body.isEmpty)
+        ? text
+        : '\n\n$text';
+    // 构造全量正文前保留准确旧范围，后续调整其他回退段偏移。
+    final String body = replace
+        ? note.body.replaceRange(start, end, replacement)
+        : '${note.body}$replacement';
+    if (body.length > 20000) return false;
+    // 成功写入正文后才能清除候选回退锚点。
+    final NoteEntryRecord? changed = await _saveTranscriptBody(note, body);
+    if (changed == null || changed.body != body) return false;
+    await (database.update(
+      database.noteAudioLocalFiles,
+    )..where((table) => table.id.equals(segmentId))).write(
+      NoteAudioLocalFilesCompanion(
+        insertedRevision: Value(changed.revision),
+        polishAdoptedHash: Value(notePolishFingerprint(local)),
+        fallbackRevision: const Value(null),
+        fallbackStart: const Value(null),
+        fallbackEnd: const Value(null),
+      ),
+    );
+    // 替换长度变化时同步移动后续安全回退范围。
+    final List<NoteAudioSegmentRecord> audio = await (database.select(
+      database.noteAudioSegments,
+    )..where((table) => table.noteId.equals(note.id))).get();
+    if (replace) {
+      // 当前替换造成的字符位移。
+      final int delta = replacement.length - (end - start);
+      for (final NoteAudioSegmentRecord other in audio) {
+        // 只有同一安全版本的其他回退范围可跟随自动替换。
+        final NoteAudioLocalFileRecord? anchor = await (database.select(
+          database.noteAudioLocalFiles,
+        )..where((table) => table.id.equals(other.id))).getSingleOrNull();
+        if (anchor?.fallbackRevision != note.revision ||
+            anchor?.fallbackStart == null ||
+            anchor?.fallbackEnd == null) {
+          continue;
+        }
+        if (anchor!.fallbackStart! >= end) {
+          await (database.update(
+            database.noteAudioLocalFiles,
+          )..where((table) => table.id.equals(other.id))).write(
+            NoteAudioLocalFilesCompanion(
+              fallbackStart: Value(anchor.fallbackStart! + delta),
+              fallbackEnd: Value(anchor.fallbackEnd! + delta),
+            ),
+          );
+        }
+      }
+    }
+    await _advanceTranscriptAnchors(audio, note.revision, changed.revision);
+    return true;
   });
 
   /// 正文、原音、转写与候选一起进入回收站。

@@ -755,6 +755,48 @@ void main() {
     expect(editor.draft.body, '未发布顶部');
   });
 
+  // 开关在录音开始后改变时，当前片段按用户最后的明确选择暂存授权。
+  for (final bool enabled in [true, false]) {
+    test('当前录音自动转写开关切换为$enabled，授权只随本段发布', () async {
+      editor.voiceConsent = !enabled;
+      await editor.startRecording();
+      recorder.nextResult = await recording();
+      editor.setVoiceConsent(enabled, includeCurrentRecording: true);
+      await editor.finishRecording();
+      expect(
+        (await database.select(database.noteDraftAudioSegments).get())
+            .single
+            .consent,
+        enabled,
+      );
+      expect(
+        await database.select(database.noteAudioLocalFiles).get(),
+        isEmpty,
+      );
+      expect(await editor.commit(), NoteCommitResult.committed);
+      expect(
+        (await database.select(database.noteAudioLocalFiles).get())
+            .single
+            .consent,
+        enabled,
+      );
+    });
+  }
+
+  test('未指定当前录音的默认授权切换不追溯本段，Android规则保留', () async {
+    await editor.startRecording();
+    recorder.nextResult = await recording();
+    editor.setVoiceConsent(true);
+    await editor.finishRecording();
+    expect(editor.voiceConsent, isTrue);
+    expect(
+      (await database.select(database.noteDraftAudioSegments).get())
+          .single
+          .consent,
+      isFalse,
+    );
+  });
+
   test('录音和授权先暂存且经孤儿清理保留，发布后才进入音频传输', () async {
     editor.voiceConsent = true;
     await editor.startRecording();

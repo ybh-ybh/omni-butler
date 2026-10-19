@@ -337,6 +337,9 @@ class OmniSyncRuntime {
           );
         }
       }
+      // 仅候选副本排除已失去业务记录的历史标签关联，原库与备份不变。
+      final Map<String, List<Map<String, Object?>>> transferable =
+          snapshot.migrationTables;
       for (final String table in SyncSnapshot.tableNames) {
         // 原音本机状态单独按文件校验恢复，不携带旧源识别任务或共享备份路径。
         if (table == 'note_audio_local_files' ||
@@ -355,7 +358,7 @@ class OmniSyncRuntime {
                 .map((Map<String, Object?> column) => column['name']! as String)
                 .toSet();
         for (final Map<String, Object?> source
-            in snapshot.tables[table] ?? <Map<String, Object?>>[]) {
+            in transferable[table] ?? <Map<String, Object?>>[]) {
           if (!useLocalData &&
               table == 'attachments' &&
               source['business_type'] != 'quoteBanner') {
@@ -615,10 +618,39 @@ class OmniSyncRuntime {
         }
         localPath = file.path;
       }
+      // 只有整理候选依赖的重识别原文跨源保留，普通旧ASR候选仍清除。
+      final String? candidate = source['candidate_transcript'] as String?;
+      // 摘要验证阻止把无关联的旧输入误当作整理来源。
+      final bool preserveCandidate =
+          source['polished_text'] != null &&
+          candidate != null &&
+          source['polish_source_hash'] ==
+              sha256.convert(utf8.encode(candidate)).toString();
       await powerSync.execute(
         'INSERT OR REPLACE INTO note_audio_local_files '
-        '(id, local_path, upload_state, recognition_state, consent) VALUES (?, ?, ?, ?, ?)',
-        <Object?>[source['id'], localPath, 'pending', 'idle', 0],
+        '(id, local_path, upload_state, recognition_state, consent, '
+        'inserted_revision, polished_text, polish_source_hash, polish_state, '
+        'polish_adopted_hash, candidate_transcript) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        <Object?>[
+          source['id'],
+          localPath,
+          'pending',
+          'idle',
+          0,
+          source['fallback_revision'] == null &&
+                  source['inserted_revision'] is String &&
+                  !(source['inserted_revision']! as String).startsWith(
+                    'waiting:',
+                  )
+              ? source['inserted_revision']
+              : null,
+          source['polished_text'],
+          source['polish_source_hash'],
+          source['polished_text'] == null ? 'disabled' : 'succeeded',
+          source['polish_adopted_hash'],
+          preserveCandidate ? candidate : null,
+        ],
       );
     }
   }

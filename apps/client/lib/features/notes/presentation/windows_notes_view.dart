@@ -1193,6 +1193,12 @@ extension _WindowsNotesView on _NotesPageState {
                             recordingActive: recording.isActive,
                             onRecognize: () => _recognize(segment),
                             onCancel: () => _cancelRecognition(segment),
+                            onRetryPolish: () => unawaited(
+                              retryNotePolish(context, ref, segment),
+                            ),
+                            onAdoptPolish: () => unawaited(
+                              adoptNotePolish(context, ref, segment),
+                            ),
                             onInsert: (text) =>
                                 _insertTranscript(segment, text),
                           ),
@@ -1658,6 +1664,7 @@ extension _WindowsNotesView on _NotesPageState {
                       updatedAt: audio.startedAt,
                     ),
                     local: NoteAudioLocalFileRecord(
+                      polishState: 'disabled',
                       id: audio.id,
                       localPath: audio.localPath,
                       uploadState: 'local',
@@ -1705,11 +1712,33 @@ extension _WindowsNotesView on _NotesPageState {
     );
   }
 
-  /// 提交成功才收起编辑器，冲突和失败保持原输入。
+  /// 暂停时只丢弃当前片段，已有正文、其他录音和附件仍留在草稿。
+  Future<void> _cancelPausedRecording(NoteEditorController editor) =>
+      _perform(() async {
+        // 固定取消的片段身份，异步期间禁止切换或发布当前草稿。
+        final NoteRecordingState recording = editor.recorder.state;
+        if (_committing ||
+            editor.committing ||
+            recording.phase != NoteRecordingPhase.paused ||
+            recording.noteId != editor.draft.id ||
+            recording.draftId != editor.draftId ||
+            recording.recordingId == null) {
+          return;
+        }
+        _updateWindows(() => _committing = true);
+        try {
+          await editor.discardRecording(recording.recordingId!);
+        } finally {
+          _updateWindows(() => _committing = false);
+        }
+      });
+
+  /// 先可靠暂存原音再发布，提交成功才收起，冲突和失败保持原输入。
   Future<void> _finishEdit(NoteEditorController editor) => _perform(() async {
     if (_committing || editor.committing) return;
     _updateWindows(() => _committing = true);
     try {
+      await editor.finishRecording();
       // 仓储明确区分成功与冲突，不能把候选当成已发布。
       final NoteCommitResult result = await editor.commit();
       if (result != NoteCommitResult.committed &&
