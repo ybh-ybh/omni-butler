@@ -3,7 +3,7 @@ import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 /// 不携带同步检查点、客户端身份或设备密钥的完整业务快照。
 class SyncSnapshot {
   /// 当前快照持久化格式版本。
-  static const int version = 8;
+  static const int version = 10;
 
   /// 服务端换服协议独立于本机备份格式，草稿不进入请求。
   static const int migrationProtocolVersion = 3;
@@ -20,6 +20,8 @@ class SyncSnapshot {
   /// 从迁移控制文件恢复快照，拒绝不支持的格式和未知表。
   factory SyncSnapshot.fromJson(Map<String, dynamic> json) {
     if (json['version'] != version &&
+        json['version'] != 9 &&
+        json['version'] != 8 &&
         json['version'] != 7 &&
         json['version'] != 6 &&
         json['version'] != 5 &&
@@ -107,7 +109,12 @@ class SyncSnapshot {
                   restored.putIfAbsent('is_pinned', () => 0);
                   restored.putIfAbsent('icon_emoji', () => null);
                 }
+                if (table == 'note_entries' || table == 'note_local_drafts') {
+                  restored.putIfAbsent('record_time_seconds', () => null);
+                  restored.putIfAbsent('record_utc_offset_minutes', () => null);
+                }
                 if (table == 'note_entries') {
+                  restored.putIfAbsent('is_pinned', () => 0);
                   restored.remove('category_id');
                   restored.remove('category_name');
                   restored.putIfAbsent(
@@ -145,7 +152,9 @@ class SyncSnapshot {
           'id': row['id'],
           'data': <String, Object?>{
             for (final String column in table.schema!.syncedColumns!)
-              column: row[column],
+              column: table.name == 'note_entries' && column == 'is_pinned'
+                  ? row[column] == true || row[column] == 1
+                  : row[column],
           },
         },
   ];

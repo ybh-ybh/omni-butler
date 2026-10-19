@@ -1,7 +1,7 @@
 part of 'android_notes_view.dart';
 
 /// 安卓已有笔记的菜单结果，不携带会变化的当前编辑身份。
-enum _AndroidNoteAction { edit, copy, details, versions, delete }
+enum _AndroidNoteAction { edit, pin, unpin, copy, details, versions, delete }
 
 /// 时间统一转为本机显示，统计字段不冒用归档日期。
 String _androidNoteTime(DateTime value, {bool seconds = false}) {
@@ -169,6 +169,23 @@ Future<_AndroidNoteAction?> _androidShowNoteMenu(
       const _AndroidNoteMenuHeader(),
       const PopupMenuDivider(),
       OmniPopupMenuItem.custom(
+        value: note.isPinned
+            ? _AndroidNoteAction.unpin
+            : _AndroidNoteAction.pin,
+        height: OmniSize.touch,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: OmniSpacing.md,
+            vertical: OmniSpacing.sm,
+          ),
+          child: Text(
+            note.isPinned ? '取消置顶' : '置顶',
+            style: Theme.of(context).textTheme.bodyMedium!
+                .copyWith(color: OmniColors.of(context).ink),
+          ),
+        ),
+      ),
+      OmniPopupMenuItem.custom(
         value: _AndroidNoteAction.details,
         height: OmniSize.touch,
         danger: false,
@@ -304,6 +321,7 @@ class _AndroidNoteDetails extends ConsumerWidget {
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text('记录时间：${note.recordTime.label}'),
                 Text('归档日期：${note.dayKey}'),
                 Text('创建时间：${_androidNoteTime(note.createdAt, seconds: true)}'),
                 Text('最后编辑：${_androidNoteTime(note.updatedAt, seconds: true)}'),

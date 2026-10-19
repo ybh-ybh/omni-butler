@@ -23,9 +23,6 @@ class _AndroidHistoryRoute extends PageRouteBuilder<void> {
 
 /// 全屏只替换编辑呈现，正文、工具和草稿会话与紧凑表面共用。
 class _AndroidHistorySurface extends StatelessWidget {
-  /// 外部返回门禁持有日历开闭状态。
-  final MenuController dateMenu;
-
   /// 正文及附件使用自己的滚动区。
   final Widget body;
 
@@ -35,60 +32,86 @@ class _AndroidHistorySurface extends StatelessWidget {
   /// 浮于工具栏上方的列表或更多胶囊。
   final Widget? popup;
 
-  /// 归档日与原始创建时分秒。
+  /// 用户可编辑的完整记录日期时间。
   final String dateLabel;
 
-  /// 当前归档日作为现有日历的选择事实。
-  final DateTime day;
+  /// 待保存修改决定左上角使用勾号还是返回箭头。
+  final bool hasChanges;
 
-  /// 返回经过草稿可靠暂存门禁。
+  /// 返回经过正式保存门禁。
   final VoidCallback? onBack;
 
   /// 顶部菜单只管理当前草稿。
   final ValueChanged<BuildContext>? onMenu;
 
-  /// 日期只修改归档自然日。
-  final ValueChanged<DateTime>? onDate;
+  /// 打开独立日期时间面板，确认后仅更新当前草稿。
+  final VoidCallback? onDate;
 
   /// 创建历史编辑专用表面。
   const _AndroidHistorySurface({
-    required this.dateMenu,
     required this.body,
     required this.toolbar,
     required this.popup,
     required this.dateLabel,
-    required this.day,
+    required this.hasChanges,
     required this.onBack,
     required this.onMenu,
     required this.onDate,
   });
 
-  /// 顶部圆形按钮在不改共享控件的前提下保持视频外观。
+  /// 按钮视觉缩小到40dp并保留48dp热区，阴影不随内部圆形裁剪消失。
   Widget _circle(
     BuildContext context,
+    String id,
     String label,
     IconData icon,
     VoidCallback? action,
-  ) => ClipOval(
-    child: DecoratedBox(
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: OmniColors.of(context).line),
-        color: OmniColors.of(context).paper,
-      ),
-      child: OmniIconButton(
-        tooltip: label,
-        icon: Icon(icon, size: OmniSpacing.xl),
-        onPressed: action,
-        constraints: const BoxConstraints.tightFor(
-          width: OmniSize.touch,
-          height: OmniSize.touch,
+  ) => SizedBox(
+    key: ValueKey('android-note-history-$id'),
+    width: OmniSize.touch,
+    height: OmniSize.touch,
+    child: Stack(
+      alignment: Alignment.center,
+      clipBehavior: Clip.none,
+      children: [
+        IgnorePointer(
+          child: Container(
+            key: ValueKey('android-note-history-$id-visual'),
+            width: OmniSize.controlLarge,
+            height: OmniSize.controlLarge,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: OmniColors.of(context).line),
+              color: OmniColors.of(context).paper,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(
+                    alpha: Theme.of(context).brightness == Brightness.dark
+                        ? .18
+                        : .06,
+                  ),
+                  blurRadius: OmniSpacing.sm,
+                  offset: const Offset(0, OmniSpacing.xxs / 2),
+                ),
+              ],
+            ),
+          ),
         ),
-        style: ButtonStyle(
-          side: const WidgetStatePropertyAll(BorderSide.none),
-          backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
+        OmniIconButton(
+          tooltip: label,
+          icon: Icon(icon, size: OmniSpacing.lg),
+          onPressed: action,
+          constraints: const BoxConstraints.tightFor(
+            width: OmniSize.touch,
+            height: OmniSize.touch,
+          ),
+          style: const ButtonStyle(
+            shape: WidgetStatePropertyAll(CircleBorder()),
+            side: WidgetStatePropertyAll(BorderSide.none),
+            backgroundColor: WidgetStatePropertyAll(Colors.transparent),
+          ),
         ),
-      ),
+      ],
     ),
   );
 
@@ -110,55 +133,72 @@ class _AndroidHistorySurface extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  _circle(context, '返回笔记列表', Icons.chevron_left, onBack),
+                  _circle(
+                    context,
+                    'back',
+                    hasChanges ? '保存' : '返回笔记列表',
+                    hasChanges ? Icons.check : Icons.chevron_left,
+                    onBack,
+                  ),
                   const SizedBox(width: OmniSpacing.xs),
                   Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Semantics(
-                          header: true,
-                          namesRoute: true,
-                          child: Text(
-                            '编辑',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
+                    // 标题和日期共用48dp入口，将两行视觉间距压缩而不缩小点击区域。
+                    child: OmniTextButton(
+                      key: const ValueKey('android-note-record-time'),
+                      onPressed: onDate,
+                      style: ButtonStyle(
+                        minimumSize: const WidgetStatePropertyAll(
+                          Size(OmniSize.touch, OmniSize.touch),
                         ),
-                        OmniDatePickerButton(
-                          controller: dateMenu,
-                          wrapLabel: true,
-                          value: day,
-                          initialDate: day,
-                          firstDate: DateTime(2000),
-                          lastDate: DateTime.now().add(
-                            const Duration(days: 3650),
-                          ),
-                          label: dateLabel,
-                          icon: Icons.keyboard_arrow_down,
-                          onChanged: onDate,
-                          style: ButtonStyle(
-                            minimumSize: const WidgetStatePropertyAll(
-                              Size(OmniSize.touch, OmniSize.touch),
-                            ),
-                            padding: const WidgetStatePropertyAll(
-                              EdgeInsets.zero,
-                            ),
-                            side: const WidgetStatePropertyAll(BorderSide.none),
-                            textStyle: WidgetStatePropertyAll(
-                              Theme.of(context).textTheme.bodySmall,
-                            ),
-                            foregroundColor: WidgetStatePropertyAll(
-                              OmniColors.of(context).muted,
-                            ),
-                          ),
+                        padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+                        side: const WidgetStatePropertyAll(BorderSide.none),
+                        foregroundColor: WidgetStatePropertyAll(
+                          OmniColors.of(context).muted,
                         ),
-                      ],
+                        textStyle: WidgetStatePropertyAll(
+                          Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Semantics(
+                            header: true,
+                            namesRoute: true,
+                            child: Text(
+                              '编辑',
+                              key: const ValueKey('android-note-history-title'),
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
+                          const SizedBox(height: OmniSpacing.xxs / 2),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  dateLabel,
+                                  key: const ValueKey(
+                                    'android-note-history-date-label',
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                              const Icon(
+                                Icons.keyboard_arrow_down,
+                                size: OmniSpacing.md,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   const SizedBox(width: OmniSpacing.xs),
                   Builder(
                     builder: (anchor) => _circle(
                       context,
+                      'more',
                       '编辑笔记操作',
                       Icons.more_horiz,
                       onMenu == null ? null : () => onMenu!(anchor),

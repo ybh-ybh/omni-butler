@@ -314,6 +314,8 @@ class NoteEditorController extends ChangeNotifier {
         id: draft.id,
         body: draft.body,
         dayKey: _explicitDay ? draft.dayKey : businessDayKey(now),
+        recordTimeSeconds: draft.recordTimeSeconds,
+        recordUtcOffsetMinutes: draft.recordUtcOffsetMinutes,
         baseRevision: draft.baseRevision,
         tags: draft.tags,
         originalTags: draft.originalTags,
@@ -451,6 +453,8 @@ class NoteEditorController extends ChangeNotifier {
       id: note.id,
       body: note.body,
       dayKey: note.dayKey,
+      recordTimeSeconds: note.recordTimeSeconds,
+      recordUtcOffsetMinutes: note.recordUtcOffsetMinutes,
       baseRevision: note.revision,
       tags: noteTagIds(note.tags),
       createdAt: note.createdAt,
@@ -511,6 +515,8 @@ class NoteEditorController extends ChangeNotifier {
     }
     if (note.revision == draft.baseRevision &&
         note.dayKey == draft.dayKey &&
+        note.recordTime.seconds == draft.recordTime.seconds &&
+        note.recordTime.utcOffsetMinutes == draft.recordTime.utcOffsetMinutes &&
         setEquals(noteTagIds(note.tags), draft.tags)) {
       return;
     }
@@ -519,8 +525,17 @@ class NoteEditorController extends ChangeNotifier {
   }
 
   /// 输入、日期及标签变更共用自动保存或本机暂存。
-  void edit({String? body, String? dayKey, Set<String>? tags}) {
+  void edit({
+    String? body,
+    String? dayKey,
+    Set<String>? tags,
+    NoteRecordTime? recordTime,
+  }) {
     if (committing || _cancelling || frozen) return;
+    if (recordTime != null) {
+      recordTime.validate();
+      dayKey = recordTime.dayKey;
+    }
     if (dayKey != null) _explicitDay = true;
     // 第一次有效输入固定真实时刻，自动保存延迟不改变创建时间。
     final DateTime now = DateTime.now();
@@ -538,6 +553,9 @@ class NoteEditorController extends ChangeNotifier {
       id: draft.id,
       body: body ?? draft.body,
       dayKey: effectiveDay,
+      recordTimeSeconds: recordTime?.seconds ?? draft.recordTimeSeconds,
+      recordUtcOffsetMinutes:
+          recordTime?.utcOffsetMinutes ?? draft.recordUtcOffsetMinutes,
       baseRevision: draft.baseRevision,
       tags: tags ?? draft.tags,
       createdAt: createdAt,
@@ -618,12 +636,23 @@ class NoteEditorController extends ChangeNotifier {
           id: draft.id,
           body: draft.body,
           dayKey: draft.dateEdited ? draft.dayKey : note.dayKey,
+          recordTimeSeconds: draft.dateEdited
+              ? draft.recordTimeSeconds
+              : note.recordTimeSeconds,
+          recordUtcOffsetMinutes: draft.dateEdited
+              ? draft.recordUtcOffsetMinutes
+              : note.recordUtcOffsetMinutes,
           baseRevision: note.revision,
           tags: continuedTags,
           createdAt: note.createdAt,
           creationTimezone: note.creationTimezone,
           originalTags: noteTagIds(note.tags),
-          dateEdited: draft.dateEdited && draft.dayKey != note.dayKey,
+          dateEdited:
+              draft.dateEdited &&
+              (draft.dayKey != note.dayKey ||
+                  draft.recordTime.seconds != note.recordTime.seconds ||
+                  draft.recordTime.utcOffsetMinutes !=
+                      note.recordTime.utcOffsetMinutes),
         );
       }
     } catch (failure) {
@@ -644,6 +673,8 @@ class NoteEditorController extends ChangeNotifier {
         id: draft.id,
         body: draft.body,
         dayKey: draft.dayKey,
+        recordTimeSeconds: draft.recordTimeSeconds,
+        recordUtcOffsetMinutes: draft.recordUtcOffsetMinutes,
         baseRevision: current.revision,
         tags: draft.tags,
         originalTags: draft.originalTags,
@@ -709,6 +740,8 @@ class NoteEditorController extends ChangeNotifier {
         id: draft.id,
         body: draft.body,
         dayKey: _explicitDay ? draft.dayKey : businessDayKey(now),
+        recordTimeSeconds: draft.recordTimeSeconds,
+        recordUtcOffsetMinutes: draft.recordUtcOffsetMinutes,
         baseRevision: draft.baseRevision,
         tags: draft.tags,
         createdAt: now,
@@ -772,6 +805,8 @@ class NoteEditorController extends ChangeNotifier {
           id: draft.id,
           body: draft.body,
           dayKey: draft.dayKey,
+          recordTimeSeconds: draft.recordTimeSeconds,
+          recordUtcOffsetMinutes: draft.recordUtcOffsetMinutes,
           baseRevision: draft.baseRevision,
           tags: draft.tags,
           originalTags: draft.originalTags,
@@ -822,6 +857,8 @@ class NoteEditorController extends ChangeNotifier {
             id: stored.id,
             body: stored.body,
             dayKey: stored.dayKey,
+            recordTimeSeconds: stored.recordTimeSeconds,
+            recordUtcOffsetMinutes: stored.recordUtcOffsetMinutes,
             baseRevision: stored.revision,
             tags: noteTagIds(stored.tags),
             createdAt: stored.createdAt,
@@ -1024,6 +1061,9 @@ class NoteEditorController extends ChangeNotifier {
     _load(saved);
     _notify();
   }
+
+  /// 正文、日期、标签及附件是否仍有未正式提交的修改，暂存完成后仍保留此事实。
+  bool get hasPendingChanges => explicitCommit ? _localHasChanges : dirty;
 
   /// 所有本机草稿都保护正文，不只保护当前可见的卡片。
   bool hasUncommittedDraft(String noteId) => explicitCommit
@@ -1326,6 +1366,8 @@ class NoteEditorController extends ChangeNotifier {
           id: saved.id,
           body: draft.body,
           dayKey: draft.dayKey,
+          recordTimeSeconds: draft.recordTimeSeconds,
+          recordUtcOffsetMinutes: draft.recordUtcOffsetMinutes,
           baseRevision: saved.revision,
           tags: draft.tags,
           originalTags: noteTagIds(saved.tags),
@@ -1475,6 +1517,8 @@ class NoteEditorController extends ChangeNotifier {
                 id: original.id,
                 body: original.body,
                 dayKey: original.dayKey,
+                recordTimeSeconds: original.recordTimeSeconds,
+                recordUtcOffsetMinutes: original.recordUtcOffsetMinutes,
                 baseRevision: original.revision,
                 tags: noteTagIds(original.tags),
                 originalTags: noteTagIds(original.tags),

@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'note_record_time.dart';
+export 'note_record_time.dart';
+
 import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
@@ -15,6 +18,8 @@ Set<String> noteTagIds(String encoded) =>
 NoteLocalDraftsCompanion noteDraftTombstone() => NoteLocalDraftsCompanion(
   body: const Value(''),
   dayKey: const Value(''),
+  recordTimeSeconds: const Value(null),
+  recordUtcOffsetMinutes: const Value(null),
   baseRevision: const Value(''),
   tags: const Value('[]'),
   originalTags: const Value(null),
@@ -60,6 +65,23 @@ class NoteDraft {
   /// 归档日期。
   final String dayKey;
 
+  /// 固定记录时钟秒数，旧草稿允许为空。
+  final int? recordTimeSeconds;
+
+  /// 选择时的 UTC 偏移分钟。
+  final int? recordUtcOffsetMinutes;
+
+  /// 当前记录时间，旧草稿和新建输入使用同一兼容规则。
+  NoteRecordTime get recordTime => NoteRecordTime.resolve(
+    dayKey: dayKey,
+    createdAt: createdAt ?? DateTime.now(),
+    creationTimezone:
+        creationTimezone ??
+        (createdAt == null ? noteCreationTimezone(DateTime.now()) : null),
+    seconds: recordTimeSeconds,
+    utcOffsetMinutes: recordUtcOffsetMinutes,
+  );
+
   /// 当前编辑起点的正文版本。
   final String baseRevision;
 
@@ -75,7 +97,7 @@ class NoteDraft {
   /// 编辑起点的标签，null表示调用方明确替换完整整理信息。
   final Set<String>? originalTags;
 
-  /// 本次是否由用户主动选择日期。
+  /// 本次是否由用户主动选择记录日期或时分秒。
   final bool dateEdited;
 
   /// 创建编辑器草稿。
@@ -89,7 +111,21 @@ class NoteDraft {
     this.creationTimezone,
     this.originalTags,
     this.dateEdited = false,
+    this.recordTimeSeconds,
+    this.recordUtcOffsetMinutes,
   });
+}
+
+/// 正式记录和草稿共用固定墙钟时间解析。
+extension NoteEntryRecordTime on NoteEntryRecord {
+  /// 新字段缺失时保留旧归档日并从原始创建信息推导时钟。
+  NoteRecordTime get recordTime => NoteRecordTime.resolve(
+    dayKey: dayKey,
+    createdAt: createdAt,
+    creationTimezone: creationTimezone,
+    seconds: recordTimeSeconds,
+    utcOffsetMinutes: recordUtcOffsetMinutes,
+  );
 }
 
 /// 笔记本地保存与原音归属，网络失败不回滚本地记录。
@@ -100,16 +136,77 @@ class NoteRepository {
   /// 创建仓储。
   const NoteRepository(this.database);
 
-  /// 按稳定自然日和原始创建时间监听有效笔记。
+  /// 置顶优先，再按记录自然日、时钟和稳定身份监听有效笔记。
   Stream<List<NoteEntryRecord>> watchAll() =>
       (database.select(database.noteEntries)
             ..where((table) => table.deletedAt.isNull())
             ..orderBy([
+              (table) => OrderingTerm.desc(table.isPinned),
               (table) => OrderingTerm.desc(table.dayKey),
               (table) => OrderingTerm.desc(table.createdAt),
               (table) => OrderingTerm.asc(table.id),
             ]))
-          .watch();
+          .watch()
+          .map(
+            (notes) => notes
+              ..sort((first, second) {
+                if (first.isPinned != second.isPinned) {
+                  return first.isPinned ? -1 : 1;
+                }
+                // 按用户所见的自然日、时钟和稳定身份排序。
+                final int day = second.dayKey.compareTo(first.dayKey);
+                if (day != 0) return day;
+                // 相同日期使用记录时钟，不使用真实创建时刻。
+                final int clock = second.recordTime.seconds.compareTo(
+                  first.recordTime.seconds,
+                );
+                return clock != 0 ? clock : first.id.compareTo(second.id);
+              }),
+          );
+
+  /// 独立更新置顶状态，正文、标签、附件和历史版本保持原样。
+  Future<void> setPinned(String id, bool pinned) =>
+      database.transaction(() async {
+        // 在事务内重新确认目标未删除，避免迟到菜单复活笔记。
+        final NoteEntryRecord? current = await find(id);
+        if (current == null || current.deletedAt != null) {
+          throw StateError('笔记已删除或不可用');
+        }
+        if (current.isPinned == pinned) return;
+        await (database.update(
+          database.noteEntries,
+        )..where((table) => table.id.equals(id))).write(
+          NoteEntriesCompanion(
+            isPinned: Value(pinned),
+            updatedAt: Value(DateTime.now()),
+          ),
+        );
+      });
+
+  /// 桌面独立修改只写正式记录时间，不提交编辑器内的其他草稿。
+  Future<void> updateRecordTime(String id, NoteRecordTime value) =>
+      database.transaction(() async {
+        value.validate();
+        // 在实际事务内重新确认笔记仍然存在且可编辑。
+        final NoteEntryRecord? current = await find(id);
+        if (current == null || current.deletedAt != null) {
+          throw StateError('笔记已删除或不可用');
+        }
+        if (current.recordTime.label == value.label &&
+            current.recordTime.utcOffsetMinutes == value.utcOffsetMinutes) {
+          return;
+        }
+        await (database.update(
+          database.noteEntries,
+        )..where((table) => table.id.equals(id))).write(
+          NoteEntriesCompanion(
+            dayKey: Value(value.dayKey),
+            recordTimeSeconds: Value(value.seconds),
+            recordUtcOffsetMinutes: Value(value.utcOffsetMinutes),
+            updatedAt: Value(DateTime.now()),
+          ),
+        );
+      });
 
   /// 读取一篇笔记，包括软删除以区分迟到的保存。
   Future<NoteEntryRecord?> find(String id) => (database.select(
@@ -152,6 +249,19 @@ class NoteRepository {
     final String effectiveDay = tracked && !draft.dateEdited
         ? previous.dayKey
         : draft.dayKey;
+    // 未主动改时间的旧草稿不能覆盖另一个入口的正式时间。
+    final NoteRecordTime effectiveTime = tracked && !draft.dateEdited
+        ? previous.recordTime
+        : draft.recordTime;
+    if (draft.dateEdited && draft.recordTimeSeconds != null) {
+      effectiveTime.validate();
+    }
+    // 日期、时钟和偏移共同决定是否写入完整时间组。
+    final bool recordTimeChanged =
+        previous == null ||
+        previous.dayKey != effectiveDay ||
+        previous.recordTime.seconds != effectiveTime.seconds ||
+        previous.recordTime.utcOffsetMinutes != effectiveTime.utcOffsetMinutes;
     // 当前写入时刻，创建时间不随编辑更新。
     final DateTime now = DateTime.now();
     // 标签身份排序，避免纯顺序变化反复同步。
@@ -172,6 +282,9 @@ class NoteRepository {
     if (previous != null &&
         previous.body == draft.body &&
         previous.dayKey == effectiveDay &&
+        previous.recordTime.seconds == effectiveTime.seconds &&
+        previous.recordTime.utcOffsetMinutes ==
+            effectiveTime.utcOffsetMinutes &&
         previous.tags == jsonEncode(tagIds)) {
       return previous;
     }
@@ -205,6 +318,8 @@ class NoteRepository {
               id: draft.id,
               body: Value(draft.body),
               dayKey: draft.dayKey,
+              recordTimeSeconds: Value(effectiveTime.seconds),
+              recordUtcOffsetMinutes: Value(effectiveTime.utcOffsetMinutes),
               tags: Value(jsonEncode(tagIds)),
               revision: revision,
               createdAt: draft.createdAt ?? now,
@@ -237,8 +352,15 @@ class NoteRepository {
         NoteEntriesCompanion(
           body: bodyChanged ? Value(draft.body) : const Value.absent(),
           revision: bodyChanged ? Value(revision) : const Value.absent(),
-          dayKey: effectiveDay != previous.dayKey
+          // 时间有任意变化时整组写入，上传端仍需补齐 SDK 裁去的未变列。
+          dayKey: recordTimeChanged
               ? Value(effectiveDay)
+              : const Value.absent(),
+          recordTimeSeconds: recordTimeChanged
+              ? Value(effectiveTime.seconds)
+              : const Value.absent(),
+          recordUtcOffsetMinutes: recordTimeChanged
+              ? Value(effectiveTime.utcOffsetMinutes)
               : const Value.absent(),
           tags: jsonEncode(tagIds) != previous.tags
               ? Value(jsonEncode(tagIds))
@@ -405,6 +527,8 @@ class NoteRepository {
       id: const Uuid().v4(),
       body: source.body,
       dayKey: source.dayKey,
+      recordTimeSeconds: source.recordTime.seconds,
+      recordUtcOffsetMinutes: source.recordTime.utcOffsetMinutes,
       baseRevision: '',
       tags: source.tags,
       createdAt: now,
@@ -505,8 +629,13 @@ class NoteRepository {
           id: note.id,
           body: body,
           dayKey: note.dayKey,
+          recordTimeSeconds: note.recordTimeSeconds,
+          recordUtcOffsetMinutes: note.recordUtcOffsetMinutes,
           baseRevision: base,
           tags: noteTagIds(note.tags),
+          originalTags: noteTagIds(note.tags),
+          createdAt: note.createdAt,
+          creationTimezone: note.creationTimezone,
         ),
         hasAudio: true,
       );

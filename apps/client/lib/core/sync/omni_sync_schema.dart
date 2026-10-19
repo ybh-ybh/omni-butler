@@ -212,7 +212,10 @@ final Schema omniSyncSchema = Schema(
       'note_entries',
       <String>[
         'body',
+        'is_pinned',
         'day_key',
+        'record_time_seconds',
+        'record_utc_offset_minutes',
         'creation_timezone',
         'tags',
         'revision',
@@ -221,8 +224,14 @@ final Schema omniSyncSchema = Schema(
         'deleted_at',
       ],
       trackPreviousValues: const TrackPreviousValuesOptions(
-        columnFilter: <String>['tags'],
-        onlyWhenChanged: true,
+        // 固定保存整组前值，上传时为未变的时间字段补齐同一次选择意图。
+        columnFilter: <String>[
+          'tags',
+          'day_key',
+          'record_time_seconds',
+          'record_utc_offset_minutes',
+        ],
+        onlyWhenChanged: false,
       ),
     ),
     _rawTable('note_versions', <String>[

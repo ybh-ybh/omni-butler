@@ -1,7 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 
-/// 笔记标签颜色已退休，客户端必须支持可空的共享颜色列。
-export const syncSchemaVersion = 8;
+/// 笔记置顶与记录时间均为独立元数据，客户端必须保留完整同步字段。
+export const syncSchemaVersion = 10;
 
 /// 在写入和签发下行凭证前阻止旧客户端解释新版任务。
 export function requireSyncSchemaVersion(version: string | undefined): void {

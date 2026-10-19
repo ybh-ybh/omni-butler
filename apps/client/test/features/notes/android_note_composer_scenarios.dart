@@ -2,8 +2,11 @@ part of 'notes_page_test.dart';
 
 /// 新版文字面板通过遮罩执行可靠暂存，不依赖已移除的文字收起按钮。
 Future<void> _closeAndroidComposer(WidgetTester tester) async {
-  if (find.byTooltip('返回笔记列表').evaluate().isNotEmpty) {
-    await tester.tap(find.byTooltip('返回笔记列表'));
+  if (find
+      .byKey(const ValueKey('android-note-history-back'))
+      .evaluate()
+      .isNotEmpty) {
+    await tester.tap(find.byKey(const ValueKey('android-note-history-back')));
   } else {
     await tester.tapAt(const Offset(8, 8));
   }

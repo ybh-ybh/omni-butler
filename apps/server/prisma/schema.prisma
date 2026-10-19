@@ -60,6 +60,12 @@ model NoteEntry {
   userId String @map("user_id") @db.Uuid
   body String @default("")
   dayKey String @map("day_key") @db.VarChar(10)
+  /// 记录自然日内的秒数；旧记录为空时由创建事实稳定推导。
+  recordTimeSeconds Int? @map("record_time_seconds")
+  /// 设定记录时间时的 UTC 偏移分钟数，与日期和秒数整体同步。
+  recordUtcOffsetMinutes Int? @map("record_utc_offset_minutes")
+  /// 独立同步的笔记置顶元数据，旧记录默认不置顶。
+  isPinned Boolean @default(false) @map("is_pinned")
   /// 创建时区名称与当时UTC偏移，旧行明确标记为未知而不伪造地区。
   creationTimezone String @default("legacy:unknown") @map("creation_timezone") @db.VarChar(128)
   tags String @default("[]")

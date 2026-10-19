@@ -289,7 +289,7 @@ void androidNoteTests() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Android历史菜单编辑显式保存，外部定位不新增正式记录', (tester) async {
+  testWidgets('Android历史菜单编辑退出保存，外部定位不新增正式记录', (tester) async {
     // 初始定位使用真实 /notes?id 参数。
     final _App app = await _mount(
       tester,
@@ -305,7 +305,7 @@ void androidNoteTests() {
       (await tester.runAsync(
         () => NoteRepository(app.database).find('target'),
       ))!.body,
-      startsWith('今日日报目标'),
+      '修改后的历史正文',
     );
     await tester.tap(
       find.descendant(
@@ -317,7 +317,7 @@ void androidNoteTests() {
     await tester.tap(find.text('编辑'));
     await _settle(tester);
     expect(_bodyText(tester), '修改后的历史正文');
-    await tester.tap(find.byKey(const ValueKey('android-note-publish')));
+    await tester.tap(find.byKey(const ValueKey('android-note-history-back')));
     await _settle(tester);
     expect(
       (await tester.runAsync(

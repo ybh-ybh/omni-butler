@@ -5,7 +5,7 @@ enum _AndroidNoteEditorMode { compact, fullscreen }
 
 /// 根导航编辑面板只拥有输入状态，草稿及录音仍由应用会话管理。
 class _AndroidNoteEditor extends ConsumerStatefulWidget {
-  /// 历史页先暂存退出，再由原入口返回另一篇正在录音的草稿。
+  /// 历史页先保存退出，再由原入口返回另一篇正在录音的草稿。
   final ValueChanged<NoteRecordingState>? onReturnRecording;
 
   /// 当前入口需要的表面，历史正式篇使用全屏。
@@ -49,9 +49,6 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
 
   /// 正文焦点独立于主列表和搜索。
   final FocusNode _focus = FocusNode();
-
-  /// 日历是锚点浮层，返回须先关闭它而不是提前退出整页。
-  final MenuController _historyDateMenu = MenuController();
 
   /// 防止异步选择、保存和取消重复进入。
   bool _busy = false;
@@ -126,8 +123,6 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
   Future<void> _requestClose({bool back = false}) async {
     if (_voice) {
       await _recordingKey.currentState?.requestExit();
-    } else if (_historyDateMenu.isOpen) {
-      _historyDateMenu.close();
     } else if (_tool != null) {
       setState(() => _tool = null);
     } else if (back && MediaQuery.viewInsetsOf(context).bottom > 0) {
@@ -179,9 +174,14 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     }
   }
 
-  /// 返回、遮罩和下滑统一暂存；只有可靠落盘后才移除覆盖层。
+  /// 历史页退出正式保存，新建面板关闭仅暂存；失败均保留当前表面。
   Future<void> _close() async {
     if (_busy || _closing || _editor.committing || _editor.recordingStarting) {
+      return;
+    }
+    // 已有笔记的实际退出默认正式保存，新建面板仍只暂存未发布输入。
+    if (widget.mode == _AndroidNoteEditorMode.fullscreen) {
+      await _commit();
       return;
     }
     setState(() {
@@ -199,8 +199,33 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     }
   }
 
+  /// 历史页所有普通退出共用提交结果，失败或冲突时保留页面与完整草稿。
+  Future<void> _saveHistoryForExit() async {
+    // 固定当前编辑器，提交期间不允许数据源变化后继续导航。
+    final NoteEditorController editor = _editor;
+    // 无修改、成功、失败与冲突必须分别判断，不能把可靠暂存当作正式保存。
+    final NoteCommitResult result = await editor.commit();
+    if (!mounted || _sourceChanged || !identical(editor, _editor)) {
+      throw StateError('编辑会话已变化，请重新打开笔记');
+    }
+    if (result == NoteCommitResult.committed) return;
+    if (result == NoteCommitResult.empty &&
+        !editor.dirty &&
+        !editor.frozen &&
+        !editor.conflicted &&
+        editor.error == null) {
+      return;
+    }
+    throw StateError(editor.error ?? '保存失败，修改仍保留在本机，请重试');
+  }
+
   /// 正式提交等待控制器排空音频与图片队列，失败保持面板。
   Future<void> _commit({bool saveAsNew = false}) => _guard(() async {
+    if (!saveAsNew && widget.mode == _AndroidNoteEditorMode.fullscreen) {
+      await _saveHistoryForExit();
+      if (mounted) Navigator.pop(context);
+      return;
+    }
     if (saveAsNew) {
       await _editor.saveAsNew();
       if (_editor.error != null || _editor.conflicted || _editor.dirty) return;
@@ -208,15 +233,6 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
       // 空白和冲突都不作为提交成功处理。
       final NoteCommitResult result = await _editor.commit();
       if (result != NoteCommitResult.committed) {
-        if (result == NoteCommitResult.empty &&
-            widget.mode == _AndroidNoteEditorMode.fullscreen &&
-            !_editor.dirty &&
-            !_editor.frozen &&
-            !_editor.conflicted &&
-            _editor.error == null) {
-          if (mounted) Navigator.pop(context);
-          return;
-        }
         if (result == NoteCommitResult.empty && mounted) {
           setState(() => _error = '请先输入内容或添加图片、录音');
         }
@@ -354,12 +370,11 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     if (mounted && _editor.draftId == draftId) await _editor.removeAudio(id);
   });
 
-  /// 浏览另一篇笔记时可返回正在采集的原草稿，切换只暂存当前修改。
+  /// 浏览另一篇笔记时可返回正在采集的原草稿，历史页切换先保存当前修改。
   Future<void> _returnToRecording(NoteRecordingState recording) =>
       _guard(() async {
         if (widget.mode == _AndroidNoteEditorMode.fullscreen) {
-          await _editor.flush();
-          if (_editor.dirty) throw StateError(_editor.error ?? '草稿暂存失败，请重试');
+          await _saveHistoryForExit();
           if (!mounted || _sourceChanged) return;
           widget.onReturnRecording?.call(recording);
           Navigator.pop(context);
@@ -387,6 +402,35 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
       confirmLabel: '开启',
     );
     if (confirmed && mounted) setState(() => _editor.voiceConsent = true);
+  }
+
+  /// 日期时间选择独立于正文选区；迟到结果不得写入其他草稿或数据源。
+  Future<void> _changeRecordTime() async {
+    if (!_editable) return;
+    // 固定当前编辑会话和草稿身份。
+    final NoteEditorController editor = _editor;
+    final String? draftId = editor.draftId;
+    // 收起键盘和工具后呈现六列滚轮。
+    _focus.unfocus();
+    setState(() => _tool = null);
+    // 取消或返回只关闭选择器。
+    final DateTime? selected = await showAndroidNoteRecordTimePicker(
+      context,
+      initialValue: editor.draft.recordTime.wallTime,
+    );
+    if (selected == null ||
+        !mounted ||
+        _sourceChanged ||
+        !identical(editor, _editor) ||
+        editor.draftId != draftId ||
+        !_editable) {
+      return;
+    }
+    try {
+      editor.edit(recordTime: NoteRecordTime.selected(selected));
+    } on Object catch (error) {
+      setState(() => _error = '$error');
+    }
   }
 
   /// 版本恢复只更改当前草稿，仍需显式保存。
@@ -450,6 +494,8 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     final String id = _editor.draft.id;
     // 同一代次防止异步返回覆盖另一篇草稿。
     final String? owner = _editor.draftId;
+    // 置顶与正文草稿分离，只能作用于菜单打开时的原数据源。
+    final NoteRepository source = _editor.repository;
     // 使用按钮真实坐标及统一菜单过渡。
     final RenderBox box = anchor.findRenderObject()! as RenderBox;
     // 根覆盖层包含全屏历史页。
@@ -464,7 +510,22 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
       Offset(box.size.width, box.size.height),
       ancestor: overlay,
     );
-    // 编辑页只保留视频中的复制全文与删除，不做分享。
+    // 正式置顶状态不从正文草稿推断，打开菜单前读取最新事实。
+    final NoteEntryRecord current;
+    try {
+      current = await _androidRequireNote(context, ref, source, id);
+    } on Object catch (error) {
+      if (mounted) setState(() => _error = '$error');
+      return;
+    }
+    if (!mounted ||
+        !anchor.mounted ||
+        _sourceChanged ||
+        owner != _editor.draftId ||
+        id != _editor.draft.id) {
+      return;
+    }
+    // 置顶独立立即保存，复制仍使用当前未保存全文。
     final String? action = await showOmniMenu<String>(
       wholePanelTransition: true,
       context: anchor,
@@ -475,6 +536,10 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
       ),
       items: [
         for (final (String, String) item in [
+          (
+            current.isPinned ? 'unpin' : 'pin',
+            current.isPinned ? '取消置顶' : '置顶',
+          ),
           ('copy', '复制全文'),
           ('delete', '删除'),
         ])
@@ -502,6 +567,12 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
       return;
     }
     if (action == 'copy') await _androidCopyNote(context, _rich.markdown);
+    if (action == 'pin' || action == 'unpin') {
+      await _guard(() async {
+        await _androidRequireNote(context, ref, source, id);
+        await source.setPinned(id, action == 'pin');
+      });
+    }
     if (action == 'delete' && mounted) {
       setState(() => _busy = true);
       try {
@@ -1028,49 +1099,48 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
                 ],
               ),
             ),
-          SizedBox(
-            width: OmniSize.touch + OmniSpacing.sm,
-            height: OmniSize.touch,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                AnimatedContainer(
-                  duration: OmniMotion.duration(
-                    context,
-                    const Duration(milliseconds: 120),
-                  ),
-                  width: OmniSize.touch + OmniSpacing.sm,
-                  height: OmniSize.touch - OmniSpacing.sm,
-                  decoration: BoxDecoration(
-                    color: content ? colors.brand : colors.mist,
-                    borderRadius: BorderRadius.circular(OmniRadius.pill),
-                  ),
-                ),
-                OmniIconButton(
-                  key: const ValueKey('android-note-publish'),
-                  tooltip: editor.draft.baseRevision.isEmpty ? '发布' : '保存',
-                  onPressed: _editable && content ? () => _commit() : null,
-                  style: ButtonStyle(
-                    backgroundColor: const WidgetStatePropertyAll(
-                      Colors.transparent,
+          if (widget.mode != _AndroidNoteEditorMode.fullscreen)
+            SizedBox(
+              width: OmniSize.touch + OmniSpacing.sm,
+              height: OmniSize.touch,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  AnimatedContainer(
+                    duration: OmniMotion.duration(
+                      context,
+                      const Duration(milliseconds: 120),
                     ),
-                    minimumSize: const WidgetStatePropertyAll(
-                      Size(OmniSize.touch + OmniSpacing.sm, OmniSize.touch),
+                    width: OmniSize.touch + OmniSpacing.sm,
+                    height: OmniSize.touch - OmniSpacing.sm,
+                    decoration: BoxDecoration(
+                      color: content ? colors.brand : colors.mist,
+                      borderRadius: BorderRadius.circular(OmniRadius.pill),
                     ),
-                    shape: const WidgetStatePropertyAll(StadiumBorder()),
                   ),
-                  icon: Icon(
-                    widget.mode == _AndroidNoteEditorMode.fullscreen
-                        ? Icons.check
-                        : Icons.send_rounded,
-                    color: content
-                        ? Theme.of(context).colorScheme.onPrimary
-                        : colors.muted,
+                  OmniIconButton(
+                    key: const ValueKey('android-note-publish'),
+                    tooltip: editor.draft.baseRevision.isEmpty ? '发布' : '保存',
+                    onPressed: _editable && content ? () => _commit() : null,
+                    style: ButtonStyle(
+                      backgroundColor: const WidgetStatePropertyAll(
+                        Colors.transparent,
+                      ),
+                      minimumSize: const WidgetStatePropertyAll(
+                        Size(OmniSize.touch + OmniSpacing.sm, OmniSize.touch),
+                      ),
+                      shape: const WidgetStatePropertyAll(StadiumBorder()),
+                    ),
+                    icon: Icon(
+                      Icons.send_rounded,
+                      color: content
+                          ? Theme.of(context).colorScheme.onPrimary
+                          : colors.muted,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -1079,7 +1149,6 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     // 历史正文始终挂载，录音覆盖不丢选区和撤销。
     final Widget surface = fullscreen
         ? _AndroidHistorySurface(
-            dateMenu: _historyDateMenu,
             body: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: _editable ? _focus.requestFocus : null,
@@ -1087,21 +1156,12 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
             ),
             toolbar: toolbar,
             popup: _popup(tags, audio),
-            dateLabel:
-                '${editor.draft.dayKey} ${_androidNoteTime(editor.draft.createdAt ?? DateTime.now(), seconds: true).split(' ').last}',
+            dateLabel: editor.draft.recordTime.label,
+            hasChanges: editor.hasPendingChanges,
             onBack: _busy || _closing || editor.committing
                 ? null
-                : () => unawaited(_requestClose(back: true)),
-            day: DateTime.tryParse(editor.draft.dayKey) ?? DateTime.now(),
-            onDate: _editable
-                ? (day) {
-                    if (!_sourceChanged &&
-                        identical(editor, _editor) &&
-                        _editable) {
-                      editor.edit(dayKey: businessDayKey(day));
-                    }
-                  }
-                : null,
+                : () => unawaited(_close()),
+            onDate: _editable ? () => unawaited(_changeRecordTime()) : null,
             onMenu: _busy || _closing || editor.committing
                 ? null
                 : (anchor) => unawaited(_historyMenu(anchor)),

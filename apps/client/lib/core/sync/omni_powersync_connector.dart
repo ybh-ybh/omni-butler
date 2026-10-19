@@ -164,6 +164,11 @@ class OmniPowerSyncConnector extends PowerSyncBackendConnector {
     final Map<String, Object?>? data = entry.opData == null
         ? null
         : Map<String, Object?>.from(entry.opData!);
+    // SQLite 布尔值在队列中保存为整数，笔记置顶接口使用严格 JSON 布尔值。
+    if (entry.table == 'note_entries' &&
+        data?.containsKey('is_pinned') == true) {
+      data!['is_pinned'] = data['is_pinned'] == true || data['is_pinned'] == 1;
+    }
     // 标签使用队列中持久保存的前值计算新增/移除，离线重试保持同一意图。
     if (entry.table == 'note_entries' &&
         entry.op == UpdateType.patch &&
@@ -175,6 +180,23 @@ class OmniPowerSyncConnector extends PowerSyncBackendConnector {
         throw const ApiFailure('笔记标签同步缺少修改前值，请重新整理该篇标签后重试');
       }
       data['tags_base'] = originalTags;
+    }
+    // SDK仅记录变化列：从持久前值补齐同次选择中未变的时间字段，不能读取当前行。
+    if (entry.table == 'note_entries' &&
+        entry.op == UpdateType.patch &&
+        data != null &&
+        entry.previousValues?.containsKey('record_time_seconds') == true) {
+      // 三个字段共同表示用户当时选择的记录时间。
+      const List<String> timeColumns = [
+        'day_key',
+        'record_time_seconds',
+        'record_utc_offset_minutes',
+      ];
+      if (timeColumns.any(data.containsKey)) {
+        for (final String column in timeColumns) {
+          data.putIfAbsent(column, () => entry.previousValues![column]);
+        }
+      }
     }
     // 当前表明确退休的字段。
     final Set<String> retired =

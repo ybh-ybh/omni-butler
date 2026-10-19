@@ -261,10 +261,20 @@ export class SyncMigrationService {
         throw new BadRequestException('快照只允许完整 PUT');
       // 静态字段白名单同时定义快照完整行协议。
       const columns = writableColumns[operation.table]!;
+      // v3 历史笔记允许缺失新增元数据，数据库默认保留未知时间与未置顶。
+      const requiredColumns = [...columns].filter((column) => {
+        if (operation.table !== 'note_entries') return true;
+        if (column === 'is_pinned') return Object.hasOwn(operation.data ?? {}, column);
+        if (column === 'record_time_seconds' || column === 'record_utc_offset_minutes') {
+          return Object.hasOwn(operation.data ?? {}, 'record_time_seconds') ||
+            Object.hasOwn(operation.data ?? {}, 'record_utc_offset_minutes');
+        }
+        return true;
+      });
       if (
         !operation.data ||
-        columns.size !== Object.keys(operation.data).length ||
-        [...columns].some(
+        requiredColumns.length !== Object.keys(operation.data).length ||
+        requiredColumns.some(
           (column) =>
             !Object.hasOwn(operation.data!, column) ||
             operation.data![column] === undefined,

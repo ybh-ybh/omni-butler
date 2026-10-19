@@ -395,6 +395,44 @@ void main() {
     );
   });
 
+  test('旧笔记缺少时间新列时自动转写保留创建时钟和归档日', () async {
+    await add('legacy-audio', 1000);
+    // 模拟升级后仍使用兼容解析的旧记录，自动插入不能改成当前时钟。
+    await database
+        .update(database.noteEntries)
+        .write(
+          NoteEntriesCompanion(
+            recordTimeSeconds: const Value(null),
+            recordUtcOffsetMinutes: const Value(null),
+            createdAt: Value(DateTime.utc(2020, 2, 29, 1, 2, 3)),
+            creationTimezone: const Value('CST|+08:00'),
+          ),
+        );
+    // 固定正文起点，原音完成后允许自动插入。
+    final NoteEntryRecord before = (await repository.find('note'))!;
+    await database
+        .update(database.noteAudioLocalFiles)
+        .write(
+          NoteAudioLocalFilesCompanion(
+            consent: const Value(true),
+            insertedRevision: Value('waiting:${before.revision}'),
+          ),
+        );
+    await database
+        .update(database.noteAudioSegments)
+        .write(const NoteAudioSegmentsCompanion(transcript: Value('新转写')));
+    await repository.insertReadyTranscripts('note');
+    // 正文改变，记录时间、真实创建时间和时区全部保留。
+    final NoteEntryRecord after = (await repository.find('note'))!;
+    expect(after.body, '人工正文\n\n新转写');
+    expect(after.recordTime.label, before.recordTime.label);
+    expect(
+      after.recordTime.utcOffsetMinutes,
+      before.recordTime.utcOffsetMinutes,
+    );
+    expect(after.createdAt, before.createdAt);
+  });
+
   test('等待转写期间人工编辑正文后只保留候选，不能覆盖输入', () async {
     await add('audio', 1000);
     // 原先明确授权的空位锚点。

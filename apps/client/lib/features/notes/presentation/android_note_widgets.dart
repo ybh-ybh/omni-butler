@@ -237,6 +237,9 @@ class _AndroidNoteCard extends ConsumerWidget {
       switch (action) {
         case _AndroidNoteAction.edit:
           await onEdit();
+        case _AndroidNoteAction.pin:
+        case _AndroidNoteAction.unpin:
+          await source.setPinned(latest.id, action == _AndroidNoteAction.pin);
         case _AndroidNoteAction.copy:
           await _androidCopyNote(context, latest.body);
         case _AndroidNoteAction.details:
@@ -308,8 +311,8 @@ class _AndroidNoteCard extends ConsumerWidget {
     final String preview = first < 0
         ? ''
         : lines.skip(first + 1).join('\n').trimRight();
-    // 用于显示的本机创建时刻。
-    final DateTime created = note.createdAt.toLocal();
+    // 记录时间保持选择时的墙钟字段。
+    final NoteRecordTime recorded = note.recordTime;
     // 当前主题的语义颜色。
     final OmniColors colors = OmniColors.of(context);
     return OmniPanel(
@@ -334,10 +337,23 @@ class _AndroidNoteCard extends ConsumerWidget {
                     Expanded(
                       child: _AndroidNoteEditTarget(
                         onEdit: () => onEdit(),
-                        child: Text(
-                          '${businessDayKey(created)} ${created.hour.toString().padLeft(2, '0')}:${created.minute.toString().padLeft(2, '0')}',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: colors.muted),
+                        child: Row(
+                          children: [
+                            if (note.isPinned) ...[
+                              NotePinIndicator(noteId: note.id),
+                              const SizedBox(width: OmniSpacing.xxs),
+                            ],
+                            Flexible(
+                              child: Text(
+                                recorded.label,
+                                key: ValueKey(
+                                  'android-note-created-${note.id}',
+                                ),
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: colors.muted),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),

@@ -12,6 +12,7 @@ void main() {
     String tags = '[]',
     DateTime? deletedAt,
   }) => NoteEntryRecord(
+    isPinned: false,
     id: day,
     body: body,
     tags: tags,

@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { Prisma } from '../generated/prisma/client';
 import type { SyncOperationDto } from './dto/sync-operation.dto';
+import { effectiveNoteRecordTime, validateSelectedNoteRecordTime } from './note-record-time';
 
 /// 标签协议只接受无重复 UUID 的 JSON 文本，避免整列覆盖和非规范身份。
 function parseNoteTags(value: unknown, field: string): string[] {
@@ -77,6 +78,16 @@ export async function normalizeNoteOperation(transaction: Prisma.TransactionClie
   // 全部正文写入必须有完整可恢复的候选事实。
   const current = await transaction.noteEntry.findFirst({ where: { userId, id: operation.id } });
   if (!current) return { ...operation, data };
+  if (data.day_key !== undefined || data.record_time_seconds !== undefined || data.record_utc_offset_minutes !== undefined) {
+    // PowerSync 可能省略未改变列；旧日期队列也在副本中补全，不改变原始回执摘要。
+    const effective = effectiveNoteRecordTime(current);
+    // 仅含 day_key 的历史队列保持其旧日期兼容语义。
+    const selected = data.record_time_seconds !== undefined || data.record_utc_offset_minutes !== undefined;
+    data.day_key ??= current.dayKey;
+    data.record_time_seconds ??= effective.seconds;
+    data.record_utc_offset_minutes ??= effective.offsetMinutes;
+    if (selected) validateSelectedNoteRecordTime(data);
+  }
   if (incoming && base) {
     // 只执行本次编辑相对基线的新增与移除，保留别的设备并发新增。
     const merged = new Set(parseNoteTags(current.tags, 'current.tags'));
@@ -86,6 +97,7 @@ export async function normalizeNoteOperation(transaction: Prisma.TransactionClie
     data.tags = JSON.stringify([...merged].sort());
   }
   if (data.creation_timezone !== undefined && data.creation_timezone !== current.creationTimezone) throw new BadRequestException('笔记创建时区不可修改');
+  if (data.created_at !== undefined && (typeof data.created_at !== 'string' || Date.parse(data.created_at) !== current.createdAt.getTime())) throw new BadRequestException('笔记真实创建时间不可修改');
   if (data.body !== undefined || data.revision !== undefined) {
     if (typeof data.body !== 'string' || typeof data.revision !== 'string') throw new BadRequestException('正文变更必须包含 body 与 revision');
     // 重放当前相同正文属于幂等更新，不需要重复版本。

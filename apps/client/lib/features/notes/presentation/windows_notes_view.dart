@@ -1031,8 +1031,8 @@ extension _WindowsNotesView on _NotesPageState {
         _expandedNoteId == note.id && editor.draft.id == note.id;
     // 展示内容不改写正文模型。
     final (String title, String preview) = _notePreview(note);
-    // 创建时间继续使用原始本机展示。
-    final DateTime created = note.createdAt.toLocal();
+    // 记录时间不随设备时区变化。
+    final NoteRecordTime recorded = note.recordTime;
     // 收缩卡片读取所属笔记的原音，不能复用当前编辑器的片段。
     final List<NoteAudioSegmentRecord> audio =
         (ref.watch(_allNoteAudioProvider).value ?? [])
@@ -1046,6 +1046,8 @@ extension _WindowsNotesView on _NotesPageState {
           );
     // 小号时间使用灰色，深色模式沿用主题的可读灰度。
     final OmniColors colors = OmniColors.of(context);
+    // 菜单固定打开时的数据源，关闭后不能写入新库的同名篇。
+    final NoteRepository source = ref.watch(noteRepositoryProvider);
     return KeyedSubtree(
       key: ValueKey('note-card-${note.id}'),
       // 稳定卡片语义父节点，展开及裁剪只更新其内部孩子。
@@ -1065,9 +1067,13 @@ extension _WindowsNotesView on _NotesPageState {
                     children: [
                       Row(
                         children: [
+                          if (note.isPinned) ...[
+                            NotePinIndicator(noteId: note.id, size: 12),
+                            const SizedBox(width: OmniSpacing.xxs),
+                          ],
                           Expanded(
                             child: Text(
-                              '${businessDayKey(created)} ${created.hour.toString().padLeft(2, '0')}:${created.minute.toString().padLeft(2, '0')}',
+                              recorded.label,
                               key: ValueKey('note-created-${note.id}'),
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(
@@ -1080,53 +1086,83 @@ extension _WindowsNotesView on _NotesPageState {
                                   ),
                             ),
                           ),
-                          OmniPopupMenuButton<String>(
-                            key: ValueKey('note-menu-${note.id}'),
-                            mouseCursor: SystemMouseCursors.click,
-                            tooltip: '笔记操作',
-                            icon: const Icon(Icons.more_horiz),
-                            onSelected: (action) async {
-                              if (action == 'edit') {
-                                await _open(note.id);
-                              }
-                              if (action == 'copy') {
-                                await Clipboard.setData(
-                                  ClipboardData(text: note.body),
-                                );
-                              }
-                              if (action == 'versions') {
-                                await _open(note.id);
-                                if (mounted && editor.draft.id == note.id) {
-                                  await _showVersions(editor);
-                                }
-                              }
-                              if (action == 'delete') {
-                                await _deleteHistoryNote(note.id, editor);
-                              }
-                            },
-                            itemBuilder: (_) => [
-                              OmniPopupMenuItem(
-                                value: 'edit',
-                                label: '编辑',
-                                icon: Icons.edit_outlined,
-                              ),
-                              OmniPopupMenuItem(
-                                value: 'copy',
-                                label: '复制正文',
-                                icon: Icons.copy_outlined,
-                              ),
-                              OmniPopupMenuItem(
-                                value: 'versions',
-                                label: '版本记录',
-                                icon: Icons.restore,
-                              ),
-                              OmniPopupMenuItem(
-                                value: 'delete',
-                                label: '移入回收站',
-                                icon: Icons.delete_outline,
-                                danger: true,
-                              ),
-                            ],
+                          Builder(
+                            builder: (menuContext) =>
+                                OmniPopupMenuButton<String>(
+                                  key: ValueKey('note-menu-${note.id}'),
+                                  mouseCursor: SystemMouseCursors.click,
+                                  tooltip: '笔记操作',
+                                  icon: const Icon(Icons.more_horiz),
+                                  onSelected: (action) async {
+                                    if (action == 'pin' || action == 'unpin') {
+                                      await _setNotePinned(
+                                        note.id,
+                                        action == 'pin',
+                                        source,
+                                      );
+                                    }
+                                    if (action == 'edit') {
+                                      await _open(note.id);
+                                    }
+                                    if (action == 'record-time' &&
+                                        menuContext.mounted) {
+                                      await _changeNoteRecordTime(
+                                        note.id,
+                                        menuContext,
+                                      );
+                                    }
+                                    if (action == 'copy') {
+                                      await Clipboard.setData(
+                                        ClipboardData(text: note.body),
+                                      );
+                                    }
+                                    if (action == 'versions') {
+                                      await _open(note.id);
+                                      if (mounted &&
+                                          editor.draft.id == note.id) {
+                                        await _showVersions(editor);
+                                      }
+                                    }
+                                    if (action == 'delete') {
+                                      await _deleteHistoryNote(note.id, editor);
+                                    }
+                                  },
+                                  itemBuilder: (_) => [
+                                    OmniPopupMenuItem(
+                                      value: note.isPinned ? 'unpin' : 'pin',
+                                      label: note.isPinned ? '取消置顶' : '置顶',
+                                      icon: note.isPinned
+                                          ? Icons.push_pin_outlined
+                                          : Icons.push_pin,
+                                    ),
+                                    OmniPopupMenuItem(
+                                      value: 'edit',
+                                      label: '编辑',
+                                      icon: Icons.edit_outlined,
+                                    ),
+                                    OmniPopupMenuItem(
+                                      value: 'copy',
+                                      label: '复制正文',
+                                      icon: Icons.copy_outlined,
+                                    ),
+                                    OmniPopupMenuItem(
+                                      value: 'record-time',
+                                      label: '修改日期',
+                                      icon: Icons.edit_calendar_outlined,
+                                    ),
+                                    OmniPopupMenuItem(
+                                      value: 'versions',
+                                      label: '版本记录',
+                                      icon: Icons.restore,
+                                    ),
+                                    OmniPopupMenuItem(
+                                      value: 'delete',
+                                      label: '移入回收站',
+                                      icon: Icons.delete_outline,
+                                      danger: true,
+                                    ),
+                                  ],
+                                ),
                           ),
                         ],
                       ),
@@ -1166,6 +1202,77 @@ extension _WindowsNotesView on _NotesPageState {
                 ),
         ),
       ),
+    );
+  }
+
+  /// 置顶仅修改原数据源的正式元数据，不切换或提交其他正文草稿。
+  Future<void> _setNotePinned(
+    String id,
+    bool pinned,
+    NoteRepository source,
+  ) async {
+    try {
+      if (!mounted || !identical(source, ref.read(noteRepositoryProvider))) {
+        return;
+      }
+      // 菜单打开后可能远端删除或换库，实际写入前重新核验。
+      final NoteEntryRecord? note = await source.find(id);
+      if (!mounted || !identical(source, ref.read(noteRepositoryProvider))) {
+        return;
+      }
+      if (note == null || note.deletedAt != null) {
+        throw StateError('笔记已删除或不可用');
+      }
+      await source.setPinned(id, pinned);
+    } on Object catch (error) {
+      if (mounted) {
+        showOmniMessage(
+          context,
+          message: '置顶设置失败：$error',
+          tone: OmniMessageTone.error,
+        );
+      }
+    }
+  }
+
+  /// 独立修改正式记录时间，保存时不触碰任何编辑草稿。
+  Future<void> _changeNoteRecordTime(
+    String id,
+    BuildContext anchorContext,
+  ) async {
+    // 菜单关闭前缓存真实锚点，异步后不再读取已卸载的节点。
+    final RenderBox? box = anchorContext.findRenderObject() as RenderBox?;
+    if (box == null || !box.attached) return;
+    // 锚点使用当前导航覆盖层坐标，保留自定义标题栏和嵌套路由的偏移。
+    final RenderObject? overlay = Navigator.of(context).overlay?.context
+        .findRenderObject();
+    if (overlay is! RenderBox) return;
+    final Rect anchor =
+        box.localToGlobal(Offset.zero, ancestor: overlay) & box.size;
+    // 固定本次操作的数据源，换库后禁止更新新源的同名笔记。
+    final NoteRepository source = ref.read(noteRepositoryProvider);
+    final NoteEntryRecord? note = await source.find(id);
+    if (!mounted || !identical(source, ref.read(noteRepositoryProvider))) {
+      return;
+    }
+    if (note == null || note.deletedAt != null) {
+      showOmniMessage(
+        context,
+        message: '笔记已删除或不可用',
+        tone: OmniMessageTone.error,
+      );
+      return;
+    }
+    await showWindowsNoteRecordTimePicker(
+      context,
+      anchor: anchor,
+      initialValue: note.recordTime.wallTime,
+      onConfirm: (value) async {
+        if (!mounted || !identical(source, ref.read(noteRepositoryProvider))) {
+          throw StateError('数据源已切换，请重新打开笔记');
+        }
+        await source.updateRecordTime(id, NoteRecordTime.selected(value));
+      },
     );
   }
 

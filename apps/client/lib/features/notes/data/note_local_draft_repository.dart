@@ -27,6 +27,8 @@ NoteDraft noteDraftFromLocal(NoteLocalDraftRecord local) => NoteDraft(
   id: local.noteId,
   body: local.body,
   dayKey: local.dayKey,
+  recordTimeSeconds: local.recordTimeSeconds,
+  recordUtcOffsetMinutes: local.recordUtcOffsetMinutes,
   baseRevision: local.baseRevision,
   tags: noteTagIds(local.tags),
   originalTags: local.originalTags == null
@@ -101,6 +103,8 @@ class NoteLocalDraftRepository {
             noteId: draft.id,
             body: Value(draft.body),
             dayKey: draft.dayKey,
+            recordTimeSeconds: Value(draft.recordTimeSeconds),
+            recordUtcOffsetMinutes: Value(draft.recordUtcOffsetMinutes),
             baseRevision: draft.baseRevision,
             tags: Value(jsonEncode(draft.tags.toList()..sort())),
             originalTags: Value(
@@ -335,6 +339,8 @@ class NoteLocalDraftRepository {
         id: saved.id,
         body: saved.body,
         dayKey: saved.dayKey,
+        recordTimeSeconds: saved.recordTimeSeconds,
+        recordUtcOffsetMinutes: saved.recordUtcOffsetMinutes,
         baseRevision: saved.revision,
         tags: noteTagIds(saved.tags),
         originalTags: noteTagIds(saved.tags),

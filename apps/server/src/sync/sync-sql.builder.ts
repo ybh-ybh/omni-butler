@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import type { SyncOperationDto } from './dto/sync-operation.dto';
+import { validateNoteRecordTime } from './note-record-time';
 
 /// 一条参数化同步 SQL。
 export interface SyncStatement {
@@ -11,7 +12,7 @@ export interface SyncStatement {
 
 /// 各同步表允许由客户端写入的列。
 export const writableColumns: Readonly<Record<string, ReadonlySet<string>>> = {
-  note_entries: new Set(['body', 'day_key', 'creation_timezone', 'tags', 'revision', 'created_at', 'updated_at', 'deleted_at']),
+  note_entries: new Set(['body', 'day_key', 'record_time_seconds', 'record_utc_offset_minutes', 'is_pinned', 'creation_timezone', 'tags', 'revision', 'created_at', 'updated_at', 'deleted_at']),
   note_versions: new Set(['note_id', 'body', 'base_revision', 'revision', 'created_at', 'deleted_at']),
   note_audio_segments: new Set(['note_id', 'sort_order', 'duration_ms', 'mime', 'sha256', 'byte_size', 'transcript', 'created_at', 'updated_at', 'deleted_at']),
   note_images: new Set(['note_id', 'sort_order', 'created_at', 'updated_at', 'deleted_at']),
@@ -222,6 +223,12 @@ export class SyncSqlBuilder {
       // 对应 UTC 自然日的解析值。
       const parsed = new Date(`${day}T00:00:00Z`);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) throw new BadRequestException('笔记日期无效');
+    }
+    if (operation.table === 'note_entries') {
+      if (Object.hasOwn(data, 'is_pinned') && typeof data.is_pinned !== 'boolean') {
+        throw new BadRequestException('笔记置顶状态必须为布尔值');
+      }
+      validateNoteRecordTime(data, operation.op === 'PATCH');
     }
     // 对新类型字段给出明确的客户端错误，原始负载保持幂等摘要不变。
     if (operation.table === 'todo_items') {

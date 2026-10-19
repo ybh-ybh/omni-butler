@@ -357,7 +357,7 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
       onOpen: _handleOpen,
       onClose: _handleClose,
       menuChildren: <Widget>[
-        _OmniCalendarPanel(
+        OmniCalendarPanel(
           visibleMonth: _visibleMonth,
           selectedDate: widget.value,
           focusDate: DateUtils.isSameMonth(_visibleMonth, _effectiveDate)
@@ -389,7 +389,7 @@ class _OmniDatePickerButtonState extends State<OmniDatePickerButton> {
 }
 
 /// 日期浮层中的日历面板。
-class _OmniCalendarPanel extends StatelessWidget {
+class OmniCalendarPanel extends StatelessWidget {
   /// 当前展示月份。
   final DateTime visibleMonth;
 
@@ -430,7 +430,7 @@ class _OmniCalendarPanel extends StatelessWidget {
   final ValueChanged<DateTime> onSelectDate;
 
   /// 创建日历浮层面板。
-  const _OmniCalendarPanel({
+  const OmniCalendarPanel({
     required this.visibleMonth,
     required this.selectedDate,
     required this.focusDate,
@@ -444,6 +444,7 @@ class _OmniCalendarPanel extends StatelessWidget {
     required this.onMoveYear,
     required this.onSelectMonth,
     required this.onSelectDate,
+    super.key,
   });
 
   /// 将年月转换为连续月份序号。

@@ -9,6 +9,7 @@ NoteEntryRecord statisticNote(
   String body, {
   bool deleted = false,
 }) => NoteEntryRecord(
+  isPinned: false,
   id: id,
   body: body,
   dayKey: date,

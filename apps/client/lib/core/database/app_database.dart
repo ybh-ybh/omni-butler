@@ -756,7 +756,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// 当前数据库结构版本。
   @override
-  int get schemaVersion => 23;
+  int get schemaVersion => 25;
 
   /// 创建数据库并从旧版本安全升级。
   @override
@@ -1023,6 +1023,43 @@ SET started_at = datetime(entry_date, printf('+%d minutes', start_minute)),
         await migrator.createTable(noteLocalDrafts);
         await migrator.createTable(noteDraftAudioSegments);
         await _createNoteIndexes();
+      }
+      if (from < 24) {
+        // 降版测试和中断迁移可能已含新增列，逐表检查后补齐。
+        for (final TableInfo<Table, Object?> table in [
+          noteEntries,
+          noteLocalDrafts,
+        ]) {
+          // 当前表的真实列，避免重复添加。
+          final Set<String> columns = (await customSelect(
+            'PRAGMA table_info(${table.actualTableName})',
+          ).get()).map((row) => row.read<String>('name')).toSet();
+          if (!columns.contains('record_time_seconds')) {
+            await migrator.addColumn(
+              table,
+              table == noteEntries
+                  ? noteEntries.recordTimeSeconds
+                  : noteLocalDrafts.recordTimeSeconds,
+            );
+          }
+          if (!columns.contains('record_utc_offset_minutes')) {
+            await migrator.addColumn(
+              table,
+              table == noteEntries
+                  ? noteEntries.recordUtcOffsetMinutes
+                  : noteLocalDrafts.recordUtcOffsetMinutes,
+            );
+          }
+        }
+      }
+      if (from < 25) {
+        // 降版测试或中断升级可能已带此列，避免重复迁移。
+        final Set<String> columns = (await customSelect(
+          'PRAGMA table_info(note_entries)',
+        ).get()).map((row) => row.read<String>('name')).toSet();
+        if (!columns.contains('is_pinned')) {
+          await migrator.addColumn(noteEntries, noteEntries.isPinned);
+        }
       }
     },
   );

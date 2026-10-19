@@ -1,7 +1,11 @@
+import 'note_record_time_picker.dart';
+import '../data/note_repository.dart';
+
 import 'dart:async';
 import 'dart:io';
 
 import 'android_notes_view.dart';
+import 'note_pin_indicator.dart';
 import 'windows_note_tags.dart';
 import '../data/note_search_filter.dart';
 

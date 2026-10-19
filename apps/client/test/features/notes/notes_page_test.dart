@@ -54,6 +54,7 @@ part 'android_note_search_scenarios.dart';
 part 'android_note_composer_scenarios.dart';
 part 'android_note_actions_scenarios.dart';
 part 'android_note_sidebar_scenarios.dart';
+part 'note_pinning_scenarios.dart';
 
 /// 全应用路径回归：所有音频接口都由替身接管。
 void main() {
@@ -124,6 +125,7 @@ void main() {
   androidComposerTests();
   androidNoteActionTests();
   androidSidebarTests();
+  notePinningTests();
 
   testWidgets('Windows 统计、热力图、标签与搜索仅使用正式笔记', (tester) async {
     // Windows 真正页面与本机数据库，不访问外部设备。
@@ -186,7 +188,7 @@ void main() {
           .hasFocus,
       isTrue,
     );
-    // 补记的 dayKey 不应替代卡片上真实创建日期。
+    // 补记卡片展示记录日期，真实创建日期继续保留用于详情追溯。
     final NoteEntryRecord archived = (await tester.runAsync<NoteEntryRecord?>(
       () => NoteRepository(app.database).find('yesterday'),
     ))!;
@@ -196,7 +198,7 @@ void main() {
       tester
           .widget<Text>(find.byKey(const ValueKey('note-created-yesterday')))
           .data,
-      startsWith(createdDay),
+      archived.recordTime.label,
     );
     // 草稿落盘后仍不进入正式统计。
     await _enterBody(tester, '未发布的想法');
@@ -1444,6 +1446,93 @@ void main() {
     await _settle(tester);
     expect(find.byTooltip('保存'), findsOneWidget);
     expect(find.text('取消'), findsOneWidget);
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Windows 菜单修改日期立即保存且保留另一篇未发布正文', (tester) async {
+    // 固定记录时间，日历初始定位与秒级输入均不依赖测试执行日期。
+    final _App app = await _mount(
+      tester,
+      platform: TargetPlatform.windows,
+      seed: true,
+      initialLocation: '/notes',
+      prepareDatabase: (database) => NoteRepository(database).updateRecordTime(
+        'target',
+        const NoteRecordTime('2024-03-29', 45296, 480),
+      ),
+    );
+    // 目标笔记的正文、版本及真实创建信息不属于本次时间操作。
+    final NoteEntryRecord before = (await tester.runAsync<NoteEntryRecord?>(
+      () => NoteRepository(app.database).find('target'),
+    ))!;
+    await _enterBody(tester, '另一篇尚未发布的正文');
+    await _settle(tester, elapsed: const Duration(milliseconds: 700));
+    // 菜单独立保存不应切换或提交顶部新笔记会话。
+    final NoteEditorController editor = app.container.read(noteEditorProvider);
+    // 稳定的新笔记身份用于判断操作后仍停留同一个草稿。
+    final String draftId = editor.draft.id;
+    await tester.ensureVisible(find.byKey(const ValueKey('note-menu-target')));
+    await _settle(tester);
+    // 父卡片提供双击编辑，单击菜单需等待真实手势竞技场判定。
+    await tester.tap(find.byKey(const ValueKey('note-menu-target')));
+    await _settle(tester, elapsed: const Duration(milliseconds: 350));
+    await tester.tap(find.text('修改日期'));
+    await _settle(tester);
+    expect(find.text('2024 年 3 月'), findsOneWidget);
+    // 查找真正的输入部件，经生产表单onChanged完成输入与校验。
+    final Finder clock = find.descendant(
+      of: find.byKey(const ValueKey('note-record-time-input')),
+      matching: find.byType(TextFormField),
+    );
+    expect(tester.widget<TextFormField>(clock).controller!.text, '12:34:56');
+    await tester.enterText(clock, '01:02:03');
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await _settle(tester);
+    expect(
+      (await tester.runAsync(
+        () => NoteRepository(app.database).find('target'),
+      ))!.recordTime.label,
+      before.recordTime.label,
+    );
+    await tester.tap(find.byKey(const ValueKey('note-menu-target')));
+    await _settle(tester, elapsed: const Duration(milliseconds: 350));
+    await tester.tap(find.text('修改日期'));
+    await _settle(tester);
+    // 六周月历还包含二月28日；最后一个28对应当前显示的三月。
+    await tester.tap(find.widgetWithText(OmniTextButton, '28').last);
+    await tester.enterText(clock, '05:06:07');
+    await tester.pump();
+    await _capture(tester, app, 'windows-record-time-picker');
+    await tester.tap(find.byKey(const ValueKey('note-record-time-confirm')));
+    await _settle(tester);
+    // 正式时间立即写入，正文编辑器仍保留尚未发布的新篇。
+    final NoteEntryRecord after = (await tester.runAsync<NoteEntryRecord?>(
+      () => NoteRepository(app.database).find('target'),
+    ))!;
+    expect(after.recordTime.label, '2024-03-28 05:06:07');
+    expect(after.body, before.body);
+    expect(after.revision, before.revision);
+    expect(after.createdAt, before.createdAt);
+    expect(editor.draft.id, draftId);
+    expect(editor.draft.body, '另一篇尚未发布的正文');
+    expect(_bodyText(tester), '另一篇尚未发布的正文');
+    expect(
+      await tester.runAsync(() => NoteRepository(app.database).find(draftId)),
+      isNull,
+    );
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteEntries).get(),
+      ))!,
+      hasLength(3),
+    );
+    expect(
+      (await tester.runAsync(
+        () => app.database.select(app.database.noteVersions).get(),
+      ))!,
+      hasLength(3),
+    );
     await _dispose(tester, app);
     expect(tester.takeException(), isNull);
   });

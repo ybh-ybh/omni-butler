@@ -70,8 +70,17 @@ class NoteEntries extends Table {
   /// 人工可编辑正文。
   TextColumn get body => text().withDefault(const Constant(''))();
 
+  /// 固定记录时钟的当日秒数；旧记录由创建时刻推导。
+  IntColumn get recordTimeSeconds => integer().nullable()();
+
+  /// 设定记录时间时的 UTC 偏移分钟。
+  IntColumn get recordUtcOffsetMinutes => integer().nullable()();
+
   /// 不随时区漂移的归档自然日。
   TextColumn get dayKey => text()();
+
+  /// 手动置顶独立于正文和记录时间，旧笔记默认不置顶。
+  BoolColumn get isPinned => boolean().withDefault(const Constant(false))();
 
   /// 多标签身份的 JSON 数组。
   TextColumn get tags => text().withDefault(const Constant('[]'))();
@@ -215,6 +224,12 @@ class NoteLocalDrafts extends Table {
   /// 未提交正文。
   TextColumn get body => text().withDefault(const Constant(''))();
 
+  /// 固定记录时钟的当日秒数；旧记录由创建时刻推导。
+  IntColumn get recordTimeSeconds => integer().nullable()();
+
+  /// 设定记录时间时的 UTC 偏移分钟。
+  IntColumn get recordUtcOffsetMinutes => integer().nullable()();
+
   /// 归档自然日。
   TextColumn get dayKey => text()();
 
@@ -233,7 +248,7 @@ class NoteLocalDrafts extends Table {
   /// 创建时设备时区。
   TextColumn get creationTimezone => text().nullable()();
 
-  /// 是否明确修改归档日。
+  /// 是否明确修改记录日期或时分秒。
   BoolColumn get dateEdited => boolean().withDefault(const Constant(false))();
 
   /// 是否尚未发布为正式笔记。

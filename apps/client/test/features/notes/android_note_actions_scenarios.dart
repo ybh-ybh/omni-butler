@@ -99,18 +99,10 @@ void androidNoteActionTests() {
     // 本机草稿归属不会被复制和详情改变。
     final String? owner = editor.draftId;
     await _androidCardMenu(tester);
-    for (final String label in ['编辑', '复制', '查看详情', '历史版本', '删除']) {
+    for (final String label in ['编辑', '复制', '置顶', '查看详情', '历史版本', '删除']) {
       expect(find.text(label).hitTestable(), findsOneWidget);
     }
-    for (final String label in [
-      '分享',
-      '置顶',
-      '加入浮窗',
-      'AI 洞察',
-      '相关笔记',
-      '复制链接',
-      '批注',
-    ]) {
+    for (final String label in ['分享', '加入浮窗', 'AI 洞察', '相关笔记', '复制链接', '批注']) {
       expect(find.text(label), findsNothing);
     }
     expect(find.textContaining('字数统计：'), findsOneWidget);
@@ -169,7 +161,8 @@ void androidNoteActionTests() {
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('android-note-editor')), findsNothing);
-      expect(find.byTooltip('保存'), findsOneWidget);
+      expect(find.byTooltip('返回笔记列表'), findsOneWidget);
+      expect(find.byKey(const ValueKey('android-note-publish')), findsNothing);
       expect(
         tester
             .widget<NoteRichEditor>(find.byType(NoteRichEditor))
@@ -177,7 +170,7 @@ void androidNoteActionTests() {
             .hasFocus,
         isTrue,
       );
-      await tester.tap(find.byKey(const ValueKey('android-note-publish')));
+      await tester.tap(find.byKey(const ValueKey('android-note-history-back')));
       await _settle(tester);
       expect(find.byType(NoteRichEditor), findsNothing);
       expect(_androidCardPart('target', find.text('收起')), findsOneWidget);
@@ -188,6 +181,11 @@ void androidNoteActionTests() {
       ))!.length,
       versions,
     );
+    // 上一轮聚焦正文可保留内部滚动位置，先确保外缘实际露出再测试背景命中。
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('android-note-card-target')),
+    );
+    await _settle(tester);
     // 卡片外缘留白也能进入编辑，背景命中不包裹媒体手势。
     final Rect cardBounds = tester.getRect(
       find.byKey(const ValueKey('android-note-card-target')),
@@ -222,7 +220,204 @@ void androidNoteActionTests() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Android已有笔记 全屏返回保留草稿、保存失败重试、复制当前稿', (tester) async {
+  // 同一生产页面分别验证明暗主题，保留系统返回与真实事务。
+  for (final String theme in ['light', 'dark']) {
+    testWidgets('Android已有笔记 紧凑阴影顶栏、暂存后勾号和系统退出默认保存 $theme', (tester) async {
+      // 生产全屏入口覆盖初始干净状态及真实键盘返回层级。
+      final _App app = await _mount(
+        tester,
+        seed: true,
+        theme: theme,
+        initialLocation: '/notes?id=target',
+      );
+      // 两侧视觉圆40dp、点击热区48dp，图标20dp且阴影存在。
+      for (final String id in ['back', 'more']) {
+        // 完整触控区域。
+        final Finder button = find.byKey(ValueKey('android-note-history-$id'));
+        // 独立视觉圆形，不包含热区留白。
+        final Finder visual = find.byKey(
+          ValueKey('android-note-history-$id-visual'),
+        );
+        expect(tester.getSize(button), const Size(48, 48));
+        expect(tester.getSize(visual), const Size(40, 40));
+        // 实际绘制的背景与阴影。
+        final BoxDecoration decoration =
+            tester.widget<Container>(visual).decoration! as BoxDecoration;
+        expect(decoration.boxShadow, isNotEmpty);
+        expect(decoration.boxShadow!.first.blurRadius, greaterThan(0));
+        expect(
+          tester
+              .widget<Icon>(
+                find.descendant(of: button, matching: find.byType(Icon)),
+              )
+              .size,
+          20,
+        );
+      }
+      // 日期与标题仅保留2dp视觉间距，整组日期入口仍至少48dp。
+      final Rect title = tester.getRect(
+        find.byKey(const ValueKey('android-note-history-title')),
+      );
+      // 日期实际排版范围。
+      final Rect date = tester.getRect(
+        find.byKey(const ValueKey('android-note-history-date-label')),
+      );
+      expect(date.top - title.bottom, inInclusiveRange(0, 4));
+      expect(
+        tester
+            .getSize(find.byKey(const ValueKey('android-note-record-time')))
+            .height,
+        greaterThanOrEqualTo(48),
+      );
+      expect(find.byTooltip('返回笔记列表'), findsOneWidget);
+      expect(find.byKey(const ValueKey('android-note-publish')), findsNothing);
+      await _capture(tester, app, 'history-header-$theme-clean');
+      // 原始记录与版本数量用于验证仅真实修改才正式提交。
+      final NoteEntryRecord before = (await tester.runAsync<NoteEntryRecord?>(
+        () => NoteRepository(app.database).find('target'),
+      ))!;
+      // 编辑前的正式正文版本数量。
+      final int versions = (await tester.runAsync(
+        () => app.database.select(app.database.noteVersions).get(),
+      ))!.length;
+      await _enterBody(tester, '退出即保存的正文');
+      await _settle(tester, elapsed: const Duration(milliseconds: 700));
+      // 真实暂存状态，用于区分dirty与未提交修改。
+      final NoteEditorController editor = app.container.read(
+        noteEditorProvider,
+      );
+      expect(editor.dirty, isFalse);
+      expect(editor.hasPendingChanges, isTrue);
+      expect(find.byTooltip('保存'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('android-note-history-back')),
+          matching: find.byIcon(Icons.check),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        (await tester.runAsync<NoteEntryRecord?>(
+          () => NoteRepository(app.database).find('target'),
+        ))!.body,
+        before.body,
+      );
+      await _capture(tester, app, 'history-header-$theme-modified');
+      tester.view.viewInsets = const FakeViewPadding(bottom: 240);
+      await tester.pump();
+      if (theme == 'dark') {
+        // 左上勾号即使键盘展开也一次保存并退出，不需要先手动收键盘。
+        await tester.tap(find.byTooltip('保存'));
+        await _settle(tester);
+        tester.view.resetViewInsets();
+      } else {
+        // 第一次系统返回仅关闭键盘，此时还没有离开编辑页。
+        await tester.binding.handlePopRoute();
+        await _settle(tester);
+        expect(
+          find.byKey(const ValueKey('android-note-history-editor')),
+          findsOneWidget,
+        );
+        expect(
+          (await tester.runAsync<NoteEntryRecord?>(
+            () => NoteRepository(app.database).find('target'),
+          ))!.body,
+          before.body,
+        );
+        tester.view.resetViewInsets();
+        await _settle(tester);
+        await tester.binding.handlePopRoute();
+        await _settle(tester);
+      }
+      expect(find.byType(NoteRichEditor), findsNothing);
+      expect(
+        (await tester.runAsync<NoteEntryRecord?>(
+          () => NoteRepository(app.database).find('target'),
+        ))!.body,
+        '退出即保存的正文',
+      );
+      expect(
+        (await tester.runAsync(
+          () => app.database.select(app.database.noteVersions).get(),
+        ))!.length,
+        versions + 1,
+      );
+      await _dispose(tester, app);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('Android已有笔记 清空纯文字后退出保存空正文而不删除原篇', (tester) async {
+    // 没有媒体的已有笔记仍允许清空，不依赖旧底部按钮的content门禁。
+    final _App app = await _mount(
+      tester,
+      seed: true,
+      initialLocation: '/notes?id=weekly-note',
+    );
+    await _enterBody(tester, '');
+    await tester.tap(find.byTooltip('保存'));
+    await _settle(tester);
+    // 清空是编辑，不是回收站删除，也不会产生第二篇笔记。
+    final NoteEntryRecord? saved = await tester.runAsync<NoteEntryRecord?>(
+      () => NoteRepository(app.database).find('weekly-note'),
+    );
+    expect(saved, isNotNull);
+    expect(saved!.body, isEmpty);
+    expect(saved.deletedAt, isNull);
+    expect(find.byType(NoteRichEditor), findsNothing);
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Android已有笔记 退出遇到正文冲突保留本页修改和远端正文', (tester) async {
+    // 本机已有未提交修改时模拟另一设备保存更新版本。
+    final _App app = await _mount(
+      tester,
+      seed: true,
+      initialLocation: '/notes?id=target',
+    );
+    // 使用真实仓储模拟其他设备的落库结果。
+    final NoteRepository repository = NoteRepository(app.database);
+    // 编辑前的正式版本与时间事实。
+    final NoteEntryRecord before = (await tester.runAsync<NoteEntryRecord?>(
+      () => repository.find('target'),
+    ))!;
+    await _enterBody(tester, '本机未提交的正文');
+    await tester.runAsync(
+      () => repository.save(
+        NoteDraft(
+          id: before.id,
+          body: '另一端保存的正文',
+          dayKey: before.dayKey,
+          baseRevision: before.revision,
+          tags: noteTagIds(before.tags),
+          originalTags: noteTagIds(before.tags),
+          createdAt: before.createdAt,
+          creationTimezone: before.creationTimezone,
+        ),
+      ),
+    );
+    await _settle(tester);
+    await tester.binding.handlePopRoute();
+    await _settle(tester);
+    // 冲突不能伪装保存成功并关闭，也不能覆盖另一端的正式版本。
+    expect(
+      find.byKey(const ValueKey('android-note-history-editor')),
+      findsOneWidget,
+    );
+    expect(_bodyText(tester), '本机未提交的正文');
+    expect(app.container.read(noteEditorProvider).conflicted, isTrue);
+    expect(
+      (await tester.runAsync<NoteEntryRecord?>(
+        () => repository.find('target'),
+      ))!.body,
+      '另一端保存的正文',
+    );
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Android已有笔记 全屏返回默认保存、保存失败重试、复制当前稿', (tester) async {
     // 当前草稿复制通过同一平台入口验证。
     final ValueNotifier<String?> clipboard = _androidClipboard(tester);
     // 外部定位必须进入全屏，同一草稿重开不能丢失修改。
@@ -246,24 +441,26 @@ void androidNoteActionTests() {
       (await tester.runAsync(
         () => NoteRepository(app.database).find('target'),
       ))!.body,
-      original.body,
+      '未保存的全屏正文',
     );
     await _androidCardMenu(tester);
     await tester.tap(find.text('编辑'));
     await _settle(tester);
     expect(_bodyText(tester), '未保存的全屏正文');
+    await _enterBody(tester, '失败后重试保存的正文');
     await tester.runAsync(
       () => app.database.customStatement(
         "CREATE TRIGGER fail_history_save BEFORE UPDATE ON note_entries BEGIN SELECT RAISE(FAIL, '模拟保存失败'); END",
       ),
     );
-    await tester.tap(find.byTooltip('保存'));
+    // 系统返回也走正式提交，失败必须停留当前页。
+    await tester.binding.handlePopRoute();
     await _settle(tester);
     expect(
       find.byKey(const ValueKey('android-note-history-editor')),
       findsOneWidget,
     );
-    expect(_bodyText(tester), '未保存的全屏正文');
+    expect(_bodyText(tester), '失败后重试保存的正文');
     await tester.runAsync(
       () => app.database.customStatement('DROP TRIGGER fail_history_save'),
     );
@@ -274,7 +471,7 @@ void androidNoteActionTests() {
     final NoteEntryRecord saved = (await tester.runAsync<NoteEntryRecord?>(
       () => NoteRepository(app.database).find('target'),
     ))!;
-    expect(saved.body, '未保存的全屏正文');
+    expect(saved.body, '失败后重试保存的正文');
     expect(saved.createdAt, original.createdAt);
     await _dispose(tester, app);
     expect(tester.takeException(), isNull);
@@ -555,11 +752,18 @@ void androidNoteActionTests() {
     expect(editor.draft.id, 'target');
     expect(app.recorder.starts, 1);
     expect(app.recorder.state.draftId, recordingOwner);
+    await _enterBody(tester, '返回另一篇录音时保存本篇修改');
     await _androidComposerOptions(tester);
     await tester.ensureVisible(find.widgetWithText(OmniButton, '返回正在录音的笔记'));
     await tester.pump();
     await tester.tap(find.widgetWithText(OmniButton, '返回正在录音的笔记'));
     await _settle(tester);
+    expect(
+      (await tester.runAsync<NoteEntryRecord?>(
+        () => NoteRepository(app.database).find('target'),
+      ))!.body,
+      '返回另一篇录音时保存本篇修改',
+    );
     expect(editor.draft.id, 'yesterday');
     expect(editor.draftId, recordingOwner);
     expect(
@@ -610,25 +814,53 @@ void androidNoteActionTests() {
       initialLocation: '/notes?id=target',
       imageDirectory: () async => directory,
       systemImagePicker: _ComposerImagePicker([source]),
+      prepareDatabase: (database) => NoteRepository(database).updateRecordTime(
+        'target',
+        const NoteRecordTime('2024-03-29', 45296, 480),
+      ),
     );
     // 修改归档日不能改原始创建时间。
     final NoteEditorController editor = app.container.read(noteEditorProvider);
     // 持久创建时间独立于归档日期。
     final DateTime created = editor.draft.createdAt!;
-    await tester.tap(find.byType(OmniDatePickerButton));
+    await tester.tap(find.byKey(const ValueKey('android-note-record-time')));
     await _settle(tester);
-    expect(find.byTooltip('上个月'), findsOneWidget);
+    expect(find.text('设定日期'), findsOneWidget);
+    expect(find.byType(ListWheelScrollView), findsNWidgets(6));
     await tester.binding.handlePopRoute();
     await _settle(tester);
-    expect(find.byTooltip('上个月'), findsNothing);
+    expect(find.text('设定日期'), findsNothing);
+    expect(editor.draft.recordTime.label, '2024-03-29 12:34:56');
     expect(
       find.byKey(const ValueKey('android-note-history-editor')),
       findsOneWidget,
     );
-    tester
-        .widget<OmniDatePickerButton>(find.byType(OmniDatePickerButton))
-        .onChanged!(DateTime(2024, 2, 29));
-    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('android-note-record-time')));
+    await _settle(tester);
+    // 操作真实滚动控制器驱动吸附及生产选中通知，不直接调用日期回调。
+    for (final (int, int) selection in [(1, 1), (3, 8), (4, 9), (5, 10)]) {
+      // 当前列仍使用生产ListWheelScrollView及其状态。
+      final ListWheelScrollView wheel = tester.widget(
+        find.byKey(ValueKey('note-record-time-wheel-${selection.$1}')),
+      );
+      (wheel.controller! as FixedExtentScrollController).jumpToItem(
+        selection.$2,
+      );
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('2024年02月29日 星期四'), findsOneWidget);
+    await _capture(tester, app, 'android-record-time-picker');
+    await tester.tap(find.byKey(const ValueKey('note-record-time-confirm')));
+    await _settle(tester);
+    expect(editor.draft.recordTime.label, '2024-02-29 08:09:10');
+    expect(editor.draft.dateEdited, isTrue);
+    // 面板确定只改变编辑草稿，点击页面保存以前正式时间保持原值。
+    expect(
+      (await tester.runAsync(
+        () => NoteRepository(app.database).find('target'),
+      ))!.recordTime.label,
+      '2024-03-29 12:34:56',
+    );
     await tester.tap(find.byTooltip('添加图片'));
     for (int attempt = 0; attempt < 100 && !editor.hasImages; attempt++) {
       await tester.runAsync(
@@ -683,6 +915,12 @@ void androidNoteActionTests() {
         () => NoteRepository(app.database).find('target'),
       ))!.dayKey,
       '2024-02-29',
+    );
+    expect(
+      (await tester.runAsync(
+        () => NoteRepository(app.database).find('target'),
+      ))!.recordTime.clockLabel,
+      '08:09:10',
     );
     expect(
       (await tester.runAsync(

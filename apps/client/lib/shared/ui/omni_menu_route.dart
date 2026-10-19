@@ -104,6 +104,8 @@ Future<T?> showOmniMenu<T>({
   bool? requestFocus,
   // 移动端可按需复用完整面板淡入缩放，默认入口仍沿用原生过渡。
   bool wholePanelTransition = false,
+  // 特定参考界面可覆盖面板阴影，未指定时保持统一菜单原样。
+  List<BoxShadow>? panelShadows,
 }) {
   assert(items.isNotEmpty);
   assert((position == null) != (positionBuilder == null));
@@ -147,12 +149,16 @@ Future<T?> showOmniMenu<T>({
       barrierLabel: MaterialLocalizations.of(context).menuDismissLabel,
       semanticLabel: MaterialLocalizations.of(context).popupMenuLabel,
       requestFocus: requestFocus,
+      panelShadows: panelShadows,
     ),
   );
 }
 
 /// 保留菜单返回值、外部关闭和焦点循环，同时只动画完整面板。
 class _OmniPopupMenuRoute<T> extends PopupRoute<T> {
+  /// 可选的局部面板阴影，不影响其他菜单入口。
+  final List<BoxShadow>? panelShadows;
+
   /// 固定上下文菜单位置。
   final RelativeRect? position;
 
@@ -196,6 +202,7 @@ class _OmniPopupMenuRoute<T> extends PopupRoute<T> {
     required this.reducedMotion,
     required this.barrierLabel,
     required this.semanticLabel,
+    required this.panelShadows,
     super.requestFocus,
   }) : super(traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop);
 
@@ -857,66 +864,76 @@ class _OmniMenuPanelState<T> extends State<_OmniMenuPanel<T>> {
       child: FocusScope(
         node: _panelFocus,
         onKeyEvent: _handleKey,
-        child: Material(
-          key: ValueKey<String>(
-            widget.submenu
-                ? 'omni-windows-submenu-surface'
-                : 'omni-windows-menu-surface',
-          ),
-          color: colors.paper,
-          surfaceTintColor: Colors.transparent,
-          shadowColor: Colors.black.withValues(
-            alpha: OmniMenuMetrics.shadowOpacity,
-          ),
-          elevation: OmniMenuMetrics.elevation,
-          shape: RoundedRectangleBorder(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(OmniRadius.panel),
-            side: BorderSide(color: colors.line),
+            boxShadow: widget.route.panelShadows,
           ),
-          clipBehavior: Clip.antiAlias,
-          child: ConstrainedBox(
-            constraints:
-                widget.route.constraints ??
-                const BoxConstraints(
-                  minWidth: OmniMenuMetrics.minWidth,
-                  maxWidth: OmniMenuMetrics.maxWidth,
-                ),
-            child: IntrinsicWidth(
-              child: Semantics(
-                role: SemanticsRole.menu,
-                container: true,
-                scopesRoute: !widget.submenu,
-                namesRoute: !widget.submenu,
-                explicitChildNodes: true,
-                label: widget.route.semanticLabel,
-                child: FocusTraversalGroup(
-                  policy: ReadingOrderTraversalPolicy(),
-                  child: CallbackShortcuts(
-                    bindings: <ShortcutActivator, VoidCallback>{
-                      const SingleActivator(LogicalKeyboardKey.escape):
-                          widget.onDismiss,
-                      if (widget.onBack != null)
-                        const SingleActivator(LogicalKeyboardKey.arrowLeft):
-                            widget.onBack!,
-                      const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
-                          _moveFocus(true),
-                      const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
-                          _moveFocus(false),
-                    },
-                    child: SingleChildScrollView(
-                      padding: widget.route.menuPadding,
-                      child: ListBody(
-                        children: <Widget>[
-                          for (
-                            int index = 0;
-                            index < widget.items.length;
-                            index += 1
-                          )
-                            Focus(
-                              focusNode: _entryFocus[index],
-                              child: widget.items[index],
-                            ),
-                        ],
+          child: Material(
+            key: ValueKey<String>(
+              widget.submenu
+                  ? 'omni-windows-submenu-surface'
+                  : 'omni-windows-menu-surface',
+            ),
+            color: colors.paper,
+            surfaceTintColor: Colors.transparent,
+            shadowColor: Colors.black.withValues(
+              alpha: OmniMenuMetrics.shadowOpacity,
+            ),
+            elevation: widget.route.panelShadows == null
+                ? OmniMenuMetrics.elevation
+                : 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(OmniRadius.panel),
+              side: BorderSide(color: colors.line),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: ConstrainedBox(
+              constraints:
+                  widget.route.constraints ??
+                  const BoxConstraints(
+                    minWidth: OmniMenuMetrics.minWidth,
+                    maxWidth: OmniMenuMetrics.maxWidth,
+                  ),
+              child: IntrinsicWidth(
+                child: Semantics(
+                  role: SemanticsRole.menu,
+                  container: true,
+                  scopesRoute: !widget.submenu,
+                  namesRoute: !widget.submenu,
+                  explicitChildNodes: true,
+                  label: widget.route.semanticLabel,
+                  child: FocusTraversalGroup(
+                    policy: ReadingOrderTraversalPolicy(),
+                    child: CallbackShortcuts(
+                      bindings: <ShortcutActivator, VoidCallback>{
+                        const SingleActivator(LogicalKeyboardKey.escape):
+                            widget.onDismiss,
+                        if (widget.onBack != null)
+                          const SingleActivator(LogicalKeyboardKey.arrowLeft):
+                              widget.onBack!,
+                        const SingleActivator(
+                          LogicalKeyboardKey.arrowDown,
+                        ): () =>
+                            _moveFocus(true),
+                        const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
+                            _moveFocus(false),
+                      },
+                      child: SingleChildScrollView(
+                        padding: widget.route.menuPadding,
+                        child: ListBody(
+                          children: <Widget>[
+                            for (
+                              int index = 0;
+                              index < widget.items.length;
+                              index += 1
+                            )
+                              Focus(
+                                focusNode: _entryFocus[index],
+                                child: widget.items[index],
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ),

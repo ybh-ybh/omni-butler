@@ -10755,6 +10755,27 @@ class $NoteEntriesTable extends NoteEntries
     requiredDuringInsert: false,
     defaultValue: const Constant(''),
   );
+  static const VerificationMeta _recordTimeSecondsMeta = const VerificationMeta(
+    'recordTimeSeconds',
+  );
+  @override
+  late final GeneratedColumn<int> recordTimeSeconds = GeneratedColumn<int>(
+    'record_time_seconds',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _recordUtcOffsetMinutesMeta =
+      const VerificationMeta('recordUtcOffsetMinutes');
+  @override
+  late final GeneratedColumn<int> recordUtcOffsetMinutes = GeneratedColumn<int>(
+    'record_utc_offset_minutes',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _dayKeyMeta = const VerificationMeta('dayKey');
   @override
   late final GeneratedColumn<String> dayKey = GeneratedColumn<String>(
@@ -10763,6 +10784,21 @@ class $NoteEntriesTable extends NoteEntries
     false,
     type: DriftSqlType.string,
     requiredDuringInsert: true,
+  );
+  static const VerificationMeta _isPinnedMeta = const VerificationMeta(
+    'isPinned',
+  );
+  @override
+  late final GeneratedColumn<bool> isPinned = GeneratedColumn<bool>(
+    'is_pinned',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_pinned" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
   );
   static const VerificationMeta _tagsMeta = const VerificationMeta('tags');
   @override
@@ -10834,7 +10870,10 @@ class $NoteEntriesTable extends NoteEntries
   List<GeneratedColumn> get $columns => [
     id,
     body,
+    recordTimeSeconds,
+    recordUtcOffsetMinutes,
     dayKey,
+    isPinned,
     tags,
     revision,
     createdAt,
@@ -10865,6 +10904,24 @@ class $NoteEntriesTable extends NoteEntries
         body.isAcceptableOrUnknown(data['body']!, _bodyMeta),
       );
     }
+    if (data.containsKey('record_time_seconds')) {
+      context.handle(
+        _recordTimeSecondsMeta,
+        recordTimeSeconds.isAcceptableOrUnknown(
+          data['record_time_seconds']!,
+          _recordTimeSecondsMeta,
+        ),
+      );
+    }
+    if (data.containsKey('record_utc_offset_minutes')) {
+      context.handle(
+        _recordUtcOffsetMinutesMeta,
+        recordUtcOffsetMinutes.isAcceptableOrUnknown(
+          data['record_utc_offset_minutes']!,
+          _recordUtcOffsetMinutesMeta,
+        ),
+      );
+    }
     if (data.containsKey('day_key')) {
       context.handle(
         _dayKeyMeta,
@@ -10872,6 +10929,12 @@ class $NoteEntriesTable extends NoteEntries
       );
     } else if (isInserting) {
       context.missing(_dayKeyMeta);
+    }
+    if (data.containsKey('is_pinned')) {
+      context.handle(
+        _isPinnedMeta,
+        isPinned.isAcceptableOrUnknown(data['is_pinned']!, _isPinnedMeta),
+      );
     }
     if (data.containsKey('tags')) {
       context.handle(
@@ -10935,9 +10998,21 @@ class $NoteEntriesTable extends NoteEntries
         DriftSqlType.string,
         data['${effectivePrefix}body'],
       )!,
+      recordTimeSeconds: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}record_time_seconds'],
+      ),
+      recordUtcOffsetMinutes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}record_utc_offset_minutes'],
+      ),
       dayKey: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}day_key'],
+      )!,
+      isPinned: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_pinned'],
       )!,
       tags: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
@@ -10979,8 +11054,17 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
   /// 人工可编辑正文。
   final String body;
 
+  /// 固定记录时钟的当日秒数；旧记录由创建时刻推导。
+  final int? recordTimeSeconds;
+
+  /// 设定记录时间时的 UTC 偏移分钟。
+  final int? recordUtcOffsetMinutes;
+
   /// 不随时区漂移的归档自然日。
   final String dayKey;
+
+  /// 手动置顶独立于正文和记录时间，旧笔记默认不置顶。
+  final bool isPinned;
 
   /// 多标签身份的 JSON 数组。
   final String tags;
@@ -11002,7 +11086,10 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
   const NoteEntryRecord({
     required this.id,
     required this.body,
+    this.recordTimeSeconds,
+    this.recordUtcOffsetMinutes,
     required this.dayKey,
+    required this.isPinned,
     required this.tags,
     required this.revision,
     required this.createdAt,
@@ -11015,7 +11102,14 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
     map['body'] = Variable<String>(body);
+    if (!nullToAbsent || recordTimeSeconds != null) {
+      map['record_time_seconds'] = Variable<int>(recordTimeSeconds);
+    }
+    if (!nullToAbsent || recordUtcOffsetMinutes != null) {
+      map['record_utc_offset_minutes'] = Variable<int>(recordUtcOffsetMinutes);
+    }
     map['day_key'] = Variable<String>(dayKey);
+    map['is_pinned'] = Variable<bool>(isPinned);
     map['tags'] = Variable<String>(tags);
     map['revision'] = Variable<String>(revision);
     map['created_at'] = Variable<DateTime>(createdAt);
@@ -11031,7 +11125,14 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
     return NoteEntriesCompanion(
       id: Value(id),
       body: Value(body),
+      recordTimeSeconds: recordTimeSeconds == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recordTimeSeconds),
+      recordUtcOffsetMinutes: recordUtcOffsetMinutes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recordUtcOffsetMinutes),
       dayKey: Value(dayKey),
+      isPinned: Value(isPinned),
       tags: Value(tags),
       revision: Value(revision),
       createdAt: Value(createdAt),
@@ -11051,7 +11152,12 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
     return NoteEntryRecord(
       id: serializer.fromJson<String>(json['id']),
       body: serializer.fromJson<String>(json['body']),
+      recordTimeSeconds: serializer.fromJson<int?>(json['recordTimeSeconds']),
+      recordUtcOffsetMinutes: serializer.fromJson<int?>(
+        json['recordUtcOffsetMinutes'],
+      ),
       dayKey: serializer.fromJson<String>(json['dayKey']),
+      isPinned: serializer.fromJson<bool>(json['isPinned']),
       tags: serializer.fromJson<String>(json['tags']),
       revision: serializer.fromJson<String>(json['revision']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
@@ -11066,7 +11172,10 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
       'body': serializer.toJson<String>(body),
+      'recordTimeSeconds': serializer.toJson<int?>(recordTimeSeconds),
+      'recordUtcOffsetMinutes': serializer.toJson<int?>(recordUtcOffsetMinutes),
       'dayKey': serializer.toJson<String>(dayKey),
+      'isPinned': serializer.toJson<bool>(isPinned),
       'tags': serializer.toJson<String>(tags),
       'revision': serializer.toJson<String>(revision),
       'createdAt': serializer.toJson<DateTime>(createdAt),
@@ -11079,7 +11188,10 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
   NoteEntryRecord copyWith({
     String? id,
     String? body,
+    Value<int?> recordTimeSeconds = const Value.absent(),
+    Value<int?> recordUtcOffsetMinutes = const Value.absent(),
     String? dayKey,
+    bool? isPinned,
     String? tags,
     String? revision,
     DateTime? createdAt,
@@ -11089,7 +11201,14 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
   }) => NoteEntryRecord(
     id: id ?? this.id,
     body: body ?? this.body,
+    recordTimeSeconds: recordTimeSeconds.present
+        ? recordTimeSeconds.value
+        : this.recordTimeSeconds,
+    recordUtcOffsetMinutes: recordUtcOffsetMinutes.present
+        ? recordUtcOffsetMinutes.value
+        : this.recordUtcOffsetMinutes,
     dayKey: dayKey ?? this.dayKey,
+    isPinned: isPinned ?? this.isPinned,
     tags: tags ?? this.tags,
     revision: revision ?? this.revision,
     createdAt: createdAt ?? this.createdAt,
@@ -11101,7 +11220,14 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
     return NoteEntryRecord(
       id: data.id.present ? data.id.value : this.id,
       body: data.body.present ? data.body.value : this.body,
+      recordTimeSeconds: data.recordTimeSeconds.present
+          ? data.recordTimeSeconds.value
+          : this.recordTimeSeconds,
+      recordUtcOffsetMinutes: data.recordUtcOffsetMinutes.present
+          ? data.recordUtcOffsetMinutes.value
+          : this.recordUtcOffsetMinutes,
       dayKey: data.dayKey.present ? data.dayKey.value : this.dayKey,
+      isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
       tags: data.tags.present ? data.tags.value : this.tags,
       revision: data.revision.present ? data.revision.value : this.revision,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
@@ -11118,7 +11244,10 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
     return (StringBuffer('NoteEntryRecord(')
           ..write('id: $id, ')
           ..write('body: $body, ')
+          ..write('recordTimeSeconds: $recordTimeSeconds, ')
+          ..write('recordUtcOffsetMinutes: $recordUtcOffsetMinutes, ')
           ..write('dayKey: $dayKey, ')
+          ..write('isPinned: $isPinned, ')
           ..write('tags: $tags, ')
           ..write('revision: $revision, ')
           ..write('createdAt: $createdAt, ')
@@ -11133,7 +11262,10 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
   int get hashCode => Object.hash(
     id,
     body,
+    recordTimeSeconds,
+    recordUtcOffsetMinutes,
     dayKey,
+    isPinned,
     tags,
     revision,
     createdAt,
@@ -11147,7 +11279,10 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
       (other is NoteEntryRecord &&
           other.id == this.id &&
           other.body == this.body &&
+          other.recordTimeSeconds == this.recordTimeSeconds &&
+          other.recordUtcOffsetMinutes == this.recordUtcOffsetMinutes &&
           other.dayKey == this.dayKey &&
+          other.isPinned == this.isPinned &&
           other.tags == this.tags &&
           other.revision == this.revision &&
           other.createdAt == this.createdAt &&
@@ -11159,7 +11294,10 @@ class NoteEntryRecord extends DataClass implements Insertable<NoteEntryRecord> {
 class NoteEntriesCompanion extends UpdateCompanion<NoteEntryRecord> {
   final Value<String> id;
   final Value<String> body;
+  final Value<int?> recordTimeSeconds;
+  final Value<int?> recordUtcOffsetMinutes;
   final Value<String> dayKey;
+  final Value<bool> isPinned;
   final Value<String> tags;
   final Value<String> revision;
   final Value<DateTime> createdAt;
@@ -11170,7 +11308,10 @@ class NoteEntriesCompanion extends UpdateCompanion<NoteEntryRecord> {
   const NoteEntriesCompanion({
     this.id = const Value.absent(),
     this.body = const Value.absent(),
+    this.recordTimeSeconds = const Value.absent(),
+    this.recordUtcOffsetMinutes = const Value.absent(),
     this.dayKey = const Value.absent(),
+    this.isPinned = const Value.absent(),
     this.tags = const Value.absent(),
     this.revision = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -11182,7 +11323,10 @@ class NoteEntriesCompanion extends UpdateCompanion<NoteEntryRecord> {
   NoteEntriesCompanion.insert({
     required String id,
     this.body = const Value.absent(),
+    this.recordTimeSeconds = const Value.absent(),
+    this.recordUtcOffsetMinutes = const Value.absent(),
     required String dayKey,
+    this.isPinned = const Value.absent(),
     this.tags = const Value.absent(),
     required String revision,
     required DateTime createdAt,
@@ -11198,7 +11342,10 @@ class NoteEntriesCompanion extends UpdateCompanion<NoteEntryRecord> {
   static Insertable<NoteEntryRecord> custom({
     Expression<String>? id,
     Expression<String>? body,
+    Expression<int>? recordTimeSeconds,
+    Expression<int>? recordUtcOffsetMinutes,
     Expression<String>? dayKey,
+    Expression<bool>? isPinned,
     Expression<String>? tags,
     Expression<String>? revision,
     Expression<DateTime>? createdAt,
@@ -11210,7 +11357,11 @@ class NoteEntriesCompanion extends UpdateCompanion<NoteEntryRecord> {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (body != null) 'body': body,
+      if (recordTimeSeconds != null) 'record_time_seconds': recordTimeSeconds,
+      if (recordUtcOffsetMinutes != null)
+        'record_utc_offset_minutes': recordUtcOffsetMinutes,
       if (dayKey != null) 'day_key': dayKey,
+      if (isPinned != null) 'is_pinned': isPinned,
       if (tags != null) 'tags': tags,
       if (revision != null) 'revision': revision,
       if (createdAt != null) 'created_at': createdAt,
@@ -11224,7 +11375,10 @@ class NoteEntriesCompanion extends UpdateCompanion<NoteEntryRecord> {
   NoteEntriesCompanion copyWith({
     Value<String>? id,
     Value<String>? body,
+    Value<int?>? recordTimeSeconds,
+    Value<int?>? recordUtcOffsetMinutes,
     Value<String>? dayKey,
+    Value<bool>? isPinned,
     Value<String>? tags,
     Value<String>? revision,
     Value<DateTime>? createdAt,
@@ -11236,7 +11390,11 @@ class NoteEntriesCompanion extends UpdateCompanion<NoteEntryRecord> {
     return NoteEntriesCompanion(
       id: id ?? this.id,
       body: body ?? this.body,
+      recordTimeSeconds: recordTimeSeconds ?? this.recordTimeSeconds,
+      recordUtcOffsetMinutes:
+          recordUtcOffsetMinutes ?? this.recordUtcOffsetMinutes,
       dayKey: dayKey ?? this.dayKey,
+      isPinned: isPinned ?? this.isPinned,
       tags: tags ?? this.tags,
       revision: revision ?? this.revision,
       createdAt: createdAt ?? this.createdAt,
@@ -11256,8 +11414,19 @@ class NoteEntriesCompanion extends UpdateCompanion<NoteEntryRecord> {
     if (body.present) {
       map['body'] = Variable<String>(body.value);
     }
+    if (recordTimeSeconds.present) {
+      map['record_time_seconds'] = Variable<int>(recordTimeSeconds.value);
+    }
+    if (recordUtcOffsetMinutes.present) {
+      map['record_utc_offset_minutes'] = Variable<int>(
+        recordUtcOffsetMinutes.value,
+      );
+    }
     if (dayKey.present) {
       map['day_key'] = Variable<String>(dayKey.value);
+    }
+    if (isPinned.present) {
+      map['is_pinned'] = Variable<bool>(isPinned.value);
     }
     if (tags.present) {
       map['tags'] = Variable<String>(tags.value);
@@ -11288,7 +11457,10 @@ class NoteEntriesCompanion extends UpdateCompanion<NoteEntryRecord> {
     return (StringBuffer('NoteEntriesCompanion(')
           ..write('id: $id, ')
           ..write('body: $body, ')
+          ..write('recordTimeSeconds: $recordTimeSeconds, ')
+          ..write('recordUtcOffsetMinutes: $recordUtcOffsetMinutes, ')
           ..write('dayKey: $dayKey, ')
+          ..write('isPinned: $isPinned, ')
           ..write('tags: $tags, ')
           ..write('revision: $revision, ')
           ..write('createdAt: $createdAt, ')
@@ -13114,6 +13286,27 @@ class $NoteLocalDraftsTable extends NoteLocalDrafts
     requiredDuringInsert: false,
     defaultValue: const Constant(''),
   );
+  static const VerificationMeta _recordTimeSecondsMeta = const VerificationMeta(
+    'recordTimeSeconds',
+  );
+  @override
+  late final GeneratedColumn<int> recordTimeSeconds = GeneratedColumn<int>(
+    'record_time_seconds',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _recordUtcOffsetMinutesMeta =
+      const VerificationMeta('recordUtcOffsetMinutes');
+  @override
+  late final GeneratedColumn<int> recordUtcOffsetMinutes = GeneratedColumn<int>(
+    'record_utc_offset_minutes',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _dayKeyMeta = const VerificationMeta('dayKey');
   @override
   late final GeneratedColumn<String> dayKey = GeneratedColumn<String>(
@@ -13249,6 +13442,8 @@ class $NoteLocalDraftsTable extends NoteLocalDrafts
     id,
     noteId,
     body,
+    recordTimeSeconds,
+    recordUtcOffsetMinutes,
     dayKey,
     baseRevision,
     tags,
@@ -13290,6 +13485,24 @@ class $NoteLocalDraftsTable extends NoteLocalDrafts
       context.handle(
         _bodyMeta,
         body.isAcceptableOrUnknown(data['body']!, _bodyMeta),
+      );
+    }
+    if (data.containsKey('record_time_seconds')) {
+      context.handle(
+        _recordTimeSecondsMeta,
+        recordTimeSeconds.isAcceptableOrUnknown(
+          data['record_time_seconds']!,
+          _recordTimeSecondsMeta,
+        ),
+      );
+    }
+    if (data.containsKey('record_utc_offset_minutes')) {
+      context.handle(
+        _recordUtcOffsetMinutesMeta,
+        recordUtcOffsetMinutes.isAcceptableOrUnknown(
+          data['record_utc_offset_minutes']!,
+          _recordUtcOffsetMinutesMeta,
+        ),
       );
     }
     if (data.containsKey('day_key')) {
@@ -13397,6 +13610,14 @@ class $NoteLocalDraftsTable extends NoteLocalDrafts
         DriftSqlType.string,
         data['${effectivePrefix}body'],
       )!,
+      recordTimeSeconds: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}record_time_seconds'],
+      ),
+      recordUtcOffsetMinutes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}record_utc_offset_minutes'],
+      ),
       dayKey: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}day_key'],
@@ -13461,6 +13682,12 @@ class NoteLocalDraftRecord extends DataClass
   /// 未提交正文。
   final String body;
 
+  /// 固定记录时钟的当日秒数；旧记录由创建时刻推导。
+  final int? recordTimeSeconds;
+
+  /// 设定记录时间时的 UTC 偏移分钟。
+  final int? recordUtcOffsetMinutes;
+
   /// 归档自然日。
   final String dayKey;
 
@@ -13479,7 +13706,7 @@ class NoteLocalDraftRecord extends DataClass
   /// 创建时设备时区。
   final String? creationTimezone;
 
-  /// 是否明确修改归档日。
+  /// 是否明确修改记录日期或时分秒。
   final bool dateEdited;
 
   /// 是否尚未发布为正式笔记。
@@ -13497,6 +13724,8 @@ class NoteLocalDraftRecord extends DataClass
     required this.id,
     required this.noteId,
     required this.body,
+    this.recordTimeSeconds,
+    this.recordUtcOffsetMinutes,
     required this.dayKey,
     required this.baseRevision,
     required this.tags,
@@ -13515,6 +13744,12 @@ class NoteLocalDraftRecord extends DataClass
     map['id'] = Variable<String>(id);
     map['note_id'] = Variable<String>(noteId);
     map['body'] = Variable<String>(body);
+    if (!nullToAbsent || recordTimeSeconds != null) {
+      map['record_time_seconds'] = Variable<int>(recordTimeSeconds);
+    }
+    if (!nullToAbsent || recordUtcOffsetMinutes != null) {
+      map['record_utc_offset_minutes'] = Variable<int>(recordUtcOffsetMinutes);
+    }
     map['day_key'] = Variable<String>(dayKey);
     map['base_revision'] = Variable<String>(baseRevision);
     map['tags'] = Variable<String>(tags);
@@ -13540,6 +13775,12 @@ class NoteLocalDraftRecord extends DataClass
       id: Value(id),
       noteId: Value(noteId),
       body: Value(body),
+      recordTimeSeconds: recordTimeSeconds == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recordTimeSeconds),
+      recordUtcOffsetMinutes: recordUtcOffsetMinutes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recordUtcOffsetMinutes),
       dayKey: Value(dayKey),
       baseRevision: Value(baseRevision),
       tags: Value(tags),
@@ -13569,6 +13810,10 @@ class NoteLocalDraftRecord extends DataClass
       id: serializer.fromJson<String>(json['id']),
       noteId: serializer.fromJson<String>(json['noteId']),
       body: serializer.fromJson<String>(json['body']),
+      recordTimeSeconds: serializer.fromJson<int?>(json['recordTimeSeconds']),
+      recordUtcOffsetMinutes: serializer.fromJson<int?>(
+        json['recordUtcOffsetMinutes'],
+      ),
       dayKey: serializer.fromJson<String>(json['dayKey']),
       baseRevision: serializer.fromJson<String>(json['baseRevision']),
       tags: serializer.fromJson<String>(json['tags']),
@@ -13589,6 +13834,8 @@ class NoteLocalDraftRecord extends DataClass
       'id': serializer.toJson<String>(id),
       'noteId': serializer.toJson<String>(noteId),
       'body': serializer.toJson<String>(body),
+      'recordTimeSeconds': serializer.toJson<int?>(recordTimeSeconds),
+      'recordUtcOffsetMinutes': serializer.toJson<int?>(recordUtcOffsetMinutes),
       'dayKey': serializer.toJson<String>(dayKey),
       'baseRevision': serializer.toJson<String>(baseRevision),
       'tags': serializer.toJson<String>(tags),
@@ -13607,6 +13854,8 @@ class NoteLocalDraftRecord extends DataClass
     String? id,
     String? noteId,
     String? body,
+    Value<int?> recordTimeSeconds = const Value.absent(),
+    Value<int?> recordUtcOffsetMinutes = const Value.absent(),
     String? dayKey,
     String? baseRevision,
     String? tags,
@@ -13622,6 +13871,12 @@ class NoteLocalDraftRecord extends DataClass
     id: id ?? this.id,
     noteId: noteId ?? this.noteId,
     body: body ?? this.body,
+    recordTimeSeconds: recordTimeSeconds.present
+        ? recordTimeSeconds.value
+        : this.recordTimeSeconds,
+    recordUtcOffsetMinutes: recordUtcOffsetMinutes.present
+        ? recordUtcOffsetMinutes.value
+        : this.recordUtcOffsetMinutes,
     dayKey: dayKey ?? this.dayKey,
     baseRevision: baseRevision ?? this.baseRevision,
     tags: tags ?? this.tags,
@@ -13641,6 +13896,12 @@ class NoteLocalDraftRecord extends DataClass
       id: data.id.present ? data.id.value : this.id,
       noteId: data.noteId.present ? data.noteId.value : this.noteId,
       body: data.body.present ? data.body.value : this.body,
+      recordTimeSeconds: data.recordTimeSeconds.present
+          ? data.recordTimeSeconds.value
+          : this.recordTimeSeconds,
+      recordUtcOffsetMinutes: data.recordUtcOffsetMinutes.present
+          ? data.recordUtcOffsetMinutes.value
+          : this.recordUtcOffsetMinutes,
       dayKey: data.dayKey.present ? data.dayKey.value : this.dayKey,
       baseRevision: data.baseRevision.present
           ? data.baseRevision.value
@@ -13671,6 +13932,8 @@ class NoteLocalDraftRecord extends DataClass
           ..write('id: $id, ')
           ..write('noteId: $noteId, ')
           ..write('body: $body, ')
+          ..write('recordTimeSeconds: $recordTimeSeconds, ')
+          ..write('recordUtcOffsetMinutes: $recordUtcOffsetMinutes, ')
           ..write('dayKey: $dayKey, ')
           ..write('baseRevision: $baseRevision, ')
           ..write('tags: $tags, ')
@@ -13691,6 +13954,8 @@ class NoteLocalDraftRecord extends DataClass
     id,
     noteId,
     body,
+    recordTimeSeconds,
+    recordUtcOffsetMinutes,
     dayKey,
     baseRevision,
     tags,
@@ -13710,6 +13975,8 @@ class NoteLocalDraftRecord extends DataClass
           other.id == this.id &&
           other.noteId == this.noteId &&
           other.body == this.body &&
+          other.recordTimeSeconds == this.recordTimeSeconds &&
+          other.recordUtcOffsetMinutes == this.recordUtcOffsetMinutes &&
           other.dayKey == this.dayKey &&
           other.baseRevision == this.baseRevision &&
           other.tags == this.tags &&
@@ -13727,6 +13994,8 @@ class NoteLocalDraftsCompanion extends UpdateCompanion<NoteLocalDraftRecord> {
   final Value<String> id;
   final Value<String> noteId;
   final Value<String> body;
+  final Value<int?> recordTimeSeconds;
+  final Value<int?> recordUtcOffsetMinutes;
   final Value<String> dayKey;
   final Value<String> baseRevision;
   final Value<String> tags;
@@ -13743,6 +14012,8 @@ class NoteLocalDraftsCompanion extends UpdateCompanion<NoteLocalDraftRecord> {
     this.id = const Value.absent(),
     this.noteId = const Value.absent(),
     this.body = const Value.absent(),
+    this.recordTimeSeconds = const Value.absent(),
+    this.recordUtcOffsetMinutes = const Value.absent(),
     this.dayKey = const Value.absent(),
     this.baseRevision = const Value.absent(),
     this.tags = const Value.absent(),
@@ -13760,6 +14031,8 @@ class NoteLocalDraftsCompanion extends UpdateCompanion<NoteLocalDraftRecord> {
     required String id,
     required String noteId,
     this.body = const Value.absent(),
+    this.recordTimeSeconds = const Value.absent(),
+    this.recordUtcOffsetMinutes = const Value.absent(),
     required String dayKey,
     required String baseRevision,
     this.tags = const Value.absent(),
@@ -13781,6 +14054,8 @@ class NoteLocalDraftsCompanion extends UpdateCompanion<NoteLocalDraftRecord> {
     Expression<String>? id,
     Expression<String>? noteId,
     Expression<String>? body,
+    Expression<int>? recordTimeSeconds,
+    Expression<int>? recordUtcOffsetMinutes,
     Expression<String>? dayKey,
     Expression<String>? baseRevision,
     Expression<String>? tags,
@@ -13798,6 +14073,9 @@ class NoteLocalDraftsCompanion extends UpdateCompanion<NoteLocalDraftRecord> {
       if (id != null) 'id': id,
       if (noteId != null) 'note_id': noteId,
       if (body != null) 'body': body,
+      if (recordTimeSeconds != null) 'record_time_seconds': recordTimeSeconds,
+      if (recordUtcOffsetMinutes != null)
+        'record_utc_offset_minutes': recordUtcOffsetMinutes,
       if (dayKey != null) 'day_key': dayKey,
       if (baseRevision != null) 'base_revision': baseRevision,
       if (tags != null) 'tags': tags,
@@ -13817,6 +14095,8 @@ class NoteLocalDraftsCompanion extends UpdateCompanion<NoteLocalDraftRecord> {
     Value<String>? id,
     Value<String>? noteId,
     Value<String>? body,
+    Value<int?>? recordTimeSeconds,
+    Value<int?>? recordUtcOffsetMinutes,
     Value<String>? dayKey,
     Value<String>? baseRevision,
     Value<String>? tags,
@@ -13834,6 +14114,9 @@ class NoteLocalDraftsCompanion extends UpdateCompanion<NoteLocalDraftRecord> {
       id: id ?? this.id,
       noteId: noteId ?? this.noteId,
       body: body ?? this.body,
+      recordTimeSeconds: recordTimeSeconds ?? this.recordTimeSeconds,
+      recordUtcOffsetMinutes:
+          recordUtcOffsetMinutes ?? this.recordUtcOffsetMinutes,
       dayKey: dayKey ?? this.dayKey,
       baseRevision: baseRevision ?? this.baseRevision,
       tags: tags ?? this.tags,
@@ -13860,6 +14143,14 @@ class NoteLocalDraftsCompanion extends UpdateCompanion<NoteLocalDraftRecord> {
     }
     if (body.present) {
       map['body'] = Variable<String>(body.value);
+    }
+    if (recordTimeSeconds.present) {
+      map['record_time_seconds'] = Variable<int>(recordTimeSeconds.value);
+    }
+    if (recordUtcOffsetMinutes.present) {
+      map['record_utc_offset_minutes'] = Variable<int>(
+        recordUtcOffsetMinutes.value,
+      );
     }
     if (dayKey.present) {
       map['day_key'] = Variable<String>(dayKey.value);
@@ -13906,6 +14197,8 @@ class NoteLocalDraftsCompanion extends UpdateCompanion<NoteLocalDraftRecord> {
           ..write('id: $id, ')
           ..write('noteId: $noteId, ')
           ..write('body: $body, ')
+          ..write('recordTimeSeconds: $recordTimeSeconds, ')
+          ..write('recordUtcOffsetMinutes: $recordUtcOffsetMinutes, ')
           ..write('dayKey: $dayKey, ')
           ..write('baseRevision: $baseRevision, ')
           ..write('tags: $tags, ')
@@ -21584,7 +21877,10 @@ typedef $$NoteEntriesTableCreateCompanionBuilder =
     NoteEntriesCompanion Function({
       required String id,
       Value<String> body,
+      Value<int?> recordTimeSeconds,
+      Value<int?> recordUtcOffsetMinutes,
       required String dayKey,
+      Value<bool> isPinned,
       Value<String> tags,
       required String revision,
       required DateTime createdAt,
@@ -21597,7 +21893,10 @@ typedef $$NoteEntriesTableUpdateCompanionBuilder =
     NoteEntriesCompanion Function({
       Value<String> id,
       Value<String> body,
+      Value<int?> recordTimeSeconds,
+      Value<int?> recordUtcOffsetMinutes,
       Value<String> dayKey,
+      Value<bool> isPinned,
       Value<String> tags,
       Value<String> revision,
       Value<DateTime> createdAt,
@@ -21626,8 +21925,23 @@ class $$NoteEntriesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<int> get recordTimeSeconds => $composableBuilder(
+    column: $table.recordTimeSeconds,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get recordUtcOffsetMinutes => $composableBuilder(
+    column: $table.recordUtcOffsetMinutes,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get dayKey => $composableBuilder(
     column: $table.dayKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -21681,8 +21995,23 @@ class $$NoteEntriesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get recordTimeSeconds => $composableBuilder(
+    column: $table.recordTimeSeconds,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get recordUtcOffsetMinutes => $composableBuilder(
+    column: $table.recordUtcOffsetMinutes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get dayKey => $composableBuilder(
     column: $table.dayKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -21732,8 +22061,21 @@ class $$NoteEntriesTableAnnotationComposer
   GeneratedColumn<String> get body =>
       $composableBuilder(column: $table.body, builder: (column) => column);
 
+  GeneratedColumn<int> get recordTimeSeconds => $composableBuilder(
+    column: $table.recordTimeSeconds,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get recordUtcOffsetMinutes => $composableBuilder(
+    column: $table.recordUtcOffsetMinutes,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<String> get dayKey =>
       $composableBuilder(column: $table.dayKey, builder: (column) => column);
+
+  GeneratedColumn<bool> get isPinned =>
+      $composableBuilder(column: $table.isPinned, builder: (column) => column);
 
   GeneratedColumn<String> get tags =>
       $composableBuilder(column: $table.tags, builder: (column) => column);
@@ -21789,7 +22131,10 @@ class $$NoteEntriesTableTableManager
               ({
                 Value<String> id = const Value.absent(),
                 Value<String> body = const Value.absent(),
+                Value<int?> recordTimeSeconds = const Value.absent(),
+                Value<int?> recordUtcOffsetMinutes = const Value.absent(),
                 Value<String> dayKey = const Value.absent(),
+                Value<bool> isPinned = const Value.absent(),
                 Value<String> tags = const Value.absent(),
                 Value<String> revision = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -21800,7 +22145,10 @@ class $$NoteEntriesTableTableManager
               }) => NoteEntriesCompanion(
                 id: id,
                 body: body,
+                recordTimeSeconds: recordTimeSeconds,
+                recordUtcOffsetMinutes: recordUtcOffsetMinutes,
                 dayKey: dayKey,
+                isPinned: isPinned,
                 tags: tags,
                 revision: revision,
                 createdAt: createdAt,
@@ -21813,7 +22161,10 @@ class $$NoteEntriesTableTableManager
               ({
                 required String id,
                 Value<String> body = const Value.absent(),
+                Value<int?> recordTimeSeconds = const Value.absent(),
+                Value<int?> recordUtcOffsetMinutes = const Value.absent(),
                 required String dayKey,
+                Value<bool> isPinned = const Value.absent(),
                 Value<String> tags = const Value.absent(),
                 required String revision,
                 required DateTime createdAt,
@@ -21824,7 +22175,10 @@ class $$NoteEntriesTableTableManager
               }) => NoteEntriesCompanion.insert(
                 id: id,
                 body: body,
+                recordTimeSeconds: recordTimeSeconds,
+                recordUtcOffsetMinutes: recordUtcOffsetMinutes,
                 dayKey: dayKey,
+                isPinned: isPinned,
                 tags: tags,
                 revision: revision,
                 createdAt: createdAt,
@@ -22781,6 +23135,8 @@ typedef $$NoteLocalDraftsTableCreateCompanionBuilder =
       required String id,
       required String noteId,
       Value<String> body,
+      Value<int?> recordTimeSeconds,
+      Value<int?> recordUtcOffsetMinutes,
       required String dayKey,
       required String baseRevision,
       Value<String> tags,
@@ -22799,6 +23155,8 @@ typedef $$NoteLocalDraftsTableUpdateCompanionBuilder =
       Value<String> id,
       Value<String> noteId,
       Value<String> body,
+      Value<int?> recordTimeSeconds,
+      Value<int?> recordUtcOffsetMinutes,
       Value<String> dayKey,
       Value<String> baseRevision,
       Value<String> tags,
@@ -22834,6 +23192,16 @@ class $$NoteLocalDraftsTableFilterComposer
 
   ColumnFilters<String> get body => $composableBuilder(
     column: $table.body,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get recordTimeSeconds => $composableBuilder(
+    column: $table.recordTimeSeconds,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get recordUtcOffsetMinutes => $composableBuilder(
+    column: $table.recordUtcOffsetMinutes,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -22917,6 +23285,16 @@ class $$NoteLocalDraftsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get recordTimeSeconds => $composableBuilder(
+    column: $table.recordTimeSeconds,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get recordUtcOffsetMinutes => $composableBuilder(
+    column: $table.recordUtcOffsetMinutes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get dayKey => $composableBuilder(
     column: $table.dayKey,
     builder: (column) => ColumnOrderings(column),
@@ -22990,6 +23368,16 @@ class $$NoteLocalDraftsTableAnnotationComposer
 
   GeneratedColumn<String> get body =>
       $composableBuilder(column: $table.body, builder: (column) => column);
+
+  GeneratedColumn<int> get recordTimeSeconds => $composableBuilder(
+    column: $table.recordTimeSeconds,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get recordUtcOffsetMinutes => $composableBuilder(
+    column: $table.recordUtcOffsetMinutes,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get dayKey =>
       $composableBuilder(column: $table.dayKey, builder: (column) => column);
@@ -23075,6 +23463,8 @@ class $$NoteLocalDraftsTableTableManager
                 Value<String> id = const Value.absent(),
                 Value<String> noteId = const Value.absent(),
                 Value<String> body = const Value.absent(),
+                Value<int?> recordTimeSeconds = const Value.absent(),
+                Value<int?> recordUtcOffsetMinutes = const Value.absent(),
                 Value<String> dayKey = const Value.absent(),
                 Value<String> baseRevision = const Value.absent(),
                 Value<String> tags = const Value.absent(),
@@ -23091,6 +23481,8 @@ class $$NoteLocalDraftsTableTableManager
                 id: id,
                 noteId: noteId,
                 body: body,
+                recordTimeSeconds: recordTimeSeconds,
+                recordUtcOffsetMinutes: recordUtcOffsetMinutes,
                 dayKey: dayKey,
                 baseRevision: baseRevision,
                 tags: tags,
@@ -23109,6 +23501,8 @@ class $$NoteLocalDraftsTableTableManager
                 required String id,
                 required String noteId,
                 Value<String> body = const Value.absent(),
+                Value<int?> recordTimeSeconds = const Value.absent(),
+                Value<int?> recordUtcOffsetMinutes = const Value.absent(),
                 required String dayKey,
                 required String baseRevision,
                 Value<String> tags = const Value.absent(),
@@ -23125,6 +23519,8 @@ class $$NoteLocalDraftsTableTableManager
                 id: id,
                 noteId: noteId,
                 body: body,
+                recordTimeSeconds: recordTimeSeconds,
+                recordUtcOffsetMinutes: recordUtcOffsetMinutes,
                 dayKey: dayKey,
                 baseRevision: baseRevision,
                 tags: tags,

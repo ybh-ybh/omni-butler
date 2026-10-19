@@ -642,6 +642,349 @@ void main() {
     }
   });
 
+  test('v24旧SDK正文队列升级后不补置顶字段，保留事务身份并可失败重试', () async {
+    // 独立文件经历旧SQLite、旧RawTable队列及新运行时的完整重开流程。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni-pin-old-queue-',
+    );
+    // 新旧运行时共用的测试文件。
+    final String databasePath = '${directory.path}/notes.sqlite';
+    // 生产身份格式的目标笔记。
+    const String id = '01990000-7000-8002-8000-000000000521';
+    // 旧版正文保存产生的版本身份。
+    const String revision = '01990000-7000-8002-8000-000000000522';
+    // 创建旧结构夹具；此时尚未安装任何同步写入触发器。
+    final AppDatabase fixture = AppDatabase.forTesting(
+      NativeDatabase(File(databasePath)),
+    );
+    // 旧正文及版本可用于真实PATCH的基线。
+    final NoteEntryRecord original;
+    try {
+      original = (await NoteRepository(fixture).save(
+        const NoteDraft(
+          id: id,
+          body: '旧正文',
+          dayKey: '2024-01-01',
+          baseRevision: '',
+          recordTimeSeconds: 3600,
+          recordUtcOffsetMinutes: 480,
+        ),
+      ))!;
+      await fixture.customStatement(
+        'ALTER TABLE note_entries DROP COLUMN is_pinned',
+      );
+      await fixture.customStatement('PRAGMA user_version = 24');
+    } finally {
+      await fixture.close();
+    }
+    // 固定复现schema9的笔记白名单，确保新增置顶字段完全不参与旧触发器。
+    final RawTable oldNotes = RawTable.inferred(
+      name: 'note_entries',
+      schema: const RawTableSchema(
+        syncedColumns: [
+          'body',
+          'day_key',
+          'record_time_seconds',
+          'record_utc_offset_minutes',
+          'creation_timezone',
+          'tags',
+          'revision',
+          'created_at',
+          'updated_at',
+          'deleted_at',
+        ],
+        options: TableOptions(
+          ignoreEmptyUpdates: true,
+          trackPreviousValues: TrackPreviousValuesOptions(
+            columnFilter: [
+              'tags',
+              'day_key',
+              'record_time_seconds',
+              'record_utc_offset_minutes',
+            ],
+            onlyWhenChanged: false,
+          ),
+        ),
+      ),
+      clear: 'DELETE FROM "note_entries"',
+    );
+    // 其余表沿用原定义，只有笔记白名单与当前schema不同。
+    final Schema oldSchema = Schema(
+      const <Table>[
+        Table.localOnly('device_sync_metadata', <Column>[Column.text('value')]),
+      ],
+      rawTables: [
+        for (final RawTable table in omniSyncSchema.rawTables)
+          table.name == 'note_entries' ? oldNotes : table,
+      ],
+    );
+    // 由真实SDK触发器生成持久化旧队列，而非手工插入powersync_crud。
+    final PowerSyncDatabase legacy = PowerSyncDatabase(
+      schema: oldSchema,
+      path: databasePath,
+    );
+    // 重开前捕获原事务身份以验证升级没有重建或折叠队列。
+    late String transactionId;
+    try {
+      await legacy.initialize();
+      await legacy.execute(
+        'INSERT INTO device_sync_metadata(id, value) VALUES(?, ?)',
+        ['owner', '01990000-7000-8002-8000-000000000099'],
+      );
+      // 旧版正文保存会在同一事务写版本和正式记录。
+      for (final RawTable table in [
+        oldNotes,
+        omniSyncSchema.rawTables.singleWhere(
+          (table) => table.name == 'note_versions',
+        ),
+      ]) {
+        for (final String operation in ['INSERT', 'UPDATE']) {
+          await legacy.execute(
+            'SELECT powersync_create_raw_table_crud_trigger(?, ?, ?)',
+            [
+              jsonEncode(table),
+              'powersync_${table.name}_${operation.toLowerCase()}',
+              operation,
+            ],
+          );
+        }
+      }
+      await legacy.writeTransaction((transaction) async {
+        await transaction.execute(
+          'INSERT INTO note_versions(id, note_id, body, base_revision, revision, created_at) VALUES(?, ?, ?, ?, ?, ?)',
+          [
+            revision,
+            id,
+            '离线正文',
+            original.revision,
+            revision,
+            original.updatedAt.toUtc().toIso8601String(),
+          ],
+        );
+        await transaction.execute(
+          'UPDATE note_entries SET body = ?, revision = ?, updated_at = ? WHERE id = ?',
+          [
+            '离线正文',
+            revision,
+            original.updatedAt
+                .add(const Duration(seconds: 1))
+                .toUtc()
+                .toIso8601String(),
+            id,
+          ],
+        );
+      });
+      // 旧队列必须真实包含正文PATCH且从未记录置顶字段。
+      final CrudTransaction queued = (await legacy.getNextCrudTransaction())!;
+      transactionId = queued.transactionId.toString();
+      expect(queued.crud, hasLength(2));
+      expect(queued.crud.last.op, UpdateType.patch);
+      expect(queued.crud.last.opData!['body'], '离线正文');
+      expect(queued.crud.last.opData!.containsKey('is_pinned'), isFalse);
+    } finally {
+      await legacy.close();
+    }
+    // 当前生产运行时升级SQLite并重新安装schema10触发器。
+    final _RecordingAuth auth = _RecordingAuth();
+    // 上传只使用本机隔离数据库和捕获请求的替身。
+    final OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      databasePath,
+    );
+    try {
+      expect(
+        (await NoteRepository(runtime.database).find(id))!.isPinned,
+        isFalse,
+      );
+      // 后续主动置顶进入另一事务，上传旧正文时当前行已经为true。
+      await NoteRepository(runtime.database).setPinned(id, true);
+      auth.loseResponse = true;
+      await expectLater(
+        OmniPowerSyncConnector(auth).uploadData(runtime.powerSync),
+        throwsA(isA<ApiFailure>()),
+      );
+      expect(auth.requests.single['transactionId'], transactionId);
+      // 服务端已置顶的笔记处理这一PATCH时，不应收到默认false或当前true。
+      final Map oldPatch =
+          (auth.requests.single['operations'] as List).singleWhere(
+            (operation) => operation['table'] == 'note_entries',
+          ) as Map;
+      expect(oldPatch['op'], 'PATCH');
+      expect(oldPatch['data']['body'], '离线正文');
+      expect((oldPatch['data'] as Map).containsKey('is_pinned'), isFalse);
+      auth.loseResponse = false;
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      expect(auth.requests[1], auth.requests[0]);
+      expect(
+        (auth.requests.last['operations'] as List).single['data']['is_pinned'],
+        true,
+      );
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 0);
+    } finally {
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('笔记置顶PUT和PATCH上传布尔，重试保持原意图且正文编辑不覆盖状态', () async {
+    // 生产PowerSync队列验证SQLite整数转换与真实事务边界。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni-note-pin-',
+    );
+    // 仅记录请求，不连接真实服务端。
+    final _RecordingAuth auth = _RecordingAuth();
+    // 独立测试运行时及真实SQLite文件。
+    final OmniSyncRuntime runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      '${directory.path}/notes.sqlite',
+    );
+    try {
+      // 笔记仓储复用正式同步桥接。
+      final NoteRepository repository = NoteRepository(runtime.database);
+      // UUID符合生产服务端身份契约。
+      const String id = '01990000-7000-8002-8000-000000000511';
+      // 进入编辑器时的旧正式状态。
+      final NoteEntryRecord original = (await repository.save(
+        const NoteDraft(
+          id: id,
+          body: '正文',
+          dayKey: '2024-01-01',
+          baseRevision: '',
+        ),
+      ))!;
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      // 完整PUT包含默认false，不能发送SQLite整数。
+      final Map put =
+          (auth.requests
+                  .expand((request) => request['operations'] as List)
+                  .singleWhere(
+                    (operation) => operation['table'] == 'note_entries',
+                  ))
+              as Map;
+      expect(put['data']['is_pinned'], false);
+      auth.requests.clear();
+      await repository.setPinned(id, true);
+      await repository.setPinned(id, false);
+      auth.loseResponse = true;
+      await expectLater(
+        OmniPowerSyncConnector(auth).uploadData(runtime.powerSync),
+        throwsA(isA<ApiFailure>()),
+      );
+      expect(
+        (auth.requests.single['operations'] as List)
+            .single['data']['is_pinned'],
+        true,
+      );
+      auth.loseResponse = false;
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      expect(auth.requests[1], auth.requests[0]);
+      expect(
+        (auth.requests.last['operations'] as List).single['data']['is_pinned'],
+        false,
+      );
+      auth.requests.clear();
+      await repository.save(
+        NoteDraft(
+          id: id,
+          body: '旧草稿保存',
+          dayKey: original.dayKey,
+          baseRevision: original.revision,
+        ),
+      );
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      // 常规正文保存的PATCH不携带旧置顶值。
+      for (final Map operation in auth.requests.expand(
+        (request) => (request['operations'] as List).cast<Map>(),
+      )) {
+        if (operation['table'] == 'note_entries') {
+          expect((operation['data'] as Map).containsKey('is_pinned'), isFalse);
+        }
+      }
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 0);
+    } finally {
+      await runtime.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('记录时间仅改日期或秒数仍上传完整选择组，重启重试不读取最新行', () async {
+    // 每次测试使用真实的独立 PowerSync 文件及持久队列。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_record_time_retry_',
+    );
+    final String databasePath = '${directory.path}/db.sqlite';
+    final _RecordingAuth auth = _RecordingAuth();
+    OmniSyncRuntime? runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      databasePath,
+    );
+    try {
+      // 原始时间、日期和偏移会进入完整 PUT。
+      final NoteRepository repository = NoteRepository(runtime.database);
+      await repository.save(
+        NoteDraft(
+          id: '01990000-7000-8002-8000-000000000501',
+          body: '正文',
+          dayKey: '2024-01-02',
+          baseRevision: '',
+          createdAt: DateTime.utc(2024, 1, 2),
+          creationTimezone: 'CST|+08:00',
+          recordTimeSeconds: 3600,
+          recordUtcOffsetMinutes: 480,
+        ),
+      );
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      auth.requests.clear();
+      // 第一次只改日期，第二次只改时钟，上传时当前表已是第二次选择。
+      await repository.updateRecordTime(
+        '01990000-7000-8002-8000-000000000501',
+        const NoteRecordTime('2023-12-31', 3600, 480),
+      );
+      await repository.updateRecordTime(
+        '01990000-7000-8002-8000-000000000501',
+        const NoteRecordTime('2023-12-31', 7200, 480),
+      );
+      // SDK确实裁去未变列，持久前值必须能恢复当时的完整时间。
+      final CrudTransaction? queued = await runtime.powerSync
+          .getNextCrudTransaction();
+      expect(
+        queued!.crud.single.opData!.containsKey('record_time_seconds'),
+        isFalse,
+      );
+      expect(queued.crud.single.previousValues?['record_time_seconds'], 3600);
+      auth.loseResponse = true;
+      await expectLater(
+        OmniPowerSyncConnector(auth).uploadData(runtime.powerSync),
+        throwsA(isA<ApiFailure>()),
+      );
+      // 第一次选择不得被当前表7200秒污染。
+      final Map<String, dynamic> first =
+          (auth.requests.single['operations'] as List).single
+              as Map<String, dynamic>;
+      expect(first['data']['day_key'], '2023-12-31');
+      expect(first['data']['record_time_seconds'], 3600);
+      expect(first['data']['record_utc_offset_minutes'], 480);
+      await runtime.close();
+      runtime = null;
+      runtime = await OmniSyncRuntime.openAtPath(auth, databasePath);
+      auth.loseResponse = false;
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      expect(auth.requests, hasLength(3));
+      expect(auth.requests[1], auth.requests[0]);
+      // 后续只改秒数的操作也携带当时未变的日期和偏移。
+      final Map<String, dynamic> last =
+          (auth.requests.last['operations'] as List).single
+              as Map<String, dynamic>;
+      expect(last['data']['day_key'], '2023-12-31');
+      expect(last['data']['record_time_seconds'], 7200);
+      expect(last['data']['record_utc_offset_minutes'], 480);
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 0);
+    } finally {
+      await runtime?.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('结构版本不兼容时停止同步并保留可见错误及未确认队列', () async {
     // 使用真实 PowerSync 引擎证明停止重试和队列保留。
     final Directory directory = await Directory.systemTemp.createTemp(

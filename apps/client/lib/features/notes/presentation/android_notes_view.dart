@@ -1,3 +1,6 @@
+import 'note_record_time_picker.dart';
+import 'note_pin_indicator.dart';
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -263,7 +266,7 @@ class _AndroidNotesViewState extends ConsumerState<AndroidNotesView>
       if (_editorOpen) return;
       ownsSheet = true;
       setState(() => _editorOpen = true);
-      // 历史恢复只替换本篇正文，仍等待用户明确保存。
+      // 历史恢复只替换本篇草稿，点击顶栏或正常退出时正式保存。
       if (version != null) {
         if (version.noteId != session.draft.id || session.frozen) {
           throw StateError('版本所属笔记已不可编辑');

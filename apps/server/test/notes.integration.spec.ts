@@ -156,7 +156,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
   });
 
   /// 用实际 token 请求 HTTP，undefined JSON 不添加无关 body。
-  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '7', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
+  async function request(path: string, method = 'GET', body?: unknown, token: string | null = tokens.accessToken): Promise<Response> { return fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-Omni-Sync-Schema': '10', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); }
   /// 构造稳定真实同步操作。
   function batch(operations: SyncOperationDto[]): { clientId: string; transactionId: string; operations: SyncOperationDto[] } { return { clientId: randomUUID(), transactionId: randomUUID(), operations }; }
   /// 构造可回听的测试 WAV，仅测试存储不向厂商发送此合成文件。
@@ -286,6 +286,143 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
     } finally {
       await upgrade.query('SET search_path TO public'); await upgrade.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); await upgrade.end();
     }
+  });
+  it('两端置顶按接收顺序生效，重放不覆盖新状态且旧正文编辑保留置顶', async () => {
+    // 历史创建负载缺少置顶字段，由数据库默认为 false。
+    const sample = await seed();
+    // 正文与创建事实用于验证置顶差量不会产生额外版本。
+    const original = await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } });
+    expect(original.isPinned).toBe(false);
+    // 两端时钟反序，置顶仍按服务端事务接收顺序采用。
+    const pin = batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { is_pinned: true, updated_at: '2026-10-19T10:00:00Z' } }]);
+    // 明确的取消置顶独立于正文草稿。
+    const unpin = batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { is_pinned: false, updated_at: '2026-10-18T10:00:00Z' } }]);
+    expect((await request('/sync/operations', 'POST', pin)).status).toBe(200);
+    expect((await request('/sync/operations', 'POST', unpin)).status).toBe(200);
+    expect(await (await request('/sync/operations', 'POST', pin)).json()).toMatchObject({ replayed: true });
+    expect(await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).toMatchObject({ isPinned: false, body: original.body, revision: original.revision, createdAt: original.createdAt });
+    expect(await prisma.noteVersion.count({ where: { noteId: sample.noteId } })).toBe(0);
+    await sync.applyBatch(user.sub, batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { is_pinned: true } }]));
+    // 旧设备正文保存不含置顶字段，不能把缓存的未置顶状态覆盖回去。
+    const revision = randomUUID();
+    await sync.applyBatch(user.sub, batch([
+      { op: 'PUT', table: 'note_versions', id: randomUUID(), data: { note_id: sample.noteId, body: '旧草稿正文', base_revision: sample.revision, revision, created_at: new Date().toISOString(), deleted_at: null } },
+      { op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { body: '旧草稿正文', revision } },
+    ]));
+    expect(await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).toMatchObject({ isPinned: true, body: '旧草稿正文', revision });
+    expect(await prisma.noteVersion.count({ where: { noteId: sample.noteId } })).toBe(1);
+    for (const isPinned of [0, 1, 'true', null]) {
+      expect((await request('/sync/operations', 'POST', batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { is_pinned: isPinned } }]))).status).toBe(400);
+    }
+    expect((await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).isPinned).toBe(true);
+  });
+  it('笔记置顶迁移保留旧事实并默认为未置顶', async () => {
+    // 仅在显式隔离测试库内验证 PostgreSQL 增量迁移。
+    const schema = `notes_pinning_${randomUUID().replaceAll('-', '')}`;
+    // 独立连接避免改变应用连接池的 search_path。
+    const upgrade = new Client({ connectionString: databaseUrl }); await upgrade.connect();
+    try {
+      await upgrade.query(`CREATE SCHEMA ${schema}`); await upgrade.query(`SET search_path TO ${schema},public`);
+      await upgrade.query('CREATE TABLE note_entries (id uuid PRIMARY KEY, body text NOT NULL, updated_at timestamptz NOT NULL)');
+      // 升级前真实正文与时间必须逐字段保留。
+      const id = randomUUID();
+      await upgrade.query("INSERT INTO note_entries VALUES($1,'旧正文','2020-01-01T00:00:01Z')", [id]);
+      // 迁移不改旧数据，也不能引入可空置顶状态。
+      const before = (await upgrade.query<Record<string, unknown>>('SELECT * FROM note_entries WHERE id=$1', [id])).rows[0]!;
+      await upgrade.query(readFileSync(join(__dirname, '../prisma/migrations/20261019010000_note_pinning/migration.sql'), 'utf8'));
+      expect((await upgrade.query('SELECT * FROM note_entries WHERE id=$1', [id])).rows[0]).toEqual({ ...before, is_pinned: false });
+      await expect(upgrade.query('UPDATE note_entries SET is_pinned=NULL WHERE id=$1', [id])).rejects.toThrow();
+      await upgrade.query('UPDATE note_entries SET is_pinned=true WHERE id=$1', [id]);
+    } finally {
+      await upgrade.query('SET search_path TO public'); await upgrade.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); await upgrade.end();
+    }
+  });
+  it.each([undefined, true, false])('wire v3 换服快照兼容新旧置顶字段：%s', async (isPinned) => {
+    // 旧版种子故意缺少新元数据字段。
+    const sample = await seed();
+    // 新版置顶快照显式带值，旧版缺失则由数据库默认 false。
+    const operations = sample.operations.map((operation): SyncOperationDto => operation.table === 'note_entries' && isPinned !== undefined ? { ...operation, data: { ...operation.data, is_pinned: isPinned } } : operation);
+    // wire 仍为 v3，原音缺失必须按既有协议显式声明。
+    const input = { syncKey, migrationId: randomUUID(), expectedOwnerId: user.sub, snapshotVersion: 3, omittedAudioIds: [sample.segmentId], operations };
+    expect((await request('/sync/migrations', 'POST', input, null)).status).toBe(200);
+    expect((await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).isPinned).toBe(isPinned ?? false);
+  });
+  it('两端主动记录时间按接收顺序整组生效，重放不覆盖后来修改且不产生正文版本', async () => {
+    // 首次创建保留旧格式，验证新增字段为空的真实存量记录。
+    const sample = await seed();
+    // 修改前完整记录用于核验正文、创建事实和版本身份不变。
+    const original = await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } });
+    // 两端时钟反序，接收顺序仍是唯一覆盖依据。
+    const first = batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { day_key: '2024-02-29', record_time_seconds: 86399, record_utc_offset_minutes: 480, updated_at: '2026-10-19T10:00:00Z' } }]);
+    // 第二设备的时间、偏移必须整体替换第一设备选择。
+    const second = batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { day_key: '2020-01-02', record_time_seconds: 3661, record_utc_offset_minutes: -300, updated_at: '2026-10-18T10:00:00Z' } }]);
+    expect((await request('/sync/operations', 'POST', first)).status).toBe(200);
+    expect((await request('/sync/operations', 'POST', second)).status).toBe(200);
+    expect(await (await request('/sync/operations', 'POST', first)).json()).toMatchObject({ replayed: true });
+    // 旧正文编辑只提交正文相关差量，不应带回缓存中的记录日期。
+    await sync.applyBatch(user.sub, batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { updated_at: new Date().toISOString() } }]));
+    expect(await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).toMatchObject({ dayKey: '2020-01-02', recordTimeSeconds: 3661, recordUtcOffsetMinutes: -300, body: original.body, revision: original.revision, createdAt: original.createdAt, creationTimezone: original.creationTimezone });
+    expect(await prisma.noteVersion.count({ where: { noteId: sample.noteId } })).toBe(0);
+  });
+  it('旧仅日期队列补全当前时间且不改变原始回执摘要，非法新时间整事务回滚', async () => {
+    // 真实存量时间为空，首次旧日期差量必须按创建偏移稳定补全。
+    const sample = await seed();
+    // 使用已保存创建事实计算期望值，不受测试机当前地区影响。
+    const original = await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } });
+    // 创建自然时刻只用于校验兼容默认。
+    const wallTime = new Date(original.createdAt.getTime() + 480 * 60000);
+    // 秒精度舍弃毫秒。
+    const seconds = wallTime.getUTCHours() * 3600 + wallTime.getUTCMinutes() * 60 + wallTime.getUTCSeconds();
+    // 原始请求不包含新字段，重放必须仍匹配同一摘要。
+    const legacy = batch([{ op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { day_key: '2024-01-01' } }]);
+    expect((await request('/sync/operations', 'POST', legacy)).status).toBe(200);
+    expect(legacy.operations[0]!.data).toEqual({ day_key: '2024-01-01' });
+    expect(await (await request('/sync/operations', 'POST', legacy)).json()).toMatchObject({ replayed: true });
+    expect(await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).toMatchObject({ dayKey: '2024-01-01', recordTimeSeconds: seconds, recordUtcOffsetMinutes: 480 });
+    // 先发生的合法差量也必须随未来时间错误回滚。
+    const invalid = batch([
+      { op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { day_key: '2024-02-02' } },
+      { op: 'PATCH', table: 'note_entries', id: sample.noteId, data: { day_key: '2999-01-01', record_time_seconds: 1, record_utc_offset_minutes: 0 } },
+    ]);
+    expect((await request('/sync/operations', 'POST', invalid)).status).toBe(400);
+    expect((await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).dayKey).toBe('2024-01-01');
+    // 数据库约束防止任何绕过同步协议的半组更新。
+    await expect(prisma.noteEntry.update({ where: { id: sample.noteId }, data: { recordTimeSeconds: null } })).rejects.toThrow();
+  });
+  it('记录时间迁移保留旧行所有事实，新增两列为空并限制非法时间组', async () => {
+    // 仅在已确认隔离的测试库内创建独立 schema。
+    const schema = `notes_record_time_${randomUUID().replaceAll('-', '')}`;
+    // 独立连接的 search_path 不影响应用连接池。
+    const upgrade = new Client({ connectionString: databaseUrl }); await upgrade.connect();
+    try {
+      await upgrade.query(`CREATE SCHEMA ${schema}`); await upgrade.query(`SET search_path TO ${schema},public`);
+      // 仅复现升级前最小真实列；本迁移不依赖其他业务表。
+      await upgrade.query('CREATE TABLE note_entries (id uuid PRIMARY KEY, body text NOT NULL, day_key text NOT NULL, created_at timestamptz NOT NULL)');
+      // 老用户曾有未来归档日期，迁移不能据当前选择范围丢弃它。
+      const id = randomUUID();
+      await upgrade.query("INSERT INTO note_entries VALUES($1,'旧正文','2999-12-31','2020-01-01T00:00:01Z')", [id]);
+      // 升级前完整数据库行用于逐字段保留验证。
+      const before = (await upgrade.query<Record<string, unknown>>('SELECT * FROM note_entries WHERE id=$1', [id])).rows[0]!;
+      await upgrade.query(readFileSync(join(__dirname, '../prisma/migrations/20261019000000_note_record_time/migration.sql'), 'utf8'));
+      expect((await upgrade.query('SELECT * FROM note_entries WHERE id=$1', [id])).rows[0]).toEqual({ ...before, record_time_seconds: null, record_utc_offset_minutes: null });
+      await expect(upgrade.query('UPDATE note_entries SET record_time_seconds=0 WHERE id=$1', [id])).rejects.toThrow();
+      await expect(upgrade.query('UPDATE note_entries SET record_time_seconds=86400,record_utc_offset_minutes=0 WHERE id=$1', [id])).rejects.toThrow();
+      await upgrade.query('UPDATE note_entries SET record_time_seconds=86399,record_utc_offset_minutes=-840 WHERE id=$1', [id]);
+    } finally {
+      await upgrade.query('SET search_path TO public'); await upgrade.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); await upgrade.end();
+    }
+  });
+  it('v3 完整换服快照往返记录时间，不把历史归档日期重新判成主动选择', async () => {
+    // 历史快照包含原音元数据，明确省略缺失文件。
+    const sample = await seed();
+    // 新增字段只写入对应的笔记行，其他表保持完整事实。
+    const operations = sample.operations.map((operation): SyncOperationDto => operation.table === 'note_entries' ? { ...operation, data: { ...operation.data, day_key: '2999-12-31', record_time_seconds: 86399, record_utc_offset_minutes: 840 } } : operation);
+    // wire 协议仍为 v3，不因本机快照升级而改变幂等内容定义。
+    const input = { syncKey, migrationId: randomUUID(), expectedOwnerId: user.sub, snapshotVersion: 3, omittedAudioIds: [sample.segmentId], operations };
+    // 迁移成功后旧 JWT 被撤销，直接检验新归属数据。
+    const response = await request('/sync/migrations', 'POST', input, null);
+    expect(response.status).toBe(200);
+    expect(await prisma.noteEntry.findUniqueOrThrow({ where: { id: sample.noteId } })).toMatchObject({ dayKey: '2999-12-31', recordTimeSeconds: 86399, recordUtcOffsetMinutes: 840 });
   });
   it('并发识别只持久创建/提交一次，结果保留原文且不覆盖用户正文', async () => {
     // 已上传的原音。

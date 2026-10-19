@@ -6,7 +6,7 @@ streams:
     auto_subscribe: true
     queries:
       - >-
-        SELECT id, body, day_key, creation_timezone, tags, revision,
+        SELECT id, body, day_key, record_time_seconds, record_utc_offset_minutes, is_pinned, creation_timezone, tags, revision,
         created_at, updated_at, deleted_at FROM note_entries WHERE user_id = auth.user_id()
       - >-
         SELECT id, note_id, body, base_revision, revision, created_at, deleted_at
