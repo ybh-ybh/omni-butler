@@ -7,6 +7,7 @@ import { SyncModule } from './sync/sync.module';
 import { validateEnvironment } from './config/environment';
 import { ImagesModule } from './images/images.module';
 import { NotesModule } from './notes/notes.module';
+import { BusinessModule } from './business/business.module';
 
 /// Omni Butler 服务端根模块。
 @Module({
@@ -22,6 +23,7 @@ import { NotesModule } from './notes/notes.module';
     SyncModule,
     ImagesModule,
     NotesModule,
+    BusinessModule,
   ],
 })
 export class AppModule {}

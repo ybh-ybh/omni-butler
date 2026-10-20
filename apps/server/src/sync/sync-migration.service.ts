@@ -13,7 +13,7 @@ import type {
   MigrationStatusDto,
   SyncMigrationDto,
 } from './dto/sync-migration.dto';
-import { reconcileSync } from './sync-consistency';
+import { reconcileSync, taxonomyRecordTables } from './sync-consistency';
 import { SyncSqlBuilder, writableColumns } from './sync-sql.builder';
 import { canonicalize } from './sync.service';
 import { syncSchemaVersion } from './sync-schema';
@@ -33,13 +33,6 @@ const references: Record<string, Record<string, string>> = {
   event_completions: { event_id: 'events' },
   inventory_items: { parent_item_id: 'inventory_items' },
   membership_payments: { membership_id: 'memberships' },
-};
-/// 客户端 TaxonomyModule 的业务记录表映射。
-const taxonomyRecordTables: Record<string, string> = {
-  inventory: 'inventory_items',
-  timeline: 'time_entries',
-  membership: 'memberships',
-  notes: 'note_entries',
 };
 
 /// 跨重建保留的迁移结果；superseded 不允许本地激活。

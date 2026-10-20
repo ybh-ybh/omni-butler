@@ -563,6 +563,8 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
       await upgrade.query(`SET search_path TO ${schema},public`);
       await upgrade.query('CREATE TABLE taxonomy_entries (LIKE public.taxonomy_entries INCLUDING ALL)');
       await upgrade.query('ALTER TABLE taxonomy_entries DROP CONSTRAINT taxonomy_notes_category_retired');
+      // LIKE 当前表也复制了后续颜色退休约束，旧结构夹具需一并移除。
+      await upgrade.query('ALTER TABLE taxonomy_entries DROP CONSTRAINT note_tags_have_no_color');
       await upgrade.query('CREATE TABLE record_taxonomy_links (LIKE public.record_taxonomy_links INCLUDING ALL)');
       await upgrade.query('ALTER TABLE record_taxonomy_links ADD FOREIGN KEY(user_id,taxonomy_id) REFERENCES taxonomy_entries(user_id,id) ON DELETE CASCADE');
       await upgrade.query('CREATE TABLE note_entries (LIKE public.note_entries INCLUDING ALL)');

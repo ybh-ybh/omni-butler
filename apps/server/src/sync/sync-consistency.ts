@@ -4,8 +4,13 @@ import type { Prisma } from '../generated/prisma/client';
 import type { SyncOperationDto } from './dto/sync-operation.dto';
 import { reconcileNotes } from './note-sync';
 
+/// 多态分类关系的现有业务表映射，迁移与增量同步共用。
+export const taxonomyRecordTables: Readonly<Record<string, string>> = {
+  inventory: 'inventory_items', timeline: 'time_entries', membership: 'memberships', notes: 'note_entries',
+};
+
 /// 与客户端 stableBusinessId 使用相同 URL 命名空间和编码规则。
-function stableBusinessId(kind: string, parts: string[]): string {
+export function stableBusinessId(kind: string, parts: string[]): string {
   // RFC 9562 URL 命名空间的十六进制字节。
   const namespace = Buffer.from('6ba7b8119dad11d180b400c04fd430c8', 'hex');
   // 与 Dart Uri.encodeComponent 保持一致的业务名称。
@@ -111,6 +116,7 @@ export async function reconcileSync(
   userId: string,
   operations: SyncOperationDto[],
 ): Promise<void> {
+  if (operations.some((operation) => operation.table === 'record_taxonomy_links')) await reconcileTaxonomyReferences(transaction, userId, operations);
   if (operations.some((operation) => operation.table.startsWith('note_') || operation.table === 'taxonomy_entries')) await reconcileNotes(transaction, userId);
   if (
     operations.some(
@@ -128,6 +134,35 @@ export async function reconcileSync(
     )
   ) {
     await reconcileTodos(transaction, userId);
+  }
+}
+
+/// 多态引用只能在完整批次写完后校验，允许子链接先于父记录上传。
+async function reconcileTaxonomyReferences(transaction: Prisma.TransactionClient, userId: string, operations: SyncOperationDto[]): Promise<void> {
+  // 只对本次新增/修改的链接校验，不拒绝无关历史数据。
+  const ids = [...new Set(operations.filter((operation) => operation.table === 'record_taxonomy_links' && operation.op !== 'DELETE').map((operation) => operation.id))];
+  if (!ids.length) return;
+  // 即使父 DELETE 排在链接 PUT 后面，永久删除仍然优先。
+  for (const [module, table] of Object.entries(taxonomyRecordTables)) {
+    await transaction.$executeRaw`DELETE FROM record_taxonomy_links AS link USING sync_tombstones AS tombstone
+      WHERE link.user_id=${userId}::uuid AND link.module=${module}
+        AND tombstone.user_id=link.user_id AND tombstone.table_name=${table} AND tombstone.record_id=link.record_id`;
+  }
+  // 未知模块不能成为逃避多态闭包检查的通路。
+  const unknown = await transaction.recordTaxonomyLink.findFirst({ where: { userId, id: { in: ids }, module: { notIn: Object.keys(taxonomyRecordTables) } } });
+  if (unknown) throw new BadRequestException('不支持的业务分类模块');
+  for (const [module, table] of Object.entries(taxonomyRecordTables)) {
+    // 表名只来自固定服务端映射，用户值仍全部使用参数。
+    const invalid = await transaction.$queryRawUnsafe<Array<{ id: string }>>(
+      `SELECT link.id FROM record_taxonomy_links AS link
+       LEFT JOIN "${table}" AS target ON target.user_id=link.user_id AND target.id=link.record_id
+       LEFT JOIN taxonomy_entries AS taxonomy ON taxonomy.user_id=link.user_id AND taxonomy.id=link.taxonomy_id
+       WHERE link.user_id=$1::uuid AND link.module=$2
+         AND link.id IN (SELECT value::uuid FROM jsonb_array_elements_text($3::jsonb))
+         AND (target.id IS NULL OR taxonomy.id IS NULL OR taxonomy.module<>link.module) LIMIT 1`,
+      userId, module, JSON.stringify(ids),
+    );
+    if (invalid.length) throw new BadRequestException('分类关系必须引用同归属、同模块的现有业务记录');
   }
 }
 
@@ -163,6 +198,11 @@ async function reconcileEvents(
       ON CONFLICT ("id") DO NOTHING
     `;
   }
+  await reconcileEventCompletions(transaction, userId);
+}
+
+/// 在线历史操作与同步共同使用最终历史重算，不重复补初始记录。
+export async function reconcileEventCompletions(transaction: Prisma.TransactionClient, userId: string): Promise<void> {
   await transaction.$executeRaw`
     UPDATE "events" AS event
     SET "last_completed_at" = latest."completed_at", "updated_at" = CURRENT_TIMESTAMP
@@ -181,7 +221,7 @@ async function reconcileEvents(
 }
 
 /// 校验两层树、传播父删除，并根据最终有效孩子状态更新父任务。
-async function reconcileTodos(
+export async function reconcileTodos(
   transaction: Prisma.TransactionClient,
   userId: string,
 ): Promise<void> {

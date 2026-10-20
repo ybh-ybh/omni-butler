@@ -1,0 +1,171 @@
+import {
+  ConflictException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { createHash, randomUUID } from 'node:crypto';
+import type { AuthUser } from '../auth/auth.types';
+import type { Prisma } from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { canonicalize } from '../sync/sync.service';
+import { uuidInput } from './business-input';
+
+/// 在 JSON 结果中统一日期及大整数，重放与首次响应形状一致。
+function jsonResult(value: unknown): Prisma.JsonValue {
+  return JSON.parse(
+    JSON.stringify(value, (_key: string, item: unknown) =>
+      typeof item === 'bigint' ? item.toString() : item,
+    ),
+  ) as Prisma.JsonValue;
+}
+
+/// 每次服务内调用都校验当前设备会话，不能仅相信对象形状。
+async function authorize(
+  transaction: Prisma.TransactionClient,
+  actor: AuthUser,
+): Promise<void> {
+  if (!actor || actor.typ !== 'access')
+    throw new UnauthorizedException('需要有效设备身份');
+  uuidInput(actor.sub, 'owner');
+  uuidInput(actor.sid, 'session');
+  // 会话事实在执行事务中重新读取，撤权和换服后旧调用失效。
+  const session = await transaction.deviceSession.findFirst({
+    where: { id: actor.sid, userId: actor.sub, expiresAt: { gt: new Date() } },
+  });
+  if (!session) throw new UnauthorizedException('设备会话已失效');
+}
+
+/// 两个以上调用方共用的只读事务；重复读取看到同一快照。
+export async function businessRead(
+  prisma: PrismaService,
+  actor: AuthUser,
+  read: (transaction: Prisma.TransactionClient) => Promise<unknown>,
+): Promise<Prisma.JsonValue> {
+  return prisma.$transaction(
+    async (transaction) => {
+      await authorize(transaction, actor);
+      return jsonResult(await read(transaction));
+    },
+    { isolationLevel: 'RepeatableRead' },
+  );
+}
+
+/// 业务写入共用现有 owner 锁；回执与副作用同事务，不冒用同步身份。
+export async function businessWrite(
+  prisma: PrismaService,
+  actor: AuthUser,
+  action: string,
+  input: Record<string, unknown>,
+  write: (transaction: Prisma.TransactionClient) => Promise<unknown>,
+): Promise<Prisma.JsonValue> {
+  // 操作身份在调用前生成，并在网络重试中保持不变。
+  const operationId = uuidInput(input.operationId, 'operationId');
+  if (!actor) throw new UnauthorizedException('需要有效设备身份');
+  uuidInput(actor.sub, 'owner');
+  // 摘要只覆盖真实业务参数；不修改请求来适配旧协议。
+  const payloadHash = createHash('sha256')
+    .update(JSON.stringify(canonicalize({ action, input })))
+    .digest('hex');
+  return prisma.$transaction(
+    async (transaction) => {
+      // 与离线写入采用相同 owner 锁，聚合操作不会互相交叉执行。
+      const owners = await transaction.$queryRaw<
+        Array<{ id: string }>
+      >`SELECT id FROM sync_owners WHERE id=${actor.sub}::uuid FOR UPDATE`;
+      if (!owners.length) throw new UnauthorizedException('数据归属已失效');
+      await authorize(transaction, actor);
+      // 全 owner 共用操作身份，不允许跨业务挪用同一个身份。
+      const identity = { userId: actor.sub, operationId };
+      // 已提交的原结果可在记录后来编辑或删除后安全重放。
+      const receipt = await transaction.businessOperationReceipt.findUnique({
+        where: { userId_operationId: identity },
+      });
+      if (receipt) {
+        if (receipt.action !== action || receipt.payloadHash !== payloadHash)
+          throw new ConflictException({
+            code: 'BUSINESS_OPERATION_CONFLICT',
+            message: '同一操作身份不能提交不同业务内容',
+          });
+        return receipt.result;
+      }
+      // 首次结果也先转换为 JSON，避免重放日期类型不同。
+      const result = jsonResult(await write(transaction));
+      await transaction.businessOperationReceipt.create({
+        data: {
+          ...identity,
+          action,
+          payloadHash,
+          result: result as Prisma.InputJsonValue,
+        },
+      });
+      return result;
+    },
+    { maxWait: 30000, timeout: 60000 },
+  );
+}
+
+/// 找不到或属于其他归属时返回相同错误，不泄露记录存在性。
+export function requireActive<T extends { deletedAt: Date | null }>(
+  record: T | null,
+): T {
+  if (!record || record.deletedAt !== null)
+    throw new NotFoundException('记录不存在或已删除');
+  return record;
+}
+
+/// 关系替换与业务保存处于同一事务，关联必须有效且属于相同模块/类型。
+export async function replaceTaxonomies(
+  transaction: Prisma.TransactionClient,
+  userId: string,
+  module: string,
+  recordId: string,
+  selected: Record<string, string[]>,
+): Promise<void> {
+  // 每类引用分别校验，不能用位置 ID 冒充分类。
+  for (const [kind, ids] of Object.entries(selected)) {
+    if (
+      ids.length !==
+      (await transaction.taxonomyEntry.count({
+        where: {
+          userId,
+          id: { in: ids },
+          module,
+          kind,
+          deletedAt: null,
+          isEnabled: true,
+        },
+      }))
+    )
+      throw new ConflictException('分类或位置不存在、已失效或类型不匹配');
+  }
+  // 只替换本次明确选择的关系种类，其他关系保持。
+  const prior = await transaction.recordTaxonomyLink.findMany({
+    where: { userId, module, recordId, deletedAt: null },
+    include: { taxonomy: true },
+  });
+  // 同时软删除历史关系，保留离线恢复所需事实。
+  const now = new Date();
+  await transaction.recordTaxonomyLink.updateMany({
+    where: {
+      userId,
+      id: {
+        in: prior
+          .filter((link) => Object.hasOwn(selected, link.taxonomy.kind))
+          .map((link) => link.id),
+      },
+    },
+    data: { deletedAt: now },
+  });
+  for (const ids of Object.values(selected))
+    for (const taxonomyId of ids)
+      await transaction.recordTaxonomyLink.create({
+        data: {
+          id: randomUUID(),
+          userId,
+          module,
+          recordId,
+          taxonomyId,
+          createdAt: now,
+        },
+      });
+}

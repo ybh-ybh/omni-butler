@@ -11,6 +11,7 @@ import type { SyncOperationDto } from './dto/sync-operation.dto';
 import {
   normalizeAutomaticRenewalPatch,
   reconcileSync,
+  taxonomyRecordTables,
 } from './sync-consistency';
 import { SyncSqlBuilder } from './sync-sql.builder';
 import { normalizeNoteOperation, validateNoteTagOperation } from './note-sync';
@@ -372,6 +373,15 @@ export class SyncService {
     userId: string,
     operation: SyncOperationDto,
   ): Promise<boolean> {
+    if (operation.table === 'record_taxonomy_links') {
+      // PATCH 可能省略未变的模块和记录身份，必须结合当前行检查。
+      const current = operation.op === 'PATCH' ? await transaction.recordTaxonomyLink.findFirst({ where: { userId, id: operation.id } }) : null;
+      // 多态父关系由固定模块映射决定，不能当成任意表名。
+      const module = operation.data?.module ?? current?.module;
+      // 关联目标的永久墓碑优先于迟到绑定。
+      const recordId = operation.data?.record_id ?? current?.recordId;
+      if (typeof module === 'string' && Object.hasOwn(taxonomyRecordTables, module) && typeof recordId === 'string' && await this.wasDeleted(transaction, userId, taxonomyRecordTables[module]!, recordId)) return true;
+    }
     // 当前表受保护的关联列。
     const references = parentReferences[operation.table] ?? {};
     // 当前操作显式携带的引用。

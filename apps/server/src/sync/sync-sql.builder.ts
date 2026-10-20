@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import type { SyncOperationDto } from './dto/sync-operation.dto';
 import { validateNoteRecordTime } from './note-record-time';
+import { NOTE_MAX_BODY_LENGTH, parseNoteTags } from './note-sync';
 
 /// 一条参数化同步 SQL。
 export interface SyncStatement {
@@ -212,11 +213,10 @@ export class SyncSqlBuilder {
       if (typeof timezone !== 'string' || timezone.trim().length === 0 || [...timezone].length > 128) throw new BadRequestException('笔记创建时区必须为一至一百二十八字的非空文字');
     }
     if (operation.table === 'note_entries' && data.tags !== undefined) {
-      // 标签必须是最多二十个 UUID 的 JSON 文本，防止歧义同步。
-      let tags: unknown;
-      try { if (typeof data.tags !== 'string') throw new Error('invalid'); tags = JSON.parse(data.tags); } catch { throw new BadRequestException('笔记标签必须为 JSON 数组'); }
-      if (!Array.isArray(tags) || tags.length > 20 || tags.some((tag: unknown) => typeof tag !== 'string' || !/^[a-f0-9-]{36}$/i.test(tag))) throw new BadRequestException('笔记最多支持二十个有效标签');
+      // 与事务内标签归一化共用数量与 UUID 校验，避免宽松的重复口径。
+      parseNoteTags(data.tags, 'tags');
     }
+    if ((operation.table === 'note_entries' || operation.table === 'note_versions') && data.body !== undefined && (typeof data.body !== 'string' || data.body.length > NOTE_MAX_BODY_LENGTH)) throw new BadRequestException('笔记正文最多 20,000 字');
     if (operation.table === 'note_entries' && data.day_key !== undefined) {
       // 真实自然日校验，不能接受 2 月 30 日之类无效值。
       const day = typeof data.day_key === 'string' ? data.day_key : '';

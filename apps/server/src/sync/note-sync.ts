@@ -3,12 +3,17 @@ import type { Prisma } from '../generated/prisma/client';
 import type { SyncOperationDto } from './dto/sync-operation.dto';
 import { effectiveNoteRecordTime, validateSelectedNoteRecordTime } from './note-record-time';
 
+/// 正式笔记正文与标签上限由在线入口和同步共同使用。
+export const NOTE_MAX_BODY_LENGTH = 20000;
+/// 标签数量保持现有客户端十个的口径。
+export const NOTE_MAX_TAGS = 10;
+
 /// 标签协议只接受无重复 UUID 的 JSON 文本，避免整列覆盖和非规范身份。
-function parseNoteTags(value: unknown, field: string): string[] {
+export function parseNoteTags(value: unknown, field: string): string[] {
   // 先检查文本类型，不让 JSON.parse 隐式转换数组或数值。
   let parsed: unknown;
   try { if (typeof value !== 'string') throw new Error('invalid'); parsed = JSON.parse(value); } catch { throw new BadRequestException(`${field} 必须为标签 UUID 的 JSON 数组文本`); }
-  if (!Array.isArray(parsed) || parsed.length > 10 || parsed.some((tag: unknown) => typeof tag !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(tag))) throw new BadRequestException('笔记最多支持十个有效标签');
+  if (!Array.isArray(parsed) || parsed.length > NOTE_MAX_TAGS || parsed.some((tag: unknown) => typeof tag !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(tag))) throw new BadRequestException('笔记最多支持十个有效标签');
   // PostgreSQL UUID 以小写形式输出，同一身份的大小写不能成为不同标签。
   const tags = (parsed as string[]).map((tag) => tag.toLowerCase());
   if (new Set(tags).size !== tags.length) throw new BadRequestException('笔记标签不能重复');
@@ -93,7 +98,7 @@ export async function normalizeNoteOperation(transaction: Prisma.TransactionClie
     const merged = new Set(parseNoteTags(current.tags, 'current.tags'));
     for (const tag of base) if (!incoming.includes(tag)) merged.delete(tag);
     for (const tag of incoming) if (!base.includes(tag)) merged.add(tag);
-    if (merged.size > 10) throw new BadRequestException('合并后的笔记标签不能超过十个');
+    if (merged.size > NOTE_MAX_TAGS) throw new BadRequestException('合并后的笔记标签不能超过十个');
     data.tags = JSON.stringify([...merged].sort());
   }
   if (data.creation_timezone !== undefined && data.creation_timezone !== current.creationTimezone) throw new BadRequestException('笔记创建时区不可修改');
@@ -121,7 +126,7 @@ export async function normalizeNoteOperation(transaction: Prisma.TransactionClie
 export async function reconcileNotes(transaction: Prisma.TransactionClient, userId: string): Promise<void> {
   // 快照迁移不走单行归一化，仍以事务最终状态统一限制标签数量。
   const invalidTagCount = await transaction.$queryRaw<Array<{ id: string }>>`
-    SELECT id FROM note_entries WHERE user_id=${userId}::uuid AND jsonb_array_length(tags::jsonb)>10 LIMIT 1
+    SELECT id FROM note_entries WHERE user_id=${userId}::uuid AND jsonb_array_length(tags::jsonb)>${NOTE_MAX_TAGS} LIMIT 1
   `;
   if (invalidTagCount.length) throw new BadRequestException('笔记最多支持十个标签');
   // 单篇最多 60 分钟，无法通过多设备同时添加越过限额。

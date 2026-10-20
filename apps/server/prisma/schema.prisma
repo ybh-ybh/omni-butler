@@ -24,6 +24,8 @@ model SyncOwner {
   id                   String                @id @default(uuid()) @db.Uuid
   sessions             DeviceSession[]
   receipts             SyncReceipt[]
+  /// 供在线业务入口安全重放的服务端回执，不参与业务同步。
+  businessReceipts     BusinessOperationReceipt[]
   tombstones           SyncTombstone[]
   todoItems            TodoItem[]
   /// 进度任务的独立步骤。
@@ -298,6 +300,27 @@ model DeviceSession {
 
   @@index([userId, expiresAt])
   @@map("device_sessions")
+}
+
+/// 在线业务动作的执行结果；不与离线同步事务身份混用。
+model BusinessOperationReceipt {
+  /// 数据归属及调用执行层固定操作身份。
+  userId String @map("user_id") @db.Uuid
+  /// 调用执行层固定的业务操作身份。
+  operationId String @map("operation_id") @db.Uuid
+  /// 业务动作和负载摘要防止身份被不同请求挪用。
+  action String @db.VarChar(80)
+  /// 原始业务请求的规范化摘要。
+  payloadHash String @map("payload_hash") @db.VarChar(64)
+  /// 与副作用同时提交的脱敏业务结果。
+  result Json
+  /// 回执随实际业务提交建立。
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// 归属被显式替换时，旧回执随之清理。
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, operationId])
+  @@map("business_operation_receipts")
 }
 
 /// 已提交客户端事务的幂等回执，与业务写入一同提交。
