@@ -1,3 +1,4 @@
+import 'package:omni_butler/core/sync/business_edit_baseline.dart';
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:uuid/uuid.dart';
@@ -34,6 +35,9 @@ enum EventDueStatus {
 
 /// 周期事件编辑草稿。
 class EventDraft {
+  /// 编辑器打开时的原始事实；不会在上传重试或远端下行后偷偷重基。
+  final Map<String, dynamic>? baseline;
+
   /// 可选现有事件标识。
   final String? id;
 
@@ -66,6 +70,7 @@ class EventDraft {
 
   /// 创建周期事件草稿。
   const EventDraft({
+    this.baseline,
     this.id,
     required this.name,
     this.category,
@@ -267,7 +272,19 @@ class EventRepository {
   }
 
   /// 保存新增或编辑后的周期事件。
-  Future<void> save(EventDraft draft) async {
+  Future<void> save(EventDraft draft) =>
+      _database.transaction(() => _saveGuarded(draft));
+
+  /// 同事务核对原表单事实并保存聚合，失败时保留原数据及队列。
+  Future<void> _saveGuarded(EventDraft draft) async {
+    if (draft.baseline != null) {
+      // 表单基线检查与写入处于同一SQLite事务，远端下行不能插入检查间隙。
+      final EventRecord? current = await (_database.select(
+        _database.events,
+      )..where((row) => row.id.equals(draft.id!))).getSingleOrNull();
+      assertBusinessEditBaseline(draft.baseline, current?.toJson());
+    }
+
     // 清理后的事件名称。
     final String name = draft.name.trim();
     if (name.isEmpty) {

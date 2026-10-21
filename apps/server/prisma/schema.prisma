@@ -26,6 +26,10 @@ model SyncOwner {
   receipts             SyncReceipt[]
   /// 供在线业务入口安全重放的服务端回执，不参与业务同步。
   businessReceipts     BusinessOperationReceipt[]
+  /// MCP 专用授权与审批只存在服务端。
+  mcpConnections       McpConnection[]
+  /// 已准备及已执行的 MCP 业务动作。
+  mcpActions           McpAction[]
   tombstones           SyncTombstone[]
   todoItems            TodoItem[]
   /// 进度任务的独立步骤。
@@ -323,6 +327,80 @@ model BusinessOperationReceipt {
   @@map("business_operation_receipts")
 }
 
+/// 专用 Bearer 令牌仅存摘要，独立于设备凭据。
+model McpConnection {
+  /// 服务端固定连接身份。
+  id String @id @db.Uuid
+  /// 数据归属。
+  userId String @map("user_id") @db.Uuid
+  /// 用户可辨认的连接名称。
+  name String @db.VarChar(100)
+  /// 随机令牌的 SHA256 摘要。
+  tokenHash String @unique @map("token_hash") @db.VarChar(64)
+  /// 只用于复用领域身份校验的独立会话，不向 MCP 交付其凭据。
+  sessionId String @map("session_id") @db.Uuid
+  /// 显式模块读权限。
+  readModules String[] @map("read_modules")
+  /// 显式模块写权限，授权后可提交固定业务动作。
+  writeModules String[] @map("write_modules")
+  /// 用户明确配置的默认时区，空值不猜测。
+  timeZone String? @map("time_zone")
+  /// 空值表示永久连接，仍可随时撤销。
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz(3)
+  /// 撤销时刻。
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+  /// 创建时间。
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// 删除归属即撤销授权。
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 持久动作保留来源连接。
+  actions McpAction[]
+  @@map("mcp_connections")
+}
+
+/// 固定预览和执行结果不进入 PowerSync 业务表，旧审批字段只供历史兼容。
+model McpAction {
+  /// 同时用于领域幂等身份派生。
+  id String @id @db.Uuid
+  /// 数据归属。
+  userId String @map("user_id") @db.Uuid
+  /// 发起连接。
+  connectionId String @map("connection_id") @db.Uuid
+  /// 调用方重试保持的请求身份。
+  requestId String @map("request_id") @db.Uuid
+  /// 工具及输入摘要，防止挪用身份。
+  inputHash String @map("input_hash") @db.VarChar(64)
+  /// 经过服务端校验并固定绝对日期的业务步骤。
+  steps Json
+  /// 业务对象基线摘要。
+  baseline String @db.VarChar(64)
+  /// 冻结的前后事实与关联影响。
+  preview Json
+  /// 固定预览摘要，沿用旧审批字段名，不再作为人工授权凭据。
+  approvalHash String @map("approval_hash") @db.VarChar(64)
+  /// pending/succeeded/cancelled/expired/conflict；approved仅为旧流程历史状态。
+  status String @default("pending") @db.VarChar(20)
+  /// 旧人工审批设备身份，新动作不填写。
+  approvedBy String? @map("approved_by") @db.Uuid
+  /// 旧人工审批时刻，新动作不填写。
+  approvedAt DateTime? @map("approved_at") @db.Timestamptz(3)
+  /// 和业务副作用同事务保存的结果。
+  result Json?
+  /// 冻结的操作有效期。
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  /// 创建时间。
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// 最后状态转换时间。
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  /// 归属删除后旧动作不可恢复授权。
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 原连接撤销后动作仍保留审计事实。
+  connection McpConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  @@unique([connectionId, requestId])
+  @@index([userId, createdAt])
+  @@map("mcp_actions")
+}
+
 /// 已提交客户端事务的幂等回执，与业务写入一同提交。
 model SyncReceipt {
   userId        String    @map("user_id") @db.Uuid
@@ -331,6 +409,8 @@ model SyncReceipt {
   payloadHash   String    @map("payload_hash") @db.VarChar(64)
   applied       Int
   ignored       Int
+  /// 失败事务的完整本机候选及人工决策；回执不可因此重复执行。
+  conflict      Json?
   user          SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, clientId, transactionId])

@@ -3455,6 +3455,9 @@ class _InventoryEditorDialog extends ConsumerStatefulWidget {
 /// 物品编辑弹窗状态。
 class _InventoryEditorDialogState
     extends ConsumerState<_InventoryEditorDialog> {
+  /// 打开表单时固定的事实，不随远端下行或父组件重建而更新。
+  late final Map<String, dynamic>? _editBaseline;
+
   /// 仅安卓新增主物品使用全屏分组布局。
   bool get _isAndroidCreate =>
       widget.item == null &&
@@ -3519,6 +3522,7 @@ class _InventoryEditorDialogState
   @override
   void initState() {
     super.initState();
+    _editBaseline = widget.item?.toJson();
     // 待编辑物品。
     final InventoryRecord? item = widget.item;
     _nameController = TextEditingController(text: item?.name ?? '');
@@ -3599,6 +3603,7 @@ class _InventoryEditorDialogState
           .save(
             InventoryDraft(
               id: widget.item?.id,
+              baseline: _editBaseline,
               name: _nameController.text,
               quantity: int.parse(_quantityController.text),
               purchasePriceCents: priceYuan == null

@@ -34,6 +34,10 @@ function resolvePublicBaseUrl(value: unknown): string {
 
 /// 应用启动所需的环境变量结构。
 interface EnvironmentVariables {
+  /// MCP 的固定部署 Origin，空值仅允许无 Origin 的本机连接。
+  MCP_ALLOWED_ORIGINS: string;
+  /// 保留规范化公网 Origin，供 MCP 校验代理 Host。
+  PUBLIC_BASE_URL: string;
   /// AI 独立加密密钥复用持久卷目录，不复用 JWT 密钥。
   JWT_KEYS_DIR: string;
   /// 云端识别厂商与凭证只存在后端。
@@ -93,6 +97,17 @@ export function validateEnvironment(
   }
   // 基础地址即使被独立覆盖也需要校验，防止错误配置静默通过。
   const publicBaseUrl = resolvePublicBaseUrl(source.PUBLIC_BASE_URL);
+  // 自托管代理/LAN的MCP Host必须显式配置，禁止通配和含凭据URL。
+  const mcpOrigins = source.MCP_ALLOWED_ORIGINS ?? '';
+  if (typeof mcpOrigins !== 'string') throw new Error('MCP_ALLOWED_ORIGINS 必须为逗号分隔的HTTP(S)根地址');
+  // 配置错误在生成密钥之前抛出，且不回显原始URL。
+  const normalizedMcpOrigins = mcpOrigins ? mcpOrigins.split(',').map((value) => {
+    // 每个值只允许固定origin，不接受路径、凭据、查询或通配符。
+    let parsed: URL;
+    try { parsed = new URL(value); } catch { throw new Error('MCP_ALLOWED_ORIGINS 包含非法Origin'); }
+    if (!/^https?:\/\/[^/?#\\@\s]+\/?$/i.test(value) || value !== value.trim() || !['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash || value.includes('*')) throw new Error('MCP_ALLOWED_ORIGINS 仅允许无凭据的HTTP(S)根地址');
+    return parsed.origin;
+  }).join(',') : '';
   if (source.POWERSYNC_URL !== undefined && typeof source.POWERSYNC_URL !== 'string') {
     throw new Error('POWERSYNC_URL 必须是有效的 HTTP 或 HTTPS 地址');
   }
@@ -173,6 +188,8 @@ export function validateEnvironment(
   const keys = resolveJwtKeys(keysDirectory);
   return {
     ...keys,
+    MCP_ALLOWED_ORIGINS: normalizedMcpOrigins,
+    PUBLIC_BASE_URL: publicBaseUrl,
     JWT_KEYS_DIR: keysDirectory,
     NOTE_ASR_PROVIDER: noteProvider,
     NOTE_ASR_MODEL: typeof source.NOTE_ASR_MODEL === 'string' ? source.NOTE_ASR_MODEL : '16k_zh',

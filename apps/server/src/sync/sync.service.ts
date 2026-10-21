@@ -2,9 +2,17 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { stableBusinessId } from './sync-consistency';
+import { checkSyncBaseline, SyncBaselineConflict, syncCurrentRecords, syncFactsHash, type SyncWriteConflict } from './sync-write-conflicts';
+import { canonicalize } from './sync-hash';
+export { canonicalize } from './sync-hash';
 import type { Prisma } from '../generated/prisma/client';
+import type { AuthUser } from '../auth/auth.types';
+import { uuidInput } from '../business/business-input';
 import { PrismaService } from '../prisma/prisma.service';
 import type { SyncBatchDto } from './dto/sync-batch.dto';
 import type { SyncOperationDto } from './dto/sync-operation.dto';
@@ -30,21 +38,10 @@ const parentReferences: Readonly<Record<string, Record<string, string>>> = {
   membership_payments: { membership_id: 'memberships' },
 };
 
-/// 对对象键排序，保证不同 JSON 属性顺序不会影响幂等内容校验。
-export function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, item]) => [key, canonicalize(item)]),
-    );
-  }
-  return value;
-}
-
 /// 原始客户端事务的持久化处理结果。
 export interface SyncResult {
+  /// 原事务已作为冲突候选保存，但客户端不得确认其队列直到用户明确处理。
+  conflict?: { id: string; status: string; message: string };
   /// 实际改变数据库的操作数量。
   applied: number;
   /// 已存在或被永久删除的操作数量。
@@ -63,7 +60,7 @@ export class SyncService {
   constructor(private readonly prisma: PrismaService) {}
 
   /// 原子应用完整本地事务，重放返回旧结果而不重新写入。
-  async applyBatch(userId: string, batch: SyncBatchDto): Promise<SyncResult> {
+  async applyBatch(userId: string, batch: SyncBatchDto, suppliedTransaction?: Prisma.TransactionClient, cascadeApproved = false): Promise<SyncResult> {
     // 写入之前校验全部表和列，避免忽略路径绕过白名单。
     for (const operation of batch.operations) {
       // 执行副本丢弃已退休类别，原始负载保持用于旧回执重放。
@@ -72,10 +69,15 @@ export class SyncService {
     }
     // 操作摘要用于拒绝复用事务身份提交不同内容。
     const payloadHash = createHash('sha256')
-      .update(JSON.stringify(canonicalize(batch.operations)))
+      .update(JSON.stringify(canonicalize(batch.operations.map((operation) => {
+        // 基线为新增协议元数据；原业务负载摘要保持旧格式，升级后的未知提交可重放旧回执。
+        const original = { ...operation };
+        delete original.previous;
+        return original;
+      }))))
       .digest('hex');
-    return this.prisma.$transaction(
-      async (transaction) => {
+    // 人工冲突决策可复用同一真实事务，其他入口仍由此处建立事务。
+    const execute = async (transaction: Prisma.TransactionClient): Promise<SyncResult> => {
         // 单人多设备事务按归属串行提交，保证派生数据和回执一致。
         // 加锁后再次确认归属，拒绝认证完成之后发生重建的旧请求。
         const owners = await transaction.$queryRaw<
@@ -105,6 +107,7 @@ export class SyncService {
             applied: receipt.applied,
             ignored: receipt.ignored,
             replayed: true,
+            ...(receipt.conflict && (receipt.conflict as unknown as SyncWriteConflict).status === 'pending' ? { conflict: { id: (receipt.conflict as unknown as SyncWriteConflict).id, status: 'pending', message: '离线修改与服务器记录冲突，请在设置的数据同步中处理；本机事务尚未确认' } } : {}),
           };
         }
         // 实际变化的操作交由派生状态协调器处理。
@@ -113,6 +116,9 @@ export class SyncService {
         let applied = 0;
         // 当前事务忽略的已删除或重复创建数量。
         let ignored = 0;
+        // 候选保留完整原事务；任何一步冲突都不能提交前面的部分写入。
+        await transaction.$executeRawUnsafe('SAVEPOINT sync_baseline_batch');
+        try {
         // 保留客户端原始事务顺序。
         for (const original of batch.operations) {
           // 旧类别操作只在当前事务的执行副本中退休。
@@ -121,6 +127,7 @@ export class SyncService {
             ignored += 1;
             continue;
           }
+          await checkSyncBaseline(transaction, userId, operation, cascadeApproved);
           if (isRetiredNoteCategory(original)) {
             // 身份碰撞不能让退休的旧 PUT 删除同 ID 的有效标签或其他模块类别。
             const current = await transaction.taxonomyEntry.findFirst({
@@ -221,13 +228,100 @@ export class SyncService {
           }
         }
         await reconcileSync(transaction, userId, changedOperations);
+        } catch (error) {
+          if (!(error instanceof SyncBaselineConflict)) throw error;
+          await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT sync_baseline_batch');
+          // 复用原事务回执持久保存候选，不把业务冲突冒充已应用或忽略。
+          const conflict: SyncWriteConflict = { id: stableBusinessId('sync-write-conflict', [batch.clientId, batch.transactionId]), status: 'pending', createdAt: new Date().toISOString(), operations: batch.operations, reason: error.detail };
+          await transaction.syncReceipt.create({ data: { ...identity, payloadHash, applied: 0, ignored: 0, conflict: JSON.parse(JSON.stringify(conflict)) as Prisma.InputJsonValue } });
+          return { applied: 0, ignored: 0, replayed: false, conflict: { id: conflict.id, status: 'pending', message: '离线修改与服务器记录冲突，请在设置的数据同步中处理；本机事务尚未确认' } };
+        }
         await transaction.syncReceipt.create({
           data: { ...identity, payloadHash, applied, ignored },
         });
         return { applied, ignored, replayed: false };
-      },
-      { maxWait: 30000, timeout: 60000 },
-    );
+      };
+    return suppliedTransaction ? execute(suppliedTransaction) : this.prisma.$transaction(execute, { maxWait: 30000, timeout: 60000 });
+  }
+
+  /// 未处理候选独立于调试日志保留，普通查询只返回摘要。
+  async listWriteConflicts(userId: string): Promise<Record<string, unknown>> {
+    // 数据归属来自JWT，不允许模型/客户端表单提供。
+    const receipts = await this.prisma.syncReceipt.findMany({ where: { userId, conflict: { path: ['status'], equals: 'pending' } }, take: 200, orderBy: [{ clientId: 'asc' }, { transactionId: 'asc' }] });
+    return { items: receipts.map((receipt) => {
+      // 原负载/正文仅在用户显式打开完整预览后读取。
+      const conflict = receipt.conflict as unknown as SyncWriteConflict;
+      return { id: conflict.id, status: conflict.status, reason: conflict.reason, createdAt: conflict.createdAt, operationCount: conflict.operations.length };
+    }), limit: 200, message: '未处理事务保留在原设备队列；选择后才允许确认该事务，其他后续事务可能也需要逐项核对' };
+  }
+
+  /// 完整原事务与当前服务器事实同时展示，基线摘要在用户阅读时固定。
+  async getWriteConflict(userId: string, id: string): Promise<Record<string, unknown>> {
+    // 同归属动作才可查看；ID不是授权凭据。
+    const receipt = await this.prisma.syncReceipt.findFirst({ where: { userId, conflict: { path: ['id'], equals: id } } });
+    if (!receipt?.conflict) throw new NotFoundException('同步冲突不存在');
+    // 私有回执记录中的原事务不可由调用方替换。
+    const conflict = receipt.conflict as unknown as SyncWriteConflict;
+    // 当前事实读取在单一重复读快照中，不以最初冲突时旧值代替。
+    const records = await this.prisma.$transaction((transaction) => syncCurrentRecords(transaction, userId, conflict.operations), { isolationLevel: 'RepeatableRead' });
+    return { ...conflict, currentRecords: records, baselineHash: syncFactsHash(records), decisions: { server: '保留服务器值，原设备确认这笔队列后采用服务器下行；原候选仍留审计', local: '明确重新提交这笔完整本机事务，沿用领域规则及笔记修订/候选规则，不绕过永久墓碑或把新增变成更新' } };
+  }
+
+  /// 人工决策固定当前事实，响应丢失后以同requestId返回原处理结果。
+  async resolveWriteConflict(actor: AuthUser, id: string, value: unknown): Promise<unknown> {
+    // 此路径仅从已认证设备调用，不向MCP暴露自行批准工具。
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BadRequestException('需要完整冲突决策');
+    // 明确白名单字段，不接受新的业务参数或任意SQL。
+    const input = value as Record<string, unknown>;
+    if (Object.keys(input).some((key) => !['requestId', 'decision', 'baselineHash'].includes(key)) || typeof input.requestId !== 'string' || !/^[0-9a-f-]{36}$/i.test(input.requestId) || typeof input.baselineHash !== 'string' || !/^[0-9a-f]{64}$/.test(input.baselineHash) || !['server', 'local'].includes(String(input.decision))) throw new BadRequestException('冲突决策参数不完整或非法');
+    // 决策身份绑定内容，不能重放成另一项处理。
+    const resolutionHash = syncFactsHash(input);
+    // 严格UUID身份在异步事务闭包中保持类型及内容固定。
+    const requestId = uuidInput(input.requestId, 'requestId');
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT id FROM sync_owners WHERE id=${actor.sub}::uuid FOR UPDATE`;
+      if (!(await transaction.deviceSession.findFirst({ where: { id: actor.sid, userId: actor.sub, expiresAt: { gt: new Date() } } }))) throw new UnauthorizedException('审批设备会话已失效');
+      // owner锁保证两个设备不会同时处理同一候选。
+      const receipt = await transaction.syncReceipt.findFirst({ where: { userId: actor.sub, conflict: { path: ['id'], equals: id } } });
+      if (!receipt?.conflict) throw new NotFoundException('同步冲突不存在');
+      // 原事务和原回执身份不更改，决策执行有自己的新身份。
+      const conflict = receipt.conflict as unknown as SyncWriteConflict;
+      if (conflict.resolution) {
+        if (conflict.resolution.hash !== resolutionHash) throw new ConflictException('该同步冲突已经处理，请查看原结果');
+        return conflict.resolution.result;
+      }
+      // 用户打开预览后若服务器发生变化，必须重读后重新明确选择。
+      const records = await syncCurrentRecords(transaction, actor.sub, conflict.operations);
+      if (syncFactsHash(records) !== input.baselineHash) throw new ConflictException('服务器数据又有变化，请重新核对冲突预览');
+      // 原操作完整保留，不在上传重试时偷偷重新构造基线。
+      let applied: SyncResult | null = null;
+      if (input.decision === 'local') {
+        // 同事务内逐步推演前值，多次编辑同一记录时保留原始顺序。
+        const current = new Map(records.map((row) => [`${row.table}/${row.id}`, row.data]));
+        // 只有明确人工决策才用刚展示的服务器事实作为新基线。
+        const operations = conflict.operations.map((operation) => {
+          // 基线草稿只属于本次已批准的决策事务。
+          const key = `${operation.table}/${operation.id}`, before = current.get(key) ?? null;
+          // PATCH的后续步骤相对于前一步结果，不相对于服务器最初快照。
+          const resolved: SyncOperationDto = { ...operation, ...(before ? { previous: { ...before } } : {}) };
+          if (operation.op === 'PATCH' && before) current.set(key, { ...before, ...operation.data });
+          if (operation.op === 'PUT' && !before) current.set(key, { ...operation.data });
+          if (operation.op === 'DELETE') current.set(key, null);
+          return resolved;
+        });
+        applied = await this.applyBatch(actor.sub, { clientId: receipt.clientId, transactionId: `conflict-resolution:${requestId}`, operations }, transaction, true);
+        if (applied.conflict) throw new ConflictException('此事务仍有冲突，请重新核对或采用服务器结果');
+      } else {
+        // 重新发布当前事实，让原设备在明确确认队列后取得权威下行；不改变业务字段。
+        for (const record of records) if (record.data) await transaction.$executeRawUnsafe(`UPDATE "${record.table}" SET id=id WHERE user_id=$1::uuid AND id=$2::uuid`, actor.sub, record.id);
+      }
+      // 原候选永久保留原意图，决策完成后上传重放才允许确认原队列。
+      const result = { id, status: input.decision, resolvedAt: new Date().toISOString(), applied, message: input.decision === 'local' ? '已按明确选择重新提交；笔记正文仍遵守修订/候选规则' : '已选择服务器数据；原设备下一次重试后确认原队列并接收下行', syncStatus: '服务器已处理，原设备队列与客户端下行状态待核实' };
+      conflict.status = input.decision as 'local' | 'server';
+      conflict.resolution = { requestId, hash: resolutionHash, resolvedAt: result.resolvedAt, result };
+      await transaction.syncReceipt.update({ where: { userId_clientId_transactionId: { userId: actor.sub, clientId: receipt.clientId, transactionId: receipt.transactionId } }, data: { conflict: JSON.parse(JSON.stringify(conflict)) as Prisma.InputJsonValue } });
+      return result;
+    }, { maxWait: 30000, timeout: 60000 });
   }
 
   /// 已保存任务不转换类型，步骤稳定身份也不能转移到另一个任务。

@@ -1,3 +1,4 @@
+import 'package:omni_butler/core/sync/business_edit_baseline.dart';
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:uuid/uuid.dart';
@@ -89,6 +90,9 @@ class PaymentDeletionResult {
 
 /// 会员编辑草稿。
 class MembershipDraft {
+  /// 编辑器打开时的原始事实；不会在上传重试或远端下行后偷偷重基。
+  final Map<String, dynamic>? baseline;
+
   /// 可选现有会员标识。
   final String? id;
 
@@ -166,6 +170,7 @@ class MembershipDraft {
 
   /// 创建会员草稿。
   const MembershipDraft({
+    this.baseline,
     this.id,
     required this.name,
     this.provider,
@@ -300,7 +305,19 @@ class MembershipRepository {
   }
 
   /// 保存新增或编辑后的会员。
-  Future<String> save(MembershipDraft draft) async {
+  Future<String> save(MembershipDraft draft) =>
+      _database.transaction(() => _saveGuarded(draft));
+
+  /// 同事务核对原表单事实并保存聚合，失败时保留原数据及队列。
+  Future<String> _saveGuarded(MembershipDraft draft) async {
+    if (draft.baseline != null) {
+      // 表单基线检查与写入处于同一SQLite事务，远端下行不能插入检查间隙。
+      final MembershipRecord? current = await (_database.select(
+        _database.memberships,
+      )..where((row) => row.id.equals(draft.id!))).getSingleOrNull();
+      assertBusinessEditBaseline(draft.baseline, current?.toJson());
+    }
+
     // 清理后的会员名称。
     final String name = draft.name.trim();
     if (name.isEmpty) {

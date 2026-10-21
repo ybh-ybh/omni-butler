@@ -977,6 +977,9 @@ class _TimeEntryEditorDialog extends ConsumerStatefulWidget {
 /// 时间记录编辑弹窗状态。
 class _TimeEntryEditorDialogState
     extends ConsumerState<_TimeEntryEditorDialog> {
+  /// 打开表单时固定的事实，不随远端下行或父组件重建而更新。
+  late final Map<String, dynamic>? _editBaseline;
+
   /// 表单键。
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
@@ -1002,6 +1005,7 @@ class _TimeEntryEditorDialogState
   @override
   void initState() {
     super.initState();
+    _editBaseline = widget.record?.toJson();
     // 待编辑记录。
     final TimeEntryRecord? record = widget.record;
     // 当前时间向下取整到 5 分钟。
@@ -1040,6 +1044,7 @@ class _TimeEntryEditorDialogState
           .save(
             TimeEntryDraft(
               id: widget.record?.id,
+              baseline: _editBaseline,
               entryDate: widget.day,
               startMinute: _startMinute,
               endMinute: _endMinute,
@@ -2258,6 +2263,9 @@ class _AbsoluteTimeEntryDialog extends ConsumerStatefulWidget {
 /// 使用绝对时间的居中时间记录弹窗状态。
 class _AbsoluteTimeEntryDialogState
     extends ConsumerState<_AbsoluteTimeEntryDialog> {
+  /// 打开表单时固定的事实，不随远端下行或父组件重建而更新。
+  late final Map<String, dynamic>? _editBaseline;
+
   /// 安卓补记、已完成记录编辑和结束记录共用全屏分组表单。
   bool get _usesFullscreenRangeEditor =>
       (widget.mode == _TimeEntryEditorMode.completed ||
@@ -2332,6 +2340,7 @@ class _AbsoluteTimeEntryDialogState
   @override
   void initState() {
     super.initState();
+    _editBaseline = widget.record?.toJson();
     // 当前时间。
     final DateTime now = ref.read(nowProvider);
     // 当前时间向下取整到五分钟。
@@ -2472,6 +2481,7 @@ class _AbsoluteTimeEntryDialogState
           .save(
             TimeEntryDraft(
               id: widget.record?.id,
+              baseline: _editBaseline,
               startedAt: _startedAt,
               endedAt:
                   widget.mode == _TimeEntryEditorMode.startOnly ||

@@ -47,4 +47,10 @@ export class SyncOperationDto {
   @IsObject()
   @IsOptional()
   data?: Record<string, unknown>;
+
+  /// 本地编辑时由SDK固化的字段前值，不允许上传时读取最新行代替。
+  @ApiProperty({ type: Object, required: false })
+  @IsOptional()
+  @IsObject()
+  previous?: Record<string, unknown>;
 }

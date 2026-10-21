@@ -317,14 +317,23 @@ export class TimeEntriesService {
       const days: Record<string, number> = {};
       // 参与统计的有效来源身份。
       const sourceIds: string[] = [];
+      // 已结束事实与进行中暂估分别列出，模型不能把暂估冒充完整记录。
+      let completedMilliseconds = 0,
+        ongoingMilliseconds = 0;
       for (const row of rows) {
         // 每条区间裁剪到查询窗口和进行中截止点。
         const duration = Math.max(
           0,
-          Math.min((row.endedAt ?? range.asOf).getTime(), range.to.getTime()) -
-            Math.max(row.startedAt.getTime(), range.from.getTime()),
+          Math.min(
+            (row.endedAt ?? range.asOf).getTime(),
+            range.to.getTime(),
+            range.asOf.getTime(),
+          ) - Math.max(row.startedAt.getTime(), range.from.getTime()),
         );
         if (!duration) continue;
+        if (row.endedAt === null || row.endedAt > range.asOf)
+          ongoingMilliseconds += duration;
+        else completedMilliseconds += duration;
         categories[row.category ?? '未分类'] =
           (categories[row.category ?? '未分类'] ?? 0) + duration;
         sourceIds.push(row.id);
@@ -352,6 +361,19 @@ export class TimeEntriesService {
       return {
         ...range,
         count: sourceIds.length,
+        completedSeconds: completedMilliseconds / 1000,
+        ongoingEstimatedSeconds: ongoingMilliseconds / 1000,
+        categoryPercentages: Object.fromEntries(
+          Object.entries(categories).map(([category, duration]) => [
+            category,
+            completedMilliseconds + ongoingMilliseconds === 0
+              ? null
+              : Math.round(
+                  (duration / (completedMilliseconds + ongoingMilliseconds)) *
+                    10000,
+                ) / 100,
+          ]),
+        ),
         totalSeconds:
           Object.values(categories).reduce(
             (sum, duration) => sum + duration,

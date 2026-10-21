@@ -1,7 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 
 /// AI 整理期间原文不得被旧客户端提前采用，所有客户端必须支持整理任务。
-export const syncSchemaVersion = 11;
+export const syncSchemaVersion = 12;
 
 /// 在写入和签发下行凭证前阻止旧客户端解释新版任务。
 export function requireSyncSchemaVersion(version: string | undefined): void {

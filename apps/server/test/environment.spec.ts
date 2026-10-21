@@ -56,6 +56,26 @@ describe('validateEnvironment', () => {
     expect(existsSync(join(keysDirectory, 'jwt-private.pem'))).toBe(true);
   });
 
+  it('MCP可信入口规范化成明确origin，不受PowerSync独立地址影响', () => {
+    // 授权入口与同步网关允许分别部署，但只信任显式地址。
+    const environment = validateEnvironment({
+      ...automaticEnvironment(),
+      PUBLIC_BASE_URL: 'https://api.example.com',
+      MCP_ALLOWED_ORIGINS: 'https://api.example.com/,http://192.168.1.10:3001',
+    });
+    expect(environment.PUBLIC_BASE_URL).toBe('https://api.example.com');
+    expect(environment.MCP_ALLOWED_ORIGINS).toBe('https://api.example.com,http://192.168.1.10:3001');
+  });
+
+  it.each([
+    '*', 'https://*.example.com', 'https://user:secret@example.com',
+    'https://example.com/path', 'https://example.com?token=secret',
+    'https://example.com#fragment', 'ftp://example.com', ' https://example.com',
+  ])('MCP非法可信入口拒绝启动且不触碰密钥：%s', (origin) => {
+    expect(() => validateEnvironment({ ...automaticEnvironment(), MCP_ALLOWED_ORIGINS: origin })).toThrow('MCP_ALLOWED_ORIGINS');
+    expect(existsSync(join(keysDirectory, 'jwt-private.pem'))).toBe(false);
+  });
+
   it.each(['DATABASE_URL', 'POWERSYNC_URL', 'SYNC_SECRET'])(
     '缺少 %s 时拒绝启动且不生成密钥',
     (key) => {

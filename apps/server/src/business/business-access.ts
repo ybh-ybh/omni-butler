@@ -4,11 +4,41 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AuthUser } from '../auth/auth.types';
 import type { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { canonicalize } from '../sync/sync.service';
 import { uuidInput } from './business-input';
+
+/// 已锁定的业务事务只在当前异步调用链内复用，避免审批与副作用分开提交。
+const businessContext = new AsyncLocalStorage<{
+  prisma: PrismaService;
+  owner: string;
+  transaction: Prisma.TransactionClient;
+}>();
+
+/// 审批提交及预览回滚复用业务方法，身份和 owner 锁仍由既有规则校验。
+export async function withinBusinessTransaction<T>(
+  prisma: PrismaService,
+  actor: AuthUser,
+  action: (transaction: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  if (!actor || actor.typ !== 'access')
+    throw new UnauthorizedException('需要有效设备身份');
+  uuidInput(actor.sub, 'owner');
+  return prisma.$transaction(
+    async (transaction) => {
+      await transaction.$queryRaw`SELECT id FROM sync_owners WHERE id=${actor.sub}::uuid FOR UPDATE`;
+      await authorize(transaction, actor);
+      return businessContext.run(
+        { prisma, owner: actor.sub, transaction },
+        () => action(transaction),
+      );
+    },
+    { maxWait: 30000, timeout: 60000 },
+  );
+}
 
 /// 在 JSON 结果中统一日期及大整数，重放与首次响应形状一致。
 function jsonResult(value: unknown): Prisma.JsonValue {
@@ -41,6 +71,12 @@ export async function businessRead(
   actor: AuthUser,
   read: (transaction: Prisma.TransactionClient) => Promise<unknown>,
 ): Promise<Prisma.JsonValue> {
+  // 同一审批事务内的领域查询看到尚未提交的同批结果。
+  const context = businessContext.getStore();
+  if (context?.prisma === prisma && context.owner === actor.sub) {
+    await authorize(context.transaction, actor);
+    return jsonResult(await read(context.transaction));
+  }
   return prisma.$transaction(
     async (transaction) => {
       await authorize(transaction, actor);
@@ -66,42 +102,47 @@ export async function businessWrite(
   const payloadHash = createHash('sha256')
     .update(JSON.stringify(canonicalize({ action, input })))
     .digest('hex');
-  return prisma.$transaction(
-    async (transaction) => {
-      // 与离线写入采用相同 owner 锁，聚合操作不会互相交叉执行。
-      const owners = await transaction.$queryRaw<
-        Array<{ id: string }>
-      >`SELECT id FROM sync_owners WHERE id=${actor.sub}::uuid FOR UPDATE`;
-      if (!owners.length) throw new UnauthorizedException('数据归属已失效');
-      await authorize(transaction, actor);
-      // 全 owner 共用操作身份，不允许跨业务挪用同一个身份。
-      const identity = { userId: actor.sub, operationId };
-      // 已提交的原结果可在记录后来编辑或删除后安全重放。
-      const receipt = await transaction.businessOperationReceipt.findUnique({
-        where: { userId_operationId: identity },
-      });
-      if (receipt) {
-        if (receipt.action !== action || receipt.payloadHash !== payloadHash)
-          throw new ConflictException({
-            code: 'BUSINESS_OPERATION_CONFLICT',
-            message: '同一操作身份不能提交不同业务内容',
-          });
-        return receipt.result;
-      }
-      // 首次结果也先转换为 JSON，避免重放日期类型不同。
-      const result = jsonResult(await write(transaction));
-      await transaction.businessOperationReceipt.create({
-        data: {
-          ...identity,
-          action,
-          payloadHash,
-          result: result as Prisma.InputJsonValue,
-        },
-      });
-      return result;
-    },
-    { maxWait: 30000, timeout: 60000 },
-  );
+  // 独立调用和审批事务内调用走相同的授权及回执代码。
+  const execute = async (
+    transaction: Prisma.TransactionClient,
+  ): Promise<Prisma.JsonValue> => {
+    // 与离线写入采用相同 owner 锁，聚合操作不会互相交叉执行。
+    const owners = await transaction.$queryRaw<
+      Array<{ id: string }>
+    >`SELECT id FROM sync_owners WHERE id=${actor.sub}::uuid FOR UPDATE`;
+    if (!owners.length) throw new UnauthorizedException('数据归属已失效');
+    await authorize(transaction, actor);
+    // 全 owner 共用操作身份，不允许跨业务挪用同一个身份。
+    const identity = { userId: actor.sub, operationId };
+    // 已提交的原结果可在记录后来编辑或删除后安全重放。
+    const receipt = await transaction.businessOperationReceipt.findUnique({
+      where: { userId_operationId: identity },
+    });
+    if (receipt) {
+      if (receipt.action !== action || receipt.payloadHash !== payloadHash)
+        throw new ConflictException({
+          code: 'BUSINESS_OPERATION_CONFLICT',
+          message: '同一操作身份不能提交不同业务内容',
+        });
+      return receipt.result;
+    }
+    // 首次结果也先转换为 JSON，避免重放日期类型不同。
+    const result = jsonResult(await write(transaction));
+    await transaction.businessOperationReceipt.create({
+      data: {
+        ...identity,
+        action,
+        payloadHash,
+        result: result as Prisma.InputJsonValue,
+      },
+    });
+    return result;
+  };
+  // 审批、领域副作用和业务回执必须共用一个真实数据库事务。
+  const context = businessContext.getStore();
+  if (context?.prisma === prisma && context.owner === actor.sub)
+    return execute(context.transaction);
+  return prisma.$transaction(execute, { maxWait: 30000, timeout: 60000 });
 }
 
 /// 找不到或属于其他归属时返回相同错误，不泄露记录存在性。

@@ -1,6 +1,6 @@
 # 可复用后端业务接口
 
-七模块业务方法由 BusinessModule 注册并导出。后续聊天工具和 MCP 入口注入同一个服务，调用同一个方法；当前 HTTP、PowerSync 和原音/图片传输继续使用现有入口。
+七模块业务方法由 BusinessModule 注册并导出。Codex MCP 已作为独立适配层注入并调用同一个服务，提供七模块查询、统计及按连接写权限执行的写入（单条直接执行，批量在Codex对话确认）；当前 HTTP、PowerSync 和原音/图片传输继续使用现有入口。接入、权限、跨端基线保护和上线说明见 [MCP README](../mcp/README.md)，应用内对话及 Function Calling 尚未接入。
 
 ## 调用约定
 

@@ -1,3 +1,5 @@
+import 'package:omni_butler/core/sync/business_edit_baseline.dart';
+
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
@@ -83,6 +85,9 @@ class QuoteImportResult {
 
 /// 名言编辑草稿。
 class QuoteDraft {
+  /// 编辑器打开时的原始事实；不会在上传重试或远端下行后偷偷重基。
+  final Map<String, dynamic>? baseline;
+
   /// 可选现有名言标识。
   final String? id;
 
@@ -97,6 +102,7 @@ class QuoteDraft {
 
   /// 创建名言草稿。
   const QuoteDraft({
+    this.baseline,
     this.id,
     required this.content,
     this.source,
@@ -128,7 +134,19 @@ class QuoteRepository {
   }
 
   /// 保存新增或编辑后的名言。
-  Future<void> save(QuoteDraft draft) async {
+  Future<void> save(QuoteDraft draft) =>
+      _database.transaction(() => _saveGuarded(draft));
+
+  /// 同事务核对原表单事实并保存聚合，失败时保留原数据及队列。
+  Future<void> _saveGuarded(QuoteDraft draft) async {
+    if (draft.baseline != null) {
+      // 表单基线检查与写入处于同一SQLite事务，远端下行不能插入检查间隙。
+      final QuoteRecord? current = await (_database.select(
+        _database.quotes,
+      )..where((row) => row.id.equals(draft.id!))).getSingleOrNull();
+      assertBusinessEditBaseline(draft.baseline, current?.toJson());
+    }
+
     // 清理后的正文。
     final String content = draft.content.trim();
     if (content.isEmpty) {

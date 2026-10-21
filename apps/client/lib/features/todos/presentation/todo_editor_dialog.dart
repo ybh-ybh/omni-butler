@@ -166,6 +166,9 @@ class _PriorityQuadrantOption extends StatelessWidget {
 
 /// 待办编辑状态。
 class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
+  /// 打开表单时固定的事实，不随远端下行或父组件重建而更新。
+  late final Map<String, dynamic>? _editBaseline;
+
   /// 表单校验键。
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
@@ -261,6 +264,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
   @override
   void initState() {
     super.initState();
+    _editBaseline = widget.record?.toJson();
     // 当前待办记录。
     final TodoRecord? record = widget.record;
     _titleController = TextEditingController(text: record?.title ?? '');
@@ -1834,6 +1838,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
       await repository.save(
         TodoDraft(
           id: widget.record?.id,
+          baseline: _editBaseline,
           title: _titleController.text,
           description: _descriptionController.text,
           parentId: widget.parent?.id ?? widget.record?.parentId,

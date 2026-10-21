@@ -1,3 +1,4 @@
+import 'package:omni_butler/core/sync/business_edit_baseline.dart';
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
@@ -76,6 +77,9 @@ enum TodoSeriesScope {
 
 /// 待办编辑草稿。
 class TodoDraft {
+  /// 编辑器打开时的原始事实；不会在上传重试或远端下行后偷偷重基。
+  final Map<String, dynamic>? baseline;
+
   /// 可选现有记录标识。
   final String? id;
 
@@ -117,6 +121,7 @@ class TodoDraft {
 
   /// 创建待办草稿。
   const TodoDraft({
+    this.baseline,
     this.id,
     required this.title,
     this.description,
@@ -290,6 +295,14 @@ class TodoRepository {
 
   /// 在单一事务内保存任务与进度结构。
   Future<void> _save(TodoDraft draft, {required TodoSeriesScope scope}) async {
+    if (draft.baseline != null) {
+      // 表单基线检查与写入处于同一SQLite事务，远端下行不能插入检查间隙。
+      final TodoRecord? current = await (_database.select(
+        _database.todoItems,
+      )..where((row) => row.id.equals(draft.id!))).getSingleOrNull();
+      assertBusinessEditBaseline(draft.baseline, current?.toJson());
+    }
+
     // 清理后的标题。
     final String normalizedTitle = draft.title.trim();
     if (normalizedTitle.isEmpty) {

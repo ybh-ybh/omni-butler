@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart' show Response;
+
 import 'package:omni_butler/core/auth/auth_models.dart';
 import 'package:omni_butler/core/auth/auth_repository.dart';
 import 'package:omni_butler/core/sync/sync_client_identity.dart';
@@ -147,13 +149,21 @@ class OmniPowerSyncConnector extends PowerSyncBackendConnector {
           utf8.encode(jsonEncode(payload)).length > 32 * 1024 * 1024) {
         throw const ApiFailure('单次同步事务超过 100000 条或 32 MB，无法拆分上传，请减少单次导入规模');
       }
-      await _auth.authorizedRequestForGeneration<void>(
-        _generation,
-        'POST',
-        '/sync/operations',
-        data: payload,
-      );
+      // 服务端候选持久化不等于本机事务成功，必须显式检查冲突状态。
+      final Response<Map<String, dynamic>> response = await _auth
+          .authorizedRequestForGeneration<Map<String, dynamic>>(
+            _generation,
+            'POST',
+            '/sync/operations',
+            data: payload,
+          );
       await _assertScope();
+      if (response.data?['conflict'] is Map) {
+        // 保留原SDK队列及所有本机修改，不能在用户处理前确认或自动重构基线。
+        throw const ApiFailure(
+          '离线修改与服务器记录冲突，请在设置 → 数据同步 → 同步冲突中处理；本机修改和原事务已保留。',
+        );
+      }
       await transaction.complete();
     }
   }
@@ -212,6 +222,8 @@ class OmniPowerSyncConnector extends PowerSyncBackendConnector {
       'table': entry.table,
       'id': entry.id,
       'data': ?data,
+      // 前值直接来自持久队列，响应丢失、重启和后续编辑不改变原负载。
+      'previous': ?entry.previousValues,
     };
   }
 }

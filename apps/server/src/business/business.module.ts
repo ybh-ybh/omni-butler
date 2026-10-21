@@ -7,6 +7,7 @@ import { NotesBusinessService } from './notes-business.service';
 import { QuotesService } from './quotes.service';
 import { TimeEntriesService } from './time-entries.service';
 import { TodosService } from './todos.service';
+import { BusinessRecycleService } from './business-recycle.service';
 
 /// 一处注册真实业务服务，后续协议入口直接注入，不增加七套控制器。
 const businessServices = [
@@ -17,6 +18,7 @@ const businessServices = [
   MembershipsService,
   EventsService,
   NotesBusinessService,
+  BusinessRecycleService,
 ];
 
 /// 七模块可复用后端能力；不包含模型会话或 MCP 传输。

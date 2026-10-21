@@ -1,3 +1,4 @@
+import 'package:omni_butler/core/sync/business_edit_baseline.dart';
 import 'package:drift/drift.dart';
 import 'package:flutter/material.dart';
 import 'package:omni_butler/core/database/app_database.dart';
@@ -31,6 +32,9 @@ class ActiveTimeEntryConflict implements Exception {
 
 /// 时间记录编辑草稿。
 class TimeEntryDraft {
+  /// 编辑器打开时的原始事实；不会在上传重试或远端下行后偷偷重基。
+  final Map<String, dynamic>? baseline;
+
   /// 可选现有记录标识。
   final String? id;
 
@@ -60,6 +64,7 @@ class TimeEntryDraft {
 
   /// 创建时间记录草稿。
   const TimeEntryDraft({
+    this.baseline,
     this.id,
     this.startedAt,
     this.endedAt,
@@ -152,7 +157,19 @@ class TimeEntryRepository {
   }
 
   /// 保存补录、编辑或进行中时间记录，并阻止区间重叠。
-  Future<void> save(TimeEntryDraft draft) async {
+  Future<void> save(TimeEntryDraft draft) =>
+      _database.transaction(() => _saveGuarded(draft));
+
+  /// 同事务核对原表单事实并保存聚合，失败时保留原数据及队列。
+  Future<void> _saveGuarded(TimeEntryDraft draft) async {
+    if (draft.baseline != null) {
+      // 表单基线检查与写入处于同一SQLite事务，远端下行不能插入检查间隙。
+      final TimeEntryRecord? current = await (_database.select(
+        _database.timeEntries,
+      )..where((row) => row.id.equals(draft.id!))).getSingleOrNull();
+      assertBusinessEditBaseline(draft.baseline, current?.toJson());
+    }
+
     // 兼容新旧草稿格式的绝对开始时间。
     final DateTime startedAt = _resolveStartedAt(draft);
     // 兼容新旧草稿格式的绝对结束时间。

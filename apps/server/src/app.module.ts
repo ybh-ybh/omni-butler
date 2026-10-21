@@ -8,6 +8,7 @@ import { validateEnvironment } from './config/environment';
 import { ImagesModule } from './images/images.module';
 import { NotesModule } from './notes/notes.module';
 import { BusinessModule } from './business/business.module';
+import { McpModule } from './mcp/mcp.module';
 
 /// Omni Butler 服务端根模块。
 @Module({
@@ -24,6 +25,7 @@ import { BusinessModule } from './business/business.module';
     ImagesModule,
     NotesModule,
     BusinessModule,
+    McpModule,
   ],
 })
 export class AppModule {}

@@ -310,6 +310,9 @@ void main() {
               'op': entry.op.toJson(),
               'table': entry.table,
               'id': entry.id,
+              // 新协议保留真实SDK前值，不能因正文已有revision就丢弃其他字段基线。
+              if (entry.previousValues != null)
+                'previous': Map<String, Object?>.from(entry.previousValues!),
               if (entry.opData != null)
                 'data': <String, Object?>{
                   ...entry.opData!,

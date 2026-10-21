@@ -4,6 +4,8 @@ import {
   Headers,
   HttpCode,
   Post,
+  Get,
+  Param,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -22,6 +24,19 @@ import { requireSyncSchemaVersion } from './sync-schema';
 export class SyncController {
   /// 注入同步落库服务。
   constructor(private readonly sync: SyncService) {}
+
+  /// 已认证设备查看持久冲突摘要，MCP令牌不能访问。
+  @Get('write-conflicts')
+  conflicts(@CurrentUser() user: AuthUser): ReturnType<SyncService['listWriteConflicts']> { return this.sync.listWriteConflicts(user.sub); }
+
+  /// 用户选择前重新读取完整本机意图及服务器事实。
+  @Get('write-conflicts/:id')
+  conflict(@CurrentUser() user: AuthUser, @Param('id') id: string): ReturnType<SyncService['getWriteConflict']> { return this.sync.getWriteConflict(user.sub, id); }
+
+  /// 决策只能由设备界面提交，不能把普通重试当成授权覆盖。
+  @Post('write-conflicts/:id/resolve')
+  @HttpCode(200)
+  resolveConflict(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() value: unknown): ReturnType<SyncService['resolveWriteConflict']> { return this.sync.resolveWriteConflict(user, id, value); }
 
   /// 原子应用一批 PowerSync CRUD 操作。
   @Post('operations')

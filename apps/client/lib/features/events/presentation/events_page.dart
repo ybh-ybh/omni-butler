@@ -2050,6 +2050,9 @@ class _EventEditorDialog extends ConsumerStatefulWidget {
 
 /// 周期事件编辑弹窗状态。
 class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
+  /// 打开表单时固定的事实，不随远端下行或父组件重建而更新。
+  late final Map<String, dynamic>? _editBaseline;
+
   /// 表单键。
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
@@ -2098,6 +2101,7 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
   @override
   void initState() {
     super.initState();
+    _editBaseline = widget.event?.toJson();
     // 待编辑事件。
     final EventRecord? event = widget.event;
     _nameController = TextEditingController(text: event?.name ?? '');
@@ -2158,6 +2162,7 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
           .save(
             EventDraft(
               id: widget.event?.id,
+              baseline: _editBaseline,
               name: _nameController.text,
               category: _categoryController.text,
               intervalValue: int.parse(_intervalController.text),

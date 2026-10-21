@@ -33,6 +33,7 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://omni_butler:${POSTGRES_PASSWORD}@postgres:5432/omni_butler?schema=public
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
       POWERSYNC_URL: ${POWERSYNC_PUBLIC_URL:-}
       JWT_KEYS_DIR: /app/keys
       SYNC_SECRET: ${SYNC_SECRET}

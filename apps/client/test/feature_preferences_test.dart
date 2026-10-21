@@ -13,6 +13,7 @@ import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/features/floating/data/floating_window_preferences.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
+import 'package:omni_butler/features/settings/data/sync_conflict_repository.dart';
 import 'package:omni_butler/features/settings/presentation/settings_page.dart';
 import 'package:omni_butler/shared/ui/omni_tag.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -164,6 +165,10 @@ void main() {
         sharedPreferencesProvider.overrideWithValue(preferences),
         authControllerProvider.overrideWith(_ConnectedAuthController.new),
         syncControllerProvider.overrideWith(_FailingSyncController.new),
+        // 隔离新增候选查询，错误标签不依赖真实服务器或存储插件。
+        syncConflictProvider.overrideWith(
+          (Ref ref) async => <String, dynamic>{'items': <Object>[]},
+        ),
       ],
     );
 

@@ -34,6 +34,9 @@ class _RecordingAuth extends AuthRepository {
   /// 是否模拟服务器已不支持当前业务结构。
   bool schemaCompatible = true;
 
+  /// 模拟HTTP成功但业务事务仍处于待决冲突，不应确认队列。
+  Map<String, dynamic>? uploadResult;
+
   /// 可选上传开始信号，供会话竞态测试使用。
   Completer<void>? uploadStarted;
 
@@ -69,7 +72,10 @@ class _RecordingAuth extends AuthRepository {
     if (loseResponse) {
       throw const ApiFailure('模拟响应丢失');
     }
-    return Response<T>(requestOptions: RequestOptions(path: path));
+    return Response<T>(
+      requestOptions: RequestOptions(path: path),
+      data: uploadResult as T?,
+    );
   }
 
   /// 模拟暂时离线，让 PowerSync 接管后续重试。
@@ -127,6 +133,104 @@ Future<void> _insertTodo(AppDatabase database, String id) async {
 /// 验证完整事务、幂等重试、初始导入和离线启动行为。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('普通字段前值持久捕获，HTTP冲突候选不确认队列，重启重试不读取最新本机值', () async {
+    // 独立真实SDK文件经历本机两次编辑、冲突、重启与明确处理后的恢复。
+    final Directory directory = await Directory.systemTemp.createTemp(
+      'omni_mcp_baseline_',
+    );
+    // 固定文件身份，不创建用户库或访问在线服务。
+    final String databasePath = '${directory.path}/db.sqlite';
+    // 可控HTTP冲突候选，模拟用户处理前后的服务器回执。
+    final _RecordingAuth auth = _RecordingAuth();
+    // 必须使用生产RawTable触发器及Drift桥接，不能伪造previous。
+    OmniSyncRuntime? runtime = await OmniSyncRuntime.openAtPath(
+      auth,
+      databasePath,
+    );
+    try {
+      // 正式名言最初服务器事实。
+      const String id = '01990000-7000-8002-8000-000000000301';
+      // 固定UTC日期避免设备墙钟影响基线。
+      final DateTime now = DateTime.utc(2026, 10, 20);
+      await runtime.database
+          .into(runtime.database.quotes)
+          .insert(
+            QuotesCompanion.insert(
+              id: id,
+              content: '编辑前',
+              source: const Value<String?>('原来源'),
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      auth.requests.clear();
+      // 两次独立编辑，各自在SDK队列中捕获当时前态。
+      await (runtime.database.update(runtime.database.quotes)
+            ..where((Quotes row) => row.id.equals(id)))
+          .write(const QuotesCompanion(content: Value<String>('第一次本机编辑')));
+      await (runtime.database.update(runtime.database.quotes)
+            ..where((Quotes row) => row.id.equals(id)))
+          .write(const QuotesCompanion(content: Value<String>('后续本机编辑')));
+      // 服务器已经由MCP修改，HTTP200只说明冲突候选已持久保存。
+      auth.uploadResult = <String, dynamic>{
+        'applied': 0,
+        'ignored': 0,
+        'conflict': <String, dynamic>{
+          'id': 'conflict-test',
+          'status': 'pending',
+        },
+      };
+      await expectLater(
+        OmniPowerSyncConnector(auth).uploadData(runtime.powerSync),
+        throwsA(
+          isA<ApiFailure>().having(
+            (ApiFailure value) => value.message,
+            '冲突原因',
+            contains('同步冲突'),
+          ),
+        ),
+      );
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 2);
+      // 原负载固定为编辑时前值，不能变成最后一次本机文字。
+      final Map<String, dynamic> first = Map<String, dynamic>.from(
+        auth.requests.single,
+      );
+      expect(
+        ((first['operations'] as List).single as Map)['previous']['content'],
+        '编辑前',
+      );
+      expect(
+        ((first['operations'] as List).single as Map)['data']['content'],
+        '第一次本机编辑',
+      );
+      await runtime.close();
+      runtime = null;
+      runtime = await OmniSyncRuntime.openAtPath(auth, databasePath);
+      await expectLater(
+        OmniPowerSyncConnector(auth).uploadData(runtime.powerSync),
+        throwsA(isA<ApiFailure>()),
+      );
+      expect(auth.requests[1], first);
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 2);
+      // 只有服务端人工处理完原候选后，同一回执才允许原队列确认。
+      auth.uploadResult = <String, dynamic>{
+        'applied': 0,
+        'ignored': 0,
+        'replayed': true,
+      };
+      await OmniPowerSyncConnector(auth).uploadData(runtime.powerSync);
+      expect((await runtime.powerSync.getUploadQueueStats()).count, 0);
+      // 后一笔保留相对于第一次修改的真实基线，不能自动重基到服务器。
+      final Map last = (auth.requests.last['operations'] as List).single as Map;
+      expect(last['previous']['content'], '第一次本机编辑');
+      expect(last['data']['content'], '后续本机编辑');
+    } finally {
+      await runtime?.close();
+      await directory.delete(recursive: true);
+    }
+  });
 
   test('批量回收失败不留同步队列，成功时正文附件和标签基线只上传一个事务', () async {
     // 使用真实触发器生成上传队列，不手动伪造 CRUD 记录。

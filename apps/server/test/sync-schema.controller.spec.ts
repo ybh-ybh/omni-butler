@@ -12,6 +12,7 @@ import { JwtAuthGuard } from '../src/auth/jwt-auth.guard';
 import { JwksService } from '../src/auth/jwks.service';
 import { SyncController } from '../src/sync/sync.controller';
 import { SyncService } from '../src/sync/sync.service';
+import { syncSchemaVersion } from '../src/sync/sync-schema';
 import { SyncMigrationController } from '../src/sync/sync-migration.controller';
 import { SyncMigrationService } from '../src/sync/sync-migration.service';
 import { NotesController } from '../src/notes/notes.controller';
@@ -45,14 +46,14 @@ describe('同步结构版本 HTTP 边界', () => {
   // 可观察的下行凭证签发边界。
   const issuePowerSyncToken = jest
     .fn()
-    .mockResolvedValue({ syncSchemaVersion: 11 });
+    .mockResolvedValue({ syncSchemaVersion });
   // 预检必须可让旧客户端得到可解释的版本结果。
   const preview = jest
     .fn()
     .mockResolvedValue({
       protocolVersion: 1,
       snapshotVersion: 3,
-      syncSchemaVersion: 11,
+      syncSchemaVersion,
     });
   // 升级前待确认迁移可在升级后继续查询原回执。
   const status = jest
@@ -150,13 +151,13 @@ describe('同步结构版本 HTTP 边界', () => {
   it.each(requests)(
     '%s 对缺失、旧版和未知新版协议头拒绝且不写入',
     async (path, body) => {
-      for (const version of [undefined, '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '12']) {
+      for (const version of [undefined, ...Array.from({ length: syncSchemaVersion - 1 }, (_value, index) => String(index + 1)), String(syncSchemaVersion + 1)]) {
         // 请求协议不兼容时，响应提供准确的服务器版本。
         const response = await post(path, body, version);
         expect(response.status).toBe(409);
         expect(await response.json()).toMatchObject({
           code: 'SYNC_SCHEMA_MISMATCH',
-          syncSchemaVersion: 11,
+          syncSchemaVersion,
         });
       }
       expect(applyBatch).not.toHaveBeenCalled();
@@ -168,13 +169,13 @@ describe('同步结构版本 HTTP 边界', () => {
   it.each(requests)(
     '%s 接受新版请求，步骤表可以通过DTO白名单',
     async (path, body) => {
-      expect((await post(path, body, '11')).status).toBe(200);
+      expect((await post(path, body, String(syncSchemaVersion))).status).toBe(200);
     },
   );
 
   it('会话与预检返回结构版本，旧回执查询不受版本门禁阻断', async () => {
     expect(await (await fetch(`${baseUrl}/auth/session`)).json()).toMatchObject(
-      { sub: user.sub, syncSchemaVersion: 11 },
+      { sub: user.sub, syncSchemaVersion },
     );
     expect(
       await (
@@ -182,7 +183,7 @@ describe('同步结构版本 HTTP 边界', () => {
           syncKey: 'valid-test-sync-key',
         })
       ).json(),
-    ).toMatchObject({ syncSchemaVersion: 11, snapshotVersion: 3 });
+    ).toMatchObject({ syncSchemaVersion, snapshotVersion: 3 });
     expect(
       await (
         await post('/sync/migrations/status', {
@@ -199,7 +200,7 @@ describe('同步结构版本 HTTP 边界', () => {
         await post(
           '/sync/migrations',
           { ...requests[1]![1], snapshotVersion: 1 },
-          '11',
+          String(syncSchemaVersion),
         )
       ).status,
     ).toBe(400);
@@ -214,8 +215,8 @@ describe('同步结构版本 HTTP 边界', () => {
       expect((await fetch(`${baseUrl}${path}/current`, { headers: version ? { 'X-Omni-Sync-Schema': version } : {} })).status).toBe(409);
     }
     expect(recognize).not.toHaveBeenCalled(); expect(current).not.toHaveBeenCalled();
-    expect((await post(path, { operationId: randomUUID(), consent: true }, '11')).status).toBe(201);
-    expect((await fetch(`${baseUrl}${path}/current`, { headers: { 'X-Omni-Sync-Schema': '11' } })).status).toBe(200);
+    expect((await post(path, { operationId: randomUUID(), consent: true }, String(syncSchemaVersion))).status).toBe(201);
+    expect((await fetch(`${baseUrl}${path}/current`, { headers: { 'X-Omni-Sync-Schema': String(syncSchemaVersion) } })).status).toBe(200);
     expect((await fetch(`${baseUrl}${path}/current`, { method: 'DELETE', headers: { 'X-Omni-Sync-Schema': '10' } })).status).toBe(200);
     expect(cancel).toHaveBeenCalledTimes(1);
   });

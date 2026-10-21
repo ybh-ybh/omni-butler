@@ -1,3 +1,4 @@
+import 'package:omni_butler/core/sync/business_edit_baseline.dart';
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:uuid/uuid.dart';
@@ -22,6 +23,9 @@ enum InventoryStatus {
 
 /// 物品编辑草稿。
 class InventoryDraft {
+  /// 编辑器打开时的原始事实；不会在上传重试或远端下行后偷偷重基。
+  final Map<String, dynamic>? baseline;
+
   /// 可选现有物品标识。
   final String? id;
 
@@ -76,6 +80,7 @@ class InventoryDraft {
 
   /// 创建物品草稿。
   const InventoryDraft({
+    this.baseline,
     this.id,
     required this.name,
     this.category,
@@ -229,7 +234,19 @@ class InventoryRepository {
   }
 
   /// 保存新增或编辑后的物品。
-  Future<String> save(InventoryDraft draft) async {
+  Future<String> save(InventoryDraft draft) =>
+      _database.transaction(() => _saveGuarded(draft));
+
+  /// 同事务核对原表单事实并保存聚合，失败时保留原数据及队列。
+  Future<String> _saveGuarded(InventoryDraft draft) async {
+    if (draft.baseline != null) {
+      // 表单基线检查与写入处于同一SQLite事务，远端下行不能插入检查间隙。
+      final InventoryRecord? current = await (_database.select(
+        _database.inventoryItems,
+      )..where((row) => row.id.equals(draft.id!))).getSingleOrNull();
+      assertBusinessEditBaseline(draft.baseline, current?.toJson());
+    }
+
     // 清理后的物品名称。
     final String name = draft.name.trim();
     if (name.isEmpty) {

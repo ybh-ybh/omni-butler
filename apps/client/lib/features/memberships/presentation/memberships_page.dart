@@ -2538,6 +2538,9 @@ class _MembershipEditorDialog extends ConsumerStatefulWidget {
 /// 会员编辑弹窗状态。
 class _MembershipEditorDialogState
     extends ConsumerState<_MembershipEditorDialog> {
+  /// 打开表单时固定的事实，不随远端下行或父组件重建而更新。
+  late final Map<String, dynamic>? _editBaseline;
+
   /// 表单键。
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
@@ -2631,6 +2634,7 @@ class _MembershipEditorDialogState
   @override
   void initState() {
     super.initState();
+    _editBaseline = widget.membership?.toJson();
     // 待编辑会员。
     final MembershipRecord? membership = widget.membership;
     _nameController = TextEditingController(text: membership?.name ?? '');
@@ -2802,6 +2806,7 @@ class _MembershipEditorDialogState
           .save(
             MembershipDraft(
               id: widget.membership?.id,
+              baseline: _editBaseline,
               name: _nameController.text,
               provider: _providerController.text,
               category: _categoryController.text,

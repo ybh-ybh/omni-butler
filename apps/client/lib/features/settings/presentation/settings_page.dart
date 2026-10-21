@@ -21,6 +21,8 @@ import 'package:omni_butler/features/floating/data/floating_window_preferences.d
 import 'package:omni_butler/features/home/presentation/home_card_manager.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/presentation/ai_settings_section.dart';
+import 'package:omni_butler/features/settings/presentation/mcp_settings_section.dart';
+import 'package:omni_butler/features/settings/presentation/sync_conflicts_section.dart';
 import 'package:omni_butler/features/settings/presentation/recycle_bin_section.dart';
 import 'package:omni_butler/features/settings/presentation/sync_connection_dialog.dart';
 import 'package:omni_butler/features/settings/presentation/sync_backup_dialog.dart';
@@ -857,8 +859,21 @@ class _SettingsCategoryContent extends ConsumerWidget {
         preference: ref.watch(themeControllerProvider),
       ),
       _SettingsCategory.notifications => const _NotificationCard(),
-      _SettingsCategory.ai => const AiSettingsSection(),
-      _SettingsCategory.sync => _SyncSettingsCard(colors: colors),
+      _SettingsCategory.ai => const Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          AiSettingsSection(),
+          SizedBox(height: 28),
+          McpSettingsSection(),
+        ],
+      ),
+      _SettingsCategory.sync => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _SyncSettingsCard(colors: colors),
+          const SyncConflictsSection(),
+        ],
+      ),
       _SettingsCategory.storage => const RecycleBinSection(),
     };
     if (category == _SettingsCategory.home) {

@@ -10,6 +10,7 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/home/data/quote_repository.dart';
 import 'package:omni_butler/features/home/presentation/quote_library_dialog.dart';
+import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 可注入名言库弹窗的测试文件网关。
 class _FakeQuoteJsonFileGateway implements QuoteJsonFileGateway {
@@ -46,6 +47,41 @@ class _FakeQuoteJsonFileGateway implements QuoteJsonFileGateway {
 
 /// 验证名言库 JSON 操作菜单与导入预览交互。
 void main() {
+  testWidgets('旧编辑器遇到MCP下行后保留窗口和草稿，不覆盖服务器内容', (WidgetTester tester) async {
+    // 真实内存库与仓储，模拟已同步的正式名言。
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // 先保存再读取编辑开始时的身份。
+    final QuoteRepository repository = QuoteRepository(database);
+    await repository.save(const QuoteDraft(content: '原名言'));
+    // 只有原身份才能被后来的服务器事实更新。
+    final QuoteRecord original = await database
+        .select(database.quotes)
+        .getSingle();
+    await _pumpDialog(
+      tester,
+      database: database,
+      gateway: _FakeQuoteJsonFileGateway(),
+    );
+    await tester.tap(find.byTooltip('编辑'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(OmniTextField).first, '尚未提交的用户草稿');
+    // 编辑器仍打开时模拟远端下行，列表更新不能重置编辑基线。
+    await repository.save(QuoteDraft(id: original.id, content: 'MCP正式内容'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(OmniButton, '保存'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('记录已在其他设备或 MCP 中修改'), findsOneWidget);
+    expect(find.text('编辑名言'), findsOneWidget);
+    expect(find.text('尚未提交的用户草稿'), findsOneWidget);
+    expect(
+      (await database.select(database.quotes).getSingle()).content,
+      'MCP正式内容',
+    );
+    await _disposeDialog(tester, database);
+  });
+
   testWidgets('紧凑布局可预览并选择替换导入且不发生溢出', (WidgetTester tester) async {
     // 模拟 Android 紧凑视口。
     tester.view.physicalSize = const Size(390, 844);

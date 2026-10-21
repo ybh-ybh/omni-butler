@@ -14,6 +14,7 @@ import 'package:omni_butler/core/auth/auth_providers.dart';
 import 'package:omni_butler/core/sync/sync_connection_coordinator.dart';
 import 'package:omni_butler/core/sync/sync_connection_providers.dart';
 import 'package:omni_butler/features/settings/presentation/settings_page.dart';
+import 'package:omni_butler/features/settings/data/sync_conflict_repository.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -415,19 +416,30 @@ void main() {
             }
             if (scale == 1) {
               // 视觉高度保持32px，安卓热区仍有48px。
-              for (final Element element
-                  in find.byType(OmniButton).evaluate()) {
-                // 当前按钮及实际绘制的Material表面。
-                final Finder button = find.byWidget(element.widget);
-                final Finder surface = find
-                    .descendant(of: button, matching: find.byType(Material))
-                    .first;
-                expect(tester.getSize(surface).height, 32);
-                if (platform == TargetPlatform.android) {
-                  expect(
-                    tester.getSize(button).height,
-                    greaterThanOrEqualTo(48),
-                  );
+              for (final String group in <String>[
+                'sync-connection-actions',
+                'sync-backup-actions',
+                'sync-disconnect-panel',
+              ]) {
+                for (final Element element
+                    in find
+                        .descendant(
+                          of: find.byKey(ValueKey<String>(group)),
+                          matching: find.byType(OmniButton),
+                        )
+                        .evaluate()) {
+                  // 当前按钮及实际绘制的Material表面。
+                  final Finder button = find.byWidget(element.widget);
+                  final Finder surface = find
+                      .descendant(of: button, matching: find.byType(Material))
+                      .first;
+                  expect(tester.getSize(surface).height, 32);
+                  if (platform == TargetPlatform.android) {
+                    expect(
+                      tester.getSize(button).height,
+                      greaterThanOrEqualTo(48),
+                    );
+                  }
                 }
               }
               // 桌面操作在分组起点左对齐，不能收缩后居中。
@@ -516,6 +528,10 @@ Future<_LayoutFixture> _pumpSettings(
       sharedPreferencesProvider.overrideWithValue(preferences),
       authControllerProvider.overrideWith(() => _LayoutAuthController(session)),
       syncConnectionCoordinatorProvider.overrideWithValue(_LayoutCoordinator()),
+      // 本测试只验证同步操作布局；候选查询的网络边界独立覆盖。
+      syncConflictProvider.overrideWith(
+        (Ref ref) async => <String, dynamic>{'items': <Object>[]},
+      ),
     ],
   );
   // 包含弹窗路由的完整截图边界。

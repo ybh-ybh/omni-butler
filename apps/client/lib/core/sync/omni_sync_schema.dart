@@ -13,7 +13,10 @@ RawTable _rawTable(
       syncedColumns: syncedColumns,
       options: TableOptions(
         ignoreEmptyUpdates: true,
-        trackPreviousValues: trackPreviousValues,
+        // MCP保护记录的冲突检查使用写入时前值，不读取上传时当前行。
+        trackPreviousValues:
+            trackPreviousValues ??
+            const TrackPreviousValuesOptions(onlyWhenChanged: false),
       ),
     ),
     clear: 'DELETE FROM "$name"',
@@ -31,7 +34,10 @@ RawTable _dailyQuoteSelectionsTable() {
         'created_at',
         'updated_at',
       ],
-      options: TableOptions(ignoreEmptyUpdates: true),
+      options: TableOptions(
+        ignoreEmptyUpdates: true,
+        trackPreviousValues: TrackPreviousValuesOptions(onlyWhenChanged: false),
+      ),
     ),
     put: PendingStatement(
       sql: '''
@@ -225,12 +231,7 @@ final Schema omniSyncSchema = Schema(
       ],
       trackPreviousValues: const TrackPreviousValuesOptions(
         // 固定保存整组前值，上传时为未变的时间字段补齐同一次选择意图。
-        columnFilter: <String>[
-          'tags',
-          'day_key',
-          'record_time_seconds',
-          'record_utc_offset_minutes',
-        ],
+        // 同时保护置顶及记录时间等普通字段，正文/标签继续原有专用规则。
         onlyWhenChanged: false,
       ),
     ),

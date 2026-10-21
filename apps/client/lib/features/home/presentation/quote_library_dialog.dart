@@ -113,25 +113,11 @@ class _QuoteLibraryDialogState extends ConsumerState<QuoteLibraryDialog> {
   /// 打开名言编辑器。
   Future<void> _edit([QuoteRecord? quote]) async {
     // 用户提交的名言草稿。
-    final QuoteDraft? draft = await showOmniSideSheet<QuoteDraft>(
+    final bool? saved = await showOmniSideSheet<bool>(
       context,
       builder: (BuildContext context) => _QuoteEditorDialog(quote: quote),
     );
-    if (draft == null) {
-      return;
-    }
-    try {
-      await ref.read(quoteRepositoryProvider).save(draft);
-      _invalidateToday();
-    } on FormatException catch (error) {
-      if (mounted) {
-        showOmniMessage(
-          context,
-          message: error.message,
-          tone: OmniMessageTone.error,
-        );
-      }
-    }
+    if (saved == true) _invalidateToday();
   }
 
   /// 确认并删除名言。
@@ -565,7 +551,7 @@ class _QuoteImportPreviewDialogState extends State<QuoteImportPreviewDialog> {
 }
 
 /// 名言编辑弹窗。
-class _QuoteEditorDialog extends StatefulWidget {
+class _QuoteEditorDialog extends ConsumerStatefulWidget {
   /// 可选待编辑名言。
   final QuoteRecord? quote;
 
@@ -574,11 +560,20 @@ class _QuoteEditorDialog extends StatefulWidget {
 
   /// 创建弹窗状态。
   @override
-  State<_QuoteEditorDialog> createState() => _QuoteEditorDialogState();
+  ConsumerState<_QuoteEditorDialog> createState() => _QuoteEditorDialogState();
 }
 
 /// 名言编辑弹窗状态。
-class _QuoteEditorDialogState extends State<_QuoteEditorDialog> {
+class _QuoteEditorDialogState extends ConsumerState<_QuoteEditorDialog> {
+  /// 打开表单时固定的事实，不随远端下行或父组件重建而更新。
+  late final Map<String, dynamic>? _editBaseline;
+
+  /// 保存成功前保持窗口及当前草稿，冲突不清空文字。
+  bool _saving = false;
+
+  /// 持续展示的校验或冲突原因。
+  String? _saveError;
+
   /// 正文控制器。
   late final TextEditingController _contentController;
 
@@ -592,6 +587,7 @@ class _QuoteEditorDialogState extends State<_QuoteEditorDialog> {
   @override
   void initState() {
     super.initState();
+    _editBaseline = widget.quote?.toJson();
     _contentController = TextEditingController(
       text: widget.quote?.content ?? '',
     );
@@ -608,15 +604,32 @@ class _QuoteEditorDialogState extends State<_QuoteEditorDialog> {
   }
 
   /// 提交名言草稿。
-  void _submit() {
-    Navigator.of(context).pop(
-      QuoteDraft(
-        id: widget.quote?.id,
-        content: _contentController.text,
-        source: _sourceController.text,
-        isEnabled: _isEnabled,
-      ),
-    );
+  Future<void> _submit() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
+    try {
+      await ref
+          .read(quoteRepositoryProvider)
+          .save(
+            QuoteDraft(
+              id: widget.quote?.id,
+              baseline: _editBaseline,
+              content: _contentController.text,
+              source: _sourceController.text,
+              isEnabled: _isEnabled,
+            ),
+          );
+      if (mounted) Navigator.of(context).pop(true);
+    } on FormatException catch (error) {
+      if (mounted) setState(() => _saveError = error.message);
+    } catch (_) {
+      if (mounted) setState(() => _saveError = '名言未保存，请保留草稿并重试。');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   /// 构建名言编辑表单。
@@ -630,13 +643,21 @@ class _QuoteEditorDialogState extends State<_QuoteEditorDialog> {
           variant: OmniButtonVariant.secondary,
           onPressed: () => Navigator.of(context).pop(),
         ),
-        OmniButton(label: '保存', onPressed: _submit),
+        OmniButton(
+          label: _saving ? '保存中' : '保存',
+          onPressed: _saving ? null : _submit,
+        ),
       ],
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(OmniSpacing.xl),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
+            if (_saveError != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: OmniSpacing.md),
+                child: Text(_saveError!),
+              ),
             OmniTextField(
               controller: _contentController,
               autofocus: true,
