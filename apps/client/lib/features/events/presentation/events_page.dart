@@ -1585,7 +1585,8 @@ class _EventCard extends ConsumerWidget {
                 ),
                 SizedBox(height: compact ? OmniSpacing.xxs : OmniSpacing.xs),
                 Divider(height: 1, color: colors.line),
-                if (!compact) const SizedBox(height: OmniSpacing.xxs),
+                // 桌面操作行与分隔线留足间距，平衡按钮上下留白。
+                if (!compact) const SizedBox(height: OmniSpacing.sm),
                 SizedBox(
                   height: compact ? OmniSize.touch : null,
                   child: Row(

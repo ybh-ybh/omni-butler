@@ -188,6 +188,36 @@ void main() {
     expect(activeHistoryButton, findsOneWidget);
     expect(activeRecordButton, findsOneWidget);
     expect(firstRecordButton, findsOneWidget);
+    // 桌面按钮与分隔线保留统一段间距，图标和文字共享同一水平中心线。
+    final Rect actionDividerRect = tester.getRect(
+      find.descendant(of: activeCard, matching: find.byType(Divider)),
+    );
+    expect(
+      tester.getRect(activeRecordButton).top - actionDividerRect.bottom,
+      closeTo(OmniSpacing.sm, 0.1),
+    );
+    expect(
+      tester.getCenter(activeHistoryButton).dy,
+      closeTo(tester.getCenter(activeRecordButton).dy, 0.1),
+    );
+    expect(
+      tester
+          .getCenter(
+            find.descendant(of: activeHistoryButton, matching: find.text('历史')),
+          )
+          .dy,
+      closeTo(
+        tester
+            .getCenter(
+              find.descendant(
+                of: activeRecordButton,
+                matching: find.text('记录'),
+              ),
+            )
+            .dy,
+        0.1,
+      ),
+    );
     expect(
       find.descendant(of: activeHistoryButton, matching: find.text('历史')),
       findsOneWidget,
