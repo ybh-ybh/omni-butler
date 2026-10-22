@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# 使用 BuildKit 内置前端，避免构建前额外从 Docker Hub 拉取语法镜像。
 FROM node:24-bookworm-slim AS base
 RUN apt-get update \
     && apt-get install -y --no-install-recommends openssl ca-certificates \
@@ -28,6 +28,8 @@ FROM base AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=production-dependencies /app/node_modules ./node_modules
+# 复用构建阶段已下载的迁移引擎，避免非 root 启动时补下载到只读依赖目录。
+COPY --from=build /app/node_modules/@prisma/engines/schema-engine-* ./node_modules/@prisma/engines/
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/prisma.config.ts ./prisma.config.ts

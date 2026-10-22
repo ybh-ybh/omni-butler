@@ -223,12 +223,7 @@ export class MembershipsService {
   /// 基础编辑不会自动生成第二次首购账目。
   update(actor: AuthUser, value: unknown): Promise<Prisma.JsonValue> {
     // 不接受直接插入支付记录的参数。
-    const input = objectInput(value, [
-      'operationId',
-      'id',
-      'timeZone',
-      ...memberFields,
-    ]);
+    const input = objectInput(value, ['operationId', 'id', ...memberFields]);
     uuidInput(input.id);
     return this.save(actor, input, false);
   }
@@ -239,8 +234,8 @@ export class MembershipsService {
     input: Record<string, unknown>,
     creating: boolean,
   ): Promise<Prisma.JsonValue> {
-    // 首购时区不从服务器默认值推断。
-    const timeZone = timeZoneInput(input.timeZone);
+    // 只有新增首购需要时区；基础编辑不读取或校验未使用的时区。
+    const timeZone = creating ? timeZoneInput(input.timeZone) : null;
     // 独立构造受限标量数据。
     const data: Partial<MemberFields> = {};
     if (input.name !== undefined) data.name = textInput(input.name, 'name')!;
@@ -384,7 +379,7 @@ export class MembershipsService {
                 paidAt: localInstant(
                   member.purchaseDate.toISOString().slice(0, 10),
                   0,
-                  timeZone,
+                  timeZone!,
                 ),
                 validFrom: member.purchaseDate,
                 validUntil: member.expirationDate,

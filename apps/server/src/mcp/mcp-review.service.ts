@@ -19,17 +19,13 @@ import { reviewSchema, type McpModule } from './mcp-catalog';
 import { McpService } from './mcp.service';
 import { notePlainText } from '../business/notes-business.service';
 
-/// 自然周/月只负责计算窗口，正文总结由 Codex 生成，不触发后端付费模型。
-/// 每个业务模块对应唯一的统计工具。
-const summaryTools: Record<McpModule, string> = {
-  quotes: 'get_quote_summary',
-  time: 'get_time_summary',
-  todos: 'get_todo_summary',
-  inventory: 'get_inventory_summary',
-  memberships: 'get_membership_spending',
-  events: 'get_event_summary',
-  notes: 'get_note_summary',
-};
+/// 仅这些模块使用截止点计算进行中时长、支付/完成事实或状态。
+const cutoffModules: readonly McpModule[] = [
+  'time',
+  'todos',
+  'memberships',
+  'events',
+];
 /// 可解释的主指标用于后端计算变化，金额不混合不同来源。
 const metrics: Record<McpModule, string[]> = {
   quotes: ['quoteCount', 'dailyCount'],
@@ -103,11 +99,13 @@ export class McpReviewService {
     // 调用每个已登记统计方法，数字来自后端完整授权集合。
     const summaries: Record<string, Prisma.JsonValue> = {};
     for (const module of modules)
-      summaries[module] = await this.mcp.read(
-        connection.id,
-        summaryTools[module],
-        { from, to, timeZone, asOf: asOf.toISOString() },
-      );
+      summaries[module] = await this.mcp.statistics(connection.id, {
+        module,
+        from,
+        to,
+        timeZone,
+        ...(cutoffModules.includes(module) ? { asOf: asOf.toISOString() } : {}),
+      });
     // 比较口径单独列出，基期0不返回误导百分比。
     const comparison: Record<string, unknown> = {};
     if (input.comparePrevious) {
@@ -127,11 +125,15 @@ export class McpReviewService {
             ).toISOString();
       for (const module of modules) {
         // 统计结果在当前事实基础上查询过去范围，不伪称有历史状态快照。
-        const previous = (await this.mcp.read(
-          connection.id,
-          summaryTools[module],
-          { from: previousFrom, to: from, timeZone, asOf: asOf.toISOString() },
-        )) as Record<string, Prisma.JsonValue>;
+        const previous = (await this.mcp.statistics(connection.id, {
+          module,
+          from: previousFrom,
+          to: from,
+          timeZone,
+          ...(cutoffModules.includes(module)
+            ? { asOf: asOf.toISOString() }
+            : {}),
+        })) as Record<string, Prisma.JsonValue>;
         // 仅比较确实存在的确定性数值字段。
         const current = summaries[module] as Record<string, Prisma.JsonValue>;
         comparison[module] = {
@@ -227,7 +229,7 @@ export class McpReviewService {
       },
       references: modules.map((module) => ({
         module,
-        tool: summaryTools[module],
+        tool: 'get_statistics',
         sourceIds:
           (summaries[module] as Record<string, Prisma.JsonValue>).sourceIds ??
           [],
@@ -242,7 +244,7 @@ export class McpReviewService {
         '仅覆盖服务器已接收的正式数据，不含本机草稿及未同步设备',
         '统计覆盖完整范围，来源明细最多200条；不能把截断材料视为全文覆盖',
         '没有记录不代表没有活动，推测需要明确标注',
-        '生成文字默认不保存；用户另行明确要求保存后，prepare_create_note再commit_action，遵循单条直接执行、批量在Codex对话确认规则',
+        '生成文字默认不保存；用户另行明确要求保存单篇总结时调用create_note直接保存，多对象任务使用prepare_batch并在对话确认后commit_action',
         '不同统计请求之间可能存在并发提交；每个模块的统计在独立一致快照内完成',
       ],
     };

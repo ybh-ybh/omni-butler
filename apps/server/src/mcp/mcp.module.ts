@@ -6,12 +6,13 @@ import { McpCatalog } from './mcp-catalog';
 import { McpController, McpManagementController } from './mcp.controller';
 import { McpReviewService } from './mcp-review.service';
 import { McpService } from './mcp.service';
+import { McpEditTokenService } from './mcp-edit-token.service';
 
 /// 两种认证边界独立，业务服务和现有同步继续复用。
 @Module({
   imports: [AuthModule, BusinessModule, PrismaModule],
   controllers: [McpController, McpManagementController],
-  providers: [McpCatalog, McpService, McpReviewService],
+  providers: [McpCatalog, McpService, McpReviewService, McpEditTokenService],
   exports: [McpService],
 })
 export class McpModule {}

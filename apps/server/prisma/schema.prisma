@@ -32,6 +32,11 @@ model SyncOwner {
   mcpActions           McpAction[]
   tombstones           SyncTombstone[]
   todoItems            TodoItem[]
+  /// 后台重复待办的服务端状态与逐系列进度，不参与同步。
+  todoRecurrenceState TodoRecurrenceState?
+  todoRecurrenceCursors TodoRecurrenceCursor[]
+  /// 后台实例的持续同步保护，不随连接撤销或记录删除清理。
+  todoRecurrenceProtections TodoRecurrenceProtection[]
   /// 进度任务的独立步骤。
   todoProgressSteps    TodoProgressStep[]
   quotes               Quote[]
@@ -426,6 +431,63 @@ model SyncTombstone {
 
   @@id([userId, tableName, recordId])
   @@map("sync_tombstones")
+}
+
+/// 后台重复生成的当前状态，缺少时区或发生歧义时明确停止。
+model TodoRecurrenceState {
+  /// 数据归属。
+  userId String @id @map("user_id") @db.Uuid
+  /// idle/catching_up/blocked_timezone/blocked_authorization/error。
+  status String @db.VarChar(32)
+  /// 本轮唯一有效的业务时区。
+  timeZone String? @map("time_zone")
+  /// 固定原因码，不保存笔记或凭据。
+  reason String? @db.VarChar(80)
+  /// 调度公平排序使用实际检查时刻。
+  checkedAt DateTime @default(now()) @map("checked_at") @db.Timestamptz(3)
+  /// 换服清空归属时同时清除执行身份。
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("todo_recurrence_states")
+}
+
+/// 每个系列独立断点，新系列不能被同日既有扫描回执跳过。
+model TodoRecurrenceCursor {
+  /// 数据归属。
+  userId String @map("user_id") @db.Uuid
+  /// 同客户端采用的稳定系列身份。
+  seriesId String @map("series_id") @db.Uuid
+  /// 原始日历锚点变化后重新检查历史，稳定身份仍阻止重复。
+  anchorDay DateTime @map("anchor_day") @db.Date
+  /// 下一次需要检查的业务自然日。
+  nextDay DateTime @map("next_day") @db.Date
+  /// 时区改变时重扫日历，已存在实例不会被覆盖。
+  timeZone String @map("time_zone")
+  /// 压缩后的规则变更点摘要；普通自动实例不会使摘要改变。
+  scheduleSignature String @map("schedule_signature") @db.VarChar(32)
+  /// 单系列失败独立记录，不能阻止其他系列推进。
+  errorCode String? @map("error_code") @db.VarChar(80)
+  /// 失败短暂退避，避免同一个坏系列长期占满扫描预算。
+  retryAfter DateTime? @map("retry_after") @db.Timestamptz(3)
+  /// 最近推进时间便于运维查看。
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  /// 断点只存在服务器，换服不能恢复旧执行授权。
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([userId, seriesId])
+  @@map("todo_recurrence_cursors")
+}
+
+/// 后台生成的待办身份永久启用离线字段前值检查，仅清空归属时删除。
+model TodoRecurrenceProtection {
+  /// 实例所属归属。
+  userId String @map("user_id") @db.Uuid
+  /// 实际创建的根任务或子任务身份，不外键到可删除业务行。
+  todoId String @map("todo_id") @db.Uuid
+  /// 首次启用保护时刻，不因重复调度修改。
+  protectedAt DateTime @default(now()) @map("protected_at") @db.Timestamptz(3)
+  /// 归属重建时旧执行事实一同清除。
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([userId, todoId])
+  @@map("todo_recurrence_protections")
 }
 
 model TodoItem {

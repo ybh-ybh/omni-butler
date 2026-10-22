@@ -12,7 +12,7 @@ import {
   objectInput,
   pageInput,
   pageResult,
-  rangeInput,
+  calendarRangeInput,
   textInput,
   uuidInput,
 } from './business-input';
@@ -196,9 +196,9 @@ export class QuotesService {
   /// 查询范围内已有日签及库计数，不为总结生成额外业务实体。
   statistics(actor: AuthUser, value: unknown): Promise<Prisma.JsonValue> {
     // 周/月仅体现为日期窗口。
-    const input = objectInput(value, ['from', 'to', 'timeZone', 'asOf']);
+    const input = objectInput(value, ['from', 'to', 'timeZone']);
     // 固定调用方指定的地区与范围。
-    const range = rangeInput(input);
+    const range = calendarRangeInput(input);
     return businessRead(this.prisma, actor, async (transaction) => {
       // 日期槽位不扫描或补写历史默认数据。
       const rows = await transaction.dailyQuoteSelection.findMany({

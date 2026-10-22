@@ -206,7 +206,32 @@ export async function syncCurrentRecords(
   return result;
 }
 
-/// 对已被MCP修改的记录永久启用字段前值检查；其他旧业务继续原有同步语义。
+/// MCP 回执与后台实例登记共同形成持续保护，撤销连接不撤销既有事实。
+async function hasProtectedRecords(
+  transaction: Prisma.TransactionClient,
+  userId: string,
+  records: Array<{ table: string; id: string }>,
+): Promise<boolean> {
+  // 关联身份来自固定业务查询，JSON 参数不会成为自由 SQL 标识。
+  const refs = JSON.stringify(records);
+  // 后台登记只覆盖待办；其他模块继续沿用实际 MCP 回执。
+  const result = await transaction.$queryRaw<Array<{ protected: boolean }>>`
+    SELECT EXISTS(
+      SELECT 1 FROM mcp_actions
+      WHERE user_id=${userId}::uuid
+        AND result->'protectedRecords' @> ANY(
+          ARRAY(SELECT jsonb_build_array(ref) FROM jsonb_array_elements(${refs}::jsonb) AS ref)
+        )
+    ) OR EXISTS(
+      SELECT 1 FROM todo_recurrence_protections protection
+      JOIN jsonb_to_recordset(${refs}::jsonb) AS ref("table" text, id uuid)
+        ON ref."table"='todo_items' AND ref.id=protection.todo_id
+      WHERE protection.user_id=${userId}::uuid
+    ) AS protected`;
+  return result[0]?.protected ?? false;
+}
+
+/// 对 MCP 写入及后台生成记录永久启用前值检查；其他旧业务维持原同步语义。
 export async function checkSyncBaseline(
   transaction: Prisma.TransactionClient,
   userId: string,
@@ -225,10 +250,12 @@ export async function checkSyncBaseline(
       // 关联身份来自固定关系查询，不由客户端声明。
       const refs = dependents.map(({ table, id }) => ({ table, id }));
       // 任一受保护的关联记录都要求明确核对整个当前删除闭包。
-      const protectedDependents = await transaction.$queryRaw<
-        Array<{ protected: boolean }>
-      >`SELECT EXISTS(SELECT 1 FROM mcp_actions WHERE user_id=${userId}::uuid AND result->'protectedRecords' @> ANY(ARRAY(SELECT jsonb_build_array(ref) FROM jsonb_array_elements(${JSON.stringify(refs)}::jsonb) AS ref))) AS protected`;
-      if (protectedDependents[0]?.protected)
+      const protectedDependents = await hasProtectedRecords(
+        transaction,
+        userId,
+        refs,
+      );
+      if (protectedDependents)
         throw new SyncBaselineConflict({
           table: operation.table,
           id: operation.id,
@@ -237,11 +264,11 @@ export async function checkSyncBaseline(
         });
     }
   }
-  // 动作回执保存真实受影响身份，不引入额外版本表；撤销连接后保护仍然存在。
-  const fences = await transaction.$queryRaw<
-    Array<{ protected: boolean }>
-  >`SELECT EXISTS(SELECT 1 FROM mcp_actions WHERE user_id=${userId}::uuid AND result->'protectedRecords' @> ${JSON.stringify([{ table: operation.table, id: operation.id }])}::jsonb) AS protected`;
-  if (!fences[0]?.protected) return;
+  // 本体和级联删除使用同一保护集合，调度新子任务不能绕过父项删除检查。
+  const protectedRecord = await hasProtectedRecords(transaction, userId, [
+    { table: operation.table, id: operation.id },
+  ]);
+  if (!protectedRecord) return;
   // 只有真实目标存在时才比较，原有墓碑和缺失目标逻辑继续处理其他情况。
   const rows = await transaction.$queryRawUnsafe<
     Array<{

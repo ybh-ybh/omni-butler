@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { AuthUser } from '../auth/auth.types';
 import type { Prisma, TodoItem } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { protectRecurringTodo } from './todo-recurrence-protection';
 import { reconcileTodos, stableBusinessId } from '../sync/sync-consistency';
 import { businessRead, businessWrite, requireActive } from './business-access';
 import {
@@ -145,7 +146,11 @@ export class TodosService {
           include: {
             progressSteps: {
               where: { deletedAt: null },
-              orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+              orderBy: [
+                { sortOrder: 'asc' },
+                { createdAt: 'asc' },
+                { id: 'asc' },
+              ],
             },
           },
           orderBy: [
@@ -177,7 +182,11 @@ export class TodosService {
             },
             progressSteps: {
               where: { deletedAt: null },
-              orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+              orderBy: [
+                { sortOrder: 'asc' },
+                { createdAt: 'asc' },
+                { id: 'asc' },
+              ],
             },
           },
         }),
@@ -509,7 +518,11 @@ export class TodosService {
           include: {
             progressSteps: {
               where: { deletedAt: null },
-              orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+              orderBy: [
+                { sortOrder: 'asc' },
+                { createdAt: 'asc' },
+                { id: 'asc' },
+              ],
             },
           },
         });
@@ -839,10 +852,16 @@ export class TodosService {
             if (!byId.has(draft.id) || retained.has(draft.id))
               throw new ConflictException('步骤身份失效或重复');
             retained.add(draft.id);
-            await transaction.todoProgressStep.update({
-              where: { id: draft.id },
-              data: { name: draft.name, sortOrder: (index + 1) * 1024 },
-            });
+            // 未变化步骤保持原时间与完成事实，避免超限历史结构被无效更新放大。
+            const previous = byId.get(draft.id)!;
+            if (
+              previous.name !== draft.name ||
+              previous.sortOrder !== (index + 1) * 1024
+            )
+              await transaction.todoProgressStep.update({
+                where: { id: draft.id },
+                data: { name: draft.name, sortOrder: (index + 1) * 1024 },
+              });
           } else
             await transaction.todoProgressStep.create({
               data: {
@@ -870,7 +889,7 @@ export class TodosService {
         await reconcileTodos(transaction, actor.sub);
         return transaction.todoProgressStep.findMany({
           where: { userId: actor.sub, todoId, deletedAt: null },
-          orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+          orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
         });
       },
     );
@@ -892,142 +911,166 @@ export class TodosService {
       actor,
       'todos.ensureRepeatedInstances',
       input,
-      async (transaction) => {
-        // 包括软删除例外与停止标记，防止自动复活。
-        const repeating = await transaction.todoItem.findMany({
-          where: {
-            userId: actor.sub,
-            parentId: null,
-            repeatRule: { not: null },
-          },
-          orderBy: [{ scheduledDate: 'asc' }, { id: 'asc' }],
-        });
-        // 系列身份与旧无 series 数据兼容。
-        const series = new Map<string, TodoItem[]>();
-        for (const row of repeating) {
-          // 兼容旧记录尚未保存独立系列身份的情况。
-          const key = row.repeatSeriesId ?? row.id;
-          series.set(key, [...(series.get(key) ?? []), row]);
-        }
-        // 本次真正创建的实例身份。
-        const created: string[] = [];
-        for (const [seriesId, rows] of series) {
-          // 最早实例决定重复日历锚点。
-          const seed = rows[0]!;
-          if (
-            !todoOccursOn(seed, day) ||
-            rows.some(
-              (row) => row.scheduledDate.toISOString().slice(0, 10) === day,
-            )
-          )
-            continue;
-          // 目标日前最近状态决定系列是否停止。
-          const previous = rows.filter(
-            (row) => row.scheduledDate.toISOString().slice(0, 10) <= day,
-          );
-          if (previous.at(-1)?.repeatRule === 'stopped') continue;
-          // 最近未删模板提供内容和孩子，不使用未来实例反向生成。
-          const template = previous
-            .filter(
-              (row) =>
-                row.deletedAt === null &&
-                row.scheduledDate.toISOString().slice(0, 10) < day,
-            )
-            .at(-1);
-          if (!template) continue;
-          // 与客户端 UUIDv5 完全一致，重启和双端生成自然合并。
-          const rootId = stableBusinessId('repeat-todo', [seriesId, day]);
-          if (await transaction.todoItem.findUnique({ where: { id: rootId } }))
-            continue;
-          // 永久墓碑是明确删除，不能因重新生成请求而复活。
-          if (
-            await transaction.syncTombstone.findUnique({
-              where: {
-                userId_tableName_recordId: {
-                  userId: actor.sub,
-                  tableName: 'todo_items',
-                  recordId: rootId,
-                },
-              },
-            })
-          )
-            continue;
-          // 不能从旧非法象限模板继续物化错误实例。
-          integerInput(template.priorityQuadrant, 'priorityQuadrant', 0, 3);
-          // 提醒与截止按目标日保留当地钟点。
-          const move = (at: Date | null): Date | null =>
-            at
-              ? localInstant(day, localParts(at, timeZone).seconds, timeZone)
-              : null;
-          await transaction.todoItem.create({
-            data: {
-              id: rootId,
-              userId: actor.sub,
-              title: template.title,
-              description: template.description,
-              scheduledDate: new Date(`${day}T00:00:00Z`),
-              dueAt: move(template.dueAt),
-              reminderAt: move(template.reminderAt),
-              priorityQuadrant: template.priorityQuadrant,
-              sortOrder: template.sortOrder,
-              repeatRule: seed.repeatRule,
-              repeatSeriesId: seriesId,
-            },
-          });
-          // 不包含软删除孩子，独立子系列身份保持。
-          const children = await transaction.todoItem.findMany({
-            where: {
-              userId: actor.sub,
-              parentId: template.id,
-              deletedAt: null,
-            },
-            orderBy: [
-              { sortOrder: 'asc' },
-              { createdAt: 'asc' },
-              { id: 'asc' },
-            ],
-          });
-          for (const child of children) {
-            // 双端会生成相同子项身份。
-            const childId = stableBusinessId('repeat-subtask', [
-              seriesId,
-              child.repeatSeriesId ?? child.id,
-              day,
-            ]);
-            if (
-              await transaction.syncTombstone.findUnique({
-                where: {
-                  userId_tableName_recordId: {
-                    userId: actor.sub,
-                    tableName: 'todo_items',
-                    recordId: childId,
-                  },
-                },
-              })
-            )
-              continue;
-            await transaction.todoItem.create({
-              data: {
-                id: childId,
-                userId: actor.sub,
-                parentId: rootId,
-                title: child.title,
-                description: child.description,
-                scheduledDate: new Date(`${day}T00:00:00Z`),
-                dueAt: move(child.dueAt),
-                reminderAt: move(child.reminderAt),
-                priorityQuadrant: template.priorityQuadrant,
-                sortOrder: child.sortOrder,
-                repeatSeriesId: child.repeatSeriesId ?? child.id,
-              },
-            });
-          }
-          created.push(rootId);
-        }
-        await reconcileTodos(transaction, actor.sub);
-        return { day, timeZone, created };
-      },
+      (transaction) =>
+        this.materializeRepeatedDay(transaction, actor.sub, day, timeZone),
     );
+  }
+
+  /// 仅供已持有 owner 锁且重验授权的内部事务复用；不会覆盖已有实例。
+  async materializeRepeatedDay(
+    transaction: Prisma.TransactionClient,
+    userId: string,
+    day: string,
+    timeZone: string,
+    seriesId?: string,
+  ): Promise<{ day: string; timeZone: string; created: string[] }> {
+    // 包括软删除例外与停止标记，防止自动复活。
+    const repeating = await transaction.todoItem.findMany({
+      where: {
+        userId,
+        parentId: null,
+        ...(seriesId
+          ? {
+              OR: [
+                { repeatSeriesId: seriesId },
+                { id: seriesId, repeatSeriesId: null },
+              ],
+            }
+          : {
+              OR: [
+                { repeatRule: { not: null } },
+                { repeatSeriesId: { not: null } },
+              ],
+            }),
+      },
+      orderBy: [{ scheduledDate: 'asc' }, { id: 'asc' }],
+    });
+    // 系列身份与旧无 series 数据兼容。
+    const series = new Map<string, TodoItem[]>();
+    for (const row of repeating) {
+      // 兼容旧记录尚未保存独立系列身份的情况。
+      const key = row.repeatSeriesId ?? row.id;
+      series.set(key, [...(series.get(key) ?? []), row]);
+    }
+    // 本次真正创建的实例身份。
+    const created: string[] = [];
+    for (const [seriesId, rows] of series) {
+      // 同系列单次例外也占据该日，不能因其没有重复规则而再生成一条。
+      if (
+        rows.some((row) => row.scheduledDate.toISOString().slice(0, 10) === day)
+      )
+        continue;
+      // 目标日前最近状态决定系列是否停止。
+      const previous = rows.filter(
+        (row) => row.scheduledDate.toISOString().slice(0, 10) <= day,
+      );
+      // 连续同规则保持原锚点；后续明确变更规则以变更日开始新周期。
+      let seed: TodoItem | undefined;
+      for (const row of previous) {
+        if (row.repeatRule !== null && row.repeatRule !== seed?.repeatRule)
+          seed = row;
+      }
+      if (!seed || !todoOccursOn(seed, day)) continue;
+      // 最近未删模板提供内容和孩子，不使用未来实例反向生成。
+      const template = previous
+        .filter(
+          (row) =>
+            row.deletedAt === null &&
+            row.repeatRule !== null &&
+            row.repeatRule !== 'stopped' &&
+            row.scheduledDate.toISOString().slice(0, 10) < day,
+        )
+        .at(-1);
+      if (!template) continue;
+      // 与客户端 UUIDv5 完全一致，重启和双端生成自然合并。
+      const rootId = stableBusinessId('repeat-todo', [seriesId, day]);
+      if (await transaction.todoItem.findUnique({ where: { id: rootId } }))
+        continue;
+      // 永久墓碑是明确删除，不能因重新生成请求而复活。
+      if (
+        await transaction.syncTombstone.findUnique({
+          where: {
+            userId_tableName_recordId: {
+              userId,
+              tableName: 'todo_items',
+              recordId: rootId,
+            },
+          },
+        })
+      )
+        continue;
+      // 不能从旧非法象限模板继续物化错误实例。
+      integerInput(template.priorityQuadrant, 'priorityQuadrant', 0, 3);
+      // 提醒与截止按目标日保留当地钟点。
+      const move = (at: Date | null): Date | null =>
+        at
+          ? localInstant(day, localParts(at, timeZone).seconds, timeZone)
+          : null;
+      await transaction.todoItem.create({
+        data: {
+          id: rootId,
+          userId,
+          title: template.title,
+          description: template.description,
+          scheduledDate: new Date(`${day}T00:00:00Z`),
+          dueAt: move(template.dueAt),
+          reminderAt: move(template.reminderAt),
+          priorityQuadrant: template.priorityQuadrant,
+          sortOrder: template.sortOrder,
+          repeatRule: seed.repeatRule,
+          repeatSeriesId: seriesId,
+        },
+      });
+      await protectRecurringTodo(transaction, userId, [rootId]);
+      // 不包含软删除孩子，独立子系列身份保持。
+      const children = await transaction.todoItem.findMany({
+        where: {
+          userId,
+          parentId: template.id,
+          deletedAt: null,
+        },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      });
+      for (const child of children) {
+        // 双端会生成相同子项身份。
+        const childId = stableBusinessId('repeat-subtask', [
+          seriesId,
+          child.repeatSeriesId ?? child.id,
+          day,
+        ]);
+        if (
+          await transaction.syncTombstone.findUnique({
+            where: {
+              userId_tableName_recordId: {
+                userId,
+                tableName: 'todo_items',
+                recordId: childId,
+              },
+            },
+          })
+        )
+          continue;
+        await transaction.todoItem.create({
+          data: {
+            id: childId,
+            userId,
+            parentId: rootId,
+            title: child.title,
+            description: child.description,
+            scheduledDate: new Date(`${day}T00:00:00Z`),
+            dueAt: move(child.dueAt),
+            reminderAt: move(child.reminderAt),
+            priorityQuadrant: template.priorityQuadrant,
+            sortOrder: child.sortOrder,
+            repeatSeriesId: child.repeatSeriesId ?? child.id,
+          },
+        });
+        await protectRecurringTodo(transaction, userId, [childId]);
+      }
+      created.push(rootId);
+    }
+    await reconcileTodos(transaction, userId);
+    return { day, timeZone, created };
   }
 
   /// 单条与未来范围软删除，主任务停止系列，子任务不停止父系列。

@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/core/database/app_database.dart';
@@ -148,6 +149,345 @@ void main() {
     expect(next.dueAt!.isUtc, isFalse);
     expect(next.dueAt!.hour, expectedLocalTime.hour);
     expect(next.dueAt!.minute, expectedLocalTime.minute);
+  });
+
+  test('本条及未来关闭重复写入停止标记，保留已生成实例且不再续生', () async {
+    // 先建立较早种子，确保停止标记不能被旧规则绕过。
+    final DateTime firstDay = DateTime(2026, 9, 4);
+    await repository.save(
+      TodoDraft(
+        title: '每日复盘',
+        scheduledDate: firstDay,
+        repeatRule: TodoRepeatRule.daily,
+      ),
+    );
+    // 当前及未来两条都已经存在，关闭重复不等于删除这些任务。
+    final TodoRecord current =
+        (await repository.watchForDay(DateTime(2026, 9, 5)).first).single;
+    await repository.watchForDay(DateTime(2026, 9, 6)).first;
+    await repository.save(
+      TodoDraft(
+        id: current.id,
+        title: current.title,
+        scheduledDate: current.scheduledDate,
+      ),
+      scope: TodoSeriesScope.future,
+    );
+    // 服务器与客户端共用stopped，而不是把null误解成缺少模板。
+    final List<TodoRecord> saved = await database
+        .select(database.todoItems)
+        .get();
+    expect(saved, hasLength(3));
+    expect(
+      saved
+          .singleWhere((record) => record.scheduledDate == firstDay)
+          .repeatRule,
+      'daily',
+    );
+    expect(
+      saved
+          .where((record) => record.scheduledDate.isAfter(firstDay))
+          .map((record) => record.repeatRule),
+      everyElement('stopped'),
+    );
+    expect(saved.map((record) => record.deletedAt), everyElement(isNull));
+    expect(await repository.watchForDay(DateTime(2026, 9, 7)).first, isEmpty);
+  });
+
+  test('已停止实例普通编辑保留停止事实，明确重新启用才恢复未来生成', () async {
+    // 较早种子继续保留原规则，检验后续停止点是否仍生效。
+    final DateTime firstDay = DateTime(2026, 9, 4);
+    await repository.save(
+      TodoDraft(
+        title: '每日复盘',
+        scheduledDate: firstDay,
+        repeatRule: TodoRepeatRule.daily,
+      ),
+    );
+    // 在第二天停止系列，再模拟编辑器默认不重复时仅修改标题。
+    final TodoRecord current =
+        (await repository.watchForDay(DateTime(2026, 9, 5)).first).single;
+    await repository.save(
+      TodoDraft(
+        id: current.id,
+        title: current.title,
+        scheduledDate: current.scheduledDate,
+      ),
+      scope: TodoSeriesScope.future,
+    );
+    await repository.save(
+      TodoDraft(
+        id: current.id,
+        title: '已停止，仅改标题',
+        scheduledDate: current.scheduledDate,
+      ),
+    );
+    expect(
+      (await repository.watchForDay(current.scheduledDate).first)
+          .single
+          .repeatRule,
+      'stopped',
+    );
+    expect(await repository.watchForDay(DateTime(2026, 9, 6)).first, isEmpty);
+    await repository.save(
+      TodoDraft(
+        id: current.id,
+        title: '明确恢复每日',
+        scheduledDate: current.scheduledDate,
+        repeatRule: TodoRepeatRule.daily,
+      ),
+      scope: TodoSeriesScope.future,
+    );
+    expect(
+      (await repository.watchForDay(DateTime(2026, 9, 6)).first).single.title,
+      '明确恢复每日',
+    );
+  });
+
+  test('单条关闭仍为null例外，不停止后续系列也不重复生成当天实例', () async {
+    // 单次例外与终止整个系列必须继续区分。
+    final DateTime firstDay = DateTime(2026, 9, 4);
+    await repository.save(
+      TodoDraft(
+        title: '每日复盘',
+        scheduledDate: firstDay,
+        repeatRule: TodoRepeatRule.daily,
+      ),
+    );
+    // 当天实例只改为不重复，保留其稳定身份。
+    final TodoRecord current =
+        (await repository.watchForDay(DateTime(2026, 9, 5)).first).single;
+    await repository.save(
+      TodoDraft(
+        id: current.id,
+        title: '仅此一次',
+        scheduledDate: current.scheduledDate,
+      ),
+    );
+    // 再次读取同一天不能因其不在重复模板集合而新建副本。
+    final List<TodoRecord> sameDay = await repository
+        .watchForDay(current.scheduledDate)
+        .first;
+    expect(sameDay, hasLength(1));
+    expect(sameDay.single.id, current.id);
+    expect(sameDay.single.repeatRule, isNull);
+    expect(
+      (await repository.watchForDay(DateTime(2026, 9, 6)).first)
+          .single
+          .repeatRule,
+      'daily',
+    );
+  });
+
+  test('未来编辑重复子项保持null，不终止父任务系列', () async {
+    // 子系列继承主任务日历，不能写入根系列的stopped标记。
+    final DateTime firstDay = DateTime(2026, 9, 4);
+    await repository.save(
+      TodoDraft(
+        title: '每日检查',
+        scheduledDate: firstDay,
+        repeatRule: TodoRepeatRule.daily,
+      ),
+    );
+    // 从真实主任务身份创建子项，随后让仓储生成下一天的树。
+    final TodoRecord root =
+        (await repository.watchForDay(firstDay).first).single;
+    await repository.save(
+      TodoDraft(title: '检查子项', parentId: root.id, scheduledDate: firstDay),
+    );
+    // 下一天实例代表将要编辑的子系列。
+    final List<TodoTreeNode> trees = await repository
+        .watchActiveTrees(DateTime(2026, 9, 5))
+        .first;
+    final TodoRecord child = trees
+        .singleWhere((tree) => tree.root.scheduledDate == DateTime(2026, 9, 5))
+        .children
+        .single;
+    await repository.save(
+      TodoDraft(
+        id: child.id,
+        title: '后续子项说明',
+        parentId: child.parentId,
+        scheduledDate: child.scheduledDate,
+      ),
+      scope: TodoSeriesScope.future,
+    );
+    // 子项未来编辑只影响内容，次日父子都仍能生成。
+    final List<TodoTreeNode> nextTrees = await repository
+        .watchActiveTrees(DateTime(2026, 9, 6))
+        .first;
+    final TodoTreeNode next = nextTrees.singleWhere(
+      (tree) => tree.root.scheduledDate == DateTime(2026, 9, 6),
+    );
+    expect(next.root.repeatRule, 'daily');
+    expect(next.children.single.repeatRule, isNull);
+    expect(next.children.single.title, '后续子项说明');
+  });
+
+  test('无系列字段的旧重复种子关闭未来也生成有效停止标记', () async {
+    // 构造旧版只有重复规则、没有独立系列身份的合法记录。
+    final DateTime firstDay = DateTime(2026, 9, 4);
+    await repository.save(
+      TodoDraft(
+        title: '旧系列',
+        scheduledDate: firstDay,
+        repeatRule: TodoRepeatRule.daily,
+      ),
+    );
+    // 旧身份兼容行为保持使用种子id，不创建新系列。
+    final TodoRecord root =
+        (await repository.watchForDay(firstDay).first).single;
+    await database.updateTodo(
+      root.id,
+      const TodoItemsCompanion(repeatSeriesId: Value<String?>(null)),
+    );
+    await repository.watchForDay(DateTime(2026, 9, 5)).first;
+    await repository.save(
+      TodoDraft(id: root.id, title: root.title, scheduledDate: firstDay),
+      scope: TodoSeriesScope.future,
+    );
+    // 种子本身和已经生成的后继都被同一未来范围处理。
+    final List<TodoRecord> saved = await database
+        .select(database.todoItems)
+        .get();
+    expect(saved, hasLength(2));
+    expect(saved.map((record) => record.repeatRule), everyElement('stopped'));
+    expect(await repository.watchForDay(DateTime(2026, 9, 6)).first, isEmpty);
+  });
+
+  test('后续每周实例改为每天后使用新规则，不沿用最初种子的频率', () async {
+    await repository.save(
+      TodoDraft(
+        title: '每周任务',
+        scheduledDate: DateTime(2026, 9, 4),
+        repeatRule: TodoRepeatRule.weekly,
+      ),
+    );
+    // 后续实例的规则转换不能修改早期种子的日历事实。
+    final TodoRecord current =
+        (await repository.watchForDay(DateTime(2026, 9, 11)).first).single;
+    await repository.save(
+      TodoDraft(
+        id: current.id,
+        title: '改为每天',
+        scheduledDate: current.scheduledDate,
+        repeatRule: TodoRepeatRule.daily,
+      ),
+      scope: TodoSeriesScope.future,
+    );
+    expect(
+      (await repository.watchForDay(DateTime(2026, 9, 12)).first)
+          .single
+          .repeatRule,
+      'daily',
+    );
+    expect(
+      (await repository.watchForDay(DateTime(2026, 9, 4)).first)
+          .single
+          .repeatRule,
+      'weekly',
+    );
+  });
+
+  test('每天改为每周以修改实例为新锚点，同规则生成不移动锚点', () async {
+    await repository.save(
+      TodoDraft(
+        title: '每天任务',
+        scheduledDate: DateTime(2026, 9, 4),
+        repeatRule: TodoRepeatRule.daily,
+      ),
+    );
+    // 新周期从修改的5日开始，每周12日、19日出现。
+    final TodoRecord current =
+        (await repository.watchForDay(DateTime(2026, 9, 5)).first).single;
+    await repository.save(
+      TodoDraft(
+        id: current.id,
+        title: '改为每周',
+        scheduledDate: current.scheduledDate,
+        repeatRule: TodoRepeatRule.weekly,
+      ),
+      scope: TodoSeriesScope.future,
+    );
+    expect(await repository.watchForDay(DateTime(2026, 9, 6)).first, isEmpty);
+    expect(
+      (await repository.watchForDay(DateTime(2026, 9, 12)).first)
+          .single
+          .repeatRule,
+      'weekly',
+    );
+    expect(await repository.watchForDay(DateTime(2026, 9, 13)).first, isEmpty);
+    expect(
+      await repository.watchForDay(DateTime(2026, 9, 19)).first,
+      hasLength(1),
+    );
+  });
+
+  test('每天改为每月保留31日锚点，二月生成实例不会把三月移到28日', () async {
+    await repository.save(
+      TodoDraft(
+        title: '每天任务',
+        scheduledDate: DateTime(2026, 1, 30),
+        repeatRule: TodoRepeatRule.daily,
+      ),
+    );
+    // 每月的新日历锚点来自31日的规则转换实例。
+    final TodoRecord current =
+        (await repository.watchForDay(DateTime(2026, 1, 31)).first).single;
+    await repository.save(
+      TodoDraft(
+        id: current.id,
+        title: '月末任务',
+        scheduledDate: current.scheduledDate,
+        repeatRule: TodoRepeatRule.monthly,
+      ),
+      scope: TodoSeriesScope.future,
+    );
+    expect(await repository.watchForDay(DateTime(2026, 2, 1)).first, isEmpty);
+    expect(
+      (await repository.watchForDay(DateTime(2026, 2, 28)).first)
+          .single
+          .repeatRule,
+      'monthly',
+    );
+    expect(await repository.watchForDay(DateTime(2026, 3, 28)).first, isEmpty);
+    expect(
+      await repository.watchForDay(DateTime(2026, 3, 31)).first,
+      hasLength(1),
+    );
+  });
+
+  test('同系列已有不同身份的null单次例外时，该日期不能双生', () async {
+    await repository.save(
+      TodoDraft(
+        title: '每天任务',
+        scheduledDate: DateTime(2026, 9, 4),
+        repeatRule: TodoRepeatRule.daily,
+      ),
+    );
+    // 服务器或旧备份中的同系列实例不保证使用当前稳定生成身份。
+    final TodoRecord root =
+        (await repository.watchForDay(DateTime(2026, 9, 4)).first).single;
+    await database.createTodo(
+      TodoItemsCompanion.insert(
+        id: '487d31e0-28f0-4f90-a321-bc5873a03f70',
+        title: '同步的单次例外',
+        scheduledDate: DateTime(2026, 9, 5),
+        repeatSeriesId: Value<String?>(root.repeatSeriesId),
+        createdAt: DateTime(2026, 9, 4),
+        updatedAt: DateTime(2026, 9, 4),
+      ),
+    );
+    // 读取应保留既有例外，而不是用原规则再生成一条同日任务。
+    final List<TodoRecord> sameDay = await repository
+        .watchForDay(DateTime(2026, 9, 5))
+        .first;
+    expect(sameDay, hasLength(1));
+    expect(sameDay.single.title, '同步的单次例外');
+    expect(
+      (await repository.watchForDay(DateTime(2026, 9, 6)).first).single.title,
+      '每天任务',
+    );
   });
 
   test('每月 31 日在短月份回退到月末', () async {

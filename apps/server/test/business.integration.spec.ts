@@ -19,6 +19,7 @@ import { NotesBusinessService } from '../src/business/notes-business.service';
 import { QuotesService } from '../src/business/quotes.service';
 import { TimeEntriesService } from '../src/business/time-entries.service';
 import { TodosService } from '../src/business/todos.service';
+import { protectRecurringTodo } from '../src/business/todo-recurrence-protection';
 import type { Prisma, TimeEntry } from '../src/generated/prisma/client';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { stableBusinessId } from '../src/sync/sync-consistency';
@@ -307,7 +308,6 @@ integration('七模块后端真实数据库能力', () => {
           operationId: randomUUID(),
           id,
           name: '新会员',
-          timeZone: 'Asia/Shanghai',
         }),
       get: (identity: AuthUser, id: string): Promise<Prisma.JsonValue> =>
         memberships.get(identity, id),
@@ -520,7 +520,6 @@ integration('七模块后端真实数据库能力', () => {
           : memberships.update(actor, {
               operationId: randomUUID(),
               id: idOf(created),
-              timeZone: 'Asia/Shanghai',
               ...fields,
             });
       // 客户端实际使用的活跃分类关系必须与名称同步。
@@ -2367,6 +2366,383 @@ integration('七模块后端真实数据库能力', () => {
         where: { userId: actor.sub, todoId: idOf(progress), deletedAt: null },
       }),
     ).toBe(1000);
+  });
+
+  it('后台真实生成路径同时保护新根与子项，旧设备模板不能覆盖新实例', async () => {
+    // 旧设备曾读取的重复模板，随后服务器修改其内容。
+    const source = await todos.create(actor, {
+      operationId: randomUUID(),
+      title: '旧模板',
+      scheduledDate: '2026-10-21',
+      repeatRule: 'daily',
+    });
+    // 子项同样随父系列生成稳定身份。
+    const sourceChild = await todos.create(actor, {
+      operationId: randomUUID(),
+      title: '旧子模板',
+      parentId: idOf(source),
+      scheduledDate: '2026-10-21',
+    });
+    await todos.update(actor, {
+      operationId: randomUUID(),
+      id: idOf(source),
+      title: '最新模板',
+    });
+    await todos.update(actor, {
+      operationId: randomUUID(),
+      id: idOf(sourceChild),
+      title: '最新子模板',
+    });
+    await todos.ensureRepeatedInstances(actor, {
+      operationId: randomUUID(),
+      day: '2026-10-22',
+      timeZone: 'UTC',
+    });
+    // 只检查本轮真实生成的记录，不手工调用保护助手。
+    const generated = await prisma.todoItem.findMany({
+      where: {
+        userId: actor.sub,
+        scheduledDate: new Date('2026-10-22T00:00:00Z'),
+      },
+    });
+    expect(generated).toHaveLength(2);
+    expect(
+      new Set(
+        (
+          await prisma.todoRecurrenceProtection.findMany({
+            where: { userId: actor.sub },
+          })
+        ).map((row) => row.todoId),
+      ),
+    ).toEqual(new Set(generated.map((row) => row.id)));
+    for (const row of generated) {
+      // 两种稳定身份都可能被旧离线设备独立生成并编辑。
+      const result = await sync.applyBatch(actor.sub, {
+        clientId: randomUUID(),
+        transactionId: randomUUID(),
+        operations: [
+          {
+            op: 'PATCH',
+            table: 'todo_items',
+            id: row.id,
+            data: { title: '覆盖新版' },
+            previous: { title: row.parentId ? '旧子模板' : '旧模板' },
+          },
+        ],
+      });
+      expect(result.conflict?.id).toBeDefined();
+      expect(
+        (await prisma.todoItem.findUniqueOrThrow({ where: { id: row.id } }))
+          .title,
+      ).toBe(row.parentId ? '最新子模板' : '最新模板');
+    }
+  });
+
+  /// 模拟后台在同一事务建立根、子实例与保护，避免测试借用 MCP 回执。
+  async function createProtectedRecurringPair(
+    protectParent = true,
+  ): Promise<{ parentId: string; childId: string }> {
+    return prisma.$transaction(async (transaction) => {
+      // 所有后台创建与同步一样持有归属锁。
+      await transaction.$queryRaw`SELECT id FROM sync_owners WHERE id=${actor.sub}::uuid FOR UPDATE`;
+      // 两个真实业务身份都由服务器生成。
+      const parentId = randomUUID(),
+        childId = randomUUID();
+      await transaction.todoItem.create({
+        data: {
+          id: parentId,
+          userId: actor.sub,
+          title: '服务器新模板',
+          scheduledDate: new Date('2026-10-22T00:00:00Z'),
+        },
+      });
+      await transaction.todoItem.create({
+        data: {
+          id: childId,
+          userId: actor.sub,
+          parentId,
+          title: '服务器新子项',
+          scheduledDate: new Date('2026-10-22T00:00:00Z'),
+        },
+      });
+      await protectRecurringTodo(
+        transaction,
+        actor.sub,
+        protectParent ? [parentId, childId] : [childId],
+      );
+      return { parentId, childId };
+    });
+  }
+
+  it.each(['parentId', 'childId'] as const)(
+    '后台实例%s的旧离线PATCH整个事务转候选且重复上传不覆盖',
+    async (target) => {
+      // 数据与私有保护一同提交，不需要存在任何 MCP 动作回执。
+      const pair = await createProtectedRecurringPair();
+      // 同一事务前置写入也必须随着冲突回滚。
+      const quoteId = randomUUID();
+      // 旧设备实际编辑时的模板标题不能作为当前服务器事实。
+      const batch = {
+        clientId: randomUUID(),
+        transactionId: randomUUID(),
+        operations: [
+          {
+            op: 'PUT' as const,
+            table: 'quotes',
+            id: quoteId,
+            data: {
+              content: '不应部分保存',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+          },
+          {
+            op: 'PATCH' as const,
+            table: 'todo_items',
+            id: pair[target],
+            data: { title: '旧离线编辑' },
+            previous: { title: '旧模板' },
+          },
+        ],
+      };
+      // 真实同步入口保留完整冲突事务而不是静默忽略。
+      const result = await sync.applyBatch(actor.sub, batch);
+      expect(result.applied).toBe(0);
+      expect(result.conflict?.id).toBeDefined();
+      expect(
+        await prisma.quote.findUnique({ where: { id: quoteId } }),
+      ).toBeNull();
+      expect(
+        (
+          await prisma.todoItem.findUniqueOrThrow({
+            where: { id: pair[target] },
+          })
+        ).title,
+      ).toBe(target === 'parentId' ? '服务器新模板' : '服务器新子项');
+      expect(
+        (await new SyncService(prisma).applyBatch(actor.sub, batch)).conflict
+          ?.id,
+      ).toBe(result.conflict?.id);
+      expect(
+        await prisma.mcpAction.count({ where: { userId: actor.sub } }),
+      ).toBe(0);
+    },
+  );
+
+  it('后台保护允许正确前值、同值重放与独立字段，仍拒绝旧DELETE', async () => {
+    // 根项与子项具有独立的前值保护。
+    const { childId } = await createProtectedRecurringPair();
+    expect(
+      await sync.applyBatch(actor.sub, {
+        clientId: randomUUID(),
+        transactionId: randomUUID(),
+        operations: [
+          {
+            op: 'PATCH',
+            table: 'todo_items',
+            id: childId,
+            data: { title: '正确基线修改' },
+            previous: { title: '服务器新子项' },
+          },
+        ],
+      }),
+    ).toEqual(expect.objectContaining({ applied: 1 }));
+    expect(
+      await sync.applyBatch(actor.sub, {
+        clientId: randomUUID(),
+        transactionId: randomUUID(),
+        operations: [
+          {
+            op: 'PATCH',
+            table: 'todo_items',
+            id: childId,
+            data: { title: '正确基线修改', description: '独立备注' },
+            previous: { title: '旧模板', description: null },
+          },
+        ],
+      }),
+    ).toEqual(expect.objectContaining({ applied: 1 }));
+    // 删除需要完整当前前值，旧删除不能绕过刚刚修改的字段。
+    const deletion = await sync.applyBatch(actor.sub, {
+      clientId: randomUUID(),
+      transactionId: randomUUID(),
+      operations: [
+        {
+          op: 'DELETE',
+          table: 'todo_items',
+          id: childId,
+          previous: { title: '旧模板' },
+        },
+      ],
+    });
+    expect(deletion.applied).toBe(0);
+    expect(deletion.conflict?.id).toBeDefined();
+    expect(
+      await prisma.todoItem.findUnique({ where: { id: childId } }),
+    ).not.toBeNull();
+    expect(
+      await prisma.syncTombstone.findUnique({
+        where: {
+          userId_tableName_recordId: {
+            userId: actor.sub,
+            tableName: 'todo_items',
+            recordId: childId,
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it('后台新子项使未保护父项的旧DELETE也需要核对当前关联闭包', async () => {
+    // 故意只保护子项，证明不是父项自身保护偶然挡住删除。
+    const { parentId, childId } = await createProtectedRecurringPair(false);
+    // 原始删除没有包含后台新增孩子。
+    const result = await sync.applyBatch(actor.sub, {
+      clientId: randomUUID(),
+      transactionId: randomUUID(),
+      operations: [{ op: 'DELETE', table: 'todo_items', id: parentId }],
+    });
+    expect(result.conflict?.id).toBeDefined();
+    // 人工处理预览展示遗漏的当前子项事实。
+    const preview = await sync.getWriteConflict(actor.sub, result.conflict!.id);
+    expect(JSON.stringify(preview)).toContain(childId);
+    expect(
+      await prisma.todoItem.count({
+        where: { id: { in: [parentId, childId] } },
+      }),
+    ).toBe(2);
+    // 固定冲突原因来自关联闭包，而非缺失父项标量前值。
+    const receipt = await prisma.syncReceipt.findFirstOrThrow({
+      where: { userId: actor.sub },
+    });
+    expect(receipt.conflict).toEqual(
+      expect.objectContaining({
+        reason: expect.objectContaining({ fields: ['关联记录'] }),
+      }),
+    );
+  });
+
+  it('后台实例创建失败同时回滚保护，重复登记幂等且不登记异主身份', async () => {
+    // 事务异常不能留下业务行或对应保护身份。
+    const rolledBackId = randomUUID();
+    await expect(
+      prisma.$transaction(async (transaction) => {
+        await transaction.todoItem.create({
+          data: {
+            id: rolledBackId,
+            userId: actor.sub,
+            title: '回滚',
+            scheduledDate: new Date('2026-10-22T00:00:00Z'),
+          },
+        });
+        await protectRecurringTodo(transaction, actor.sub, [rolledBackId]);
+        throw new Error('测试回滚');
+      }),
+    ).rejects.toThrow('测试回滚');
+    expect(
+      await prisma.todoItem.findUnique({ where: { id: rolledBackId } }),
+    ).toBeNull();
+    expect(
+      await prisma.todoRecurrenceProtection.count({
+        where: { userId: actor.sub },
+      }),
+    ).toBe(0);
+    // 正常登记不得因再次扫描刷新时间或出现重复行。
+    const { parentId, childId } = await createProtectedRecurringPair();
+    // 另一归属的真实记录不能被错误调用登记到当前归属。
+    const foreign = await todos.create(other, {
+      operationId: randomUUID(),
+      title: '另一归属',
+      scheduledDate: '2026-10-22',
+    });
+    // 首次保护时间是可审计的稳定事实。
+    const before = await prisma.todoRecurrenceProtection.findMany({
+      where: { userId: actor.sub },
+      orderBy: { todoId: 'asc' },
+    });
+    await prisma.$transaction(async (transaction) => {
+      await protectRecurringTodo(transaction, actor.sub, [
+        parentId,
+        childId,
+        childId,
+        idOf(foreign),
+        randomUUID(),
+      ]);
+      await protectRecurringTodo(transaction, actor.sub, []);
+    });
+    expect(
+      await prisma.todoRecurrenceProtection.findMany({
+        where: { userId: actor.sub },
+        orderBy: { todoId: 'asc' },
+      }),
+    ).toEqual(before);
+    expect(
+      await prisma.todoRecurrenceProtection.count({
+        where: { userId: other.sub },
+      }),
+    ).toBe(0);
+  });
+
+  it('后台保护在撤权和实例删除后保留，归属重建才清除且不进入同步发布', async () => {
+    // 持久保护不能依赖授权仍在，也不能依赖实例行仍在。
+    const { parentId, childId } = await createProtectedRecurringPair();
+    // 连接只用于验证撤销不会级联删除保护。
+    const connection = await prisma.mcpConnection.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        sessionId: actor.sid,
+        name: '调度授权',
+        tokenHash: 'a'.repeat(64),
+        readModules: ['todos'],
+        writeModules: ['todos'],
+        timeZone: 'UTC',
+        expiresAt: null,
+      },
+    });
+    await prisma.mcpConnection.update({
+      where: { id: connection.id },
+      data: { revokedAt: new Date() },
+    });
+    // 撤权之后迟到的离线修改仍受先前生成事实保护。
+    expect(
+      (
+        await sync.applyBatch(actor.sub, {
+          clientId: randomUUID(),
+          transactionId: randomUUID(),
+          operations: [
+            {
+              op: 'PATCH',
+              table: 'todo_items',
+              id: childId,
+              data: { title: '迟到覆盖' },
+              previous: { title: '旧模板' },
+            },
+          ],
+        })
+      ).conflict,
+    ).toBeDefined();
+    await prisma.todoItem.deleteMany({
+      where: { id: { in: [parentId, childId] } },
+    });
+    expect(
+      await prisma.todoRecurrenceProtection.count({
+        where: { userId: actor.sub },
+      }),
+    ).toBe(2);
+    // 该表只存在服务端，客户端版本与同步白名单不增加任何字段。
+    const published = await database.query<{ tablename: string }>(
+      "SELECT tablename FROM pg_publication_tables WHERE pubname='powersync'",
+    );
+    expect(published.rows.map((row) => row.tablename)).not.toContain(
+      'todo_recurrence_protections',
+    );
+    await prisma.syncOwner.delete({ where: { id: actor.sub } });
+    expect(
+      await prisma.todoRecurrenceProtection.count({
+        where: { userId: actor.sub },
+      }),
+    ).toBe(0);
   });
 
   it('首购删除不扣减期限，自动账目撤销回退期限并关闭自动续费提醒', async () => {

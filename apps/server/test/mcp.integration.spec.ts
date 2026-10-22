@@ -17,12 +17,14 @@ import { SyncController } from '../src/sync/sync.controller';
 import type { AuthUser } from '../src/auth/auth.types';
 import {
   mcpModules,
+  mcpAutoTaxonomyPolicy,
   mcpTimeCategoryPolicy,
   mcpTaxonomyPolicy,
   mcpTodoQuadrantPolicy,
   mcpWritePolicy,
 } from '../src/mcp/mcp-catalog';
 import { SyncService } from '../src/sync/sync.service';
+import { TodoRecurrenceService } from '../src/business/todo-recurrence.service';
 
 /// 不读取应用DATABASE_URL，只允许显式本机空测试库。
 const databaseUrl = process.env.OMNI_MCP_TEST_DATABASE_URL;
@@ -122,6 +124,8 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
     })
       .overrideProvider(PrismaService)
       .useValue(prisma)
+      .overrideProvider(TodoRecurrenceService)
+      .useValue({})
       .compile();
     mcp = module.get(McpService);
     app = module.createNestApplication();
@@ -203,20 +207,34 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
     // SDK校验协议级返回形状。
     const result = await client.callTool({ name, arguments: args });
     if (result.isError)
-      throw new Error(JSON.stringify(result.structuredContent));
+      throw new Error(
+        JSON.stringify(result.structuredContent ?? result.content),
+      );
     return result.structuredContent as Record<string, unknown>;
   }
-  /// 连续准备并提交单条操作，全程只使用MCP连接权限。
+  /// 单条写入通过公开业务工具直接完成，沿用固定请求身份重试。
   async function execute(
     name: string,
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     // 每个明确新动作分配新请求身份。
-    const prepared = await call(`prepare_${name}`, {
+    return call(name, {
       requestId: randomUUID(),
       ...args,
     });
-    return call('commit_action', { actionId: prepared.id });
+  }
+
+  /// 冲突和取消用例显式调用批量准备，单步骤同样不提前提交。
+  async function prepare(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    // 请求身份属于整个批量动作，不混入内部业务参数。
+    const { requestId = randomUUID(), ...input } = args;
+    return call('prepare_batch', {
+      requestId,
+      actions: [{ tool: name, arguments: input }],
+    });
   }
 
   it('新会话初始化instructions、实际工具与能力发现不改变任何业务表', async () => {
@@ -226,6 +244,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
     expect(client.getInstructions()).toContain(mcpWritePolicy);
     expect(client.getInstructions()).toContain(mcpTimeCategoryPolicy);
     expect(client.getInstructions()).toContain(mcpTaxonomyPolicy);
+    expect(client.getInstructions()).toContain(mcpAutoTaxonomyPolicy);
     expect(client.getInstructions()).toContain(mcpTodoQuadrantPolicy);
     expect(client.getInstructions()).not.toContain('知序设置页核对并审批');
     // 权限说明与真实目录需要一一对应。
@@ -235,32 +254,24 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       'get_review_context',
     );
     expect(capabilities.service).toBe('知序 MCP');
-    expect(capabilities.capabilityVersion).toBe('2.2');
+    expect(client.getServerVersion()?.version).toBe('3.0.0');
+    expect(capabilities.capabilityVersion).toBe('3.0');
     expect(capabilities.workflow).toMatchObject({
       confirmation: mcpWritePolicy,
-      timeCategories: mcpTimeCategoryPolicy,
-      taxonomies: mcpTaxonomyPolicy,
-      todoQuadrants: mcpTodoQuadrantPolicy,
+      autoTaxonomy: mcpAutoTaxonomyPolicy,
     });
+    expect(tools.tools).toHaveLength(65);
+    expect(capabilities).not.toHaveProperty('tools');
+    expect(capabilities).toHaveProperty('serverTime');
     expect(tools.tools.map((tool) => tool.name)).toContain('cancel_action');
-    // 注册说明与能力说明保持同一份规则，准备/提交不可能各说一种流程。
+    // 批量准备和提交继续发布同一确认规则，单条直接工具另有明确保存语义。
     for (const tool of tools.tools) {
-      expect(
-        (
-          capabilities.tools as Array<{ name: string; description: string }>
-        ).find((item) => item.name === tool.name)?.description,
-      ).toBe(tool.description);
       if (
         tool.name.startsWith('prepare_') ||
         ['commit_action', 'undo_action'].includes(tool.name)
       )
         expect(tool.description).toContain(mcpWritePolicy);
     }
-    expect(
-      (capabilities.tools as Array<{ name: string }>)
-        .map((tool) => tool.name)
-        .sort(),
-    ).toEqual(tools.tools.map((tool) => tool.name).sort());
     expect(JSON.stringify(capabilities)).not.toContain(token);
     expect(await prisma.quote.count({ where: { userId: actor.sub } })).toBe(
       before,
@@ -287,7 +298,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       'finish_time_entry',
     ]) {
       // 实际发布给宿主的JSON Schema必须包含新字段和可读说明。
-      const tool = tools.tools.find((item) => item.name === `prepare_${name}`)!;
+      const tool = tools.tools.find((item) => item.name === name)!;
       expect(tool.inputSchema.properties).toHaveProperty('categoryId');
       expect(tool.description).toContain(mcpTimeCategoryPolicy);
     }
@@ -303,7 +314,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       ]),
     );
     // 预览不持久化业务记录，但真实前后变化已经包含解析后的名称。
-    const action = await call('prepare_create_time_entry', {
+    const action = await prepare('create_time_entry', {
       requestId: randomUUID(),
       startedAt: '2040-01-02T12:00:00Z',
       endedAt: '2040-01-02T13:40:00Z',
@@ -331,7 +342,8 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       }),
     ).toEqual([expect.objectContaining({ category: '学习' })]);
     expect(
-      await call('get_time_summary', {
+      await call('get_statistics', {
+        module: 'time',
         from: '2040-01-02T12:00:00Z',
         to: '2040-01-02T13:40:00Z',
         asOf: '2040-01-02T13:40:00Z',
@@ -344,7 +356,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
     const count = await prisma.mcpAction.count({ where: { connectionId } });
     // MCP工具错误必须包含可操作的纠正提示。
     const result = await client.callTool({
-      name: 'prepare_create_time_entry',
+      name: 'create_time_entry',
       arguments: {
         requestId: randomUUID(),
         startedAt: '2040-01-03T12:00:00Z',
@@ -354,7 +366,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       },
     });
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.content)).toContain('categoryId');
+    expect(JSON.stringify(result.content)).toContain('category');
     expect(await prisma.mcpAction.count({ where: { connectionId } })).toBe(
       count,
     );
@@ -375,7 +387,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       },
     });
     // 原动作只允许提交当时看到的分类，不跟随迟到的语义变化。
-    const action = await call('prepare_create_time_entry', {
+    const action = await prepare('create_time_entry', {
       requestId: randomUUID(),
       startedAt: '2040-01-04T12:00:00Z',
       endedAt: '2040-01-04T13:40:00Z',
@@ -397,7 +409,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
   });
 
   it.each(['inventory', 'memberships'] as const)(
-    '%s分类文字更新同步规范关联，UUID误填及双字段被拒绝',
+    '%s规范分类ID更新同步显示名称，旧文字字段及双字段被拒绝',
     async (moduleName) => {
       // MCP模块名与持久化taxonomy模块名采用固定映射。
       const taxonomyModule =
@@ -432,9 +444,9 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
           : {
               name: 'MCP分类回归会员',
               purchaseDate: '2026-10-21',
-              isPermanent: true,
+              billingCycle: 'permanent',
             };
-      // 正确规范ID绑定为后续兼容名称编辑提供初始状态。
+      // 正确规范ID绑定为后续分类切换提供初始状态。
       const created = await execute(createTool, {
         ...fields,
         categoryIds: [first.id],
@@ -445,7 +457,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       // 修改与提交回放都应保持名称和规范关系一致。
       const updated = await execute(
         moduleName === 'inventory' ? 'update_item' : 'update_membership',
-        { id, category: second.name },
+        { id, categoryIds: [second.id] },
       );
       expect(updated.result).toMatchObject({
         values: [expect.objectContaining({ category: second.name })],
@@ -475,7 +487,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       ]) {
         // 发布Schema与真实服务均不能把错误输入变成成功变更。
         const result = await client.callTool({
-          name: `prepare_${createTool}`,
+          name: createTool,
           arguments: { requestId: randomUUID(), ...fields, ...categoryFields },
         });
         expect(result.isError).toBe(true);
@@ -491,7 +503,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
     },
   );
 
-  it('MCP物品位置和标签拒绝UUID，位置文字变更同步替换旧关联', async () => {
+  it('MCP物品位置和标签拒绝UUID，规范位置ID变更同步替换旧关联', async () => {
     // 位置身份与类别身份不能互换。
     const oldLocation = await prisma.taxonomyEntry.create({
       data: {
@@ -502,7 +514,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
         name: 'MCP书房',
       },
     });
-    // 合法目标用于验证兼容名称的实际解析。
+    // 合法目标用于验证规范身份对应的实际显示名称。
     const newLocation = await prisma.taxonomyEntry.create({
       data: {
         id: randomUUID(),
@@ -521,7 +533,8 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
     const id = (created.result as { values: Array<{ id: string }> }).values[0]!
       .id;
     expect(
-      (await execute('update_item', { id, location: newLocation.name })).result,
+      (await execute('update_item', { id, locationIds: [newLocation.id] }))
+        .result,
     ).toMatchObject({
       values: [expect.objectContaining({ location: newLocation.name })],
     });
@@ -539,7 +552,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       expect(
         (
           await client.callTool({
-            name: 'prepare_update_item',
+            name: 'update_item',
             arguments: { requestId: randomUUID(), id, ...fields },
           })
         ).isError,
@@ -552,11 +565,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
   it('MCP象限Schema与持久化统一0至3，新增编辑移动均支持0且拒绝4', async () => {
     // 元数据需把数字语义暴露给宿主，避免按常见一至四编号猜测。
     const tools = await client.listTools();
-    for (const name of [
-      'prepare_create_todo',
-      'prepare_update_todo',
-      'prepare_set_todo_quadrant',
-    ]) {
+    for (const name of ['create_todo', 'update_todo', 'set_todo_quadrant']) {
       // 实际发布Schema明确最小、最大值与完整语义说明。
       const tool = tools.tools.find((item) => item.name === name)!;
       expect(tool.inputSchema.properties?.priorityQuadrant).toMatchObject({
@@ -590,7 +599,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       expect(
         (
           await client.callTool({
-            name: `prepare_${name}`,
+            name: name,
             arguments: {
               requestId: randomUUID(),
               ...fields,
@@ -632,15 +641,14 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       ),
     );
     expect(
-      (await reader.listTools()).tools.some(
-        (tool) =>
-          tool.name.startsWith('prepare_') || tool.name === 'commit_action',
+      (await reader.listTools()).tools.every(
+        (tool) => tool.annotations?.readOnlyHint === true,
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       (
         await reader.callTool({
-          name: 'prepare_create_note',
+          name: 'create_note',
           arguments: { requestId: randomUUID(), body: '禁止', timeZone: 'UTC' },
         })
       ).isError,
@@ -696,10 +704,15 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       // 固定预览仍有独立短有效期，不因连接永久而无限期保留。
       const action = (
         await permanentClient.callTool({
-          name: 'prepare_create_quote',
+          name: 'prepare_batch',
           arguments: {
             requestId: randomUUID(),
-            content: '永久连接直接写入验证',
+            actions: [
+              {
+                tool: 'create_quote',
+                arguments: { content: '永久连接预览验证' },
+              },
+            ],
           },
         })
       ).structuredContent as Record<string, unknown>;
@@ -715,6 +728,17 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
           await permanentClient.callTool({
             name: 'commit_action',
             arguments: { actionId: action.id },
+          })
+        ).structuredContent,
+      ).toMatchObject({ status: 'succeeded' });
+      expect(
+        (
+          await permanentClient.callTool({
+            name: 'create_quote',
+            arguments: {
+              requestId: randomUUID(),
+              content: '永久连接直接写入验证',
+            },
           })
         ).structuredContent,
       ).toMatchObject({ status: 'succeeded' });
@@ -764,7 +788,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       where: { userId: actor.sub },
     });
     // 准备不写业务表，也不留下预演业务回执。
-    const action = await call('prepare_create_quote', args);
+    const action = await prepare('create_quote', args);
     expect(
       await prisma.quote.count({
         where: { userId: actor.sub, content: '幂等名言' },
@@ -775,7 +799,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
         where: { userId: actor.sub },
       }),
     ).toBe(receiptCount);
-    expect((await call('prepare_create_quote', args)).id).toBe(action.id);
+    expect((await prepare('create_quote', args)).id).toBe(action.id);
     expect(action.approvalHash).toBeUndefined();
     expect(JSON.stringify(action)).not.toContain('approvalLocation');
     expect(
@@ -828,7 +852,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       data: { id: randomUUID(), userId: actor.sub, content: '旧值' },
     });
     // 准备只固定意图，提交仍检查基线。
-    const action = await call('prepare_update_quote', {
+    const action = await prepare('update_quote', {
       requestId: randomUUID(),
       id: row.id,
       content: 'AI值',
@@ -874,11 +898,11 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
         requestId: randomUUID(),
         actions: [
           {
-            tool: 'prepare_create_quote',
+            tool: 'create_quote',
             arguments: { content: '不得部分保存' },
           },
           {
-            tool: 'prepare_update_item',
+            tool: 'update_item',
             arguments: { id: randomUUID(), name: '不存在' },
           },
         ],
@@ -892,8 +916,8 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
     const action = await call('prepare_batch', {
       requestId: randomUUID(),
       actions: [
-        { tool: 'prepare_create_quote', arguments: { content: '一起名言' } },
-        { tool: 'prepare_create_item', arguments: { name: '一起物品' } },
+        { tool: 'create_quote', arguments: { content: '一起名言' } },
+        { tool: 'create_item', arguments: { name: '一起物品' } },
       ],
     });
     expect((await call('commit_action', { actionId: action.id })).status).toBe(
@@ -913,32 +937,32 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       'quotes',
       { content: '协议新增名言' },
       'quote',
-      'list_quotes_recycle_bin',
-      'restore_quotes',
+      'list_recycle_bin',
+      'restore_record',
     ],
     [
       'item',
       'inventory',
       { name: '协议新增物品' },
       'inventoryItem',
-      'list_inventory_recycle_bin',
-      'restore_inventory',
+      'list_recycle_bin',
+      'restore_record',
     ],
     [
       'event',
       'events',
       { name: '协议新增事件', intervalValue: 1, intervalUnit: 'month' },
       'event',
-      'list_events_recycle_bin',
-      'restore_events',
+      'list_recycle_bin',
+      'restore_record',
     ],
     [
       'todo',
       'todos',
       { title: '协议新增待办', scheduledDate: '2026-10-20' },
       'todoItem',
-      'list_todos_recycle_bin',
-      'restore_todos',
+      'list_recycle_bin',
+      'restore_record',
     ],
     [
       'membership',
@@ -950,16 +974,16 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
         timeZone: 'Asia/Shanghai',
       },
       'membership',
-      'list_memberships_recycle_bin',
-      'restore_memberships',
+      'list_recycle_bin',
+      'restore_record',
     ],
     [
       'note',
       'notes',
       { body: '协议新增笔记，保留数字123与否定。', timeZone: 'Asia/Shanghai' },
       'noteEntry',
-      'list_notes_recycle_bin',
-      'restore_notes',
+      'list_recycle_bin',
+      'restore_record',
     ],
     [
       'time_entry',
@@ -971,13 +995,13 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
         timeZone: 'Asia/Shanghai',
       },
       'timeEntry',
-      'list_time_recycle_bin',
-      'restore_time',
+      'list_recycle_bin',
+      'restore_record',
     ],
   ] as const)(
     '%s通过SDK新增/详情/软删除/显式回收站/恢复',
-    async (entity, _scope, input, model, listTool, restore) => {
-      // 标准准备→人工→提交得到真实正式身份。
+    async (entity, scope, input, model, listTool, restore) => {
+      // 标准单条直接写入口返回真实正式身份。
       const action = await execute(`create_${entity}`, input);
       // 正式结果JSON统一且笔记保存有status包装。
       const value = (
@@ -990,8 +1014,10 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       );
       await execute(`delete_${entity}`, { id: row.id });
       // 查询默认排除已删除；显式回收站可以发现身份。
-      expect((await call(listTool)).data).toHaveProperty('items');
-      await execute(restore, { id: row.id });
+      expect((await call(listTool, { module: scope })).data).toHaveProperty(
+        'items',
+      );
+      await execute(restore, { module: scope, id: row.id });
       // 数据库中确实恢复，不只检查工具成功文本。
       const actual = await database.query<{ deleted_at: Date | null }>(
         `SELECT deleted_at FROM "${({ quote: 'quotes', inventoryItem: 'inventory_items', event: 'events', todoItem: 'todo_items', membership: 'memberships', noteEntry: 'note_entries', timeEntry: 'time_entries' } as const)[model]}" WHERE id=$1`,
@@ -1040,7 +1066,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
 
   it('设备旧审批接口返回410，新写入不填写批准人或批准时间', async () => {
     // 设备JWT仍可管理连接，但不能通过旧端点签发审批。
-    const action = await call('prepare_create_quote', {
+    const action = await prepare('create_quote', {
       requestId: randomUUID(),
       content: '不需要设备批准',
     });
@@ -1075,10 +1101,10 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       requestId: randomUUID(),
       actions: [
         {
-          tool: 'prepare_create_quote',
+          tool: 'create_quote',
           arguments: { content: '取消批量名言' },
         },
-        { tool: 'prepare_create_item', arguments: { name: '取消批量物品' } },
+        { tool: 'create_item', arguments: { name: '取消批量物品' } },
       ],
     });
     // 并发重复取消返回同一份持久状态。
@@ -1135,7 +1161,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
 
   it('取消与提交并发争用同一owner锁，最终至多执行一次', async () => {
     // 对同一个尚未执行动作同时发送两种相反意图。
-    const action = await call('prepare_create_quote', {
+    const action = await prepare('create_quote', {
       requestId: randomUUID(),
       content: '并发取消提交',
     });
@@ -1153,7 +1179,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
 
   it('准备后撤回模块写权限即拒绝提交，未执行的旧approved也不能自动执行', async () => {
     // 当前连接的每一步都必须重新检查权限。
-    const action = await call('prepare_create_quote', {
+    const action = await prepare('create_quote', {
       requestId: randomUUID(),
       content: '写权限撤回不保存',
     });
@@ -1190,10 +1216,10 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       requestId: randomUUID(),
       actions: [
         {
-          tool: 'prepare_create_quote',
+          tool: 'create_quote',
           arguments: { content: '提交故障全部回滚' },
         },
-        { tool: 'prepare_create_item', arguments: { name: '提交故障物品' } },
+        { tool: 'create_item', arguments: { name: '提交故障物品' } },
       ],
     });
     // 仅拦截真实目录中的第二个领域调用，第一步正常进入数据库事务。
@@ -1279,12 +1305,12 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       content: '迁移保留已成功数据',
     });
     // 分别构造旧pending和approved；准备阶段未写任何业务记录。
-    const pending = await call('prepare_create_quote', {
+    const pending = await prepare('create_quote', {
       requestId: randomUUID(),
       content: '旧pending不自动保存',
     });
     // 独立请求用于模拟旧流程已批准但尚未执行的方案。
-    const approved = await call('prepare_create_quote', {
+    const approved = await prepare('create_quote', {
       requestId: randomUUID(),
       content: '旧approved不自动保存',
     });
@@ -1361,7 +1387,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
 
   it('撤销/到期及另一归属不能批准、查询或提交', async () => {
     // 同owner不同连接也不能窃取对方action结果。
-    const action = await call('prepare_create_quote', {
+    const action = await prepare('create_quote', {
       requestId: randomUUID(),
       content: '撤权不执行',
     });
@@ -1439,7 +1465,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
 
   it('设置优先列出有效待决动作，不被100条更新的历史记录淹没', async () => {
     // 固定一笔仍未提交的真实预览。
-    const pending = await call('prepare_create_quote', {
+    const pending = await prepare('create_quote', {
       requestId: randomUUID(),
       content: '仍待执行',
     });
@@ -1857,7 +1883,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
         expirationDate: '2026-11-01',
         timeZone: 'Asia/Shanghai',
       },
-      { name: 'MCP新会员', timeZone: 'Asia/Shanghai' },
+      { name: 'MCP新会员' },
     ],
     [
       'note',
@@ -1896,7 +1922,22 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
           [record.id],
         )
       ).rows[0]!.data;
-      await execute(`update_${entity}`, { id: record.id, ...edit });
+      // 笔记的标量编辑同样使用真实详情凭据，不能绕过v3编辑契约。
+      const editBaseline =
+        entity === 'note'
+          ? {
+              editToken: (
+                (await call('get_note', { id: record.id })).data as {
+                  editToken: string;
+                }
+              ).editToken,
+            }
+          : {};
+      await execute(`update_${entity}`, {
+        id: record.id,
+        ...edit,
+        ...editBaseline,
+      });
       // 旧意图不得把新事实写回旧值，保护独立于之后是否撤销连接。
       // SDK的SQLite布尔前值为整数，DATE前值可能是UTC ISO；后端按真实列类型规范化。
       const previous = { ...original };
@@ -1931,55 +1972,47 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
   );
 
   it.each([
-    [
-      '数量为零不创建物品',
-      'prepare_create_item',
-      { name: '非法物品', quantity: 0 },
-    ],
+    ['数量为零不创建物品', 'create_item', { name: '非法物品', quantity: 0 }],
     [
       '负金额不创建物品',
-      'prepare_create_item',
+      'create_item',
       { name: '非法物品', purchasePriceCents: -1 },
     ],
-    ['同名但未选UUID不修改', 'prepare_update_item', { name: '同名物品' }],
+    ['同名但未选UUID不修改', 'update_item', { name: '同名物品' }],
     [
       '不接受任意物品状态',
-      'prepare_create_item',
+      'create_item',
       { name: '非法物品', status: 'unknown-state' },
     ],
     [
       '缺到期日不创建周期会员',
-      'prepare_create_membership',
+      'create_membership',
       { name: '非法会员', purchaseDate: '2026-10-01' },
     ],
     [
       '永久会员不能同时设置到期日',
-      'prepare_create_membership',
+      'create_membership',
       {
         name: '非法会员',
         purchaseDate: '2026-10-01',
-        isPermanent: true,
+        billingCycle: 'permanent',
         expirationDate: '2026-11-01',
       },
     ],
     [
       '负续费金额不产生账目',
-      'prepare_record_membership_payment',
+      'record_membership_payment',
       { membershipId: randomUUID(), amountCents: -1 },
     ],
-    [
-      '周期必须正数',
-      'prepare_create_event',
-      { name: '非法事件', intervalValue: 0 },
-    ],
+    ['周期必须正数', 'create_event', { name: '非法事件', intervalValue: 0 }],
     [
       '事件不是日历预约',
-      'prepare_create_event',
+      'create_event',
       { name: '预约', description: '已退休字段不回流' },
     ],
     [
       '结束必须晚于开始',
-      'prepare_create_time_entry',
+      'create_time_entry',
       {
         activity: '非法区间',
         startedAt: '2026-01-01T03:00:00Z',
@@ -1988,31 +2021,27 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
     ],
     [
       '绝对时刻必须含偏移',
-      'prepare_create_time_entry',
+      'create_time_entry',
       {
         activity: '非法区间',
         startedAt: '2026-01-01T03:00:00',
         endedAt: '2026-01-01T04:00:00',
       },
     ],
-    [
-      '不猜测未知时区',
-      'prepare_start_time_entry',
-      { timeZone: 'Mars/Olympus' },
-    ],
+    ['不猜测未知时区', 'start_time_entry', { timeZone: 'Mars/Olympus' }],
     [
       '非法日期不创建待办',
-      'prepare_create_todo',
+      'create_todo',
       { title: '非法日期', scheduledDate: '2026-02-30' },
     ],
     [
       '进度任务必须有步骤',
-      'prepare_create_todo',
+      'create_todo',
       { title: '非法进度', scheduledDate: '2026-10-20', taskType: 'progress' },
     ],
     [
       '进度任务不得重复',
-      'prepare_create_todo',
+      'create_todo',
       {
         title: '非法进度',
         scheduledDate: '2026-10-20',
@@ -2021,19 +2050,25 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
         steps: [{ name: '一步' }],
       },
     ],
-    ['正文不能静默截断', 'prepare_create_note', { body: '字'.repeat(20001) }],
+    ['正文不能静默截断', 'create_note', { body: '字'.repeat(20001) }],
     ['超大分页不伪装完整', 'search_notes', { limit: 201 }],
     [
       '统计范围不能反向',
-      'get_time_summary',
-      { from: '2026-10-02T00:00:00Z', to: '2026-10-01T00:00:00Z' },
+      'get_statistics',
+      {
+        module: 'time',
+        from: '2026-10-02T00:00:00Z',
+        to: '2026-10-01T00:00:00Z',
+      },
     ],
   ] as const)('%s', async (_scenario, name, args) => {
     // 固定脱敏输入通过真实SDK覆盖参数和领域规则，业务无部分写入。
     const result = await client.callTool({
       name,
       arguments: {
-        ...(name.startsWith('prepare_') ? { requestId: randomUUID() } : {}),
+        ...(!['search_notes', 'get_statistics'].includes(name)
+          ? { requestId: randomUUID() }
+          : {}),
         ...args,
       },
     });
@@ -2059,23 +2094,23 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
         },
       ),
     );
-    // 目录和说明来自同一份元数据，重连也一样。
+    // 工具目录与精简能力权限共同限制当前连接，能力不重复返回工具表。
     const tools = await scoped.listTools(),
       capabilities = await scoped.callTool({
         name: 'get_capabilities',
         arguments: {},
       });
-    expect(
-      (
-        capabilities.structuredContent as { tools: Array<{ name: string }> }
-      ).tools
-        .map((tool) => tool.name)
-        .sort(),
-    ).toEqual(tools.tools.map((tool) => tool.name).sort());
+    expect(capabilities.structuredContent).not.toHaveProperty('tools');
+    expect(capabilities.structuredContent).toMatchObject({
+      modules: mcpModules.map((module) => ({
+        module,
+        read: module === 'notes',
+        write: module === 'notes',
+      })),
+    });
     expect(
       tools.tools.some(
-        (tool) =>
-          tool.name === 'list_quotes' || tool.name === 'prepare_create_item',
+        (tool) => tool.name === 'list_quotes' || tool.name === 'create_item',
       ),
     ).toBe(false);
     expect(
@@ -2168,17 +2203,21 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
         values: Array<{ note: { id: string; revision: string } }>;
       }
     ).values[0]!.note;
+    // 两次编辑共享真实详情返回的原始凭据，不能提交时偷换最新基线。
+    const originalRead = await call('get_note', { id: original.id });
+    // 凭据与内容位于同一次详情响应中。
+    const editToken = (originalRead.data as { editToken: string }).editToken;
     await execute('update_note', {
       id: original.id,
       body: '人工新正文',
-      expectedRevision: original.revision,
+      editToken,
     });
     // 模型仍使用旧正文修订时，预览明确只会保存候选。
-    const candidate = await call('prepare_update_note', {
+    const candidate = await prepare('update_note', {
       requestId: randomUUID(),
       id: original.id,
       body: '旧基线整理候选',
-      expectedRevision: original.revision,
+      editToken,
     });
     expect(
       (candidate.preview as { expectedOutcomes: string[] }).expectedOutcomes,
@@ -2223,7 +2262,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
   ])('禁止模型注入%s身份/审批/自由数据库字段', async (field) => {
     // 真实SDK会把伪造参数交给后端，必须得到协议错误。
     const result = await client.callTool({
-      name: 'prepare_create_quote',
+      name: 'create_quote',
       arguments: {
         requestId: randomUUID(),
         content: '字段注入不写入',

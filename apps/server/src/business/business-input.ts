@@ -313,12 +313,10 @@ export function pageResult<T>(
   };
 }
 
-/// 日期范围与统计截止点共用明确参数。
-export function rangeInput(input: Record<string, unknown>): {
+/// 绝对时间窗口只校验首尾，不引入未参与查询的时区或截止点。
+export function absoluteRangeInput(input: Record<string, unknown>): {
   from: Date;
   to: Date;
-  asOf: Date;
-  timeZone: string;
 } {
   // 查询窗口使用左闭右开语义。
   const from = instantInput(input.from, 'from');
@@ -326,11 +324,31 @@ export function rangeInput(input: Record<string, unknown>): {
   const to = instantInput(input.to, 'to');
   if (to <= from || to.getTime() - from.getTime() > 3660 * 86400000)
     throw new BadRequestException('范围必须为正且不超过十年');
+  return { from, to };
+}
+
+/// 自然日统计在绝对窗口之外明确地区日界，但不宣称历史状态快照。
+export function calendarRangeInput(input: Record<string, unknown>): {
+  from: Date;
+  to: Date;
+  timeZone: string;
+} {
   return {
-    from,
-    to,
+    ...absoluteRangeInput(input),
+    timeZone: timeZoneInput(input.timeZone),
+  };
+}
+
+/// 需要截止点的统计复用范围与地区，并固定进行中状态的计算时刻。
+export function rangeInput(input: Record<string, unknown>): {
+  from: Date;
+  to: Date;
+  asOf: Date;
+  timeZone: string;
+} {
+  return {
+    ...calendarRangeInput(input),
     asOf:
       input.asOf === undefined ? new Date() : instantInput(input.asOf, 'asOf'),
-    timeZone: timeZoneInput(input.timeZone),
   };
 }

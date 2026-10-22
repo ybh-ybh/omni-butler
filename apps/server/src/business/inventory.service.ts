@@ -24,7 +24,7 @@ import {
   objectInput,
   pageInput,
   pageResult,
-  rangeInput,
+  calendarRangeInput,
   textInput,
   taxonomyTextInput,
   urlInput,
@@ -497,7 +497,6 @@ export class InventoryService {
       'from',
       'to',
       'timeZone',
-      'asOf',
     ]);
     // 默认只统计主物品。
     const includeAccessories =
@@ -507,7 +506,7 @@ export class InventoryService {
     // 有日期窗口时统计购买事实，不宣称重建过去时点的物品状态。
     const range =
       input.from !== undefined || input.to !== undefined
-        ? rangeInput(input)
+        ? calendarRangeInput(input)
         : null;
     return businessRead(this.prisma, actor, async (transaction) => {
       // 全量统计不使用分页列表。

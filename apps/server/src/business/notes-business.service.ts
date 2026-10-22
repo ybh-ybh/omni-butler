@@ -25,7 +25,7 @@ import {
   objectInput,
   pageInput,
   pageResult,
-  rangeInput,
+  calendarRangeInput,
   textInput,
   timeZoneInput,
   uuidInput,
@@ -651,9 +651,9 @@ export class NotesBusinessService {
   /// 正式笔记按记录自然日统计，与客户端的方言可见字口径一致。
   statistics(actor: AuthUser, value: unknown): Promise<Prisma.JsonValue> {
     // 周/月作为同一种范围查询。
-    const input = objectInput(value, ['from', 'to', 'timeZone', 'asOf']);
+    const input = objectInput(value, ['from', 'to', 'timeZone']);
     // 显式范围和地区口径。
-    const range = rangeInput(input);
+    const range = calendarRangeInput(input);
     return businessRead(this.prisma, actor, async (transaction) => {
       // 日期列取原始业务日，不改为 createdAt。
       const rows = await transaction.noteEntry.findMany({

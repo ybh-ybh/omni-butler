@@ -364,11 +364,13 @@ class TodoRepository {
     if (parent?.taskType == TodoTaskType.progress.name) {
       throw const FormatException('进度任务不能添加子任务');
     }
-    // 规范化后的重复规则。
+    // 普通编辑保留已有终止标记；单次关闭仍用null表达本次例外。
     final String? repeatRule = parent != null
         ? null
         : draft.repeatRule == TodoRepeatRule.none
-        ? null
+        ? existingRecord?.repeatRule == 'stopped'
+              ? 'stopped'
+              : null
         : draft.repeatRule.name;
     // 实际使用的优先象限；子任务继承主任务象限。
     final int effectivePriorityQuadrant =
@@ -427,12 +429,21 @@ class TodoRepository {
           await (_database.select(_database.todoItems)
                 ..where((TodoItems table) => table.id.equals(existingId)))
               .getSingleOrNull();
-      if (existing?.repeatSeriesId != null) {
+      if (existing != null &&
+          (existing.repeatSeriesId != null || existing.repeatRule != null)) {
+        // 旧重复根尚无系列字段时，以原记录身份兼容已有稳定生成规则。
+        final String seriesId = existing.repeatSeriesId ?? existing.id;
+        // 未来关闭主系列须留下跨端可识别的终止事实，子项不停止主系列。
+        final String? futureRepeatRule =
+            existing.parentId == null && draft.repeatRule == TodoRepeatRule.none
+            ? 'stopped'
+            : repeatRule;
         // 当前及未来同系列实例。
         final List<TodoRecord> futureRecords =
             await (_database.select(_database.todoItems)..where(
                   (TodoItems table) =>
-                      table.repeatSeriesId.equals(existing!.repeatSeriesId!) &
+                      (table.repeatSeriesId.equals(seriesId) |
+                          table.id.equals(existing.id)) &
                       table.scheduledDate.isBiggerOrEqualValue(
                         _normalizeDay(existing.scheduledDate),
                       ) &
@@ -452,7 +463,7 @@ class TodoRepository {
               reminderAt: Value<DateTime?>(
                 _moveClockToDay(draft.reminderAt, record.scheduledDate),
               ),
-              repeatRule: Value<String?>(repeatRule),
+              repeatRule: Value<String?>(futureRepeatRule),
               updatedAt: Value<DateTime>(now),
               syncState: const Value<String>('localSaved'),
             ),
@@ -952,15 +963,18 @@ class TodoRepository {
 
   /// 为指定自然日按需生成缺失的独立重复实例。
   Future<void> _materializeRepeats(DateTime day) async {
-    // 全部重复主任务实例，包括软删除的单次例外与终止标记。
+    // 包含单次null例外与终止标记，已存在的同系列日期不能再次生成。
     final List<TodoRecord> repeating =
         await (_database.select(_database.todoItems)
               ..where(
                 (TodoItems table) =>
-                    table.repeatRule.isNotNull() & table.parentId.isNull(),
+                    (table.repeatRule.isNotNull() |
+                        table.repeatSeriesId.isNotNull()) &
+                    table.parentId.isNull(),
               )
               ..orderBy(<OrderingTerm Function(TodoItems)>[
                 (TodoItems table) => OrderingTerm.asc(table.scheduledDate),
+                (TodoItems table) => OrderingTerm.asc(table.id),
               ]))
             .get();
     // 按重复系列分组。
@@ -973,11 +987,6 @@ class TodoRepository {
     // 当前生成时间。
     final DateTime now = DateTime.now();
     for (final MapEntry<String, List<TodoRecord>> entry in series.entries) {
-      // 当前系列最早实例负责确定重复日历。
-      final TodoRecord seed = entry.value.first;
-      if (!_occursOn(seed, day)) {
-        continue;
-      }
       // 当前自然日是否已经存在实例，包含软删除记录以避免自动复活。
       final bool exists = entry.value.any(
         (TodoRecord record) => _normalizeDay(record.scheduledDate) == day,
@@ -985,22 +994,33 @@ class TodoRepository {
       if (exists) {
         continue;
       }
-      // 目标日前最近一条记录决定系列是否已经终止。
+      // 目标日之前的规则转换点决定日历，未来记录不能反向影响过去。
       final List<TodoRecord> previousRecords = entry.value
           .where(
             (TodoRecord record) =>
                 !_normalizeDay(record.scheduledDate).isAfter(day),
           )
           .toList(growable: false);
-      if (previousRecords.isNotEmpty &&
-          previousRecords.last.repeatRule == 'stopped') {
+      // 同规则生成实例不重置锚点，null仅为单次例外，stopped明确终止。
+      TodoRecord? ruleAnchor;
+      for (final TodoRecord previous in previousRecords) {
+        if (previous.repeatRule != null &&
+            previous.repeatRule != ruleAnchor?.repeatRule) {
+          ruleAnchor = previous;
+        }
+      }
+      if (ruleAnchor == null || !_occursOn(ruleAnchor, day)) {
         continue;
       }
+      // 固定当前有效规则，后续异步事务不会引用可变的锚点变量。
+      final String activeRule = ruleAnchor.repeatRule!;
       // 最近一条未删除实例作为内容与子任务模板。
       final List<TodoRecord> activeTemplates = entry.value
           .where(
             (TodoRecord record) =>
                 record.deletedAt == null &&
+                record.repeatRule != null &&
+                record.repeatRule != 'stopped' &&
                 _normalizeDay(record.scheduledDate).isBefore(day),
           )
           .toList(growable: false);
@@ -1043,7 +1063,7 @@ class TodoRepository {
             reminderAt: Value<DateTime?>(
               _moveClockToDay(template.reminderAt, day),
             ),
-            repeatRule: Value<String?>(seed.repeatRule),
+            repeatRule: Value<String?>(activeRule),
             repeatSeriesId: Value<String>(entry.key),
             sortOrder: Value<int>(template.sortOrder),
             createdAt: now,
@@ -1280,8 +1300,12 @@ class TodoRepository {
     if (day.isBefore(start)) {
       return false;
     }
-    // 间隔天数。
-    final int days = day.difference(start).inDays;
+    // 按自然日计算间隔，夏令时的23或25小时不能改变每周出现日。
+    final int days = DateTime.utc(
+      day.year,
+      day.month,
+      day.day,
+    ).difference(DateTime.utc(start.year, start.month, start.day)).inDays;
     return switch (seed.repeatRule) {
       'daily' => true,
       'weekly' => days % 7 == 0,

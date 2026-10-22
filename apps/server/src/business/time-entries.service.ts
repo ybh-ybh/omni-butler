@@ -9,7 +9,9 @@ import type { Prisma, TimeEntry } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { businessRead, businessWrite, requireActive } from './business-access';
 import {
+  absoluteRangeInput,
   addDays,
+  enumInput,
   instantInput,
   localInstant,
   localParts,
@@ -29,19 +31,27 @@ export class TimeEntriesService {
   /// 注入共享持久化连接。
   constructor(private readonly prisma: PrismaService) {}
 
-  /// 查询与窗口相交的记录，采用左闭右开范围。
+  /// 按状态分页查询；指定窗口时只返回与左闭右开范围相交的记录。
   list(actor: AuthUser, value: unknown): Promise<Prisma.JsonValue> {
     // 范围语义由服务校验，工具不能直接拼数据库条件。
     const input = objectInput(value, [
       'from',
       'to',
-      'timeZone',
-      'asOf',
+      'status',
       'limit',
       'offset',
     ]);
-    // 已解析的时间范围。
-    const range = rangeInput(input);
+    // 无窗口查询也受分页限制，进行中记录不会因开始时间过早而遗漏。
+    const range =
+      input.from !== undefined || input.to !== undefined
+        ? absoluteRangeInput(input)
+        : null;
+    // 状态默认涵盖进行中和已结束记录。
+    const status = enumInput(input.status ?? 'all', 'status', [
+      'ongoing',
+      'finished',
+      'all',
+    ]);
     // 返回显式截断状态。
     const page = pageInput(input);
     return businessRead(this.prisma, actor, async (transaction) =>
@@ -50,8 +60,17 @@ export class TimeEntriesService {
           where: {
             userId: actor.sub,
             deletedAt: null,
-            startedAt: { lt: range.to },
-            OR: [{ endedAt: null }, { endedAt: { gt: range.from } }],
+            ...(status === 'ongoing'
+              ? { endedAt: null }
+              : status === 'finished'
+                ? { endedAt: { not: null } }
+                : {}),
+            ...(range
+              ? {
+                  startedAt: { lt: range.to },
+                  OR: [{ endedAt: null }, { endedAt: { gt: range.from } }],
+                }
+              : {}),
           },
           orderBy: [{ startedAt: 'asc' }, { id: 'asc' }],
           skip: page.skip,
@@ -78,19 +97,7 @@ export class TimeEntriesService {
   ongoing(actor: AuthUser, value: unknown = {}): Promise<Prisma.JsonValue> {
     // 进行中列表同样有界。
     const input = objectInput(value, ['limit', 'offset']);
-    // 分页不会改变记录状态。
-    const page = pageInput(input);
-    return businessRead(this.prisma, actor, async (transaction) =>
-      pageResult(
-        await transaction.timeEntry.findMany({
-          where: { userId: actor.sub, deletedAt: null, endedAt: null },
-          orderBy: [{ startedAt: 'asc' }, { id: 'asc' }],
-          skip: page.skip,
-          take: page.take + 1,
-        }),
-        page,
-      ),
-    );
+    return this.list(actor, { ...input, status: 'ongoing' });
   }
 
   /// 开始新记录，默认使用真实服务器当前时间。

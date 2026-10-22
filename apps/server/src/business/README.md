@@ -4,6 +4,8 @@
 
 ## 调用约定
 
+本文件描述内部领域方法，不能把方法参数直接视为公开 MCP 协议。MCP v3 在适配层统一统计、回收站和恢复入口，单条业务工具自动完成预演与提交；批量使用 `prepare_batch → commit_action`。完整公开清单见 `spec/mcp-tools.json`，共 65 个工具，按连接权限进一步筛选。MCP 用稳定 `requestId` 定位原动作，再按动作身份和步骤序号派生领域 `operationId`；调用方重试必须复用请求身份。
+
 - 每个方法的第一个参数为认证层提供的 AuthUser，第二个参数为普通 JSON 对象；get 的第二个参数直接为 UUID。
 - AuthUser 只能由可信认证上下文提供。方法在数据库事务内再次核对设备会话、归属和到期时间；模型输入不能提供 userId、sub、sid 或任意数据库字段。
 - 公开方法自行校验参数，不依赖 HTTP ValidationPipe。未知字段、错误类型、失效记录和越权引用会被拒绝。
@@ -20,7 +22,7 @@ list、history、payments、versions、ongoing 支持 limit（默认 50，最大
 
 statistics 直接读取完整授权集合，不从分页列表推算总数。引用 ID 或正文材料最多返回 200 条，使用 sourcesTruncated/selectionsTruncated 明确截断；complete 表示统计覆盖完整的声明口径，不能把截断的材料当成完整事实明细。
 
-范围统一使用 from/to（带时区 ISO 时间点）、timeZone（IANA 地区或 UTC）、可选 asOf，采用左闭右开区间，最长十年。DATE/笔记 dayKey 数据按指定地区的自然日起点归属窗口；月/周窗口应传实际当地日界。当前数据查询不重建历史快照：asOf 用于进行中时长、完成/支付截止及状态计算，不能推断过去的库存或会员状态版本。
+范围使用 from/to（带时区 ISO 时间点），采用左闭右开区间，最长十年。时间列表窗口成对可选，不再接收无效的 timeZone/asOf；自然日统计仍需 timeZone（IANA 地区或 UTC）。只有时间、待办、会员和事件统计接受可选 asOf，用于进行中时长、完成/支付截止及状态计算；日签、笔记和物品统计不接收或回显该字段。DATE/笔记 dayKey 数据按指定地区的自然日起点归属窗口；月/周窗口应传实际当地日界。当前数据查询不重建历史库存或会员状态快照。
 
 每个统计对象返回自己的口径。例如：
 
@@ -50,9 +52,9 @@ statistics 直接读取完整授权集合，不从分页列表推算总数。引
 
 | 方法 | 输入和行为 |
 |---|---|
-| list | 范围、分页；返回相交记录 |
+| list | status=ongoing/finished/all（默认all）、分页，选填成对from/to；有窗口时返回相交记录 |
 | get | UUID；详情 |
-| ongoing | 分页；展示所有已保存进行中记录，不掩盖同步冲突 |
+| ongoing | 内部兼容方法，委托list(status=ongoing)；MCP不再单独暴露 |
 | start | operationId、timeZone，选填 startedAt/activity/categoryId/category/notes；省略 startedAt 表示首次执行时的现在 |
 | create | operationId、timeZone、startedAt、endedAt、activity，选填 categoryId/category/notes |
 | update | operationId、id、timeZone，选填 startedAt/endedAt/activity/categoryId/category/notes |
@@ -62,7 +64,7 @@ statistics 直接读取完整授权集合，不从分页列表推算总数。引
 
 新建/普通编辑检查区间重叠与当前进行中记录。结束既有进行中记录保留原冲突收尾通路，允许用户逐条处理离线同步形成的多条进行中记录。
 
-分类首选 `categoryId`：事务内检查同 owner、timeline 模块、category 类型、未删除且启用，然后将真实名称存入原 `category` 文本列；未新增关系或同步字段。`categoryId: null` 明确清空，省略分类参数保留已有分类。兼容 `category` 名称输入，但拒绝 UUID 字符串；两个字段不能同时提供。MCP 先查询分类，在完整列表中唯一匹配名称，重名或缺失须澄清。预览、回执和统计使用真实名称，分类改名或失效仍会触发 MCP 既有基线保护。
+分类首选 `categoryId`：事务内检查同 owner、timeline 模块、category 类型、未删除且启用，然后将真实名称存入原 `category` 文本列；未新增关系或同步字段。`categoryId: null` 明确清空，省略分类参数保留已有分类。内部兼容 `category` 名称输入，但拒绝 UUID 字符串；两个字段不能同时提供。MCP 只公开 categoryId，先查询分类，在完整列表中唯一匹配名称，重名或缺失须澄清。预览、回执和统计使用真实名称，分类改名或失效仍会触发 MCP 既有基线保护。
 
 ### InventoryService
 
@@ -78,6 +80,8 @@ statistics 直接读取完整授权集合，不从分页列表推算总数。引
 
 物品字段包括 quantity、purchasePriceCents、purchaseDate、purchaseUrl、purchasePlatform、status、warrantyExpiration、tags（文字数组）、parentItemId、notes。分类/位置首选categoryIds/locationIds，与对应category/location文字互斥，空数组清空，缺省保留。旧文字和tags不能填写UUID；旧名称唯一匹配同归属有效分类/位置时同步关联，重名拒绝，无匹配则保留兼容名称并解除该种类旧关联，不新建分类。其他种类关系保持。配件只允许两层，不能自引用、循环或把带配件主项挂到另一主项下。
 
+上述文字分类、位置和文字 tags 仅为内部领域兼容参数；MCP v3 只公开 categoryIds/locationIds，历史文字继续可读。未指定分类的新增按 MCP 提示规则从已有项选最合适的一项，没有合适项留空；后端不为此调用模型或新建分类。
+
 ### MembershipsService
 
 | 方法 | 输入和行为 |
@@ -85,7 +89,7 @@ statistics 直接读取完整授权集合，不从分页列表推算总数。引
 | list | timeZone，选填 query/asOf、分页；按到期排序并返回状态 |
 | get | UUID；详情及规范关系 |
 | create | operationId、timeZone、name、purchaseDate；周期会员还须 expirationDate；选填会员字段及 categoryIds/tagIds |
-| update | operationId、id、timeZone 和所选会员字段；不会重新生成首购 |
+| update | operationId、id 和所选会员字段；不接收timeZone，不会重新生成首购 |
 | recordPayment | operationId、membershipId、amountCents、timeZone，选填 paidAt/billingCycle/validUntil/notes |
 | deletePayment | operationId、membershipId、paymentId、timeZone；准确回退账期，区分首购与稳定自动账期 |
 | payments | membershipId、分页 |
@@ -93,6 +97,8 @@ statistics 直接读取完整授权集合，不从分页列表推算总数。引
 | statistics | 范围；整数分值支出、账目计数、当前有效会员状态 |
 
 会员字段包括 provider/category/description/websiteUrl/purchasePlatform/priceCents/billingCycle/baseStatus/purchaseDate/expirationDate/isPermanent/autoRenew/renewalDate/needsRenewal、提醒配置、cancelGuide/notes。永久与到期日期互斥；提醒提前天数须为正、日内分钟在 0—1439。
+
+MCP v3 的永久属性只接受 billingCycle=permanent，由适配层维护领域 isPermanent，防止模型重复填写矛盾状态。MCP 不再接受文字 category，只允许 categoryIds/tagIds；领域兼容参数仍保留。首购、记账和删除账目需要业务时区，基础编辑不需要。
 
 保存主表、首购和分类标签是一个事务。标准续费从当前到期日叠加，账目 validFrom 使用支付业务日；自定义周期 validUntil 必须晚于支付日。记账不执行真实扣费，改续费标记不执行供应商退订；现有客户端自动补账调度继续使用原路径。
 
@@ -127,11 +133,23 @@ category 是自由文本。日/周为固定时长，月/年为业务地区日历
 | setStepsCompleted | operationId、todoId、stepIds、completed；满格不自动确认，返回条件撤销事实 |
 | undoSteps | operationId、changeOperationId；从原可信回执读取旧状态，后续修改后拒绝覆盖 |
 | replaceSteps | operationId、todoId、steps、baseline；结构由 id/name/顺序校验，保留原步骤完成事实 |
-| ensureRepeatedInstances | operationId、day、timeZone；显式生成该日实例，与客户端使用相同稳定身份并尊重停止和永久墓碑 |
+| ensureRepeatedInstances | 内部兼容入口；MCP不再暴露手动生成工具，后台调度共用同一生成规则 |
 | trash | operationId、id，scope=single/future；未来仅删未完成实例，主任务写 stopped，子任务不停止主系列 |
 | statistics | 范围；计划与完成日分别计数，明确只含已保存重复实例 |
 
 普通树只有两层；进度任务独立、不重复、不能转型。创建/新增步骤上限 1000，已合并超限结构可保留/减少。结构 baseline 不含完成状态，状态修改不导致无关结构编辑误冲突；步骤撤销则要求原步骤的状态及更新时间仍精确匹配。
+
+MCP 只在创建时公开 taskType；替换步骤先调用 get_todo 取得 editToken，原样回传，由适配层提供读取时的结构 baseline。新步骤省略 id，不传 null。不得在冲突后自动读取最新基线覆盖。
+
+步骤 editToken 保存原有序结构的签名摘要。准备阶段在 owner 锁内读取当前结构，摘要相同才传入领域 baseline；摘要不同直接拒绝，不能把最新结构冒充已读基线。这样无需把全部步骤名称复制进令牌，完成状态仍与结构编辑分离。令牌有效 24 小时，绑定 owner、连接和对象；持久签名密钥使其可跨进程重启验证，密钥轮换后失效。相同 requestId 和原参数先重放已有 MCP 动作，旧令牌过期不会阻断原回执查询或重放，授权和动作状态仍须校验。
+
+TodoRecurrenceService 在服务启动及每 30 秒运行，以持久游标补齐各系列到今天。游标保存锚点、时区与规则变化签名；排程变化会重新检查，新增同规则实例不会反复重置断点。每轮最多 10 个 owner、每个 4 个系列、每系列 7 天；单系列失败在保存点内回滚并退避 60 秒，不阻止健康系列提交，失败期间不会误报已追平。实例、游标与保护身份在同一 owner 锁事务保存，停机后继续推进，不生成未来日期，不因查询或统计产生写入。
+
+时区来自该 owner 有效待办读写连接的显式设置，经 IANA 别名规范化后必须唯一。无授权、无明确时区或时区冲突时暂停，条件恢复后自动继续。有待办读权限的 MCP 连接可从 get_capabilities.todoRecurrence 读取最近检查的 status/timeZone/reason/checkedAt，包括 not_checked、idle、catching_up、blocked_authorization、blocked_timezone、error；此查询不触发调度。
+
+客户端与后端共用规则段锚点语义：连续同规则实例不改变周期起点，频率改变以变更日重新起算，null 表示单次例外。scope=future 关闭主系列保存 stopped，普通编辑保留既有终止标记。停止规则、永久墓碑和稳定实例身份仍生效，Windows/Android 须同步更新此逻辑。
+
+第 26 份迁移 20261022010000_todo_recurrence_worker 提供私有调度状态及游标；第 27 份 20261022020000_todo_recurrence_protection 提供 todo_recurrence_protections。生成根项和子项时同事务记录保护身份，同步上传复用既有字段前值检查及关联删除冲突检查，避免旧离线 PATCH/DELETE 覆盖后台生成内容。保护不依赖伪 MCP 回执，撤销连接或删除记录后仍保留，仅删除 owner 时级联清理；私有表不发布到 PowerSync 或业务快照。
 
 priorityQuadrant完全沿用客户端0–3：0不紧急不重要，1紧急不重要，2重要不紧急（缺省），3重要且紧急。新增、编辑及整树移动均接受0并拒绝4；已有非法4不自动重映射，须核对后显式更新，不能经父项继承、未来编辑或重复实例生成继续传播。
 
@@ -152,6 +170,8 @@ priorityQuadrant完全沿用客户端0–3：0不紧急不重要，1紧急不重
 
 记录时间组为 dayKey、recordTimeSeconds、recordUtcOffsetMinutes，必须整体提供，范围沿用现有 1970 年至当前时刻限制。正文基线失效时返回 status=conflict、当前 note 和 candidateRevision，候选已经提交，不能当成 saved；成功返回 status=saved。标签/元数据不使用正文 revision 提供全端保护。
 
+上述时间组和 expectedRevision/tagsBase 为内部领域协议。MCP v3 只接收带偏移的 recordedAt 和详情返回的 editToken，适配层拆出记录日期、日内秒、偏移，并使用读取时的正文/标签基线。recordedAt 新增省略取当前时刻，更新省略保留；get_note 返回的 editToken 必须原样回传，不可自造或用提交时最新值替代。令牌沿用上述 24 小时、持久签名和原 requestId 重放规则。正式正文冲突仍保存候选，标签仍保留并发新增。
+
 追加冲突基于真正的历史正文构造候选；历史基线不存在时返回 NOTE_BASE_MISSING。历史正文恢复可读取 versions，再以当前 expectedRevision 调用普通 update 生成新修订。ASR/AI 整理成功仍不等于正式正文已采用；服务器整理采用与跨端去重留待该能力接入时实施。
 
 ## 迁移、验证与发布边界
@@ -160,6 +180,10 @@ priorityQuadrant完全沿用客户端0–3：0不紧急不重要，1紧急不重
 
 增量同步与快照迁移共用现有多态模块映射。增量事务在最终状态检查关系闭包，允许链接先于业务父行上传；父项的永久墓碑优先于迟到的新链接身份。同步原始负载摘要、回执及批次顺序保持。
 
-发布前按现有流程备份数据库、对象存储及密钥卷，再部署数据库迁移和 API。本轮只在专用空测试库执行迁移，运行中的应用数据库未更新。Flutter 现有 Repository 没有切换调用方式；后端新会员保存路径已原子化，客户端原有独立事务问题仍需在客户端工作中处理。
+发布前按现有流程备份数据库、对象存储及密钥卷，停止旧 API 请求后执行全部 27 份迁移，再启动新版 API 并更新 Windows/Android 客户端。后台保护身份须随数据库备份，不能作为日志清理。当前代码只在专用空测试库执行迁移，运行中的应用数据库未更新。客户端仍通过原同步入口，v3 只调整重复规则逻辑；同步 schema 12、SQLite 26、快照 11、wire snapshot 3 不变。
 
-验证入口：test/business-input.spec.ts、test/business.integration.spec.ts。集成测试只读取显式 OMNI_BUSINESS_TEST_DATABASE_URL，要求 127.0.0.1、库名以 _test 结尾且 public 无既有表；不读取应用 DATABASE_URL，也不清理用户数据库。通过的具体用例、全套服务端回归及外部存储跳过项以本轮 output/business-backend-20261020/ 测试记录为准。
+验证入口：test/business-input.spec.ts、test/business.integration.spec.ts。集成测试只读取显式 OMNI_BUSINESS_TEST_DATABASE_URL，要求 127.0.0.1、库名以 _test 结尾且 public 无既有表；不读取应用 DATABASE_URL，也不清理用户数据库。2026-10-20 的原业务层验证记录保留在 output/business-backend-20261020/，不代表 v3 最终结果。
+
+### MCP v3 验证（2026-10-22）
+
+完整 npm test 使用六套隔离 PostgreSQL 环境，601 项通过、20 项外部存储用例跳过；非修复模式 lint、build、MCP 导出检查通过。Flutter 定向 23 项及相关 analyze、UI 样式检查通过。证据位于 output/mcp-v3-20261022/。未部署、未构建或安装客户端、未进行真实 Codex 宿主和双设备验证。

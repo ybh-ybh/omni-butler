@@ -31,14 +31,12 @@ import {
   McpCatalog,
   mcpId,
   mcpModules,
-  mcpPrepareDescription,
-  mcpTimeCategoryPolicy,
-  mcpTaxonomyPolicy,
-  mcpTodoQuadrantPolicy,
+  mcpAutoTaxonomyPolicy,
   mcpWritePolicy,
   type McpModule,
   type McpToolDefinition,
 } from './mcp-catalog';
+import { McpEditTokenService } from './mcp-edit-token.service';
 
 /// MCP 业务步骤只能引用已登记的具体工具。
 export interface McpStep {
@@ -111,6 +109,7 @@ export class McpService {
   constructor(
     private readonly prisma: PrismaService,
     readonly catalog: McpCatalog,
+    private readonly editTokens: McpEditTokenService,
   ) {}
 
   /// 仅已认证设备可以创建限期或永久连接，默认30天及所有模块只读。
@@ -295,7 +294,7 @@ export class McpService {
   ): McpToolDefinition {
     // 来自实际注册目录的唯一映射。
     const tool = this.catalog
-      .visible(connection.readModules, connection.writeModules)
+      .authorized(connection.readModules, connection.writeModules)
       .find((item) => item.name === name && item.write === write);
     if (!tool) throw new ForbiddenException('当前连接未获该工具权限');
     return tool;
@@ -305,11 +304,33 @@ export class McpService {
   async capabilities(connectionId: string): Promise<Record<string, unknown>> {
     // 能力结果不授予权限，实际调用仍要复核。
     const connection = await this.requireConnection(this.prisma, connectionId);
+    // 后台状态只向有待办读权限的连接展示，不触发任务或返回归属身份。
+    const recurrence = connection.readModules.includes('todos')
+      ? await this.prisma.todoRecurrenceState.findUnique({
+          where: { userId: connection.userId },
+          select: {
+            status: true,
+            timeZone: true,
+            reason: true,
+            checkedAt: true,
+          },
+        })
+      : undefined;
     return {
       service: '知序 MCP',
-      capabilityVersion: '2.2',
+      capabilityVersion: '3.0',
       serverTime: new Date().toISOString(),
       timeZone: connection.timeZone,
+      ...(recurrence === undefined
+        ? {}
+        : {
+            todoRecurrence: recurrence ?? {
+              status: 'not_checked',
+              timeZone: null,
+              reason: null,
+              checkedAt: null,
+            },
+          }),
       timeZoneSource: connection.timeZone
         ? '用户连接设置'
         : '未配置，日期操作需要显式提供 IANA 时区',
@@ -321,43 +342,18 @@ export class McpService {
           ? '按连接写权限提交；单条直接执行，批量在Codex对话中确认'
           : '只读或未授权',
       })),
-      tools: [
-        ...this.catalog
-          .visible(connection.readModules, connection.writeModules)
-          .map((tool) => ({
-            name: tool.write ? 'prepare_' + tool.name : tool.name,
-            module: tool.module,
-            effect: tool.write ? '准备固定变更，不修改业务表' : '只读',
-            description: tool.write
-              ? mcpPrepareDescription(tool)
-              : tool.description,
-            example: tool.write
-              ? '请准备' + tool.description.split('；')[0]
-              : '请' + tool.description.split('；')[0],
-          })),
-        ...this.catalog
-          .controls(connection.readModules, connection.writeModules)
-          .map((tool) => ({
-            name: tool.name,
-            module: 'system',
-            effect: tool.write
-              ? '按工具说明准备、提交或取消当前连接操作'
-              : '只读',
-            description: tool.description,
-            example: tool.description,
-          })),
-      ],
       workflow: {
-        prepare: '生成固定输入与影响预览',
+        single: '业务写工具直接保存；重试原样复用requestId与参数',
+        prepare: 'prepare_batch固定输入与影响预览，尚未修改业务数据',
         confirmation: mcpWritePolicy,
-        timeCategories: mcpTimeCategoryPolicy,
-        taxonomies: mcpTaxonomyPolicy,
-        todoQuadrants: mcpTodoQuadrantPolicy,
+        autoTaxonomy: mcpAutoTaxonomyPolicy,
+        editing: 'get_note/get_todo返回editToken；原样回传编辑，冲突停止核对',
         authorization:
           '连接模块写权限为后端执行授权；不验证Codex对话中的人工确认',
         commit: 'commit_action 提交有效pending操作，不再需要设备审批',
         cancel: 'cancel_action 取消当前连接未执行操作；不能回滚已提交结果',
-        status: 'get_action_status 按原动作身份核实，重试不新建业务记录',
+        status:
+          '已知actionId用get_action_status；未知则原requestId和原参数重试写工具',
         undo: 'undo_action 为原成功时间起10分钟内仍符合后置基线的单条新增准备软删除补偿，再提交',
       },
       limits: {
@@ -398,10 +394,99 @@ export class McpService {
     const connection = await this.requireConnection(this.prisma, connectionId);
     // 运行时严格 Schema 再校验一次，不能只依靠模型遵守 Schema。
     const tool = this.tool(connection, name, false);
-    return tool.run(
+    // 编辑凭据必须来自同一次详情查询，不在生成凭据时再读最新事实。
+    const result = await tool.run(
       connectionActor(connection),
       tool.schema.parse(this.defaultZone(connection, tool, value)),
     );
+    if (
+      (name === 'get_note' || name === 'get_todo') &&
+      result &&
+      typeof result === 'object' &&
+      !Array.isArray(result)
+    ) {
+      return {
+        ...result,
+        editToken: this.editTokens.issue(
+          connection,
+          mcpId.parse(result.id),
+          name === 'get_note'
+            ? {
+                kind: 'note',
+                revision: mcpId.parse(result.revision),
+                tags: JSON.parse(z.string().parse(result.tags)) as string[],
+              }
+            : {
+                kind: 'todoSteps',
+                structureHash: mcpHash(
+                  (
+                    result.progressSteps as Array<{
+                      id: string;
+                      name: string | null;
+                    }>
+                  ).map((step) => ({ id: step.id, name: step.name })),
+                ),
+              },
+        ),
+      };
+    }
+    return result;
+  }
+
+  /// 统一统计入口仍使用各模块严格契约，拒绝不适用的参数。
+  async statistics(
+    connectionId: string,
+    value: unknown,
+  ): Promise<Prisma.JsonValue> {
+    // 模块枚举限制公开参数，权限在底层读取时再次核对。
+    const { module, ...input } = z
+      .strictObject({
+        module: z.enum(mcpModules),
+        from: z.string().optional(),
+        to: z.string().optional(),
+        timeZone: z.string().optional(),
+        asOf: z.string().optional(),
+        includeAccessories: z.boolean().optional(),
+      })
+      .parse(value);
+    // 内部目录名固定，不能借模块参数访问任意工具。
+    const summaries: Record<McpModule, string> = {
+      quotes: 'get_quote_summary',
+      time: 'get_time_summary',
+      todos: 'get_todo_summary',
+      inventory: 'get_inventory_summary',
+      memberships: 'get_membership_spending',
+      events: 'get_event_summary',
+      notes: 'get_note_summary',
+    };
+    return this.read(connectionId, summaries[module], input);
+  }
+
+  /// 七模块回收站共享分页入口，内部仍按模块验证owner与只读权限。
+  async recycle(
+    connectionId: string,
+    value: unknown,
+  ): Promise<Prisma.JsonValue> {
+    // 不接受自由表名、任意筛选或写入字段。
+    const { module, ...input } = z
+      .strictObject({
+        module: z.enum(mcpModules),
+        limit: z.number().optional(),
+        offset: z.number().optional(),
+      })
+      .parse(value);
+    return this.read(connectionId, `list_${module}_recycle_bin`, input);
+  }
+
+  /// 单条公开写入复用预演、固定输入和原子提交，重试只重放原回执。
+  async execute(
+    connectionId: string,
+    requestId: string,
+    step: McpStep,
+  ): Promise<Record<string, unknown>> {
+    // 准备成功后的实际action身份用于提交，不使用模型猜测的业务身份。
+    const prepared = await this.prepare(connectionId, requestId, [step]);
+    return this.commit(connectionId, String(prepared.id));
   }
 
   /// 只给工具已声明的时区字段应用显式连接默认值，不向其他工具注入额外字段。
@@ -531,18 +616,106 @@ export class McpService {
   }
 
   /// 从原始步骤生成固定的绝对事实；提交跨午夜不会重新解释“现在”。
-  private fixedSteps(
+  private async fixedSteps(
+    transaction: Prisma.TransactionClient,
     connection: McpConnection,
     steps: McpStep[],
     now: Date,
-  ): McpStep[] {
-    return steps.map((step) => {
+  ): Promise<McpStep[]> {
+    // 顺序解析在同一owner锁内完成，不并行访问事务连接。
+    const fixed: McpStep[] = [];
+    for (const step of steps) {
       // 严格输入不接受 operationId、confirmed、owner 等非业务参数。
-      const tool = this.tool(connection, step.name, true);
+      const mapped =
+        step.name === 'restore_record'
+          ? z
+              .strictObject({ module: z.enum(mcpModules), id: mcpId })
+              .parse(step.input)
+          : null;
+      // 统一恢复工具只展开到固定目录，不能构造隐藏业务工具名。
+      const name = mapped ? `restore_${mapped.module}` : step.name;
+      // 批量只接受公开业务动作；历史隐藏入口不能通过字符串绕过目录。
+      if (
+        !mapped &&
+        !this.catalog
+          .visible(connection.readModules, connection.writeModules)
+          .some((item) => item.name === name && item.write)
+      )
+        throw new ForbiddenException('当前连接未开放该写工具');
+      // 内部目录保留恢复映射的领域实现。
+      const tool = this.tool(connection, name, true);
       // 初次校验之后才补服务端默认值，不能为模型保留任意字段。
       const input = tool.schema.parse(
-        this.defaultZone(connection, tool, step.input),
+        this.defaultZone(
+          connection,
+          tool,
+          mapped ? { id: mapped.id } : step.input,
+        ),
       );
+      if (input.editToken !== undefined) {
+        // 解包读取时签名的事实，不从当前数据库补造过期基线。
+        const baseline = this.editTokens.read(
+          connection,
+          String(name === 'replace_todo_steps' ? input.todoId : input.id),
+          z.string().parse(input.editToken),
+          name === 'replace_todo_steps' ? 'todoSteps' : 'note',
+        );
+        if (baseline.kind === 'note') {
+          if (name === 'append_note' || input.body !== undefined)
+            input.expectedRevision = baseline.revision;
+          if (input.tags !== undefined) input.tagsBase = baseline.tags;
+        } else {
+          // 大型历史结构只签摘要；当前结构必须与已读取的签名事实完全相同。
+          const current = await transaction.todoProgressStep.findMany({
+            where: {
+              userId: connection.userId,
+              todoId: String(input.todoId),
+              deletedAt: null,
+            },
+            orderBy: [
+              { sortOrder: 'asc' },
+              { createdAt: 'asc' },
+              { id: 'asc' },
+            ],
+            select: { id: true, name: true },
+          });
+          if (mcpHash(current) !== baseline.structureHash)
+            throw new ConflictException('进度结构已变化，请停止并核对变更');
+          input.baseline = current;
+        }
+        delete input.editToken;
+      }
+      if (
+        (name === 'create_membership' || name === 'update_membership') &&
+        input.billingCycle !== undefined
+      ) {
+        // 单一周期字段映射到旧存储，转换永久时清除不适用的到期日。
+        input.isPermanent = input.billingCycle === 'permanent';
+        if (input.isPermanent) {
+          if (
+            input.expirationDate !== undefined &&
+            input.expirationDate !== null
+          )
+            throw new BadRequestException('永久会员不能设置到期日');
+          input.expirationDate = null;
+        }
+      }
+      if (input.recordedAt !== undefined) {
+        // 保留输入偏移与墙钟时间，不能转成UTC后丢失原记录日期。
+        const recorded = z.string().parse(input.recordedAt);
+        // ISO Schema已验证格式，偏移另外限制在现有笔记存储范围。
+        const offset = /([+-])(\d{2}):(\d{2})$/.exec(recorded);
+        input.dayKey = recorded.slice(0, 10);
+        input.recordTimeSeconds =
+          Number(recorded.slice(11, 13)) * 3600 +
+          Number(recorded.slice(14, 16)) * 60 +
+          Number(recorded.slice(17, 19) || 0);
+        input.recordUtcOffsetMinutes = offset
+          ? (offset[1] === '-' ? -1 : 1) *
+            (Number(offset[2]) * 60 + Number(offset[3]))
+          : 0;
+        delete input.recordedAt;
+      }
       if (step.name === 'start_time_entry' && input.startedAt === undefined)
         input.startedAt = now.toISOString();
       if (step.name === 'finish_time_entry' && input.endedAt === undefined)
@@ -566,8 +739,9 @@ export class McpService {
         input.recordTimeSeconds = local.seconds;
         input.recordUtcOffsetMinutes = local.offsetMinutes;
       }
-      return { name: step.name, input };
-    });
+      fixed.push({ name, input });
+    }
+    return fixed;
   }
 
   /// 一次可见清单在一个事务内模拟或提交，最多8个明确动作。
@@ -627,7 +801,12 @@ export class McpService {
           return this.actionView(prior, true);
         }
         // 执行前固定动作、时间和授权。
-        const fixed = this.fixedSteps(connection, steps, new Date());
+        const fixed = await this.fixedSteps(
+          transaction,
+          connection,
+          steps,
+          new Date(),
+        );
         // 基线包含本次所有模块及其关系，数据变化后不能沿用旧预览。
         const modules = [
           ...new Set(

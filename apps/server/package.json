@@ -11,6 +11,7 @@
     "lint": "eslint \"{src,test}/**/*.ts\"",
     "test": "jest --runInBand",
     "test:integration": "jest --runTestsByPath test/sync.integration.spec.ts --runInBand",
+    "export:mcp-tools": "node scripts/export-mcp-tools.cjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy"
