@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  BadRequestException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -9,7 +10,7 @@ import type { AuthUser } from '../auth/auth.types';
 import type { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { canonicalize } from '../sync/sync.service';
-import { uuidInput } from './business-input';
+import { idsInput, taxonomyTextInput, uuidInput } from './business-input';
 
 /// 已锁定的业务事务只在当前异步调用链内复用，避免审批与副作用分开提交。
 const businessContext = new AsyncLocalStorage<{
@@ -152,6 +153,61 @@ export function requireActive<T extends { deletedAt: Date | null }>(
   if (!record || record.deletedAt !== null)
     throw new NotFoundException('记录不存在或已删除');
   return record;
+}
+
+/// 兼容名称与规范ID采用单一选择，缺省保留；名称清空或无匹配时解除旧关系。
+export async function resolveNamedTaxonomy(
+  transaction: Prisma.TransactionClient,
+  userId: string,
+  module: string,
+  kind: 'category' | 'location',
+  input: Record<string, unknown>,
+): Promise<{ ids: string[]; name: string | null } | null> {
+  // 现有业务使用复数ID字段支持多选，兼容文字字段只表达一个旧名称。
+  const idField = `${kind}Ids`;
+  if (input[idField] !== undefined && input[kind] !== undefined)
+    throw new BadRequestException(`${idField} 与 ${kind} 不能同时提供`);
+  if (input[idField] === undefined && input[kind] === undefined) return null;
+  if (input[idField] !== undefined) {
+    // 身份归属、模块、类型与有效状态均在当前写事务内核验。
+    const ids = idsInput(input[idField], idField);
+    // 使用稳定顺序维护兼容展示名称，不能采用模型额外提交的名字。
+    const entries = await transaction.taxonomyEntry.findMany({
+      where: {
+        userId,
+        module,
+        kind,
+        id: { in: ids },
+        deletedAt: null,
+        isEnabled: true,
+      },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+    });
+    if (entries.length !== ids.length)
+      throw new ConflictException('分类或位置不存在、已失效或类型不匹配');
+    return { ids, name: entries.map((entry) => entry.name).join(',') || null };
+  }
+  // 原有自由名称兼容保留，但不能遗留指向其他分类的旧关联。
+  const name = taxonomyTextInput(input[kind], kind);
+  if (name === null) return { ids: [], name: null };
+  // 最多读取两个匹配项即可判定歧义，不能静默选择同名记录。
+  const matches = await transaction.taxonomyEntry.findMany({
+    where: {
+      userId,
+      module,
+      kind,
+      name: { equals: name, mode: 'insensitive' },
+      deletedAt: null,
+      isEnabled: true,
+    },
+    take: 2,
+  });
+  if (matches.length > 1)
+    throw new ConflictException('分类或位置名称重名，请查询并使用明确ID');
+  return {
+    ids: matches.map((entry) => entry.id),
+    name: matches[0]?.name ?? name,
+  };
 }
 
 /// 关系替换与业务保存处于同一事务，关联必须有效且属于相同模块/类型。

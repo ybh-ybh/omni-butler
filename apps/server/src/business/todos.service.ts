@@ -258,8 +258,8 @@ export class TodosService {
       data.priorityQuadrant = integerInput(
         input.priorityQuadrant,
         'priorityQuadrant',
-        1,
-        4,
+        0,
+        3,
       );
     if (input.parentId !== undefined)
       data.parentId =
@@ -351,6 +351,9 @@ export class TodosService {
           data.priorityQuadrant ??
           current?.priorityQuadrant ??
           2;
+        // 旧非法编号保留待核对，但不能经继承或未来编辑传播到其他记录。
+        if (creating || input.parentId !== undefined || scope === 'future')
+          integerInput(priorityQuadrant, 'priorityQuadrant', 0, 3);
         // 进度规则同客户端，不能混用步骤和普通任务。
         const repeatRule = parent
           ? null
@@ -577,8 +580,8 @@ export class TodosService {
     const priorityQuadrant = integerInput(
       input.priorityQuadrant,
       'priorityQuadrant',
-      1,
-      4,
+      0,
+      3,
     );
     return businessWrite(
       this.prisma,
@@ -949,6 +952,8 @@ export class TodosService {
             })
           )
             continue;
+          // 不能从旧非法象限模板继续物化错误实例。
+          integerInput(template.priorityQuadrant, 'priorityQuadrant', 0, 3);
           // 提醒与截止按目标日保留当地钟点。
           const move = (at: Date | null): Date | null =>
             at

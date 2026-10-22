@@ -32,6 +32,9 @@ import {
   mcpId,
   mcpModules,
   mcpPrepareDescription,
+  mcpTimeCategoryPolicy,
+  mcpTaxonomyPolicy,
+  mcpTodoQuadrantPolicy,
   mcpWritePolicy,
   type McpModule,
   type McpToolDefinition,
@@ -304,7 +307,7 @@ export class McpService {
     const connection = await this.requireConnection(this.prisma, connectionId);
     return {
       service: '知序 MCP',
-      capabilityVersion: '2.0',
+      capabilityVersion: '2.2',
       serverTime: new Date().toISOString(),
       timeZone: connection.timeZone,
       timeZoneSource: connection.timeZone
@@ -347,6 +350,9 @@ export class McpService {
       workflow: {
         prepare: '生成固定输入与影响预览',
         confirmation: mcpWritePolicy,
+        timeCategories: mcpTimeCategoryPolicy,
+        taxonomies: mcpTaxonomyPolicy,
+        todoQuadrants: mcpTodoQuadrantPolicy,
         authorization:
           '连接模块写权限为后端执行授权；不验证Codex对话中的人工确认',
         commit: 'commit_action 提交有效pending操作，不再需要设备审批',

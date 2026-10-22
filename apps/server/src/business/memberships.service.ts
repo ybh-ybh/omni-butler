@@ -13,6 +13,7 @@ import {
   businessRead,
   businessWrite,
   replaceTaxonomies,
+  resolveNamedTaxonomy,
   requireActive,
 } from './business-access';
 import {
@@ -31,6 +32,7 @@ import {
   pageResult,
   rangeInput,
   textInput,
+  taxonomyTextInput,
   timeZoneInput,
   urlInput,
   uuidInput,
@@ -244,7 +246,6 @@ export class MembershipsService {
     if (input.name !== undefined) data.name = textInput(input.name, 'name')!;
     for (const field of [
       'provider',
-      'category',
       'purchasePlatform',
       'description',
       'cancelGuide',
@@ -261,6 +262,8 @@ export class MembershipsService {
             : 200,
           true,
         );
+    if (input.category !== undefined)
+      data.category = taxonomyTextInput(input.category, 'category');
     if (input.websiteUrl !== undefined)
       data.websiteUrl = urlInput(input.websiteUrl, 'websiteUrl');
     if (input.priceCents !== undefined)
@@ -309,18 +312,28 @@ export class MembershipsService {
         0,
         1439,
       );
-    // 规范关系仅替换明确选择的种类。
-    const selected: Record<string, string[]> = {};
-    if (input.categoryIds !== undefined)
-      selected.category = idsInput(input.categoryIds, 'categoryIds');
-    if (input.tagIds !== undefined)
-      selected.tag = idsInput(input.tagIds, 'tagIds');
     return businessWrite(
       this.prisma,
       actor,
       creating ? 'memberships.create' : 'memberships.update',
       input,
       async (transaction) => {
+        // 分类兼容名称与规范关系统一解释，标签ID仍保持原有独立语义。
+        const selected: Record<string, string[]> = {};
+        // 此处不能使用提交前的模型名称替代规范分类名称。
+        const category = await resolveNamedTaxonomy(
+          transaction,
+          actor.sub,
+          'membership',
+          'category',
+          input,
+        );
+        if (category) {
+          selected.category = category.ids;
+          data.category = category.name;
+        }
+        if (input.tagIds !== undefined)
+          selected.tag = idsInput(input.tagIds, 'tagIds');
         // 当前状态在 owner 锁内读取。
         const id = creating ? randomUUID() : uuidInput(input.id);
         // 创建与修改都使用同一个有效期规则。
@@ -385,18 +398,6 @@ export class MembershipsService {
           id,
           selected,
         );
-        if (selected.category) {
-          // 保持旧客户端分类文字与当前规范引用一致。
-          const names = await transaction.taxonomyEntry.findMany({
-            where: { userId: actor.sub, id: { in: selected.category } },
-            orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
-            select: { name: true },
-          });
-          await transaction.membership.update({
-            where: { id },
-            data: { category: names.map((row) => row.name).join(',') || null },
-          });
-        }
         return transaction.membership.findUniqueOrThrow({ where: { id } });
       },
     );

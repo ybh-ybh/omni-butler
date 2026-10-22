@@ -17,6 +17,7 @@ import {
   pageInput,
   pageResult,
   rangeInput,
+  taxonomyTextInput,
   textInput,
   timeZoneInput,
   uuidInput,
@@ -101,6 +102,7 @@ export class TimeEntriesService {
       'timeZone',
       'activity',
       'category',
+      'categoryId',
       'notes',
     ]);
     return this.save(actor, input, 'time.start', null);
@@ -116,6 +118,7 @@ export class TimeEntriesService {
       'timeZone',
       'activity',
       'category',
+      'categoryId',
       'notes',
     ]);
     if (
@@ -137,6 +140,7 @@ export class TimeEntriesService {
       'timeZone',
       'activity',
       'category',
+      'categoryId',
       'notes',
     ]);
     if (input.endedAt === null)
@@ -155,6 +159,7 @@ export class TimeEntriesService {
       'timeZone',
       'activity',
       'category',
+      'categoryId',
       'notes',
     ]);
     return this.save(actor, input, 'time.update');
@@ -173,6 +178,8 @@ export class TimeEntriesService {
     const id = input.id === undefined ? null : uuidInput(input.id);
     if ((action === 'time.update' || action === 'time.finish') && !id)
       throw new BadRequestException('必须指定记录身份');
+    if (input.categoryId !== undefined && input.category !== undefined)
+      throw new BadRequestException('categoryId 与 category 不能同时提供');
     return businessWrite(
       this.prisma,
       actor,
@@ -189,6 +196,13 @@ export class TimeEntriesService {
           : null;
         if (action === 'time.finish' && current?.endedAt !== null)
           throw new ConflictException('记录已经结束');
+        // 分类身份在同一写事务内核验，持久化仍使用客户端约定的名称。
+        const category = await this.categoryName(
+          transaction,
+          actor.sub,
+          input,
+          current?.category ?? null,
+        );
         // 开始默认当前时间，仅开始命令允许省略。
         const startedAt =
           input.startedAt === undefined
@@ -248,10 +262,7 @@ export class TimeEntriesService {
           endMinute: endedAt
             ? Math.floor((endedAt.getTime() - midnight) / 60000)
             : Math.floor((startedAt.getTime() - midnight) / 60000),
-          category:
-            input.category === undefined && current
-              ? current.category
-              : textInput(input.category, 'category', 200, true),
+          category,
           notes:
             input.notes === undefined && current
               ? current.notes
@@ -264,6 +275,37 @@ export class TimeEntriesService {
             });
       },
     );
+  }
+
+  /// 将规范分类身份解析为名称，禁止把 UUID 当成兼容文字分类写入。
+  private async categoryName(
+    transaction: Prisma.TransactionClient,
+    userId: string,
+    input: Record<string, unknown>,
+    current: string | null,
+  ): Promise<string | null> {
+    if (input.categoryId === null) return null;
+    if (input.categoryId !== undefined) {
+      // 只允许当前用户的有效时间类别，不能借用标签或其他模块的身份。
+      const category = await transaction.taxonomyEntry.findFirst({
+        where: {
+          id: uuidInput(input.categoryId, 'categoryId'),
+          userId,
+          module: 'timeline',
+          kind: 'category',
+          deletedAt: null,
+          isEnabled: true,
+        },
+      });
+      if (!category)
+        throw new ConflictException(
+          '时间分类不存在、已失效或归属/类型不匹配，请重新查询分类',
+        );
+      return category.name;
+    }
+    if (input.category === undefined) return current;
+    // 兼容原有名称输入，但拒绝常见的 ID 与名称混用。
+    return taxonomyTextInput(input.category, 'category');
   }
 
   /// 将记录移入回收站，不触发额外计时。

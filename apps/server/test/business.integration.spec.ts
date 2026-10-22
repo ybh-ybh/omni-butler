@@ -19,7 +19,7 @@ import { NotesBusinessService } from '../src/business/notes-business.service';
 import { QuotesService } from '../src/business/quotes.service';
 import { TimeEntriesService } from '../src/business/time-entries.service';
 import { TodosService } from '../src/business/todos.service';
-import type { Prisma } from '../src/generated/prisma/client';
+import type { Prisma, TimeEntry } from '../src/generated/prisma/client';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { stableBusinessId } from '../src/sync/sync-consistency';
 import { SyncService } from '../src/sync/sync.service';
@@ -449,6 +449,857 @@ integration('七模块后端真实数据库能力', () => {
     expect(await quotes.list(actor, { limit: 1, offset: 2 })).toEqual(
       expect.objectContaining({ hasMore: false, nextOffset: null }),
     );
+  });
+
+  it.each(['inventory', 'membership'] as const)(
+    '%s分类名称与ID始终同步，缺省保留、清空和旧文字解除旧关联',
+    async (moduleName) => {
+      // 两模块复用相同真实领域规则，但各自仅能引用本模块的分类。
+      const first = await prisma.taxonomyEntry.create({
+        data: {
+          id: randomUUID(),
+          userId: actor.sub,
+          module: moduleName,
+          kind: 'category',
+          name: '原分类',
+        },
+      });
+      // 名称路径必须解析成此真实分类，而非仅覆盖兼容文字。
+      const second = await prisma.taxonomyEntry.create({
+        data: {
+          id: randomUUID(),
+          userId: actor.sub,
+          module: moduleName,
+          kind: 'category',
+          name: '新分类',
+        },
+      });
+      // 独立标签用于确保只修改分类不影响其他类型。
+      const tag = await prisma.taxonomyEntry.create({
+        data: {
+          id: randomUUID(),
+          userId: actor.sub,
+          module: moduleName,
+          kind: 'tag',
+          name: '保留标签',
+        },
+      });
+      // 新增使用各自原有业务入口，会员构造不涉及真实费用的永久类型。
+      const create = (
+        fields: Record<string, unknown>,
+      ): Promise<Prisma.JsonValue> =>
+        moduleName === 'inventory'
+          ? inventory.create(actor, {
+              operationId: randomUUID(),
+              name: '分类一致性物品',
+              ...fields,
+            })
+          : memberships.create(actor, {
+              operationId: randomUUID(),
+              name: '分类一致性会员',
+              purchaseDate: '2026-10-21',
+              isPermanent: true,
+              timeZone: 'Asia/Shanghai',
+              ...fields,
+            });
+      // 创建时的规范分类与名称必须一致。
+      const created = await create({
+        categoryIds: [first.id],
+        ...(moduleName === 'membership' ? { tagIds: [tag.id] } : {}),
+      });
+      // 后续编辑只传明确变化的字段。
+      const edit = (
+        fields: Record<string, unknown>,
+      ): Promise<Prisma.JsonValue> =>
+        moduleName === 'inventory'
+          ? inventory.update(actor, {
+              operationId: randomUUID(),
+              id: idOf(created),
+              ...fields,
+            })
+          : memberships.update(actor, {
+              operationId: randomUUID(),
+              id: idOf(created),
+              timeZone: 'Asia/Shanghai',
+              ...fields,
+            });
+      // 客户端实际使用的活跃分类关系必须与名称同步。
+      const categoryIds = async (): Promise<string[]> =>
+        (
+          await prisma.recordTaxonomyLink.findMany({
+            where: {
+              userId: actor.sub,
+              recordId: idOf(created),
+              deletedAt: null,
+              taxonomy: { kind: 'category' },
+            },
+          })
+        ).map((link) => link.taxonomyId);
+      expect(created).toMatchObject({ category: '原分类' });
+      expect(await edit({ category: ' 新分类 ' })).toMatchObject({
+        category: '新分类',
+      });
+      expect(await categoryIds()).toEqual([second.id]);
+      expect(await edit({ notes: '只改备注' })).toMatchObject({
+        category: '新分类',
+      });
+      expect(await categoryIds()).toEqual([second.id]);
+      expect(await edit({ category: '历史未建分类' })).toMatchObject({
+        category: '历史未建分类',
+      });
+      expect(await categoryIds()).toEqual([]);
+      expect(
+        await prisma.taxonomyEntry.count({
+          where: { userId: actor.sub, name: '历史未建分类' },
+        }),
+      ).toBe(0);
+      await edit({ categoryIds: [second.id] });
+      expect(await edit({ category: null })).toMatchObject({ category: null });
+      expect(await categoryIds()).toEqual([]);
+      await edit({ category: '原分类' });
+      expect(await edit({ categoryIds: [] })).toMatchObject({ category: null });
+      expect(await categoryIds()).toEqual([]);
+      if (moduleName === 'membership')
+        expect(
+          await prisma.recordTaxonomyLink.count({
+            where: {
+              recordId: idOf(created),
+              taxonomyId: tag.id,
+              deletedAt: null,
+            },
+          }),
+        ).toBe(1);
+    },
+  );
+
+  it('物品位置名称更新同步关联，不影响分类，名称与ID互斥及重名失败均无副作用', async () => {
+    // 正确分类和两个位置构成已有真实关系。
+    const category = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'inventory',
+        kind: 'category',
+        name: '数码',
+      },
+    });
+    // 初始位置用于确认旧关系被替换。
+    const oldLocation = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'inventory',
+        kind: 'location',
+        name: '书房',
+      },
+    });
+    // 新位置从兼容文字解析到规范身份。
+    const newLocation = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'inventory',
+        kind: 'location',
+        name: '客厅',
+      },
+    });
+    // 创建本体与关系仍然原子保存。
+    const created = await inventory.create(actor, {
+      operationId: randomUUID(),
+      name: '位置一致性',
+      categoryIds: [category.id],
+      locationIds: [oldLocation.id],
+    });
+    // 编辑真实目标，不借用任何测试替身。
+    const edit = (fields: Record<string, unknown>): Promise<Prisma.JsonValue> =>
+      inventory.update(actor, {
+        operationId: randomUUID(),
+        id: idOf(created),
+        ...fields,
+      });
+    expect(await edit({ location: '客厅' })).toMatchObject({
+      category: '数码',
+      location: '客厅',
+    });
+    expect(
+      (
+        await prisma.recordTaxonomyLink.findMany({
+          where: { recordId: idOf(created), deletedAt: null },
+        })
+      )
+        .map((link) => link.taxonomyId)
+        .sort(),
+    ).toEqual([category.id, newLocation.id].sort());
+    await expect(
+      edit({ category: '数码', categoryIds: [category.id] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      edit({ location: null, locationIds: [] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'inventory',
+        kind: 'location',
+        name: '客厅',
+      },
+    });
+    await expect(edit({ location: '客厅' })).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(await inventory.get(actor, idOf(created))).toMatchObject({
+      category: '数码',
+      location: '客厅',
+    });
+    expect(
+      await prisma.recordTaxonomyLink.count({
+        where: { recordId: idOf(created), deletedAt: null },
+      }),
+    ).toBe(2);
+  });
+
+  it('物品及会员拒绝UUID名称和互相矛盾的字段，普通文字标签仍可用', async () => {
+    // 同时覆盖单个UUID及逗号列表中混入的UUID。
+    const uuid = randomUUID();
+    for (const fields of [
+      { category: uuid },
+      { location: uuid },
+      { tags: [uuid] },
+      { category: `文字,${uuid}` },
+      { tags: [`文字,${uuid}`] },
+      { category: null, categoryIds: [] },
+      { location: '书房', locationIds: [] },
+    ])
+      await expect(async () =>
+        inventory.create(actor, {
+          operationId: randomUUID(),
+          name: '不得误存',
+          ...fields,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    for (const fields of [
+      { category: uuid },
+      { category: `文字,${uuid}` },
+      { category: '视频', categoryIds: [] },
+    ])
+      await expect(async () =>
+        memberships.create(actor, {
+          operationId: randomUUID(),
+          name: '不得误存',
+          purchaseDate: '2026-10-21',
+          isPermanent: true,
+          timeZone: 'Asia/Shanghai',
+          ...fields,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    expect(
+      await prisma.inventoryItem.count({ where: { userId: actor.sub } }),
+    ).toBe(0);
+    expect(
+      await prisma.membership.count({ where: { userId: actor.sub } }),
+    ).toBe(0);
+    expect(
+      await inventory.create(actor, {
+        operationId: randomUUID(),
+        name: '正常标签',
+        tags: ['常用', '随身'],
+      }),
+    ).toMatchObject({ tags: '常用,随身' });
+  });
+
+  it.each([0, 1, 2, 3])(
+    '待办象限%s可新增、编辑和整树移动，编号沿用客户端',
+    async (quadrant) => {
+      // 合法四象限不能再漏掉0，不能重新映射1至3的含义。
+      const created = await todos.create(actor, {
+        operationId: randomUUID(),
+        title: '象限一致性',
+        scheduledDate: '2026-10-21',
+        priorityQuadrant: quadrant,
+      });
+      expect(created).toMatchObject({ priorityQuadrant: quadrant });
+      // 先移到其他象限，再通过编辑设置当前编号。
+      const another = (quadrant + 1) % 4;
+      await todos.update(actor, {
+        operationId: randomUUID(),
+        id: idOf(created),
+        priorityQuadrant: another,
+      });
+      expect(
+        await todos.update(actor, {
+          operationId: randomUUID(),
+          id: idOf(created),
+          priorityQuadrant: quadrant,
+        }),
+      ).toMatchObject({ priorityQuadrant: quadrant });
+      // 子任务移动必须连同根节点，不破坏已有聚合规则。
+      const child = await todos.create(actor, {
+        operationId: randomUUID(),
+        title: '象限孩子',
+        scheduledDate: '2026-10-21',
+        parentId: idOf(created),
+      });
+      await todos.setQuadrant(actor, {
+        operationId: randomUUID(),
+        id: idOf(child),
+        priorityQuadrant: another,
+      });
+      await todos.setQuadrant(actor, {
+        operationId: randomUUID(),
+        id: idOf(child),
+        priorityQuadrant: quadrant,
+      });
+      expect(await todos.get(actor, idOf(created))).toMatchObject({
+        priorityQuadrant: quadrant,
+      });
+      expect(await todos.get(actor, idOf(child))).toMatchObject({
+        priorityQuadrant: quadrant,
+      });
+    },
+  );
+
+  it('待办拒绝非法象限，既存4保留原事实并允许用户明确改正', async () => {
+    // 通过正常入口建立目标，非法变更不产生半条记录。
+    const created = await todos.create(actor, {
+      operationId: randomUUID(),
+      title: '保留异常待办',
+      scheduledDate: '2026-10-21',
+    });
+    for (const priorityQuadrant of [-1, 4, 5]) {
+      await expect(async () =>
+        todos.create(actor, {
+          operationId: randomUUID(),
+          title: '不得保存',
+          scheduledDate: '2026-10-21',
+          priorityQuadrant,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(async () =>
+        todos.update(actor, {
+          operationId: randomUUID(),
+          id: idOf(created),
+          priorityQuadrant,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(async () =>
+        todos.setQuadrant(actor, {
+          operationId: randomUUID(),
+          id: idOf(created),
+          priorityQuadrant,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    }
+    await prisma.todoItem.update({
+      where: { id: idOf(created) },
+      data: { priorityQuadrant: 4 },
+    });
+    expect(await todos.get(actor, idOf(created))).toMatchObject({
+      priorityQuadrant: 4,
+    });
+    await expect(
+      todos.create(actor, {
+        operationId: randomUUID(),
+        title: '不得继承四',
+        scheduledDate: '2026-10-21',
+        parentId: idOf(created),
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    // 旧错误系列也不能通过显式物化继续生成新的象限4实例。
+    const seed = await todos.create(actor, {
+      operationId: randomUUID(),
+      title: '不得传播四',
+      scheduledDate: '2026-10-21',
+      repeatRule: 'daily',
+    });
+    await prisma.todoItem.update({
+      where: { id: idOf(seed) },
+      data: { priorityQuadrant: 4 },
+    });
+    await expect(
+      todos.ensureRepeatedInstances(actor, {
+        operationId: randomUUID(),
+        day: '2026-10-22',
+        timeZone: 'Asia/Shanghai',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(
+      await prisma.todoItem.count({
+        where: { userId: actor.sub, title: '不得传播四' },
+      }),
+    ).toBe(1);
+    await todos.setQuadrant(actor, {
+      operationId: randomUUID(),
+      id: idOf(seed),
+      priorityQuadrant: 0,
+    });
+    await todos.setQuadrant(actor, {
+      operationId: randomUUID(),
+      id: idOf(created),
+      priorityQuadrant: 3,
+    });
+    expect(await todos.get(actor, idOf(created))).toMatchObject({
+      priorityQuadrant: 3,
+    });
+  });
+
+  it('分类修复迁移补齐可确认UUID名称与关系，保留歧义、无效引用和旧象限4且可重复执行', async () => {
+    // 有效目标分别属于真实模块和类型，禁止跨字段复用同一假分类。
+    const itemCategory = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'inventory',
+        kind: 'category',
+        name: '数码',
+      },
+    });
+    // 旧位置UUID可以安全恢复为名称和规范关联。
+    const location = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'inventory',
+        kind: 'location',
+        name: '书房',
+      },
+    });
+    // 会员分类不能被当作物品类别。
+    const memberCategory = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'membership',
+        kind: 'category',
+        name: '视频',
+      },
+    });
+    // 已有相反关联的记录无法确定文字和关系哪个才是用户意图。
+    const another = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'inventory',
+        kind: 'category',
+        name: '办公',
+      },
+    });
+    // 被禁用或跨归属的分类不能由迁移重新启用或绑定。
+    const disabled = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'inventory',
+        kind: 'category',
+        name: '停用',
+        isEnabled: false,
+      },
+    });
+    // 外部归属独立于当前owner。
+    const foreign = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: other.sub,
+        module: 'inventory',
+        kind: 'category',
+        name: '其他人',
+      },
+    });
+    // 只对实际修复的行推进游标，避免重复迁移反复触发同步。
+    const oldTime = new Date('2020-01-01T00:00:00Z');
+    // 两个文字字段和标签文字都误填UUID的原始记录。
+    const item = await prisma.inventoryItem.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        name: '旧UUID物品',
+        category: ` ${itemCategory.id.toUpperCase()} `,
+        location: location.id,
+        tags: `常用,${itemCategory.id}`,
+        notes: '原备注',
+        updatedAt: oldTime,
+      },
+    });
+    // 会员保留原有效期事实及金额，不由修复生成首购。
+    const member = await prisma.membership.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        name: '旧UUID会员',
+        purchaseDate: oldTime,
+        isPermanent: true,
+        category: memberCategory.id,
+        updatedAt: oldTime,
+      },
+    });
+    // 这些记录都必须原样保留，不能在迁移中猜测归属或意图。
+    const skipped = await prisma.inventoryItem.createManyAndReturn({
+      data: [
+        {
+          id: randomUUID(),
+          userId: actor.sub,
+          name: '歧义',
+          category: itemCategory.id,
+          updatedAt: oldTime,
+        },
+        {
+          id: randomUUID(),
+          userId: actor.sub,
+          name: '停用',
+          category: disabled.id,
+          updatedAt: oldTime,
+        },
+        {
+          id: randomUUID(),
+          userId: actor.sub,
+          name: '跨用户',
+          category: foreign.id,
+          updatedAt: oldTime,
+        },
+        {
+          id: randomUUID(),
+          userId: actor.sub,
+          name: '错模块',
+          category: memberCategory.id,
+          updatedAt: oldTime,
+        },
+        {
+          id: randomUUID(),
+          userId: actor.sub,
+          name: '未知',
+          category: randomUUID(),
+          updatedAt: oldTime,
+        },
+        {
+          id: randomUUID(),
+          userId: actor.sub,
+          name: '名称分叉',
+          category: '另一个文字名称',
+          updatedAt: oldTime,
+        },
+      ],
+    });
+    for (const record of skipped.filter(
+      (row) => row.name === '歧义' || row.name === '名称分叉',
+    ))
+      await prisma.recordTaxonomyLink.create({
+        data: {
+          id: randomUUID(),
+          userId: actor.sub,
+          module: 'inventory',
+          recordId: record.id,
+          taxonomyId: another.id,
+        },
+      });
+    // 旧象限4无法安全自动推断成0或3。
+    const todo = await prisma.todoItem.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        title: '旧象限待核对',
+        scheduledDate: oldTime,
+        priorityQuadrant: 4,
+      },
+    });
+    // 直接执行将部署的真实SQL。
+    const migration = readFileSync(
+      join(
+        __dirname,
+        '../prisma/migrations/20261021020000_named_taxonomy_repairs/migration.sql',
+      ),
+      'utf8',
+    );
+    await database.query(migration);
+    // 正式身份、备注等业务事实保持，只有可确认字段与游标变化。
+    const repaired = await prisma.inventoryItem.findUniqueOrThrow({
+      where: { id: item.id },
+    });
+    expect(repaired).toEqual({
+      ...item,
+      category: '数码',
+      location: '书房',
+      tags: '常用,数码',
+      updatedAt: expect.any(Date),
+    });
+    expect(repaired.updatedAt.getTime()).toBeGreaterThan(oldTime.getTime());
+    expect(
+      await prisma.membership.findUniqueOrThrow({ where: { id: member.id } }),
+    ).toEqual({ ...member, category: '视频', updatedAt: expect.any(Date) });
+    expect(
+      await prisma.membershipPayment.count({
+        where: { membershipId: member.id },
+      }),
+    ).toBe(0);
+    expect(
+      (
+        await prisma.recordTaxonomyLink.findMany({
+          where: { recordId: item.id, deletedAt: null },
+        })
+      )
+        .map((link) => link.taxonomyId)
+        .sort(),
+    ).toEqual([itemCategory.id, location.id].sort());
+    expect(
+      await prisma.recordTaxonomyLink.count({
+        where: {
+          recordId: member.id,
+          taxonomyId: memberCategory.id,
+          deletedAt: null,
+        },
+      }),
+    ).toBe(1);
+    for (const record of skipped)
+      expect(
+        await prisma.inventoryItem.findUniqueOrThrow({
+          where: { id: record.id },
+        }),
+      ).toEqual(record);
+    expect(
+      await prisma.todoItem.findUniqueOrThrow({ where: { id: todo.id } }),
+    ).toEqual(todo);
+    await database.query(migration);
+    expect(
+      await prisma.inventoryItem.findUniqueOrThrow({ where: { id: item.id } }),
+    ).toEqual(repaired);
+    expect(
+      await prisma.recordTaxonomyLink.count({
+        where: { recordId: item.id, deletedAt: null },
+      }),
+    ).toBe(2);
+  });
+
+  it('时间分类ID在补记、开始、编辑和结束中解析为名称，省略保留且null清空', async () => {
+    // 分类由真实用户数据提供，不借用固定默认ID。
+    const category = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'timeline',
+        kind: 'category',
+        name: '学习',
+      },
+    });
+    // 用户示例在上海时区对应20:00至21:40。
+    const created = await time.create(actor, {
+      operationId: randomUUID(),
+      timeZone: 'Asia/Shanghai',
+      startedAt: '2026-10-21T12:00:00Z',
+      endedAt: '2026-10-21T13:40:00Z',
+      activity: '源哥面试复盘',
+      categoryId: category.id.toUpperCase(),
+    });
+    expect(created).toEqual(expect.objectContaining({ category: '学习' }));
+    expect(
+      await time.statistics(actor, {
+        from: '2026-10-21T12:00:00Z',
+        to: '2026-10-21T13:40:00Z',
+        asOf: '2026-10-21T13:40:00Z',
+        timeZone: 'Asia/Shanghai',
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        categories: { 学习: 6000 },
+        totalSeconds: 6000,
+      }),
+    );
+    expect(
+      await time.update(actor, {
+        operationId: randomUUID(),
+        id: idOf(created),
+        timeZone: 'Asia/Shanghai',
+        notes: '保留分类',
+      }),
+    ).toEqual(expect.objectContaining({ category: '学习' }));
+    expect(
+      await time.update(actor, {
+        operationId: randomUUID(),
+        id: idOf(created),
+        timeZone: 'Asia/Shanghai',
+        categoryId: null,
+      }),
+    ).toEqual(expect.objectContaining({ category: null }));
+    expect(
+      await time.update(actor, {
+        operationId: randomUUID(),
+        id: idOf(created),
+        timeZone: 'Asia/Shanghai',
+        categoryId: category.id,
+      }),
+    ).toEqual(expect.objectContaining({ category: '学习' }));
+    // 开始和结束也使用同一分类解析，结束仍保持已有区间保护。
+    const ongoing = await time.start(actor, {
+      operationId: randomUUID(),
+      timeZone: 'Asia/Shanghai',
+      startedAt: '2026-10-22T12:00:00Z',
+      categoryId: category.id,
+    });
+    expect(ongoing).toEqual(expect.objectContaining({ category: '学习' }));
+    expect(
+      await time.finish(actor, {
+        operationId: randomUUID(),
+        id: idOf(ongoing),
+        timeZone: 'Asia/Shanghai',
+        endedAt: '2026-10-22T13:00:00Z',
+        activity: '结束学习',
+        categoryId: null,
+      }),
+    ).toEqual(expect.objectContaining({ category: null }));
+    expect(
+      await time.update(actor, {
+        operationId: randomUUID(),
+        id: idOf(created),
+        timeZone: 'Asia/Shanghai',
+        category: '兼容旧分类名称',
+      }),
+    ).toEqual(expect.objectContaining({ category: '兼容旧分类名称' }));
+  });
+
+  it.each([
+    'missing',
+    'foreign',
+    'module',
+    'kind',
+    'disabled',
+    'deleted',
+  ] as const)('时间分类拒绝%s引用且不产生记录或幂等回执', async (variant) => {
+    // 每种错误引用分别验证owner、模块、类型与有效状态。
+    const id = randomUUID();
+    if (variant !== 'missing')
+      await prisma.taxonomyEntry.create({
+        data: {
+          id,
+          userId: variant === 'foreign' ? other.sub : actor.sub,
+          module: variant === 'module' ? 'inventory' : 'timeline',
+          kind: variant === 'kind' ? 'tag' : 'category',
+          name: '不可绑定',
+          isEnabled: variant !== 'disabled',
+          deletedAt: variant === 'deleted' ? new Date() : null,
+        },
+      });
+    await expect(
+      time.create(actor, {
+        operationId: randomUUID(),
+        timeZone: 'Asia/Shanghai',
+        startedAt: '2026-10-21T12:00:00Z',
+        endedAt: '2026-10-21T13:40:00Z',
+        activity: '不得保存',
+        categoryId: id,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(await prisma.timeEntry.count({ where: { userId: actor.sub } })).toBe(
+      0,
+    );
+    expect(
+      await prisma.businessOperationReceipt.count({
+        where: { userId: actor.sub },
+      }),
+    ).toBe(0);
+  });
+
+  it('UUID误填名称、非法分类ID及同时传ID与名称均被明确拒绝', async () => {
+    // 所有错误都在写入前拒绝，不能先创建记录再返回参数错误。
+    for (const fields of [
+      { category: ` ${randomUUID()} ` },
+      { categoryId: '学习' },
+      { categoryId: null, category: '学习' },
+      { categoryId: randomUUID(), category: null },
+    ])
+      await expect(async () =>
+        time.create(actor, {
+          operationId: randomUUID(),
+          timeZone: 'Asia/Shanghai',
+          startedAt: '2026-10-21T12:00:00Z',
+          endedAt: '2026-10-21T13:40:00Z',
+          activity: '不得保存',
+          ...fields,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    expect(await prisma.timeEntry.count({ where: { userId: actor.sub } })).toBe(
+      0,
+    );
+  });
+
+  it('时间分类数据迁移只修正同归属有效类别，保留未知值及原时间正文且重复运行不改游标', async () => {
+    // 独立构造已存在的误写记录，覆盖不能被猜测修复的边界。
+    const variants = [
+      'valid',
+      'foreign',
+      'module',
+      'kind',
+      'disabled',
+      'deleted',
+      'unknown',
+      'name',
+    ] as const;
+    // 固定旧游标用于证明仅实际修复行进入同步下行。
+    const oldTime = new Date('2020-01-01T00:00:00Z');
+    // 保存每个场景原记录用于精确比对非目标字段。
+    const records: TimeEntry[] = [];
+    for (const variant of variants) {
+      // 只有valid分类属于当前owner的有效timeline/category。
+      const id = randomUUID();
+      if (variant !== 'unknown' && variant !== 'name')
+        await prisma.taxonomyEntry.create({
+          data: {
+            id,
+            userId: variant === 'foreign' ? other.sub : actor.sub,
+            module: variant === 'module' ? 'inventory' : 'timeline',
+            kind: variant === 'kind' ? 'tag' : 'category',
+            name: '学习',
+            isEnabled: variant !== 'disabled',
+            deletedAt: variant === 'deleted' ? oldTime : null,
+          },
+        });
+      records.push(
+        await prisma.timeEntry.create({
+          data: {
+            id: randomUUID(),
+            userId: actor.sub,
+            entryDate: oldTime,
+            startMinute: 1200,
+            endMinute: 1300,
+            startedAt: new Date('2020-01-01T12:00:00Z'),
+            endedAt: new Date('2020-01-01T13:40:00Z'),
+            activity: '源哥面试复盘',
+            notes: '原备注',
+            category:
+              variant === 'name'
+                ? '学习'
+                : variant === 'valid'
+                  ? ` ${id.toUpperCase()} `
+                  : id,
+            updatedAt: oldTime,
+          },
+        }),
+      );
+    }
+    // 执行真实迁移SQL，不能用测试中的同款更新冒充验证。
+    const migration = readFileSync(
+      join(
+        __dirname,
+        '../prisma/migrations/20261021010000_time_category_names/migration.sql',
+      ),
+      'utf8',
+    );
+    await database.query(migration);
+    // 修复结果保留正式记录身份、时间、活动和备注。
+    const repaired = await prisma.timeEntry.findUniqueOrThrow({
+      where: { id: records[0]!.id },
+    });
+    expect(repaired).toEqual({
+      ...records[0],
+      category: '学习',
+      updatedAt: expect.any(Date),
+    });
+    expect(repaired.updatedAt.getTime()).toBeGreaterThan(oldTime.getTime());
+    for (const record of records.slice(1))
+      expect(
+        await prisma.timeEntry.findUniqueOrThrow({ where: { id: record.id } }),
+      ).toEqual(record);
+    await database.query(migration);
+    expect(
+      await prisma.timeEntry.findUniqueOrThrow({ where: { id: repaired.id } }),
+    ).toEqual(repaired);
   });
 
   it('时间区间互斥、跨日DST统计正确，历史多进行中仍可逐条收尾', async () => {

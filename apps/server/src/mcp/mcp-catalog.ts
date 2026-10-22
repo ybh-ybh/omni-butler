@@ -26,6 +26,15 @@ export type McpModule = (typeof mcpModules)[number];
 /// 对话确认是宿主规则，服务端执行授权始终来自连接的模块写权限。
 export const mcpWritePolicy =
   '有对应写权限时，目标明确且参数完整的单条任务直接完成prepare和commit_action，无需知序端批准。同一用户任务涉及两个及以上独立业务对象时，先展示目标、数量、变更及关联影响，等待用户在当前对话明确确认；单个对象正常产生的账单、版本或子项不另计。不得拆分单条调用绕过批量确认；确认后目标或内容变化须重新确认，数据冲突时停止，不能自动刷新基线覆盖。用户取消时调用cancel_action。';
+/// 时间分类查询与写入共同使用同一规则，避免名称和规范身份混用。
+export const mcpTimeCategoryPolicy =
+  '时间记录指定分类时先调用list_taxonomies(module="time")，按用户名称在完整结果中唯一匹配category类型，并将其id传给categoryId；不得把UUID填入category名称字段。存在重名先请用户选择；找不到分类先澄清，不擅自新建、模糊匹配或改成其他分类。categoryId传null明确清空，省略保持原分类；实际类别名称以预览和提交回执为准。';
+/// 分类与位置的写入规则用于物品、会员及能力发现。
+export const mcpTaxonomyPolicy =
+  '物品和会员分类、物品位置先从list_taxonomies查询真实ID并按名称唯一匹配，分别通过categoryIds/locationIds提交；会员标签用tagIds。名称和对应ID数组互斥，空数组清空，省略保留。category/location及物品tags仅为兼容名称文字，不接受UUID；物品tags不是笔记tags的UUID数组。重名或缺失先澄清，不擅自创建。兼容名称修改同步替换或解除旧关联；结果依据实际回执报告。';
+/// 象限数字直接沿用客户端存储值，不能按常见的一至四编号猜测。
+export const mcpTodoQuadrantPolicy =
+  '待办priorityQuadrant使用固定0至3：0=不紧急不重要（有空再做），1=紧急不重要（快速处理），2=重要不紧急（安排时间），3=重要且紧急（立即处理）。不接受4，不猜测已有非法象限的用户意图。';
 /// 准备工具的协议说明复用于实际注册和能力发现，不污染业务影响预览。
 export function mcpPrepareDescription(tool: McpToolDefinition): string {
   return `${tool.description} 此调用仅准备固定变更，不提交业务数据；requestId为本次动作固定UUID，重试原样复用。${mcpWritePolicy}`;
@@ -57,6 +66,18 @@ const text = z.string().max(20000);
 const optionalText = text.nullable().optional();
 /// 对象身份只能来自已查询的真实记录。
 export const mcpId = z.uuid();
+/// 时间分类首选规范身份；兼容文字字段显式标注禁止传 UUID。
+const timeCategoryFields = {
+  categoryId: mcpId
+    .nullable()
+    .optional()
+    .describe(
+      '来自list_taxonomies(module="time")的有效category类型ID；null清空，与category互斥',
+    ),
+  category: optionalText.describe(
+    '兼容分类名称文字，不接受UUID；优先使用categoryId，与categoryId互斥',
+  ),
+};
 /// 时间必须携带明确偏移。
 const instant = z.iso.datetime({ offset: true });
 /// DATE 类型只接受自然日。
@@ -65,6 +86,13 @@ const day = z.iso.date();
 const integer = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 /// 分类或记录身份数组。
 const ids = z.array(mcpId).max(1000);
+/// 工具输入范围与客户端四象限完全一致，模型可从字段说明确定语义。
+const todoQuadrant = z
+  .number()
+  .int()
+  .min(0)
+  .max(3)
+  .describe(mcpTodoQuadrantPolicy);
 /// 窗口参数与后端统计口径相同。
 export const rangeShape = {
   from: instant,
@@ -109,26 +137,44 @@ const page = {
 /// 物品规范字段。
 const itemFields = {
   name: text.optional(),
-  category: optionalText,
+  category: optionalText.describe(
+    '兼容分类名称，禁止UUID，与categoryIds互斥；首选categoryIds',
+  ),
   quantity: integer.optional(),
   purchasePriceCents: integer.nullable().optional(),
   purchaseDate: day.nullable().optional(),
-  location: optionalText,
+  location: optionalText.describe(
+    '兼容位置名称，禁止UUID，与locationIds互斥；首选locationIds',
+  ),
   purchaseUrl: optionalText,
   purchasePlatform: optionalText,
   status: z.enum(['inUse', 'idle', 'lent', 'sold', 'discarded']).optional(),
   warrantyExpiration: day.nullable().optional(),
-  tags: z.array(text).max(200).optional(),
+  tags: z
+    .array(text)
+    .max(200)
+    .optional()
+    .describe('物品兼容标签名称文字数组，禁止UUID；规范分类用categoryIds'),
   parentItemId: mcpId.nullable().optional(),
   notes: optionalText,
-  categoryIds: ids.optional(),
-  locationIds: ids.optional(),
+  categoryIds: ids
+    .optional()
+    .describe(
+      '查询得到的inventory/category ID数组；空数组清空，与category互斥',
+    ),
+  locationIds: ids
+    .optional()
+    .describe(
+      '查询得到的inventory/location ID数组；空数组清空，与location互斥',
+    ),
 };
 /// 会员金额以 CNY 整数分表示，操作不执行外部扣费。
 const memberFields = {
   name: text.optional(),
   provider: optionalText,
-  category: optionalText,
+  category: optionalText.describe(
+    '兼容分类名称，禁止UUID，与categoryIds互斥；首选categoryIds',
+  ),
   description: optionalText,
   websiteUrl: optionalText,
   purchasePlatform: optionalText,
@@ -160,8 +206,14 @@ const memberFields = {
   reminderTimeMinutes: integer.optional(),
   cancelGuide: optionalText,
   notes: optionalText,
-  categoryIds: ids.optional(),
-  tagIds: ids.optional(),
+  categoryIds: ids
+    .optional()
+    .describe(
+      '查询得到的memberships/category ID数组；空数组清空，与category互斥',
+    ),
+  tagIds: ids
+    .optional()
+    .describe('查询得到的memberships/tag ID数组；空数组清空，省略保留'),
 };
 /// 周期事件的汇总完成时间不可直接写入。
 const eventFields = {
@@ -184,7 +236,7 @@ const todoFields = {
   scheduledDate: day.optional(),
   dueAt: instant.nullable().optional(),
   reminderAt: instant.nullable().optional(),
-  priorityQuadrant: integer.optional(),
+  priorityQuadrant: todoQuadrant.optional(),
   parentId: mcpId.nullable().optional(),
   progressUnit: optionalText,
   repeatRule: z
@@ -342,12 +394,12 @@ export class McpCatalog {
       'time',
       'start_time_entry',
       true,
-      '开始时间记录；已有进行中或区间冲突时拒绝。缺省开始时刻固定为准备时。',
+      `开始时间记录；已有进行中或区间冲突时拒绝。缺省开始时刻固定为准备时。${mcpTimeCategoryPolicy}`,
       {
         timeZone: z.string().optional(),
         startedAt: instant.optional(),
         activity: optionalText,
-        category: optionalText,
+        ...timeCategoryFields,
         notes: optionalText,
       },
       (a, p) => time.start(a, p),
@@ -356,13 +408,13 @@ export class McpCatalog {
       'time',
       'create_time_entry',
       true,
-      '补记一段完整时间，不自动截断或删除重叠记录。',
+      `补记一段完整时间，不自动截断或删除重叠记录。${mcpTimeCategoryPolicy}`,
       {
         timeZone: z.string().optional(),
         startedAt: instant,
         endedAt: instant,
         activity: text,
-        category: optionalText,
+        ...timeCategoryFields,
         notes: optionalText,
       },
       (a, p) => time.create(a, p),
@@ -372,14 +424,14 @@ export class McpCatalog {
       'time',
       'update_time_entry',
       true,
-      '修改指定时间记录，重新校验完整区间。',
+      `修改指定时间记录，重新校验完整区间。${mcpTimeCategoryPolicy}`,
       {
         id: mcpId,
         timeZone: z.string().optional(),
         startedAt: instant.optional(),
         endedAt: instant.optional(),
         activity: text.optional(),
-        category: optionalText,
+        ...timeCategoryFields,
         notes: optionalText,
       },
       (a, p) => time.update(a, p),
@@ -388,13 +440,13 @@ export class McpCatalog {
       'time',
       'finish_time_entry',
       true,
-      '结束指定进行中记录，必须有活动内容且结束晚于开始；允许逐条修复多条进行中。',
+      `结束指定进行中记录，必须有活动内容且结束晚于开始；允许逐条修复多条进行中。${mcpTimeCategoryPolicy}`,
       {
         id: mcpId,
         timeZone: z.string().optional(),
         endedAt: instant.optional(),
         activity: text.optional(),
-        category: optionalText,
+        ...timeCategoryFields,
         notes: optionalText,
       },
       (a, p) => time.finish(a, p),
@@ -447,7 +499,7 @@ export class McpCatalog {
       'inventory',
       'create_item',
       true,
-      '新增物品；分类/位置使用查询得到的规范身份，配件仅两层。',
+      `新增物品；分类/位置使用查询得到的规范身份，配件仅两层。${mcpTaxonomyPolicy}`,
       { ...itemFields, name: text },
       (a, p) => inventory.create(a, p),
       true,
@@ -456,7 +508,7 @@ export class McpCatalog {
       'inventory',
       'update_item',
       true,
-      '编辑物品明确字段或合法状态，不能创建循环配件。',
+      `编辑物品明确字段或合法状态，不能创建循环配件。${mcpTaxonomyPolicy}`,
       { id: mcpId, ...itemFields },
       (a, p) => inventory.update(a, p),
     );
@@ -517,7 +569,7 @@ export class McpCatalog {
       'memberships',
       'create_membership',
       true,
-      '新增会员、本次首购及分类标签原子保存；预览展示首购金额及关联信息。',
+      `新增会员、本次首购及分类标签原子保存；预览展示首购金额及关联信息。${mcpTaxonomyPolicy}`,
       {
         ...memberFields,
         name: text,
@@ -531,7 +583,7 @@ export class McpCatalog {
       'memberships',
       'update_membership',
       true,
-      '修改本系统会员记录；取消自动续费不会向供应商退订。',
+      `修改本系统会员记录；取消自动续费不会向供应商退订。${mcpTaxonomyPolicy}`,
       { id: mcpId, timeZone: z.string().optional(), ...memberFields },
       (a, p) => memberships.update(a, p),
     );
@@ -741,7 +793,7 @@ export class McpCatalog {
       'set_todo_quadrant',
       true,
       '移动整棵待办树到指定四象限，不单独破坏子项归属。',
-      { id: mcpId, priorityQuadrant: integer },
+      { id: mcpId, priorityQuadrant: todoQuadrant },
       (a, p) => todos.setQuadrant(a, p),
     );
     this.add(
@@ -938,8 +990,7 @@ export class McpCatalog {
     )
       tools.push({
         name: 'list_taxonomies',
-        description:
-          '查询已授权模块有效分类、位置、标签的规范UUID；按模块校验，不创建分类。',
+        description: `查询已授权模块有效分类、位置、标签，返回id、name及kind；分页有hasMore时继续查询，不能从不完整结果认定没有匹配或唯一匹配。按模块校验，不创建分类。${mcpTimeCategoryPolicy}${mcpTaxonomyPolicy}`,
         schema: z.strictObject({
           module: z.enum(['time', 'inventory', 'memberships', 'notes']),
           limit: z.number().int().min(1).max(200).optional(),

@@ -53,14 +53,16 @@ statistics 直接读取完整授权集合，不从分页列表推算总数。引
 | list | 范围、分页；返回相交记录 |
 | get | UUID；详情 |
 | ongoing | 分页；展示所有已保存进行中记录，不掩盖同步冲突 |
-| start | operationId、timeZone，选填 startedAt/activity/category/notes；省略 startedAt 表示首次执行时的现在 |
-| create | operationId、timeZone、startedAt、endedAt、activity，选填 category/notes |
-| update | operationId、id、timeZone，选填 startedAt/endedAt/activity/category/notes |
-| finish | operationId、id、timeZone，选填 endedAt/activity/category/notes；原记录须进行中，最终活动不能为空；省略 endedAt 表示现在 |
+| start | operationId、timeZone，选填 startedAt/activity/categoryId/category/notes；省略 startedAt 表示首次执行时的现在 |
+| create | operationId、timeZone、startedAt、endedAt、activity，选填 categoryId/category/notes |
+| update | operationId、id、timeZone，选填 startedAt/endedAt/activity/categoryId/category/notes |
+| finish | operationId、id、timeZone，选填 endedAt/activity/categoryId/category/notes；原记录须进行中，最终活动不能为空；省略 endedAt 表示现在 |
 | trash | operationId、id |
 | statistics | 范围；完整裁剪时长、分类与按日汇总 |
 
 新建/普通编辑检查区间重叠与当前进行中记录。结束既有进行中记录保留原冲突收尾通路，允许用户逐条处理离线同步形成的多条进行中记录。
+
+分类首选 `categoryId`：事务内检查同 owner、timeline 模块、category 类型、未删除且启用，然后将真实名称存入原 `category` 文本列；未新增关系或同步字段。`categoryId: null` 明确清空，省略分类参数保留已有分类。兼容 `category` 名称输入，但拒绝 UUID 字符串；两个字段不能同时提供。MCP 先查询分类，在完整列表中唯一匹配名称，重名或缺失须澄清。预览、回执和统计使用真实名称，分类改名或失效仍会触发 MCP 既有基线保护。
 
 ### InventoryService
 
@@ -74,7 +76,7 @@ statistics 直接读取完整授权集合，不从分页列表推算总数。引
 | trash | operationId、id；本体及直属有效配件同批软删 |
 | statistics | includeAccessories，选填完整范围；数量/金额及分类、位置、状态分布 |
 
-物品字段包括 quantity、purchasePriceCents、purchaseDate、purchaseUrl、purchasePlatform、status、warrantyExpiration、tags（文字数组）、parentItemId、notes；category/location 旧文字仍可读写，明确提供规范 ID 时优先同步维护展示文字。配件只允许两层，不能自引用、循环或把带配件主项挂到另一主项下。
+物品字段包括 quantity、purchasePriceCents、purchaseDate、purchaseUrl、purchasePlatform、status、warrantyExpiration、tags（文字数组）、parentItemId、notes。分类/位置首选categoryIds/locationIds，与对应category/location文字互斥，空数组清空，缺省保留。旧文字和tags不能填写UUID；旧名称唯一匹配同归属有效分类/位置时同步关联，重名拒绝，无匹配则保留兼容名称并解除该种类旧关联，不新建分类。其他种类关系保持。配件只允许两层，不能自引用、循环或把带配件主项挂到另一主项下。
 
 ### MembershipsService
 
@@ -93,6 +95,8 @@ statistics 直接读取完整授权集合，不从分页列表推算总数。引
 会员字段包括 provider/category/description/websiteUrl/purchasePlatform/priceCents/billingCycle/baseStatus/purchaseDate/expirationDate/isPermanent/autoRenew/renewalDate/needsRenewal、提醒配置、cancelGuide/notes。永久与到期日期互斥；提醒提前天数须为正、日内分钟在 0—1439。
 
 保存主表、首购和分类标签是一个事务。标准续费从当前到期日叠加，账目 validFrom 使用支付业务日；自定义周期 validUntil 必须晚于支付日。记账不执行真实扣费，改续费标记不执行供应商退订；现有客户端自动补账调度继续使用原路径。
+
+categoryIds与category互斥。规范ID推导展示名称，旧名称按物品相同规则替换或解除分类关系，不能遗留旧类别；UUID误填文字被拒绝。单独修改分类不影响tagIds，修改其他字段不重写分类关系。
 
 ### EventsService
 
@@ -128,6 +132,8 @@ category 是自由文本。日/周为固定时长，月/年为业务地区日历
 | statistics | 范围；计划与完成日分别计数，明确只含已保存重复实例 |
 
 普通树只有两层；进度任务独立、不重复、不能转型。创建/新增步骤上限 1000，已合并超限结构可保留/减少。结构 baseline 不含完成状态，状态修改不导致无关结构编辑误冲突；步骤撤销则要求原步骤的状态及更新时间仍精确匹配。
+
+priorityQuadrant完全沿用客户端0–3：0不紧急不重要，1紧急不重要，2重要不紧急（缺省），3重要且紧急。新增、编辑及整树移动均接受0并拒绝4；已有非法4不自动重映射，须核对后显式更新，不能经父项继承、未来编辑或重复实例生成继续传播。
 
 ### NotesBusinessService
 

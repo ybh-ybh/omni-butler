@@ -11,6 +11,7 @@ import {
   businessRead,
   businessWrite,
   replaceTaxonomies,
+  resolveNamedTaxonomy,
   requireActive,
 } from './business-access';
 import {
@@ -25,6 +26,7 @@ import {
   pageResult,
   rangeInput,
   textInput,
+  taxonomyTextInput,
   urlInput,
   uuidInput,
 } from './business-input';
@@ -72,9 +74,16 @@ function inventoryData(
   // 全部值经各自规则校验后才进入持久化。
   const data: Partial<InventoryFields> = {};
   if (input.name !== undefined) data.name = textInput(input.name, 'name')!;
-  for (const field of ['category', 'location', 'purchasePlatform'] as const)
+  for (const field of ['category', 'location'] as const)
     if (input[field] !== undefined)
-      data[field] = textInput(input[field], field, 200, true);
+      data[field] = taxonomyTextInput(input[field], field);
+  if (input.purchasePlatform !== undefined)
+    data.purchasePlatform = textInput(
+      input.purchasePlatform,
+      'purchasePlatform',
+      200,
+      true,
+    );
   if (input.notes !== undefined)
     data.notes = textInput(input.notes, 'notes', 20000, true);
   if (input.quantity !== undefined)
@@ -110,7 +119,11 @@ function inventoryData(
       throw new BadRequestException('tags 必须为文字数组');
     // 与客户端相同，以逗号保存去重后的标签文字。
     const tags = [
-      ...new Set(input.tags.map((tag: unknown) => textInput(tag, 'tag', 200)!)),
+      ...new Set(
+        input.tags.map(
+          (tag: unknown) => taxonomyTextInput(tag, 'tags', false)!,
+        ),
+      ),
     ];
     data.tags = tags.length ? tags.join(',') : null;
   }
@@ -274,18 +287,28 @@ export class InventoryService {
   ): Promise<Prisma.JsonValue> {
     // 请求中的业务值先独立校验。
     const data = inventoryData(input);
-    // 可选关系只在明确提供时替换。
-    const selected: Record<string, string[]> = {};
-    if (input.categoryIds !== undefined)
-      selected.category = idsInput(input.categoryIds, 'categoryIds');
-    if (input.locationIds !== undefined)
-      selected.location = idsInput(input.locationIds, 'locationIds');
     return businessWrite(
       this.prisma,
       actor,
       creating ? 'inventory.create' : 'inventory.update',
       input,
       async (transaction) => {
+        // 只处理明确选择的分类种类，名称更新与ID关系始终在同一事务保存。
+        const selected: Record<string, string[]> = {};
+        for (const kind of ['category', 'location'] as const) {
+          // 规范身份推导名称，兼容名称推导唯一身份或解除旧关系。
+          const selection = await resolveNamedTaxonomy(
+            transaction,
+            actor.sub,
+            'inventory',
+            kind,
+            input,
+          );
+          if (selection) {
+            selected[kind] = selection.ids;
+            data[kind] = selection.name;
+          }
+        }
         // 目标身份由服务端创建，编辑则必须存在。
         const id = creating ? randomUUID() : uuidInput(input.id);
         // 当前数据在事务内核验。
@@ -331,21 +354,6 @@ export class InventoryService {
           id,
           selected,
         );
-        // 同时维护旧客户端展示文本，不引入新投影机制。
-        for (const [kind, ids] of Object.entries(selected)) {
-          // 稳定按名称输出兼容字段。
-          const names = await transaction.taxonomyEntry.findMany({
-            where: { id: { in: ids }, userId: actor.sub },
-            orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
-            select: { name: true },
-          });
-          await transaction.inventoryItem.update({
-            where: { id },
-            data: {
-              [kind]: names.map((entry) => entry.name).join(',') || null,
-            },
-          });
-        }
         return transaction.inventoryItem.findUniqueOrThrow({ where: { id } });
       },
     );

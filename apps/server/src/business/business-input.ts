@@ -48,6 +48,27 @@ export function textInput(
   return text || null;
 }
 
+/// 分类、位置及兼容标签文字不能携带误放的规范UUID。
+export function taxonomyTextInput(
+  value: unknown,
+  field: string,
+  nullable = true,
+): string | null {
+  // 兼容逗号分隔名称，同时拦截其中任一被误当作文字的UUID。
+  const name = textInput(value, field, 200, nullable);
+  if (
+    name
+      ?.split(',')
+      .some((part) =>
+        /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(part.trim()),
+      )
+  )
+    throw new BadRequestException(
+      `${field} 只能填写名称文字；分类UUID请使用categoryId/categoryIds，位置UUID请使用locationIds`,
+    );
+  return name;
+}
+
 /// 校验整数，拒绝浮点、字符串与安全范围外金额。
 export function integerInput(
   value: unknown,

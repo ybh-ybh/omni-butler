@@ -15,7 +15,13 @@ import { McpService } from '../src/mcp/mcp.service';
 import { AuthModule } from '../src/auth/auth.module';
 import { SyncController } from '../src/sync/sync.controller';
 import type { AuthUser } from '../src/auth/auth.types';
-import { mcpModules, mcpWritePolicy } from '../src/mcp/mcp-catalog';
+import {
+  mcpModules,
+  mcpTimeCategoryPolicy,
+  mcpTaxonomyPolicy,
+  mcpTodoQuadrantPolicy,
+  mcpWritePolicy,
+} from '../src/mcp/mcp-catalog';
 import { SyncService } from '../src/sync/sync.service';
 
 /// 不读取应用DATABASE_URL，只允许显式本机空测试库。
@@ -218,6 +224,9 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
     const before = await prisma.quote.count({ where: { userId: actor.sub } });
     expect(client.getInstructions()).toContain('get_capabilities');
     expect(client.getInstructions()).toContain(mcpWritePolicy);
+    expect(client.getInstructions()).toContain(mcpTimeCategoryPolicy);
+    expect(client.getInstructions()).toContain(mcpTaxonomyPolicy);
+    expect(client.getInstructions()).toContain(mcpTodoQuadrantPolicy);
     expect(client.getInstructions()).not.toContain('知序设置页核对并审批');
     // 权限说明与真实目录需要一一对应。
     const tools = await client.listTools();
@@ -226,9 +235,12 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       'get_review_context',
     );
     expect(capabilities.service).toBe('知序 MCP');
-    expect(capabilities.capabilityVersion).toBe('2.0');
+    expect(capabilities.capabilityVersion).toBe('2.2');
     expect(capabilities.workflow).toMatchObject({
       confirmation: mcpWritePolicy,
+      timeCategories: mcpTimeCategoryPolicy,
+      taxonomies: mcpTaxonomyPolicy,
+      todoQuadrants: mcpTodoQuadrantPolicy,
     });
     expect(tools.tools.map((tool) => tool.name)).toContain('cancel_action');
     // 注册说明与能力说明保持同一份规则，准备/提交不可能各说一种流程。
@@ -253,6 +265,343 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
     expect(await prisma.quote.count({ where: { userId: actor.sub } })).toBe(
       before,
     );
+  });
+
+  it('查询时间分类后按ID准备与提交，预览、回执、实体和统计均使用学习名称', async () => {
+    // 分类由当前owner明确建立，不能依赖客户端恰好播种的默认值。
+    const category = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'timeline',
+        kind: 'category',
+        name: '学习',
+      },
+    });
+    // MCP元数据声明了ID与名称的区别，各时间写入口保持一致。
+    const tools = await client.listTools();
+    for (const name of [
+      'start_time_entry',
+      'create_time_entry',
+      'update_time_entry',
+      'finish_time_entry',
+    ]) {
+      // 实际发布给宿主的JSON Schema必须包含新字段和可读说明。
+      const tool = tools.tools.find((item) => item.name === `prepare_${name}`)!;
+      expect(tool.inputSchema.properties).toHaveProperty('categoryId');
+      expect(tool.description).toContain(mcpTimeCategoryPolicy);
+    }
+    // 直接读取真实分类列表，保留身份及显示名称供模型进行唯一匹配。
+    const taxonomies = await call('list_taxonomies', { module: 'time' });
+    expect((taxonomies.data as { items: unknown[] }).items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: category.id,
+          name: '学习',
+          kind: 'category',
+        }),
+      ]),
+    );
+    // 预览不持久化业务记录，但真实前后变化已经包含解析后的名称。
+    const action = await call('prepare_create_time_entry', {
+      requestId: randomUUID(),
+      startedAt: '2040-01-02T12:00:00Z',
+      endedAt: '2040-01-02T13:40:00Z',
+      activity: '源哥面试复盘分类回归',
+      categoryId: category.id,
+    });
+    expect(JSON.stringify(action.preview)).toContain('"category":"学习"');
+    expect(
+      await prisma.timeEntry.count({
+        where: { activity: '源哥面试复盘分类回归' },
+      }),
+    ).toBe(0);
+    // 正式回执与实际落库值一致，重放提交不能再新增一条。
+    const committed = await call('commit_action', { actionId: action.id });
+    expect(committed.status).toBe('succeeded');
+    expect(committed.result).toMatchObject({
+      values: [expect.objectContaining({ category: '学习' })],
+    });
+    expect(
+      (await call('commit_action', { actionId: action.id })).result,
+    ).toEqual(committed.result);
+    expect(
+      await prisma.timeEntry.findMany({
+        where: { activity: '源哥面试复盘分类回归' },
+      }),
+    ).toEqual([expect.objectContaining({ category: '学习' })]);
+    expect(
+      await call('get_time_summary', {
+        from: '2040-01-02T12:00:00Z',
+        to: '2040-01-02T13:40:00Z',
+        asOf: '2040-01-02T13:40:00Z',
+      }),
+    ).toMatchObject({ data: { categories: { 学习: 6000 } } });
+  });
+
+  it('误把UUID填入category时返回明确错误且不创建动作和业务记录', async () => {
+    // 复现原始错误参数，后端不能把字符串类型通过误认为业务语义合法。
+    const count = await prisma.mcpAction.count({ where: { connectionId } });
+    // MCP工具错误必须包含可操作的纠正提示。
+    const result = await client.callTool({
+      name: 'prepare_create_time_entry',
+      arguments: {
+        requestId: randomUUID(),
+        startedAt: '2040-01-03T12:00:00Z',
+        endedAt: '2040-01-03T13:40:00Z',
+        activity: 'UUID不得当名称',
+        category: randomUUID(),
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('categoryId');
+    expect(await prisma.mcpAction.count({ where: { connectionId } })).toBe(
+      count,
+    );
+    expect(
+      await prisma.timeEntry.count({ where: { activity: 'UUID不得当名称' } }),
+    ).toBe(0);
+  });
+
+  it('准备后分类改名导致固定基线冲突，不自动改用新名称提交', async () => {
+    // 分类也属于预览基线，改名后应要求重新核对原任务。
+    const category = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'timeline',
+        kind: 'category',
+        name: '分类改名前',
+      },
+    });
+    // 原动作只允许提交当时看到的分类，不跟随迟到的语义变化。
+    const action = await call('prepare_create_time_entry', {
+      requestId: randomUUID(),
+      startedAt: '2040-01-04T12:00:00Z',
+      endedAt: '2040-01-04T13:40:00Z',
+      activity: '分类改名不得静默提交',
+      categoryId: category.id,
+    });
+    await prisma.taxonomyEntry.update({
+      where: { id: category.id },
+      data: { name: '分类改名后' },
+    });
+    expect((await call('commit_action', { actionId: action.id })).status).toBe(
+      'conflict',
+    );
+    expect(
+      await prisma.timeEntry.count({
+        where: { activity: '分类改名不得静默提交' },
+      }),
+    ).toBe(0);
+  });
+
+  it.each(['inventory', 'memberships'] as const)(
+    '%s分类文字更新同步规范关联，UUID误填及双字段被拒绝',
+    async (moduleName) => {
+      // MCP模块名与持久化taxonomy模块名采用固定映射。
+      const taxonomyModule =
+        moduleName === 'inventory' ? 'inventory' : 'membership';
+      // 两个真实分类分别代表修改前后状态。
+      const first = await prisma.taxonomyEntry.create({
+        data: {
+          id: randomUUID(),
+          userId: actor.sub,
+          module: taxonomyModule,
+          kind: 'category',
+          name: `${moduleName}旧分类`,
+        },
+      });
+      // 新名称必须映射到该规范身份，不能只改主表文字。
+      const second = await prisma.taxonomyEntry.create({
+        data: {
+          id: randomUUID(),
+          userId: actor.sub,
+          module: taxonomyModule,
+          kind: 'category',
+          name: `${moduleName}新分类`,
+        },
+      });
+      // 真实创建工具与业务要求保持一致。
+      const createTool =
+        moduleName === 'inventory' ? 'create_item' : 'create_membership';
+      // 会员合成数据不涉及实际扣费或外部账号。
+      const fields =
+        moduleName === 'inventory'
+          ? { name: 'MCP分类回归物品' }
+          : {
+              name: 'MCP分类回归会员',
+              purchaseDate: '2026-10-21',
+              isPermanent: true,
+            };
+      // 正确规范ID绑定为后续兼容名称编辑提供初始状态。
+      const created = await execute(createTool, {
+        ...fields,
+        categoryIds: [first.id],
+      });
+      // 本体ID完全取自正式提交回执。
+      const id = (created.result as { values: Array<{ id: string }> })
+        .values[0]!.id;
+      // 修改与提交回放都应保持名称和规范关系一致。
+      const updated = await execute(
+        moduleName === 'inventory' ? 'update_item' : 'update_membership',
+        { id, category: second.name },
+      );
+      expect(updated.result).toMatchObject({
+        values: [expect.objectContaining({ category: second.name })],
+      });
+      expect(
+        (
+          await prisma.recordTaxonomyLink.findMany({
+            where: {
+              userId: actor.sub,
+              recordId: id,
+              deletedAt: null,
+              taxonomy: { kind: 'category' },
+            },
+          })
+        ).map((link) => link.taxonomyId),
+      ).toEqual([second.id]);
+      expect(
+        (await call('commit_action', { actionId: updated.id })).result,
+      ).toEqual(updated.result);
+      // 错误输入在预演阶段拒绝，不能生成可提交的错误动作。
+      const actionCount = await prisma.mcpAction.count({
+        where: { connectionId },
+      });
+      for (const categoryFields of [
+        { category: first.id },
+        { category: '名称', categoryIds: [first.id] },
+      ]) {
+        // 发布Schema与真实服务均不能把错误输入变成成功变更。
+        const result = await client.callTool({
+          name: `prepare_${createTool}`,
+          arguments: { requestId: randomUUID(), ...fields, ...categoryFields },
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(await prisma.mcpAction.count({ where: { connectionId } })).toBe(
+        actionCount,
+      );
+      expect(
+        await call(moduleName === 'inventory' ? 'get_item' : 'get_membership', {
+          id,
+        }),
+      ).toMatchObject({ data: { category: second.name } });
+    },
+  );
+
+  it('MCP物品位置和标签拒绝UUID，位置文字变更同步替换旧关联', async () => {
+    // 位置身份与类别身份不能互换。
+    const oldLocation = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'inventory',
+        kind: 'location',
+        name: 'MCP书房',
+      },
+    });
+    // 合法目标用于验证兼容名称的实际解析。
+    const newLocation = await prisma.taxonomyEntry.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        module: 'inventory',
+        kind: 'location',
+        name: 'MCP客厅',
+      },
+    });
+    // 原位置通过规范ID建立。
+    const created = await execute('create_item', {
+      name: 'MCP位置一致性',
+      locationIds: [oldLocation.id],
+    });
+    // 身份必须来自已提交结果。
+    const id = (created.result as { values: Array<{ id: string }> }).values[0]!
+      .id;
+    expect(
+      (await execute('update_item', { id, location: newLocation.name })).result,
+    ).toMatchObject({
+      values: [expect.objectContaining({ location: newLocation.name })],
+    });
+    expect(
+      (
+        await prisma.recordTaxonomyLink.findMany({
+          where: { recordId: id, deletedAt: null },
+        })
+      ).map((link) => link.taxonomyId),
+    ).toEqual([newLocation.id]);
+    for (const fields of [
+      { location: oldLocation.id },
+      { tags: [oldLocation.id] },
+    ])
+      expect(
+        (
+          await client.callTool({
+            name: 'prepare_update_item',
+            arguments: { requestId: randomUUID(), id, ...fields },
+          })
+        ).isError,
+      ).toBe(true);
+    expect(await call('get_item', { id })).toMatchObject({
+      data: { location: newLocation.name },
+    });
+  });
+
+  it('MCP象限Schema与持久化统一0至3，新增编辑移动均支持0且拒绝4', async () => {
+    // 元数据需把数字语义暴露给宿主，避免按常见一至四编号猜测。
+    const tools = await client.listTools();
+    for (const name of [
+      'prepare_create_todo',
+      'prepare_update_todo',
+      'prepare_set_todo_quadrant',
+    ]) {
+      // 实际发布Schema明确最小、最大值与完整语义说明。
+      const tool = tools.tools.find((item) => item.name === name)!;
+      expect(tool.inputSchema.properties?.priorityQuadrant).toMatchObject({
+        minimum: 0,
+        maximum: 3,
+        description: mcpTodoQuadrantPolicy,
+      });
+    }
+    // 新增使用客户端最低优先象限0，不再被后端拒绝。
+    const created = await execute('create_todo', {
+      title: 'MCP象限零',
+      scheduledDate: '2026-10-21',
+      priorityQuadrant: 0,
+    });
+    // 目标来源于正式回执。
+    const id = (created.result as { values: Array<{ id: string }> }).values[0]!
+      .id;
+    expect(created.result).toMatchObject({
+      values: [expect.objectContaining({ priorityQuadrant: 0 })],
+    });
+    await execute('update_todo', { id, priorityQuadrant: 3 });
+    await execute('set_todo_quadrant', { id, priorityQuadrant: 0 });
+    expect(await call('get_todo', { id })).toMatchObject({
+      data: { priorityQuadrant: 0 },
+    });
+    for (const [name, fields] of [
+      ['create_todo', { title: '不得写入四', scheduledDate: '2026-10-21' }],
+      ['update_todo', { id }],
+      ['set_todo_quadrant', { id }],
+    ] as const)
+      expect(
+        (
+          await client.callTool({
+            name: `prepare_${name}`,
+            arguments: {
+              requestId: randomUUID(),
+              ...fields,
+              priorityQuadrant: 4,
+            },
+          })
+        ).isError,
+      ).toBe(true);
+    expect(
+      await prisma.todoItem.count({ where: { title: '不得写入四' } }),
+    ).toBe(0);
   });
 
   it('令牌默认只读、明文只显示一次、摘要与设备凭据均不外泄', async () => {

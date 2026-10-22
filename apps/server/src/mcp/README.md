@@ -51,7 +51,7 @@ tool_timeout_sec = 75
 5. `commit_action` 只执行有效的 `pending` 动作；事务内重查当前连接、模块权限、内部身份及业务基线。连接期限与预览期限分别检查，固定预览最多保留 10 分钟。结果及领域回执同事务保存，响应丢失时查询原 `actionId` 或重试原提交，不能新建请求重复保存。
 6. 结果明确区分“服务器已保存、客户端待同步”和笔记“仅保存冲突候选、正式正文未采用”。终态不重新执行；知序设置只读展示完整操作记录及实际结果。
 
-批量确认是 Codex 的对话规则，后端执行授权来自连接写权限；服务端不验证聊天记录，也不接受 `confirmed` 参数作为人工批准证明。初始化 instructions、工具描述和 `get_capabilities` 使用相同规则，能力版本为 2.0、服务器版本为 2.0.0。已有宿主需重新连接刷新说明。
+批量确认是 Codex 的对话规则，后端执行授权来自连接写权限；服务端不验证聊天记录，也不接受 `confirmed` 参数作为人工批准证明。初始化 instructions、工具描述和 `get_capabilities` 使用相同规则，当前能力版本为 2.2、服务器版本为 2.2.0。已有宿主需重新连接刷新说明。
 
 一次最多 8 个明确步骤、200 个实际变化记录，超限拒绝，不截断影响清单。超过 8 步须先展示完整目标和分批方案，用户确认后逐批准备、提交；跨批不保证原子性，任何一批失败都停止并报告已完成范围。批量不支持依赖预览临时新 ID 的步骤引用。
 
@@ -60,6 +60,50 @@ tool_timeout_sec = 75
 删除为软删除，恢复保留原身份，必要时恢复同批次子记录，不复活单独删除的旧子记录。没有永久删除、清空回收站或后台清理工具。`undo_action` 仅为成功时间起 10 分钟内、后置基线未变的单条新增准备软删除补偿，再由 `commit_action` 执行；补偿预览不会延长原窗口，提交时再次校验。其他修改使用明确业务动作。会员记录与续费标记不会向供应商真实扣费或退订；事件是周期事务。
 
 原设备 JWT `POST /mcp-management/actions/:id/decision` 返回 410，提示更新客户端和重新连接 Codex；连接管理及操作详情仍使用设备 JWT。
+
+## 时间记录分类
+
+能力版本 `2.2`、服务版本 `2.2.0`。指定时间分类时先调用 `list_taxonomies(module="time")`，查询完所有分页，再根据用户名称唯一匹配 `kind="category"` 的条目，将其 `id` 传给四个时间写工具的 `categoryId`。例如“20点到21点40，源哥面试复盘，属于学习”，准备参数应使用查询得到的 `categoryId`，预览和实际结果中的 `category` 为“学习”。重名或找不到时先澄清，不擅自新建、模糊替换或归到“其他”。
+
+`categoryId: null` 明确清空分类；省略保留当前分类。兼容 `category` 名称参数，但禁止将 UUID 填入其中，两个参数不能同时提供。服务端在同一事务校验分类 owner、模块、类型与有效状态，并把规范名称写入现有文本列；分类在准备后改变，提交按已有固定基线返回冲突。单条写入仍连续 prepare→commit，展示结果必须依据实际回执。
+
+第24份迁移 `20261021010000_time_category_names` 修复历史 UUID 误写：只匹配同一用户有效的 timeline/category 身份，替换为当前真实名称并更新同步游标，保留记录 ID、时间、活动和备注；不存在、跨用户、其他模块、其他类型、禁用或已删除的分类原样保留。不会猜测未知 UUID 对应的名称。迁移同时作用于可恢复记录；已成功 MCP 历史回执保留原事实，新的查询返回修正后的值。
+
+部署前可只读核对将修复的范围：
+
+```sql
+SELECT record.id, record.user_id, record.activity,
+       record.category AS old_category, taxonomy.name AS new_category
+FROM time_entries AS record
+JOIN taxonomy_entries AS taxonomy
+  ON record.user_id = taxonomy.user_id
+ AND lower(btrim(record.category)) = taxonomy.id::text
+WHERE taxonomy.module = 'timeline' AND taxonomy.kind = 'category'
+  AND taxonomy.is_enabled = true AND taxonomy.deleted_at IS NULL
+  AND record.category IS DISTINCT FROM taxonomy.name;
+```
+
+备份后停止旧 API 接收请求，应用迁移，再启动新版 API，并让 Codex 重新连接刷新工具说明。当前文本存储及展示方式兼容已有客户端，此次无需提高同步、本地库或快照版本。离线待上传的旧 UUID 值及无法归属的异常记录仍须核对后通过正常编辑纠正；本迁移只修复执行时服务器已接收的数据。
+
+## 物品、会员分类和待办象限
+
+物品分类、位置和会员分类首选查询得到的 `categoryIds`/`locationIds`，会员标签使用 `tagIds`；空数组表示清空，省略表示保留。对应名称字段与 ID 数组互斥；物品的 `tags` 是兼容名称文字数组，与笔记 `tags` 的 UUID 数组含义不同，不能混用。
+
+服务端拒绝向物品 category/location/tags 或会员 category 写入 UUID，包括逗号名称列表中混入的 UUID。兼容名称在同一事务内唯一匹配现有分类时同步替换规范关联，重名返回冲突；无匹配的旧名称保留为文字并解除该种类旧关联，不擅自创建分类。单独清空分类不影响会员标签、物品位置等其他类型；只改备注不会重写分类。模型遇到找不到的分类仍应先澄清。
+
+待办 `priorityQuadrant` 完全沿用客户端：`0` 不紧急不重要、`1` 紧急不重要、`2` 重要不紧急（默认）、`3` 重要且紧急。新增、编辑和整树移动均接受 `0` 并拒绝 `4`；工具Schema、字段说明、初始化和能力发现同步采用此口径。旧非法编号不能通过父子继承、未来编辑或重复实例生成继续传播。
+
+第25份迁移 `20261021020000_named_taxonomy_repairs` 仅修复能映射同用户有效分类/位置、且不存在冲突关联的 UUID 文字，同时补齐规范关系、维护下行游标；物品 tags 仅替换可确认的同模块分类/标签 UUID 片段。未知、跨用户、错模块、无效、已有不同关联或普通名称分叉均保留待核对。历史回执保持原执行事实，迁移重复执行不重复建立关联。
+
+已有象限 `4` 不自动映射成其他编号，可先只读查询，再由用户明确指定目标象限后通过正常更新纠正：
+
+```sql
+SELECT id, title, priority_quadrant
+FROM todo_items
+WHERE priority_quadrant NOT BETWEEN 0 AND 3;
+```
+
+迁移前同样完整备份并停止旧API接收请求，再执行迁移和更新API，让Codex重连；本期总迁移数为25，schema12/SQLite26/快照11/wire3不变。已有普通名称与关联分叉需人工核对，不从文字或旧关联任一方推断真实意图。步骤 `id:null` 与笔记正文 `expectedRevision:null` 的两个独立契约问题仍为待办。
 
 ## 总结与来源
 

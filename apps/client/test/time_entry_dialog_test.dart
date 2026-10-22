@@ -90,8 +90,10 @@ void main() {
       );
       expect(find.byTooltip('关闭'), findsNothing);
       await _wheelTo(tester, hour: 8, minute: 50);
-      expect(find.text('共 1.5 小时'), findsOneWidget);
+      expect(find.text('共 1 小时 30 分钟'), findsOneWidget);
       await _capture(tester, 'android-fullscreen-duration');
+      await _wheelTo(tester, hour: 9, minute: 50);
+      expect(find.text('共 30 分钟'), findsOneWidget);
       await _enterActivity(tester, '取消草稿');
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
@@ -364,7 +366,7 @@ void main() {
           expect(find.text('保存'), findsOneWidget);
           expect(find.text('保存记录'), findsNothing);
           expect(tester.getCenter(find.text('编辑时间记录')).dx, closeTo(195, 0.1));
-          expect(find.text('共 0.03 小时'), findsOneWidget);
+          expect(find.text('共 2 分钟'), findsOneWidget);
         }
         expect(_saveButton(tester).onPressed, isNotNull);
         expect(_dateButton(tester, 'start').value, DateTime(2026, 10, 7, 9, 1));
@@ -533,7 +535,7 @@ void main() {
           await _capture(tester, 'android-finish-invalid-time');
           await _wheelTo(tester, hour: 10, minute: 25);
           expect(find.text('调整结束时间'), findsOneWidget);
-          expect(find.text('共 1.08 小时'), findsOneWidget);
+          expect(find.text('共 1 小时 5 分钟'), findsOneWidget);
           tester.view.physicalSize = const Size(360, 800);
           fixture.media.value = const MediaQueryData(
             size: Size(360, 800),
@@ -834,7 +836,7 @@ void main() {
       );
       expect(find.text('调整结束时间'), findsOneWidget);
       expect(find.text('结束 · 次日'), findsOneWidget);
-      expect(find.text('共 0.17 小时'), findsOneWidget);
+      expect(find.text('共 10 分钟'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey<String>('time-start-select')));
       await tester.pumpAndSettle();
       expect(

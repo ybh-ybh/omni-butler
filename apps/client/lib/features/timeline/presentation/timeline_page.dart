@@ -3395,9 +3395,8 @@ class _AbsoluteTimeEntryDialogState
   }) {
     // 当前主题的辅助文字颜色。
     final OmniColors colors = OmniColors.of(context);
-    // 非整小时保留最多两位小数，整数不显示多余零。
-    final String hours = NumberFormat('0.##')
-        .format(_endedAt.difference(_startedAt).inMinutes / 60);
+    // 与时间区间摘要共用小时、分钟格式。
+    final String duration = _formatRangeDuration();
     return PopScope(
       canPop: !_saving,
       child: OmniFullscreenFormScaffold(
@@ -3425,7 +3424,7 @@ class _AbsoluteTimeEntryDialogState
                     ? (_loadingDefaultRange ? '正在计算时长…' : '时长待计算')
                     : invalidTime
                     ? '时间待调整'
-                    : '共 $hours 小时',
+                    : '共 $duration',
                 key: const ValueKey<String>('time-range-duration'),
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall
@@ -3484,6 +3483,17 @@ class _AbsoluteTimeEntryDialogState
     );
   }
 
+  /// 将实际时间差格式化为时长，省略零小时或零分钟。
+  String _formatRangeDuration() {
+    // 起止时间之间的完整分钟数。
+    final int minutes = _endedAt.difference(_startedAt).inMinutes;
+    return minutes <= 0
+        ? '不足 1 分钟'
+        : '${minutes >= 60 ? '${minutes ~/ 60} 小时' : ''}'
+                  '${minutes % 60 != 0 ? ' ${minutes % 60} 分钟' : ''}'
+              .trim();
+  }
+
   /// 构建两端一致的时间摘要及平台专用输入。
   Widget _buildCompletedTimeSection({
     required bool usesWheel,
@@ -3499,14 +3509,8 @@ class _AbsoluteTimeEntryDialogState
   }) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    // 用实际时间差显示唯一一处时长。
-    final int minutes = _endedAt.difference(_startedAt).inMinutes;
-    // 精简时长文本，避免零小时或零分钟占据注意力。
-    final String duration = minutes <= 0
-        ? '不足 1 分钟'
-        : '${minutes >= 60 ? '${minutes ~/ 60} 小时' : ''}'
-                  '${minutes % 60 != 0 ? ' ${minutes % 60} 分钟' : ''}'
-              .trim();
+    // 与全屏编辑器共用实际时间差的时长格式。
+    final String duration = _formatRangeDuration();
     // 滚轮上方在时间无效时显示错误，恢复有效后继续提示当前调整端点。
     final String? timeError = invalidTime
         ? (!_startInputValid || !_endInputValid
