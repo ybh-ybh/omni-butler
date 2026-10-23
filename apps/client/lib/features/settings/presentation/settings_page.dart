@@ -82,7 +82,7 @@ extension _SettingsCategoryPresentation on _SettingsCategory {
     _SettingsCategory.features => '只保留你真正使用的功能，关闭后数据仍会安全保留。',
     _SettingsCategory.appearance => '调整当前设备的显示模式与视觉体验。',
     _SettingsCategory.notifications => '管理当前设备上的系统提醒。',
-    _SettingsCategory.ai => '配置模型服务，自动整理语音识别后的笔记文本。',
+    _SettingsCategory.ai => '配置模型服务、应用内助手与笔记 AI 整理。',
     _SettingsCategory.sync => '连接自托管服务，在多个设备之间同步数据。',
     _SettingsCategory.storage => '查看并处理已删除的数据。',
   };
@@ -113,7 +113,10 @@ extension _SettingsCategoryPresentation on _SettingsCategory {
 /// 设置页面。
 class SettingsPage extends ConsumerStatefulWidget {
   /// 创建设置页面。
-  const SettingsPage({super.key});
+  const SettingsPage({this.initialCategory, super.key});
+
+  /// 受控深链分类，供助手配置引导直接打开 AI 设置。
+  final String? initialCategory;
 
   /// 创建设置页面状态。
   @override
@@ -139,10 +142,44 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   @override
   void initState() {
     super.initState();
+    // 外部受控入口可直接打开对应的两端设置分区。
+    final _SettingsCategory? initial = _SettingsCategory.values
+        .where(
+          (_SettingsCategory category) =>
+              category.name == widget.initialCategory,
+        )
+        .firstOrNull;
+    if (initial != null) {
+      _selectedCategory = initial;
+      _androidSelectedCategory = initial;
+    }
     _androidPageController = AnimationController(
       vsync: this,
       duration: OmniMotion.panel,
+      value: initial == null ? 0 : 1,
     );
+  }
+
+  /// 现有有状态设置路由收到新深链时切换分类。
+  @override
+  void didUpdateWidget(covariant SettingsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialCategory == oldWidget.initialCategory ||
+        widget.initialCategory == null) {
+      return;
+    }
+    // 只识别已存在的枚举，不接受任意动态页面。
+    final _SettingsCategory? initial = _SettingsCategory.values
+        .where(
+          (_SettingsCategory category) =>
+              category.name == widget.initialCategory,
+        )
+        .firstOrNull;
+    if (initial != null) {
+      _selectedCategory = initial;
+      _androidSelectedCategory = initial;
+      _androidPageController.value = 1;
+    }
   }
 
   /// 释放层级切换动画，取消尚未完成的返回回调。

@@ -46,6 +46,7 @@ class _AiAuth implements AuthRepository {
     ResponseType? responseType,
     Duration? receiveTimeout,
     bool preserveTransportErrors = false,
+    CancelToken? cancelToken,
   }) async {
     if (generation != this.generation) throw const ApiFailure('同步会话已变更');
     // 当前调用的最小请求信息。

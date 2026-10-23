@@ -133,6 +133,8 @@ integration('SyncService PostgreSQL 集成', () => {
     );
     if (existing.rows.length > 0)
       throw new Error('集成测试要求空数据库，拒绝清理已有 public 表');
+    if ((await database.query("SELECT 1 FROM pg_namespace WHERE nspname='assistant_graph'")).rows.length)
+      throw new Error('同步集成要求不存在助手私有 schema');
     ownsSchema = true;
     // 按生产发布顺序应用真实迁移。
     for (const migration of readdirSync(
@@ -699,7 +701,7 @@ integration('SyncService PostgreSQL 集成', () => {
     try {
       if (database && ownsSchema) {
         await database.query(
-          'DROP PUBLICATION IF EXISTS powersync; DROP SCHEMA public CASCADE; CREATE SCHEMA public',
+          'DROP PUBLICATION IF EXISTS powersync; DROP SCHEMA IF EXISTS assistant_graph CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public',
         );
       }
     } finally {

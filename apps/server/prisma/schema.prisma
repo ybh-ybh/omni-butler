@@ -65,6 +65,15 @@ model SyncOwner {
   aiSettings AiSettings?
   aiProfiles AiProfile[]
   notePolishJobs NotePolishJob[]
+  /// 应用内助手私有状态，不参与业务同步。
+  assistantSettings AssistantSettings?
+  assistantConversations AssistantConversation[]
+  assistantTasks AssistantTask[]
+  assistantRuns AssistantRun[]
+  assistantMessages AssistantMessage[]
+  assistantEvents AssistantEvent[]
+  assistantMemories AssistantMemory[]
+  assistantAttempts AssistantAttempt[]
 
   @@map("sync_owners")
 }
@@ -370,7 +379,10 @@ model McpAction {
   /// 数据归属。
   userId String @map("user_id") @db.Uuid
   /// 发起连接。
-  connectionId String @map("connection_id") @db.Uuid
+  connectionId String? @map("connection_id") @db.Uuid
+  /// 来源隔离外部连接与设备认证助手任务。
+  source String @default("mcp") @db.VarChar(16)
+  sourceId String @map("source_id") @db.Uuid
   /// 调用方重试保持的请求身份。
   requestId String @map("request_id") @db.Uuid
   /// 工具及输入摘要，防止挪用身份。
@@ -400,10 +412,152 @@ model McpAction {
   /// 归属删除后旧动作不可恢复授权。
   user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// 原连接撤销后动作仍保留审计事实。
-  connection McpConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  connection McpConnection? @relation(fields: [connectionId], references: [id], onDelete: Cascade)
   @@unique([connectionId, requestId])
+  @@unique([source, sourceId, requestId])
   @@index([userId, createdAt])
   @@map("mcp_actions")
+}
+
+/// 助手独立选择已有模型，不覆盖笔记整理设置。
+model AssistantSettings {
+  userId String @id @map("user_id") @db.Uuid
+  revision Int @default(0)
+  enabled Boolean @default(false)
+  profileId String? @map("profile_id") @db.Uuid
+  memoryReadEnabled Boolean @default(true) @map("memory_read_enabled")
+  memoryWriteEnabled Boolean @default(true) @map("memory_write_enabled")
+  memoryVersion Int @default(0) @map("memory_version")
+  timeZone String @default("Asia/Shanghai") @map("time_zone") @db.VarChar(128)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("assistant_settings")
+}
+
+/// 会话删除清除聊天正文，业务回执独立保留。
+model AssistantConversation {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  title String @db.VarChar(100)
+  summary String @default("")
+  summaryThrough DateTime? @map("summary_through") @db.Timestamptz(3)
+  memoryVersion Int @default(0) @map("memory_version")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, updatedAt])
+  @@map("assistant_conversations")
+}
+
+/// 整项用户任务跨模型轮次与澄清保持同一身份。
+model AssistantTask {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  conversationId String @map("conversation_id") @db.Uuid
+  sessionId String @map("session_id") @db.Uuid
+  runId String @map("run_id") @db.Uuid
+  status String @default("queued") @db.VarChar(32)
+  planVersion Int @default(0) @map("plan_version")
+  plan Json?
+  approvedHash String? @map("approved_hash") @db.VarChar(64)
+  actionId String? @map("action_id") @db.Uuid
+  /// 准备请求身份与真实动作身份分开，崩溃后安全重放。
+  planRequestId String? @map("plan_request_id") @db.Uuid
+  committed Boolean @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, conversationId, status])
+  @@map("assistant_tasks")
+}
+
+/// 可接管的执行尝试；密文配置快照不进入事件或图状态。
+model AssistantRun {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  conversationId String @map("conversation_id") @db.Uuid
+  taskId String @map("task_id") @db.Uuid
+  sessionId String @map("session_id") @db.Uuid
+  status String @default("queued") @db.VarChar(32)
+  profileSnapshot Json @map("profile_snapshot")
+  state Json
+  leaseOwner String? @map("lease_owner") @db.Uuid
+  leaseUntil DateTime? @map("lease_until") @db.Timestamptz(3)
+  eventSequence Int @default(0) @map("event_sequence")
+  errorCode String? @map("error_code") @db.VarChar(80)
+  errorMessage String? @map("error_message")
+  elapsedMs Int @default(0) @map("elapsed_ms")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([status, leaseUntil])
+  @@index([userId, conversationId, createdAt])
+  @@map("assistant_runs")
+}
+
+/// 展示消息与模型上下文分开，遗忘来源可从未来输入排除。
+model AssistantMessage {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  conversationId String @map("conversation_id") @db.Uuid
+  taskId String @map("task_id") @db.Uuid
+  clientMessageId String? @map("client_message_id") @db.Uuid
+  role String @db.VarChar(16)
+  content String
+  cards Json
+  excluded Boolean @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, clientMessageId])
+  @@index([userId, conversationId, createdAt])
+  @@map("assistant_messages")
+}
+
+/// 稳定事件序号用于断线续接，不返回模型密钥或内部推理。
+model AssistantEvent {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  runId String @map("run_id") @db.Uuid
+  seq Int
+  type String @db.VarChar(40)
+  data Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([runId, seq])
+  @@map("assistant_events")
+}
+
+/// 用户明确授权的跨会话记忆，业务事实仍由工具实时读取。
+model AssistantMemory {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  content String @db.VarChar(2000)
+  category String @default("preference") @db.VarChar(40)
+  enabled Boolean @default(true)
+  revision Int @default(0)
+  sourceMessageId String? @map("source_message_id") @db.Uuid
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, enabled])
+  @@map("assistant_memories")
+}
+
+/// 付费请求先持久登记，未知提交不自动再次收费。
+model AssistantAttempt {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  runId String @map("run_id") @db.Uuid
+  ordinal Int
+  inputHash String @map("input_hash") @db.VarChar(64)
+  status String @db.VarChar(32)
+  response Json?
+  usage Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([runId, ordinal])
+  @@map("assistant_attempts")
 }
 
 /// 已提交客户端事务的幂等回执，与业务写入一同提交。

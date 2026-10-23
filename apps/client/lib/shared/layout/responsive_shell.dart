@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -88,6 +90,12 @@ const List<_AppDestination> _desktopDestinations = <_AppDestination>[
     selectedIcon: Icons.edit_note_rounded,
     features: <AppFeature>[AppFeature.notes],
     primaryDestination: PrimaryNavigationDestination.notes,
+  ),
+  _AppDestination(
+    path: '/assistant',
+    label: '助手',
+    icon: Icons.auto_awesome_outlined,
+    selectedIcon: Icons.auto_awesome,
   ),
   _AppDestination(
     path: '/inventory',
@@ -325,14 +333,17 @@ class ResponsiveShell extends ConsumerWidget {
               final bool isDesktopPlatform = OmniBreakpoint.isDesktopPlatform(
                 Theme.of(context).platform,
               );
-              // Windows 笔记自行提供侧栏与顶栏，外层只保留图标轨。
-              final bool windowsNotes =
-                  Theme.of(context).platform == TargetPlatform.windows &&
-                  location == '/notes';
+              // Windows 始终使用图标轨，不随页面或窗口宽度展开。
+              final bool windowsPlatform =
+                  Theme.of(context).platform == TargetPlatform.windows;
               // 安卓笔记的根覆盖层自行避让键盘，底层导航保持原尺寸。
               final bool androidNotes =
                   Theme.of(context).platform == TargetPlatform.android &&
                   location == '/notes';
+              // Windows仅首页显示全局顶栏，其余页面不保留顶栏占位。
+              final bool showTopBar = windowsPlatform
+                  ? location == '/home'
+                  : !androidNotes;
               // 当前是否为展开布局。
               final bool isExpanded = OmniBreakpoint.isExpanded(
                 constraints.maxWidth,
@@ -364,7 +375,7 @@ class ResponsiveShell extends ConsumerWidget {
                 backgroundColor: colors.canvas,
                 body: Row(
                   children: <Widget>[
-                    if (isExpanded && !windowsNotes)
+                    if (isExpanded && !windowsPlatform)
                       _ExpandedSidebar(
                         location: location,
                         destinations: desktopDestinations,
@@ -395,7 +406,7 @@ class ResponsiveShell extends ConsumerWidget {
                     Expanded(
                       child: Column(
                         children: <Widget>[
-                          if (!windowsNotes && !androidNotes) const _TopBar(),
+                          if (showTopBar) const _TopBar(),
                           Expanded(child: child),
                         ],
                       ),
@@ -489,34 +500,10 @@ class _ExpandedSidebar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    // 用户是否明确开启多端同步。
-    final bool syncEnabled = ref.watch(syncPreferenceProvider);
     // 侧栏与原生标题栏共用背景和边界色。
     final OmniChromeColors chrome = OmniChromeColors.of(context);
     // 当前侧栏需要展示的同步阶段。
-    _SidebarSyncPhase? syncPhase;
-    if (syncEnabled) {
-      // 当前设备同步会话异步状态。
-      final AsyncValue<SyncSession?> sessionState = ref.watch(
-        authControllerProvider,
-      );
-      // 当前同步连接控制器状态。
-      final AsyncValue<void> syncController = ref.watch(syncControllerProvider);
-      // 当前 PowerSync 实时状态。
-      final AsyncValue<SyncStatus?> syncStatusState = ref.watch(
-        syncStatusProvider,
-      );
-      // 当前本机待上传操作数量状态。
-      final AsyncValue<int> queueCountState = ref.watch(
-        syncUploadQueueCountProvider,
-      );
-      syncPhase = _resolveSidebarSyncPhase(
-        sessionState: sessionState,
-        syncController: syncController,
-        syncStatusState: syncStatusState,
-        queueCountState: queueCountState,
-      );
-    }
+    final _SidebarSyncPhase? syncPhase = _sidebarSyncPhase(ref);
 
     return Container(
       key: const ValueKey<String>('expanded-sidebar'),
@@ -560,8 +547,8 @@ class _ExpandedSidebar extends ConsumerWidget {
   }
 }
 
-/// 中等宽度导航轨。
-class _MediumNavigation extends StatelessWidget {
+/// Windows 常驻图标轨，其他平台在中等宽度使用。
+class _MediumNavigation extends ConsumerWidget {
   /// 当前路由路径。
   final String location;
 
@@ -571,7 +558,7 @@ class _MediumNavigation extends StatelessWidget {
   /// 选择回调。
   final ValueChanged<_AppDestination> onSelected;
 
-  /// 创建中等宽度导航轨。
+  /// 创建折叠导航轨。
   const _MediumNavigation({
     required this.location,
     required this.destinations,
@@ -580,11 +567,18 @@ class _MediumNavigation extends StatelessWidget {
 
   /// 构建飞书式紧凑导航轨。
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     // 与 Windows 标题栏共用的导航配色。
     final OmniChromeColors chrome = OmniChromeColors.of(context);
+    // 只调整Windows导航提示，其他平台沿用现有样式。
+    final bool isWindows = Theme.of(context).platform == TargetPlatform.windows;
+    // Windows 图标轨保留实时同步状态，其他平台沿用既有展示范围。
+    final _SidebarSyncPhase? syncPhase = isWindows
+        ? _sidebarSyncPhase(ref)
+        : null;
 
-    return Container(
+    // 导航布局与提示样式分开，避免放大点击热区或影响页面内提示。
+    final Widget navigation = Container(
       key: const ValueKey<String>('medium-navigation'),
       width: OmniSize.navigationRail,
       decoration: BoxDecoration(
@@ -597,16 +591,38 @@ class _MediumNavigation extends StatelessWidget {
             const SizedBox(height: OmniSpacing.sm),
             const _CompactBrandMark(),
             const SizedBox(height: OmniSpacing.lg),
-            for (final _AppDestination destination in destinations)
-              Padding(
-                padding: const EdgeInsets.only(bottom: OmniSpacing.xxs),
-                child: _RailDestination(
-                  destination: destination,
-                  selected: _isDestinationSelected(destination, location),
-                  onTap: () => onSelected(destination),
+            Expanded(
+              child: SingleChildScrollView(
+                key: const ValueKey<String>('rail-navigation-scroll'),
+                primary: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    for (final _AppDestination destination in destinations)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: OmniSpacing.xxs),
+                        child: _RailDestination(
+                          destination: destination,
+                          selected: _isDestinationSelected(
+                            destination,
+                            location,
+                          ),
+                          onTap: () => onSelected(destination),
+                        ),
+                      ),
+                  ],
                 ),
               ),
-            const Spacer(),
+            ),
+            if (syncPhase != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: OmniSpacing.xxs),
+                child: _SyncStatusCard(
+                  colors: OmniColors.of(context),
+                  phase: syncPhase,
+                  iconOnly: true,
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.only(bottom: OmniSpacing.xxs),
               child: _RailDestination(
@@ -618,6 +634,45 @@ class _MediumNavigation extends StatelessWidget {
           ],
         ),
       ),
+    );
+    if (!isWindows) return navigation;
+    return TooltipTheme(
+      data: TooltipTheme.of(context).copyWith(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        textStyle: Theme.of(context).textTheme.bodyMedium!.copyWith(
+          color: OmniColors.of(context).canvas,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          height: 1.5,
+        ),
+        decoration: BoxDecoration(
+          color: OmniColors.of(context).ink,
+          borderRadius: BorderRadius.circular(OmniRadius.control),
+        ),
+      ),
+      child: navigation,
+    );
+  }
+}
+
+/// 将Windows导航墨迹限制在图标周围，保留完整的点击热区。
+class _RailInkShape extends RoundedRectangleBorder {
+  /// 与其他桌面图标按钮使用相同的圆角。
+  const _RailInkShape()
+    : super(
+        borderRadius: const BorderRadius.all(
+          Radius.circular(OmniRadius.control),
+        ),
+      );
+
+  /// 仅缩小墨迹的绘制轮廓，不参与布局或命中测试。
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
+    // 悬停墨迹与选中背景共享32dp尺寸，小热区不向外扩张。
+    final double extent = math.min(OmniSize.control, rect.shortestSide);
+    return super.getOuterPath(
+      Rect.fromCenter(center: rect.center, width: extent, height: extent),
+      textDirection: textDirection,
     );
   }
 }
@@ -647,6 +702,12 @@ class _RailDestination extends StatelessWidget {
     final OmniChromeColors chrome = OmniChromeColors.of(context);
     return Tooltip(
       message: destination.label,
+      positionDelegate: Theme.of(context).platform == TargetPlatform.windows
+          ? _rightNavigationTooltip
+          : null,
+      constraints: Theme.of(context).platform == TargetPlatform.windows
+          ? _navigationTooltipConstraints(context)
+          : null,
       child: Material(
         key: ValueKey<String>('navigation-${destination.path}'),
         color: Colors.transparent,
@@ -659,13 +720,17 @@ class _RailDestination extends StatelessWidget {
                   onTap();
                 },
                 borderRadius: BorderRadius.circular(OmniRadius.control),
+                customBorder:
+                    Theme.of(context).platform == TargetPlatform.windows
+                    ? const _RailInkShape()
+                    : null,
                 child: SizedBox(
                   width: 56,
                   height: 48,
                   child: Center(
                     child: Container(
-                      width: 32,
-                      height: 32,
+                      width: OmniSize.control,
+                      height: OmniSize.control,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
                         color: selected
@@ -1055,7 +1120,7 @@ class _SidebarDestination extends StatelessWidget {
   }
 }
 
-/// 展开侧栏中的同步展示阶段。
+/// 侧栏共用的同步展示阶段。
 enum _SidebarSyncPhase {
   /// 正在建立同步连接。
   connecting,
@@ -1073,7 +1138,18 @@ enum _SidebarSyncPhase {
   error,
 }
 
-/// 根据同步链路状态解析展开侧栏的展示阶段。
+/// 读取同一组同步事实，折叠与展开导航不另行判断完成状态。
+_SidebarSyncPhase? _sidebarSyncPhase(WidgetRef ref) {
+  if (!ref.watch(syncPreferenceProvider)) return null;
+  return _resolveSidebarSyncPhase(
+    sessionState: ref.watch(authControllerProvider),
+    syncController: ref.watch(syncControllerProvider),
+    syncStatusState: ref.watch(syncStatusProvider),
+    queueCountState: ref.watch(syncUploadQueueCountProvider),
+  );
+}
+
+/// 根据同步链路状态解析侧栏的展示阶段。
 _SidebarSyncPhase _resolveSidebarSyncPhase({
   required AsyncValue<SyncSession?> sessionState,
   required AsyncValue<void> syncController,
@@ -1117,7 +1193,7 @@ _SidebarSyncPhase _resolveSidebarSyncPhase({
   return _SidebarSyncPhase.completed;
 }
 
-/// 展开侧栏中的实时同步状态卡。
+/// 实时同步状态，Windows 只显示图标并以悬停说明详情。
 class _SyncStatusCard extends StatelessWidget {
   /// 当前主题语义色。
   final OmniColors colors;
@@ -1125,8 +1201,15 @@ class _SyncStatusCard extends StatelessWidget {
   /// 当前同步展示阶段。
   final _SidebarSyncPhase phase;
 
+  /// 是否使用折叠图标轨的呈现。
+  final bool iconOnly;
+
   /// 创建实时同步状态卡。
-  const _SyncStatusCard({required this.colors, required this.phase});
+  const _SyncStatusCard({
+    required this.colors,
+    required this.phase,
+    this.iconOnly = false,
+  });
 
   /// 构建同步阶段图标和说明。
   @override
@@ -1162,6 +1245,19 @@ class _SyncStatusCard extends StatelessWidget {
       _SidebarSyncPhase.error => colors.danger,
       _SidebarSyncPhase.connecting || _SidebarSyncPhase.syncing => colors.brand,
     };
+    if (iconOnly) {
+      return Tooltip(
+        message: '$label\n$description',
+        positionDelegate: _rightNavigationTooltip,
+        constraints: _navigationTooltipConstraints(context),
+        child: SizedBox(
+          key: const ValueKey<String>('sidebar-sync-status'),
+          width: 56,
+          height: 48,
+          child: Center(child: Icon(icon, size: 18, color: tone)),
+        ),
+      );
+    }
     return Container(
       key: const ValueKey<String>('sidebar-sync-status'),
       padding: const EdgeInsets.all(12),
@@ -1187,6 +1283,55 @@ class _SyncStatusCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 导航图标背景与提示之间保留的外间距。
+const double _navigationTooltipGap = 5;
+
+/// 提示按导航右侧的剩余空间换行，不挤回图标上方。
+BoxConstraints _navigationTooltipConstraints(BuildContext context) =>
+    BoxConstraints(
+      minHeight: OmniSize.control,
+      maxWidth: math.max(
+        1,
+        MediaQuery.sizeOf(context).width -
+            OmniSize.navigationRail / 2 -
+            OmniSize.control / 2 -
+            _navigationTooltipGap * 2,
+      ),
+    );
+
+/// 使用原生 Tooltip 的定位回调，在图标右侧垂直居中并避让窗口边缘。
+Offset _rightNavigationTooltip(TooltipPositionContext context) {
+  // 外间距从可见的图标背景计算，而不是更宽的点击热区。
+  const double gap = _navigationTooltipGap;
+  // Tooltip 坐标相对当前 Overlay，而非业务页面的局部坐标。
+  final double left =
+      context.target.dx +
+      math.min(OmniSize.control, context.targetSize.width) / 2 +
+      gap;
+  // 靠近顶部或底部时夹在可用窗口范围内。
+  final double top = context.target.dy - context.tooltipSize.height / 2;
+  return Offset(
+    left
+        .clamp(
+          gap,
+          math.max(
+            gap,
+            context.overlaySize.width - context.tooltipSize.width - gap,
+          ),
+        )
+        .toDouble(),
+    top
+        .clamp(
+          gap,
+          math.max(
+            gap,
+            context.overlaySize.height - context.tooltipSize.height - gap,
+          ),
+        )
+        .toDouble(),
+  );
 }
 
 /// 判断路由是否选中。

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -875,6 +876,11 @@ class _HomeDashboardToolbar extends StatelessWidget {
           Expanded(
             child: Text('今日工作台', style: Theme.of(context).textTheme.labelLarge),
           ),
+          OmniIconButton(
+            icon: const Icon(Icons.auto_awesome_outlined),
+            tooltip: '知序助手',
+            onPressed: () => context.push('/assistant'),
+          ),
           OmniButton(
             label: '管理卡片',
             icon: Icons.tune_rounded,
@@ -1041,6 +1047,12 @@ class _QuoteHero extends ConsumerWidget {
             children: <Widget>[
               Row(
                 children: <Widget>[
+                  OmniIconButton(
+                    tooltip: '知序助手',
+                    onPressed: () => context.push('/assistant'),
+                    color: Colors.white,
+                    icon: const Icon(Icons.auto_awesome_outlined),
+                  ),
                   const Spacer(),
                   OmniIconButton(
                     tooltip: '名言库',

@@ -1,3 +1,4 @@
+import 'package:omni_butler/features/assistant/data/assistant_repository.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
@@ -341,6 +342,7 @@ class AiSettingsController extends AsyncNotifier<AiSettingsSnapshot?> {
       if (ref.mounted &&
           repository.generation == repository.auth.sessionGeneration) {
         state = AsyncData<AiSettingsSnapshot?>(snapshot);
+        ref.invalidate(assistantSettingsProvider);
       }
     } on AiSettingsConflict {
       // 只刷新同一服务器，防止换服后迟到结果污染新设置。

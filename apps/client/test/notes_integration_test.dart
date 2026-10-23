@@ -43,6 +43,7 @@ class _FixtureAuth extends AuthRepository {
     ResponseType? responseType,
     Duration? receiveTimeout,
     bool preserveTransportErrors = false,
+    CancelToken? cancelToken,
   }) async {
     expect(method, 'POST');
     expect(path, '/sync/operations');

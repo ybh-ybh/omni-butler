@@ -65,6 +65,7 @@ class _RecordingAuth extends AuthRepository {
     ResponseType? responseType,
     Duration? receiveTimeout,
     bool preserveTransportErrors = false,
+    CancelToken? cancelToken,
   }) async {
     requests.add(jsonDecode(jsonEncode(data)) as Map<String, dynamic>);
     uploadStarted?.complete();

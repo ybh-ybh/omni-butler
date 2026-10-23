@@ -16,7 +16,8 @@ import {
   timeZoneInput,
 } from '../business/business-input';
 import { reviewSchema, type McpModule } from './mcp-catalog';
-import { McpService } from './mcp.service';
+import { ActionExecutor } from './action-executor';
+import type { ActionContext, ActionScope } from './action-context';
 import { notePlainText } from '../business/notes-business.service';
 
 /// 仅这些模块使用截止点计算进行中时长、支付/完成事实或状态。
@@ -42,13 +43,29 @@ const metrics: Record<McpModule, string[]> = {
 export class McpReviewService {
   /// 复用当前连接认证及逐项业务统计。
   constructor(
-    private readonly mcp: McpService,
+    private readonly mcp: ActionExecutor,
     private readonly prisma: PrismaService,
   ) {}
 
+  /// 助手与 MCP 使用相同统计证据规则，身份始终由共享引擎校验。
+  async reviewFor(
+    context: ActionContext,
+    value: unknown,
+  ): Promise<Record<string, unknown>> {
+    return this.review(await this.mcp.scope(context), value);
+  }
+
+  /// 助手分类查询复用真实 owner 范围，不接受模型声明归属。
+  async taxonomiesFor(
+    context: ActionContext,
+    value: unknown,
+  ): Promise<Prisma.JsonValue> {
+    return this.taxonomies(await this.mcp.scope(context), value);
+  }
+
   /// 规范自然周期，并明确本期未发生部分不在默认窗口内。
   async review(
-    connection: McpConnection,
+    connection: McpConnection | ActionScope,
     value: unknown,
   ): Promise<Record<string, unknown>> {
     // 模型无法增加归属、任意SQL或隐藏筛选。
@@ -99,13 +116,18 @@ export class McpReviewService {
     // 调用每个已登记统计方法，数字来自后端完整授权集合。
     const summaries: Record<string, Prisma.JsonValue> = {};
     for (const module of modules)
-      summaries[module] = await this.mcp.statistics(connection.id, {
-        module,
-        from,
-        to,
-        timeZone,
-        ...(cutoffModules.includes(module) ? { asOf: asOf.toISOString() } : {}),
-      });
+      summaries[module] = await this.mcp.statistics(
+        'context' in connection ? connection.context : connection.id,
+        {
+          module,
+          from,
+          to,
+          timeZone,
+          ...(cutoffModules.includes(module)
+            ? { asOf: asOf.toISOString() }
+            : {}),
+        },
+      );
     // 比较口径单独列出，基期0不返回误导百分比。
     const comparison: Record<string, unknown> = {};
     if (input.comparePrevious) {
@@ -125,15 +147,18 @@ export class McpReviewService {
             ).toISOString();
       for (const module of modules) {
         // 统计结果在当前事实基础上查询过去范围，不伪称有历史状态快照。
-        const previous = (await this.mcp.statistics(connection.id, {
-          module,
-          from: previousFrom,
-          to: from,
-          timeZone,
-          ...(cutoffModules.includes(module)
-            ? { asOf: asOf.toISOString() }
-            : {}),
-        })) as Record<string, Prisma.JsonValue>;
+        const previous = (await this.mcp.statistics(
+          'context' in connection ? connection.context : connection.id,
+          {
+            module,
+            from: previousFrom,
+            to: from,
+            timeZone,
+            ...(cutoffModules.includes(module)
+              ? { asOf: asOf.toISOString() }
+              : {}),
+          },
+        )) as Record<string, Prisma.JsonValue>;
         // 仅比较确实存在的确定性数值字段。
         const current = summaries[module] as Record<string, Prisma.JsonValue>;
         comparison[module] = {
@@ -252,7 +277,7 @@ export class McpReviewService {
 
   /// 查询规范分类身份，模块范围来自当前连接，不提供自由表查询。
   taxonomies(
-    connection: McpConnection,
+    connection: McpConnection | ActionScope,
     value: unknown,
   ): Promise<Prisma.JsonValue> {
     // 多态分类目前仅四个模块存在，未开放模块不能枚举。

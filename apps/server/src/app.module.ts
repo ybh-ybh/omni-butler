@@ -9,6 +9,7 @@ import { ImagesModule } from './images/images.module';
 import { NotesModule } from './notes/notes.module';
 import { BusinessModule } from './business/business.module';
 import { McpModule } from './mcp/mcp.module';
+import { AssistantModule } from './assistant/assistant.module';
 
 /// Omni Butler 服务端根模块。
 @Module({
@@ -26,6 +27,7 @@ import { McpModule } from './mcp/mcp.module';
     NotesModule,
     BusinessModule,
     McpModule,
+    AssistantModule,
   ],
 })
 export class AppModule {}

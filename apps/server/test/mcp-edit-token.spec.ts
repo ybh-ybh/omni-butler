@@ -109,6 +109,42 @@ describe('MCP编辑凭据的签名与原始基线', () => {
     );
   });
 
+  it('助手凭据绑定任务且与 MCP 旧签名域双向隔离', () => {
+    // 即使任务 UUID 与连接 UUID 相同也不能跨入口使用。
+    const assistant = {
+      source: 'assistant' as const,
+      taskId: connection.id,
+      userId: connection.userId,
+    };
+    // 两个入口各自签发原始读取事实。
+    const assistantToken = service.issue(assistant, record, baseline);
+    // 旧连接格式保持可用但不能授权助手编辑。
+    const mcpToken = service.issue(connection, record, baseline);
+    expect(service.read(assistant, record, assistantToken, 'note')).toEqual(
+      baseline,
+    );
+    expect(() =>
+      service.read(connection, record, assistantToken, 'note'),
+    ).toThrow();
+    expect(() => service.read(assistant, record, mcpToken, 'note')).toThrow();
+    expect(() =>
+      service.read(
+        { ...assistant, taskId: randomUUID() },
+        record,
+        assistantToken,
+        'note',
+      ),
+    ).toThrow();
+    expect(() =>
+      service.read(
+        { ...assistant, userId: randomUUID() },
+        record,
+        assistantToken,
+        'note',
+      ),
+    ).toThrow();
+  });
+
   it('其他签名用途与访问JWT不能混用，密钥轮换安全失效', () => {
     // 正确内容也必须使用专门签名域。
     const token = service.issue(connection, record, baseline);

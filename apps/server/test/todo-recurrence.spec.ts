@@ -107,6 +107,14 @@ integration('重复待办后台任务真实数据库行为', () => {
       "SELECT tablename FROM pg_tables WHERE schemaname='public'",
     );
     if (tables.rows.length) throw new Error('重复任务集成要求空 schema');
+    if (
+      (
+        await database.query(
+          "SELECT 1 FROM pg_namespace WHERE nspname='assistant_graph'",
+        )
+      ).rows.length
+    )
+      throw new Error('重复任务集成要求不存在助手私有 schema');
     ownsSchema = true;
     await database.query('CREATE SCHEMA IF NOT EXISTS public');
     for (const migration of readdirSync(
@@ -155,7 +163,10 @@ integration('重复待办后台任务真实数据库行为', () => {
     if (module) await module.close();
     else if (prisma) await prisma.$disconnect();
     if (database) {
-      if (ownsSchema) await database.query('DROP SCHEMA public CASCADE');
+      if (ownsSchema)
+        await database.query(
+          'DROP SCHEMA IF EXISTS assistant_graph CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;',
+        );
       await database.end();
     }
   });

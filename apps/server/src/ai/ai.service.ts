@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AiKeyStore } from './ai-key-store';
 import { AI_POLISH_PROMPT_VERSION, AI_PRESETS, AiProvider, AiProviderError, aiFailure, normalizeAiBaseUrl } from './ai-provider';
 import type { AiProfileDto, AiSettingsDto, AiTestDto } from './ai.dto';
+import type { AssistantProfileSnapshot } from './assistant-model.types';
 
 /// 原文和密钥均不在公共任务响应中回传。
 export interface PolishResult {
@@ -88,6 +89,8 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
       if (id && !existing) throw new NotFoundException({ code: 'AI_PROFILE_NOT_FOUND', message: '模型配置不存在' });
       // 只加密新的非空密钥，旧任务自己的密文快照不会被修改。
       const encryptedApiKey = input.removeApiKey ? null : input.apiKey?.trim() ? this.keys.encrypt(input.apiKey.trim()) : existing?.encryptedApiKey ?? null;
+      // 必须在更新前比较凭据，防止事务替身或对象引用变化丢失旧值。
+      const credentialsChanged = !!existing && encryptedApiKey !== existing.encryptedApiKey;
       // 不完整配置可保存，但不能开启整理。
       const data = { name: input.name.trim(), provider: input.provider, baseUrl, model: input.model.trim(), encryptedApiKey };
       // 保存结果用于在同一事务内选择首个配置，避免客户端另发设置请求。
@@ -102,6 +105,7 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
         await transaction.aiSettings.update({ where: { userId }, data: { notePolishEnabled: false } });
         await this.cancelJobs(transaction, userId);
       }
+      if (existing && credentialsChanged) await this.invalidateAssistantProfile(transaction, userId, existing.id);
       await transaction.aiSettings.update({ where: { userId }, data: { revision: { increment: 1 }, ...(isFirstProfile ? { activeProfileId: profile.id } : {}) } });
       return this.snapshot(transaction, userId);
     });
@@ -114,6 +118,7 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
       // 同归属删除计数明确判断不存在，避免伪成功。
       const deleted = await transaction.aiProfile.deleteMany({ where: { id, userId } });
       if (!deleted.count) throw new NotFoundException({ code: 'AI_PROFILE_NOT_FOUND', message: '模型配置不存在' });
+      await this.invalidateAssistantProfile(transaction, userId, id, true);
       // 当前配置删除必须关闭开关，再选择时仍需用户主动开启。
       const settings = await transaction.aiSettings.findUniqueOrThrow({ where: { userId } });
       if (settings.activeProfileId === id) {
@@ -134,6 +139,37 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
     const apiKey = input.apiKey?.trim() || (profile?.encryptedApiKey ? this.keys.decrypt(profile.encryptedApiKey) : '');
     if (!apiKey || /[\r\n\0]/.test(apiKey)) throw new BadRequestException({ code: 'AI_KEY_REQUIRED', message: '请填写有效 API Key' });
     try { return await this.provider.test({ ...input, baseUrl: normalizeAiBaseUrl(input.baseUrl), apiKey }); } catch (error: unknown) { if (error instanceof BadRequestException) throw error; throw aiFailure(error); }
+  }
+
+  /// 助手独立选取已保存配置，密钥保持密文，不能借配置 UUID 跨归属读取。
+  async captureAssistantProfile(userId: string, profileId: string): Promise<AssistantProfileSnapshot> {
+    // 仅复制完整的同归属配置，不依赖笔记整理的开关或当前配置。
+    const profile = await this.prisma.aiProfile.findFirst({ where: { id: profileId, userId } });
+    if (!profile) throw new NotFoundException({ code: 'AI_PROFILE_NOT_FOUND', message: '模型配置不存在，请重新选择' });
+    if (!profile.encryptedApiKey || !profile.model.trim()) throw new BadRequestException({ code: 'AI_PROFILE_REQUIRED', message: '请先补全模型名称和 API Key' });
+    return { profileId: profile.id, profileRevision: profile.revision, provider: profile.provider, baseUrl: normalizeAiBaseUrl(profile.baseUrl), model: profile.model, encryptedApiKey: profile.encryptedApiKey };
+  }
+
+  /// 普通配置编辑不改变任务目标，删除、清空或替换密钥立即禁止旧凭据继续出站。
+  async assertAssistantProfileAvailable(userId: string, snapshot: AssistantProfileSnapshot): Promise<void> {
+    // 每次请求都重新检查当前配置与同归属密钥事实，不仅在任务创建时检查。
+    const profile = await this.prisma.aiProfile.findFirst({ where: { id: snapshot.profileId, userId }, select: { encryptedApiKey: true } });
+    if (!profile?.encryptedApiKey || profile.encryptedApiKey !== snapshot.encryptedApiKey) throw new ConflictException({ code: 'AI_CONFIGURATION_UNAVAILABLE', message: '模型配置或密钥已被删除或替换，请重新开始任务' });
+  }
+
+  /// 凭据撤回与配置保存共享归属锁及事务，不能让待确认计划保留旧执行授权。
+  private async invalidateAssistantProfile(transaction: Prisma.TransactionClient, userId: string, profileId: string, removeSelection = false): Promise<void> {
+    await transaction.assistantSettings.updateMany({ where: { userId, profileId }, data: { enabled: false, revision: { increment: 1 }, ...(removeSelection ? { profileId: null } : {}) } });
+    // 与助手运行器相同的未完成状态集合，历史成功回执保持原状。
+    const active = ['queued', 'running', 'waitingConfirmation', 'waitingInput', 'submissionUnknown'];
+    // 任务可能在当前配置切换前已启动，须按固定快照查找而非仅按设置关联。
+    const runs = await transaction.assistantRun.findMany({ where: { userId, status: { in: active }, profileSnapshot: { path: ['profileId'], equals: profileId } }, select: { id: true, taskId: true } });
+    if (!runs.length) return;
+    // 一项任务可能具有多个恢复尝试，取消时先合并稳定任务身份。
+    const taskIds = [...new Set(runs.map((run) => run.taskId))];
+    await transaction.mcpAction.updateMany({ where: { userId, source: 'assistant', sourceId: { in: taskIds }, status: 'pending' }, data: { status: 'cancelled' } });
+    await transaction.assistantTask.updateMany({ where: { userId, id: { in: taskIds }, status: { in: active } }, data: { status: 'cancelled', approvedHash: null } });
+    await transaction.assistantRun.updateMany({ where: { userId, id: { in: runs.map((run) => run.id) }, status: { in: active } }, data: { status: 'cancelled', leaseOwner: null, leaseUntil: null, errorCode: 'AI_CONFIGURATION_UNAVAILABLE', errorMessage: '模型配置或密钥已被删除或替换，本次任务已停止；已保存的业务操作保留实际结果。' } });
   }
 
   /// 与新 ASR 建立同一事务，固定当时的开关和配置版本。

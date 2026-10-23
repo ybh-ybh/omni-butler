@@ -4,7 +4,8 @@ import { AiController } from './ai.controller';
 import { AiKeyStore } from './ai-key-store';
 import { AiProvider } from './ai-provider';
 import { AiService } from './ai.service';
+import { AssistantModelProvider } from './assistant-model.provider';
 
 /// 独立模型接入模块，不依赖 Agent 框架或笔记 UI。
-@Module({ imports: [AuthModule], controllers: [AiController], providers: [AiKeyStore, AiProvider, AiService], exports: [AiService] })
+@Module({ imports: [AuthModule], controllers: [AiController], providers: [AiKeyStore, AiProvider, AiService, AssistantModelProvider], exports: [AiService, AssistantModelProvider] })
 export class AiModule {}

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { BusinessModule } from '../business/business.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { ActionExecutor } from './action-executor';
 import { McpCatalog } from './mcp-catalog';
 import { McpController, McpManagementController } from './mcp.controller';
 import { McpReviewService } from './mcp-review.service';
@@ -12,7 +13,13 @@ import { McpEditTokenService } from './mcp-edit-token.service';
 @Module({
   imports: [AuthModule, BusinessModule, PrismaModule],
   controllers: [McpController, McpManagementController],
-  providers: [McpCatalog, McpService, McpReviewService, McpEditTokenService],
-  exports: [McpService],
+  providers: [
+    ActionExecutor,
+    McpCatalog,
+    McpService,
+    McpReviewService,
+    McpEditTokenService,
+  ],
+  exports: [McpService, ActionExecutor, McpReviewService],
 })
 export class McpModule {}

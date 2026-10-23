@@ -27,6 +27,10 @@ API 和 PowerSync 的公网路径固定为 `/omni-butler/api/v1/`、`/omni-butle
 
 ## 启动
 
+应用内助手升级需停止旧 API 后部署 `20261023010000_assistant` 迁移，再启动新 API 和更新两端客户端。助手私有表与 `assistant_graph` checkpoint 不加入 PowerSync；已有 MCP v3 工具和同步协议保持兼容。助手在 AI 设置中独立选择已有模型配置，默认关闭。
+
+完整数据库灾备恢复时，保持 API 停止，恢复数据库及 `api-keys` 等全部持久卷后，先在恢复库执行 [assistant-restore-safety.sql](assistant-restore-safety.sql)，再启动 API。脚本保留业务记录、聊天、记忆、回执与同步保护，禁用助手并撤销旧设备/MCP身份及未完成操作；设备需重新连接。不能直接启动恢复出来的旧排队任务或沿用备份中的确认授权。助手 API、分批、上下文和验证边界见 [助手 README](../apps/server/src/assistant/README.md)。
+
 配置完成后，Windows PowerShell、CMD 和 Linux / macOS 均使用同一条命令：
 
 ```text

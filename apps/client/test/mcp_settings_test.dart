@@ -12,6 +12,7 @@ import 'package:omni_butler/features/settings/data/mcp_repository.dart';
 import 'package:omni_butler/features/settings/presentation/mcp_settings_section.dart';
 import 'package:omni_butler/features/settings/presentation/sync_conflicts_section.dart';
 import 'package:omni_butler/shared/ui/omni_switch.dart';
+import 'package:omni_butler/shared/ui/omni_button.dart';
 
 /// 只模拟认证传输边界，不调用实际后端或安全存储。
 class _Auth extends Fake implements AuthRepository {
@@ -39,6 +40,7 @@ class _Auth extends Fake implements AuthRepository {
     ResponseType? responseType,
     Duration? receiveTimeout,
     bool preserveTransportErrors = false,
+    CancelToken? cancelToken,
   }) async {
     if (generation != this.generation) throw const ApiFailure('同步会话已变更');
     calls.add((method: method, path: path, data: data));
@@ -72,8 +74,11 @@ class _Controller extends AuthController {
 }
 
 /// 无密钥、无业务正文的安全列表快照。
-Map<String, dynamic> _snapshot({bool action = false}) => <String, dynamic>{
-  'connections': <Object>[],
+Map<String, dynamic> _snapshot({
+  bool action = false,
+  List<Map<String, dynamic>> connections = const <Map<String, dynamic>>[],
+}) => <String, dynamic>{
+  'connections': connections,
   'actions': action
       ? <Object>[
           <String, dynamic>{
@@ -84,6 +89,21 @@ Map<String, dynamic> _snapshot({bool action = false}) => <String, dynamic>{
           },
         ]
       : <Object>[],
+};
+
+/// 合成连接只包含列表允许公开的字段。
+Map<String, dynamic> _connection(
+  String id,
+  String name, {
+  bool revoked = false,
+}) => <String, dynamic>{
+  'id': id,
+  'name': name,
+  'revokedAt': revoked ? '2026-10-23T01:00:00Z' : null,
+  'readModules': mcpModuleLabels.keys.toList(),
+  'writeModules': <String>['notes'],
+  'expiresAt': null,
+  'timeZone': 'Asia/Shanghai',
 };
 
 /// 冻结的完整操作预览。
@@ -153,6 +173,273 @@ Future<void> _pump(
 
 /// 管理和审批界面与认证代次保护的定向回归。
 void main() {
+  for (final TargetPlatform platform in <TargetPlatform>[
+    TargetPlatform.windows,
+    TargetPlatform.android,
+  ]) {
+    testWidgets('${platform.name} 连接卡片隐藏已撤销项，卡头及行内操作靠右且大字号不溢出', (
+      WidgetTester tester,
+    ) async {
+      // Windows核对水平几何，Android覆盖最窄窗口和双倍字号。
+      final bool desktop = platform == TargetPlatform.windows;
+      // 后端历史依然含撤销记录，页面只展示未撤销连接。
+      final _Auth auth = _Auth()
+        ..handler = (String path) async => _snapshot(
+          connections: <Map<String, dynamic>>[
+            _connection('active', '日常 Codex'),
+            _connection('revoked', '旧 Codex', revoked: true),
+          ],
+        );
+      await _pump(
+        tester,
+        auth,
+        platform: platform,
+        width: desktop ? 1000 : 320,
+        scale: desktop ? 1 : 2,
+      );
+      // 卡片包含标题和连接条目，已撤销项及原长说明均不占位。
+      final Finder card = find.byKey(
+        const ValueKey<String>('mcp-connections-card'),
+      );
+      final Finder row = find.byKey(
+        const ValueKey<String>('mcp-connection-active'),
+      );
+      final Finder create = find.widgetWithText(OmniButton, '新增连接');
+      final Finder refresh = find.widgetWithText(OmniButton, '刷新状态');
+      final Finder revoke = find.widgetWithText(OmniButton, '撤销连接');
+      expect(find.descendant(of: card, matching: row), findsOneWidget);
+      expect(find.descendant(of: card, matching: create), findsOneWidget);
+      expect(find.text('旧 Codex'), findsNothing);
+      expect(find.textContaining('默认只读，按模块授权。'), findsNothing);
+      expect(revoke, findsOneWidget);
+      // 单行或换行后，操作始终贴齐卡片右侧内容边界。
+      expect(
+        tester.getRect(refresh).right,
+        closeTo(tester.getRect(row).right, .01),
+      );
+      expect(
+        tester.getRect(revoke).right,
+        closeTo(tester.getRect(row).right, .01),
+      );
+      expect(
+        tester.getRect(revoke).left,
+        greaterThan(tester.getRect(find.text('日常 Codex')).right),
+      );
+      if (desktop) {
+        expect(
+          tester.getRect(create).left,
+          greaterThan(tester.getRect(find.text('MCP 连接')).right),
+        );
+        expect(
+          tester.getCenter(create).dy,
+          closeTo(tester.getCenter(refresh).dy, .01),
+        );
+      }
+      expect(tester.takeException(), isNull);
+      // 刷新仍请求当前列表，不重放新增或撤销。
+      await tester.ensureVisible(refresh);
+      await tester.tap(refresh);
+      await tester.pumpAndSettle();
+      expect(
+        auth.calls.where((call) => call.method == 'GET').length,
+        greaterThan(1),
+      );
+      expect(auth.calls.where((call) => call.method == 'POST'), isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('${platform.name} 操作记录卡片按时间只显示最近30条，查看按钮靠右且绑定对应操作', (
+      WidgetTester tester,
+    ) async {
+      // Windows核对同行居中，Android核对320dp双倍字号的换行布局。
+      final bool desktop = platform == TargetPlatform.windows;
+      // 使用完整UUID和跨状态记录，避免短测试身份掩盖窄屏换行问题。
+      final List<Map<String, dynamic>> history = List.generate(
+        35,
+        (int index) => <String, dynamic>{
+          'id': '00000000-0000-4000-8000-${index.toString().padLeft(12, '0')}',
+          'status': index < 10 ? 'pending' : 'succeeded',
+          'createdAt': DateTime.utc(2026, 10, 23, 0, index).toIso8601String(),
+          'preview': <String, dynamic>{'affectedRecords': 1},
+        },
+      );
+      // 第30条仍可查看详情，裁掉的旧记录不能占用展示名额。
+      final String lastId = history[5]['id'] as String;
+      // 模拟真实接口把较早待执行记录放在历史记录之前的分组顺序。
+      final _Auth auth = _Auth()
+        ..handler = (String path) async => path.endsWith('/actions/$lastId')
+            ? <String, dynamic>{..._preview(), 'id': lastId}
+            : <String, dynamic>{
+                ..._snapshot(),
+                'actions': <Map<String, dynamic>>[
+                  ...history.take(10),
+                  ...history.skip(10).toList().reversed,
+                ],
+              };
+      await _pump(
+        tester,
+        auth,
+        platform: platform,
+        width: desktop ? 1000 : 320,
+        scale: desktop ? 1 : 2,
+      );
+      // 所有记录与标题都包含在同一张操作记录卡片中。
+      final Finder card = find.byKey(
+        const ValueKey<String>('mcp-actions-card'),
+      );
+      // 使用行身份读取真实渲染顺序，不能只检查列表长度。
+      final Finder rows = find.descendant(
+        of: card,
+        matching: find.byWidgetPredicate(
+          (Widget widget) =>
+              widget is Padding &&
+              widget.key is ValueKey<String> &&
+              (widget.key! as ValueKey<String>).value.startsWith(
+                'mcp-action-row-',
+              ),
+        ),
+      );
+      expect(
+        find.descendant(of: card, matching: find.text('操作记录')),
+        findsOneWidget,
+      );
+      expect(rows, findsNWidgets(30));
+      expect(
+        tester.widgetList<Padding>(rows).map((Padding row) => row.key),
+        orderedEquals(
+          history.reversed
+              .take(30)
+              .map(
+                (Map<String, dynamic> action) =>
+                    ValueKey<String>('mcp-action-row-${action['id']}'),
+              ),
+        ),
+      );
+      // 30条记录只有29条分隔线，逐一核对横向铺满和上下位置。
+      final Finder dividers = find.descendant(
+        of: card,
+        matching: find.byType(Divider),
+      );
+      expect(dividers, findsNWidgets(29));
+      for (int index = 0; index < 29; index++) {
+        // 分隔线只能出现在前后两条记录之间。
+        final Rect divider = tester.getRect(dividers.at(index));
+        // 上一条记录的布局边界包含其原有留白。
+        final Rect previous = tester.getRect(rows.at(index));
+        // 下一条记录紧接细线，不能引入额外空白行。
+        final Rect next = tester.getRect(rows.at(index + 1));
+        expect(divider.left, closeTo(previous.left, .01));
+        expect(divider.right, closeTo(previous.right, .01));
+        expect(divider.top, closeTo(previous.bottom, .01));
+        expect(divider.bottom, closeTo(next.top, .01));
+        expect(divider.height, 1);
+      }
+      // 最新一条的按钮贴齐内容右侧；大字号下换到摘要下方。
+      final Finder firstRow = find.byKey(
+        ValueKey<String>('mcp-action-row-${history.last['id']}'),
+      );
+      // 每条按钮具有自己的操作身份。
+      final Finder firstButton = find.byKey(
+        ValueKey<String>('mcp-action-review-${history.last['id']}'),
+      );
+      expect(
+        tester.getRect(firstButton).right,
+        closeTo(tester.getRect(firstRow).right, .01),
+      );
+      if (desktop) {
+        expect(
+          tester.getCenter(firstButton).dy,
+          closeTo(tester.getCenter(firstRow).dy, .01),
+        );
+      } else {
+        expect(
+          tester.getRect(firstButton).top,
+          greaterThan(
+            tester
+                .getRect(
+                  find.descendant(
+                    of: firstRow,
+                    matching: find.textContaining('影响'),
+                  ),
+                )
+                .bottom,
+          ),
+        );
+      }
+      expect(tester.takeException(), isNull);
+      // 滚动到最后一条并打开详情，验证排序和截断未串用其他操作ID。
+      final Finder lastButton = find.byKey(
+        ValueKey<String>('mcp-action-review-$lastId'),
+      );
+      await tester.ensureVisible(lastButton);
+      await tester.tap(lastButton);
+      await tester.pumpAndSettle();
+      expect(auth.calls.last.path, '/mcp-management/actions/$lastId');
+      expect(find.text('MCP 操作详情'), findsOneWidget);
+      expect(auth.calls.every((call) => call.method == 'GET'), isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('空操作记录也在卡片内显示说明', (WidgetTester tester) async {
+    await _pump(tester, _Auth());
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey<String>('mcp-actions-card')),
+        matching: find.text('暂无 MCP 操作。使用 Codex 操作后，可刷新查看记录与结果。'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('查看操作'), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey<String>('mcp-actions-card')),
+        matching: find.byType(Divider),
+      ),
+      findsNothing,
+    );
+  });
+
+  testWidgets('行内撤销绑定对应连接，成功刷新后隐藏该项', (WidgetTester tester) async {
+    // 模拟撤销后的同一列表仍保留服务端审计记录。
+    bool revoked = false;
+    // 按连接身份验证操作请求，避免列表过滤后索引错位。
+    final _Auth auth = _Auth()
+      ..handler = (String path) async {
+        if (path.endsWith('/connections/active/revoke')) revoked = true;
+        return _snapshot(
+          connections: <Map<String, dynamic>>[
+            _connection('old', '历史连接', revoked: true),
+            _connection('active', '当前连接', revoked: revoked),
+            _connection('other', '另一连接'),
+          ],
+        );
+      };
+    await _pump(tester, auth);
+    // 确认窗口仅来自撤销，不影响助手开关的直接保存。
+    final Finder row = find.byKey(
+      const ValueKey<String>('mcp-connection-active'),
+    );
+    await tester.tap(
+      find.descendant(
+        of: row,
+        matching: find.widgetWithText(OmniButton, '撤销连接'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('撤销 当前连接？'), findsOneWidget);
+    await tester.tap(find.widgetWithText(OmniButton, '撤销连接').last);
+    await tester.pumpAndSettle();
+    expect(
+      auth.calls.where((call) => call.method == 'POST').single.path,
+      '/mcp-management/connections/active/revoke',
+    );
+    expect(find.text('当前连接'), findsNothing);
+    expect(find.text('历史连接'), findsNothing);
+    expect(find.text('另一连接'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('未连接时说明连接后端，不读取或创建空配置', (WidgetTester tester) async {
     // 未认证状态下不得发管理请求。
     final _Auth auth = _Auth();
@@ -323,6 +610,14 @@ void main() {
             : _snapshot(action: true);
       await _pump(tester, auth);
       expect(find.text('操作记录'), findsOneWidget);
+      // 单条记录不需要分隔线，避免误画卡片首尾边框。
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey<String>('mcp-actions-card')),
+          matching: find.byType(Divider),
+        ),
+        findsNothing,
+      );
       await tester.tap(find.text('查看操作'));
       await tester.pumpAndSettle();
       expect(find.text('MCP 操作详情'), findsOneWidget);

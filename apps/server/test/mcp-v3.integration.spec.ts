@@ -155,6 +155,14 @@ integration('MCP v3 精简契约真实 SDK 与 PostgreSQL', () => {
     );
     if (tables.rows.length)
       throw new Error('v3 集成要求空 schema，不删除已有表');
+    if (
+      (
+        await database.query(
+          "SELECT 1 FROM pg_namespace WHERE nspname='assistant_graph'",
+        )
+      ).rows.length
+    )
+      throw new Error('测试要求空助手图模式，不删除已有模式');
     ownsSchema = true;
     await database.query('CREATE SCHEMA IF NOT EXISTS public');
     for (const migration of readdirSync(
@@ -238,7 +246,10 @@ integration('MCP v3 精简契约真实 SDK 与 PostgreSQL', () => {
     await app?.close();
     await prisma?.$disconnect();
     if (database) {
-      if (ownsSchema) await database.query('DROP SCHEMA public CASCADE');
+      if (ownsSchema) {
+        await database.query('DROP SCHEMA IF EXISTS assistant_graph CASCADE');
+        await database.query('DROP SCHEMA public CASCADE');
+      }
       await database.end();
     }
   });

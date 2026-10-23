@@ -23,13 +23,27 @@ const List<ManagementSection> _desktopSections = <ManagementSection>[
 
 /// 验证桌面管理入口合并、标题切换和功能开关联动。
 void main() {
-  // 同时覆盖展开侧栏、窄导航轨和浅深两种主题。
+  _testDesktopWidgets('侧栏缩小悬停背景后，图标外围仍可点击导航', (
+    WidgetTester tester,
+  ) async {
+    // 真实路由用来验证背景外的热区仍可触发切换。
+    final _DesktopHarness harness = await _pumpDesktopApp(tester);
+    // 原热区左上角位于居中背景之外。
+    final Rect target = tester.getRect(_key('navigation-/inventory'));
+    expect(target.size, const Size(56, 48));
+    await tester.tapAt(target.topLeft + const Offset(2, 2));
+    await tester.pumpAndSettle();
+    expect(harness.path, '/inventory');
+    expect(tester.takeException(), isNull);
+  });
+
+  // Windows 在宽窄窗口均使用图标轨，同时覆盖浅深两种主题。
   for (final ({Size size, Brightness brightness, String navigationKey}) scenario
       in <({Size size, Brightness brightness, String navigationKey})>[
         (
           size: const Size(1440, 900),
           brightness: Brightness.light,
-          navigationKey: 'expanded-sidebar',
+          navigationKey: 'medium-navigation',
         ),
         (
           size: const Size(640, 760),
@@ -37,7 +51,7 @@ void main() {
           navigationKey: 'medium-navigation',
         ),
       ]) {
-    _testDesktopWidgets('${scenario.navigationKey} 三分区共用管理入口且菜单布局正常', (
+    _testDesktopWidgets('${scenario.navigationKey} ${scenario.size.width} 三分区共用管理入口且菜单布局正常', (
       WidgetTester tester,
     ) async {
       // 当前主题和视口的独立应用环境。

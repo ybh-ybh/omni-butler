@@ -98,6 +98,14 @@ integration('七模块后端真实数据库能力', () => {
     );
     if (tables.rows.length)
       throw new Error('业务集成要求空 schema，不清理已有表');
+    if (
+      (
+        await database.query(
+          "SELECT 1 FROM pg_namespace WHERE nspname='assistant_graph'",
+        )
+      ).rows.length
+    )
+      throw new Error('业务集成要求不存在助手私有 schema');
     ownsSchema = true;
     for (const migration of readdirSync(
       join(__dirname, '../prisma/migrations'),
@@ -190,7 +198,10 @@ integration('七模块后端真实数据库能力', () => {
     if (module) await module.close();
     else if (prisma) await prisma.$disconnect();
     if (database) {
-      if (ownsSchema) await database.query('DROP SCHEMA public CASCADE');
+      if (ownsSchema)
+        await database.query(
+          'DROP SCHEMA IF EXISTS assistant_graph CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;',
+        );
       await database.end();
     }
   });

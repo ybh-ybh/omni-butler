@@ -61,6 +61,10 @@ export interface McpToolDefinition {
   ) => Promise<Prisma.JsonValue>;
   /// 新增补偿可转成同模块软删除，其他动作不假定可撤销。
   undoCreate?: boolean;
+  /// 独立业务主对象字段；账单、历史和步骤统一归属于主对象计数。
+  targetField?: string;
+  /// 重复待办的未来范围按真实预演中各实例计数。
+  targetScopeField?: string;
 }
 
 /// 常用非空文字，不替代领域中的长度校验。
@@ -1336,6 +1340,13 @@ export class McpCatalog {
       schema: z.strictObject(shape),
       run,
       undoCreate,
+      targetField: ['todoId', 'membershipId', 'eventId', 'itemId', 'id'].find(
+        (field) => Object.hasOwn(shape, field),
+      ),
+      targetScopeField:
+        module === 'todos' && write && Object.hasOwn(shape, 'scope')
+          ? 'scope'
+          : undefined,
     });
   }
 

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter/rendering.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
@@ -169,6 +170,16 @@ class _HomeMobileDashboardState extends State<HomeMobileDashboard> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
+                    if (!widget.visibleCards.contains(HomeCardId.quote))
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: OmniButton(
+                          label: '知序助手',
+                          icon: Icons.auto_awesome_outlined,
+                          variant: OmniButtonVariant.text,
+                          onPressed: () => context.push('/assistant'),
+                        ),
+                      ),
                     if (widget.visibleCards.contains(HomeCardId.quote))
                       widget.cards[HomeCardId.quote]!,
                   ],

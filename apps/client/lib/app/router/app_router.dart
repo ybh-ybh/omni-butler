@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_page.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_memories_page.dart';
 import 'package:omni_butler/features/events/presentation/events_page.dart';
 import 'package:omni_butler/features/home/presentation/home_page.dart';
 import 'package:omni_butler/features/inventory/presentation/inventory_page.dart';
@@ -38,6 +40,25 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
   return GoRouter(
     initialLocation: '/home',
     routes: <RouteBase>[
+      GoRoute(
+        path: '/assistant',
+        builder: (BuildContext context, GoRouterState state) {
+          if (Theme.of(context).platform == TargetPlatform.android) {
+            return const Scaffold(body: SafeArea(child: AssistantPage()));
+          }
+          return const ResponsiveShell(
+            location: '/assistant',
+            child: AssistantPage(),
+          );
+        },
+        routes: <RouteBase>[
+          GoRoute(
+            path: 'memories',
+            builder: (BuildContext context, GoRouterState state) =>
+                const AssistantMemoriesPage(),
+          ),
+        ],
+      ),
       StatefulShellRoute(
         builder: (context, state, navigationShell) {
           return ResponsiveShell(
@@ -167,8 +188,11 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
             routes: <RouteBase>[
               GoRoute(
                 path: '/settings',
-                builder: (context, state) =>
-                    _PrimaryRouteSurface(child: const SettingsPage()),
+                builder: (context, state) => _PrimaryRouteSurface(
+                  child: SettingsPage(
+                    initialCategory: state.uri.queryParameters['section'],
+                  ),
+                ),
               ),
             ],
           ),

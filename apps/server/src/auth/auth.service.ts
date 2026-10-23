@@ -93,7 +93,11 @@ export class AuthService {
     try {
       // 当前设备会话；不能仅凭公开会话标识撤销其他设备。
       const session = await this.verifySession(refreshToken);
-      await this.prisma.deviceSession.deleteMany({ where: { id: session.id } });
+      await this.prisma.$transaction(async (transaction) => {
+        // 与助手和业务提交串行，撤权先完成则后续提交失效。
+        await transaction.$queryRaw`SELECT id FROM sync_owners WHERE id=${session.userId}::uuid FOR UPDATE`;
+        await transaction.deviceSession.deleteMany({ where: { id: session.id } });
+      });
     } catch (error) {
       if (!(error instanceof UnauthorizedException)) {
         throw error;

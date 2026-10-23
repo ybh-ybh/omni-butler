@@ -33,6 +33,7 @@ function createService(): {
   owner: { id: string };
   jwt: { signAsync: jest.Mock<Promise<string>, [object, object]> };
   prisma: {
+    $queryRaw: jest.Mock;
     syncOwner: { findFirst: jest.Mock };
     deviceSession: {
       create: jest.Mock;
@@ -55,6 +56,8 @@ function createService(): {
     },
     /// 只观察事务锁调用，不连接数据库。
     $executeRaw: jest.fn().mockResolvedValue(1),
+    /// 断开设备使用同一 owner 行锁，顺序可由调用记录核查。
+    $queryRaw: jest.fn().mockResolvedValue([owner]),
     syncOwner: { findFirst: jest.fn().mockResolvedValue(owner) },
     deviceSession: {
       create: jest.fn(({ data }: { data: TestSession }) => {
@@ -170,13 +173,17 @@ describe('AuthService 设备会话', () => {
   });
   it('断开同时使访问和刷新失效，其他设备不受影响', async () => {
     // 当前服务、策略与所有者。
-    const { service, strategy, owner } = createService();
+    const { service, strategy, owner, prisma } = createService();
     // 首个设备。
     const first = await service.connect('correct-sync-key');
     // 第二设备。
     const second = await service.connect('correct-sync-key');
     await service.disconnect(first.refreshToken);
     await service.disconnect(first.refreshToken);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.deviceSession.deleteMany.mock.invocationCallOrder[0]!,
+    );
     await expect(service.refresh(first.refreshToken)).rejects.toBeInstanceOf(
       UnauthorizedException,
     );

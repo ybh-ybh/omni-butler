@@ -28,6 +28,13 @@ export async function withinBusinessTransaction<T>(
   if (!actor || actor.typ !== 'access')
     throw new UnauthorizedException('需要有效设备身份');
   uuidInput(actor.sub, 'owner');
+  // 同一 owner 的预演与提交复用已锁定事务，避免嵌套申请自己的行锁。
+  const context = businessContext.getStore();
+  if (context?.prisma === prisma && context.owner === actor.sub) {
+    // 每次嵌套调用仍复验真实会话，不能借已有事务跳过撤权。
+    await authorize(context.transaction, actor);
+    return action(context.transaction);
+  }
   return prisma.$transaction(
     async (transaction) => {
       await transaction.$queryRaw`SELECT id FROM sync_owners WHERE id=${actor.sub}::uuid FOR UPDATE`;

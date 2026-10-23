@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_settings_section.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
 import 'package:omni_butler/core/auth/auth_providers.dart';
@@ -325,6 +326,8 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                 ],
               ),
             ),
+            const SizedBox(height: OmniSpacing.lg),
+            const AssistantSettingsSection(),
           ],
         );
       },

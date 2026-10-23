@@ -12,6 +12,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { PrismaService } from '../src/prisma/prisma.service';
 import { McpModule } from '../src/mcp/mcp.module';
 import { McpService } from '../src/mcp/mcp.service';
+import { ActionExecutor } from '../src/mcp/action-executor';
+import type { AssistantActionContext } from '../src/mcp/action-context';
 import { AuthModule } from '../src/auth/auth.module';
 import { SyncController } from '../src/sync/sync.controller';
 import type { AuthUser } from '../src/auth/auth.types';
@@ -49,6 +51,15 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
   let client: Client;
   // 当前测试专用连接。
   let connectionId: string, token: string;
+  // 最新迁移前建立的旧动作，用真实升级过程验证来源回填。
+  const legacyConnectionId = randomUUID(),
+    legacyOwnerId = randomUUID(),
+    legacyActionId = randomUUID();
+  // 已存在的历史结果及持续同步保护不能被迁移改写。
+  const legacyResult = {
+    values: [{ id: randomUUID() }],
+    protectedRecords: [{ table: 'quotes', id: randomUUID() }],
+  };
 
   beforeAll(async () => {
     // 强制验证目标地址、库名与真实连接结果。
@@ -76,20 +87,63 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       ).rows.length
     )
       throw new Error('MCP测试要求空schema，不删除已有表');
+    if (
+      (
+        await database.query(
+          "SELECT 1 FROM pg_namespace WHERE nspname='assistant_graph'",
+        )
+      ).rows.length
+    )
+      throw new Error('测试要求空助手图模式，不删除已有模式');
     ownsSchema = true;
+    await database.query('CREATE SCHEMA IF NOT EXISTS public');
     for (const migration of readdirSync(
       join(__dirname, '../prisma/migrations'),
       { withFileTypes: true },
     )
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
-      .sort())
+      .sort()) {
+      if (migration === '20261023010000_assistant') {
+        // 只在测试独占空库已应用旧版本后写入升级 fixture。
+        await database.query('INSERT INTO sync_owners(id) VALUES($1)', [
+          legacyOwnerId,
+        ]);
+        await database.query(
+          'INSERT INTO mcp_connections(id,user_id,name,token_hash,session_id,read_modules,write_modules,expires_at) VALUES($1,$2,$3,$4,$5,$6,$6,NULL)',
+          [
+            legacyConnectionId,
+            legacyOwnerId,
+            '旧版本连接',
+            'f'.repeat(64),
+            randomUUID(),
+            ['quotes'],
+          ],
+        );
+        await database.query(
+          "INSERT INTO mcp_actions(id,user_id,connection_id,request_id,input_hash,steps,baseline,preview,approval_hash,status,result,expires_at) VALUES($1,$2,$3,$4,$5,$6,$5,$7,$5,$8,$9,NOW()+INTERVAL '10 minutes')",
+          [
+            legacyActionId,
+            legacyOwnerId,
+            legacyConnectionId,
+            randomUUID(),
+            'a'.repeat(64),
+            JSON.stringify([
+              { name: 'create_quote', input: { content: '旧动作' } },
+            ]),
+            JSON.stringify({ steps: [], affectedRecords: 1 }),
+            'succeeded',
+            JSON.stringify(legacyResult),
+          ],
+        );
+      }
       await database.query(
         readFileSync(
           join(__dirname, '../prisma/migrations', migration, 'migration.sql'),
           'utf8',
         ),
       );
+    }
     // 测试密钥仅内存生成，不读取持久卷或真实用户密钥。
     const keys = generateKeyPairSync('rsa', {
       modulusLength: 2048,
@@ -194,8 +248,10 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
   afterAll(async () => {
     await app?.close();
     await prisma?.$disconnect();
-    if (ownsSchema)
+    if (ownsSchema) {
+      await database.query('DROP SCHEMA IF EXISTS assistant_graph CASCADE');
       await database.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+    }
     await database?.end();
   });
 
@@ -1478,6 +1534,7 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
         id: randomUUID(),
         userId: actor.sub,
         connectionId,
+        sourceId: connectionId,
         requestId: randomUUID(),
         inputHash: original.inputHash,
         steps: original.steps!,
@@ -2288,5 +2345,380 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
     'empty_recycle_bin',
   ])('未开放%s不能被猜名调用', async (name) => {
     expect((await client.callTool({ name, arguments: {} })).isError).toBe(true);
+  });
+
+  /// 助手预演使用真实持久任务，不能只伪造一个合法设备对象。
+  async function assistantContext(): Promise<AssistantActionContext> {
+    // 助手开启状态与任务生命周期均来自真实数据库。
+    const taskId = randomUUID(),
+      runId = randomUUID();
+    // 不创建任何 MCP 连接，使用原本有效设备身份。
+    const conversation = await prisma.assistantConversation.create({
+      data: { id: randomUUID(), userId: actor.sub, title: '共享执行验证' },
+    });
+    await prisma.assistantSettings.upsert({
+      where: { userId: actor.sub },
+      create: { userId: actor.sub, enabled: true },
+      update: { enabled: true },
+    });
+    await prisma.assistantTask.create({
+      data: {
+        id: taskId,
+        userId: actor.sub,
+        conversationId: conversation.id,
+        sessionId: actor.sid,
+        runId,
+        status: 'running',
+      },
+    });
+    await prisma.assistantRun.create({
+      data: {
+        id: runId,
+        userId: actor.sub,
+        conversationId: conversation.id,
+        taskId,
+        sessionId: actor.sid,
+        status: 'running',
+        profileSnapshot: {},
+        state: {},
+      },
+    });
+    return {
+      source: 'assistant',
+      taskId,
+      runId,
+      actor,
+      timeZone: 'Asia/Shanghai',
+    };
+  }
+
+  it('助手共享真实预演与提交，隔离来源且必须同事务通过门禁', async () => {
+    // 共享服务使用真实设备身份，不增设 MCP 连接。
+    const executor = module.get(ActionExecutor);
+    // 来源身份由助手运行器生成，工具参数不能设置。
+    const context = await assistantContext();
+    // 调用前记录连接数量，证明没有隐式连接创建。
+    const connections = await prisma.mcpConnection.count({
+      where: { userId: actor.sub },
+    });
+    // 每个用户任务保留稳定请求身份。
+    const requestId = randomUUID();
+    // 两步新增是两个独立对象，预演不得写入正式业务表。
+    const steps = [
+      { name: 'create_quote', input: { content: '助手共享动作甲' } },
+      { name: 'create_quote', input: { content: '助手共享动作乙' } },
+    ];
+    // 真实数据库预演及回滚路径。
+    const prepared = await executor.prepare(context, requestId, steps);
+    expect((prepared.preview as { targetCount: number }).targetCount).toBe(2);
+    expect(
+      await prisma.quote.count({
+        where: { content: { in: ['助手共享动作甲', '助手共享动作乙'] } },
+      }),
+    ).toBe(0);
+    // 来源及任务身份写入动作表，连接字段保持空值。
+    const persisted = await prisma.mcpAction.findUniqueOrThrow({
+      where: { id: String(prepared.id) },
+    });
+    expect(persisted).toMatchObject({
+      source: 'assistant',
+      sourceId: context.taskId,
+      connectionId: null,
+    });
+    expect((await executor.prepare(context, requestId, steps)).id).toBe(
+      prepared.id,
+    );
+    await expect(executor.commit(context, String(prepared.id))).rejects.toThrow(
+      '执行门禁',
+    );
+    await expect(
+      executor.commit(context, String(prepared.id), () =>
+        Promise.reject(new Error('计划尚未确认')),
+      ),
+    ).rejects.toThrow('计划尚未确认');
+    expect(
+      await prisma.quote.count({
+        where: { content: { in: ['助手共享动作甲', '助手共享动作乙'] } },
+      }),
+    ).toBe(0);
+    // 原来源以外不能查询、提交或取消助手动作。
+    await expect(mcp.status(connectionId, String(prepared.id))).rejects.toThrow(
+      '操作不存在',
+    );
+    await expect(
+      executor.status(
+        { ...context, taskId: randomUUID() },
+        String(prepared.id),
+      ),
+    ).rejects.toThrow('操作不存在');
+    // 提交守卫仅在首次执行中调用，重放返回实际结果。
+    const guard = jest.fn(() => Promise.resolve());
+    // 副作用与动作回执共用真实事务。
+    const result = await executor.commit(context, String(prepared.id), guard);
+    expect(result.status).toBe('succeeded');
+    expect(
+      (result.result as { protectedRecords: unknown[] }).protectedRecords,
+    ).toHaveLength(2);
+    expect(await executor.commit(context, String(prepared.id), guard)).toEqual(
+      result,
+    );
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect((await executor.cancel(context, String(prepared.id))).status).toBe(
+      'succeeded',
+    );
+    expect(
+      await prisma.quote.count({
+        where: { content: { in: ['助手共享动作甲', '助手共享动作乙'] } },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.mcpConnection.count({ where: { userId: actor.sub } }),
+    ).toBe(connections);
+    // MCP 设置列表和 JWT 详情不能泄漏助手来源的私有计划。
+    expect(JSON.stringify(await mcp.settings(actor))).not.toContain(
+      String(prepared.id),
+    );
+    await expect(mcp.review(actor, String(prepared.id))).rejects.toThrow(
+      '操作不存在',
+    );
+  });
+
+  it('助手详情签名可编辑并支持来源内补偿，外部 MCP 不能消费凭据', async () => {
+    // 原有 MCP 新增仍通过真实协议执行。
+    const created = await execute('create_note', { body: '助手签名编辑原文' });
+    // 正式记录身份只来自实际回执。
+    const note = (created.result as { values: Array<{ note: { id: string } }> })
+      .values[0]!.note;
+    // 助手来源与 MCP 连接保持独立。
+    const executor = module.get(ActionExecutor);
+    // 明确设备任务身份在恢复时保持稳定。
+    const context = await assistantContext();
+    // 同一次读取绑定正文与标签原始版本。
+    const detail = (await executor.read(context, 'get_note', {
+      id: note.id,
+    })) as Record<string, unknown>;
+    await expect(
+      mcp.prepare(connectionId, randomUUID(), [
+        {
+          name: 'append_note',
+          input: {
+            id: note.id,
+            text: '非法跨来源',
+            editToken: detail.editToken,
+          },
+        },
+      ]),
+    ).rejects.toThrow('编辑凭据无效');
+    // 使用真正的助手凭据准备并执行追加。
+    const prepared = await executor.prepare(context, randomUUID(), [
+      {
+        name: 'append_note',
+        input: { id: note.id, text: '合法追加', editToken: detail.editToken },
+      },
+    ]);
+    expect((prepared.preview as { targetCount: number }).targetCount).toBe(1);
+    expect(
+      (
+        await executor.commit(context, String(prepared.id), () =>
+          Promise.resolve(),
+        )
+      ).status,
+    ).toBe('succeeded');
+    // 新增补偿仍受后置基线与原十分钟窗口约束。
+    const added = await executor.prepare(context, randomUUID(), [
+      { name: 'create_quote', input: { content: '助手撤销新增' } },
+    ]);
+    await executor.commit(context, String(added.id), () => Promise.resolve());
+    // 撤销仅准备软删除，仍须走受控提交。
+    const undo = await executor.undo(context, String(added.id), randomUUID());
+    expect(undo.status).toBe('pending');
+    expect(
+      (await executor.commit(context, String(undo.id), () => Promise.resolve()))
+        .status,
+    ).toBe('succeeded');
+    expect(
+      await prisma.quote.findFirst({
+        where: { userId: actor.sub, content: '助手撤销新增', deletedAt: null },
+      }),
+    ).toBeNull();
+  });
+
+  it('助手工具目录复用业务 schema，控制工具不可交给模型绕过确认', async () => {
+    // 无额外连接的工具目录读取。
+    const executor = module.get(ActionExecutor);
+    // 只对已认证设备生成该运行可用的工具目录。
+    const tools = await executor.listTools({
+      source: 'assistant',
+      taskId: randomUUID(),
+      runId: randomUUID(),
+      actor,
+      timeZone: 'Asia/Shanghai',
+    });
+    expect(tools.some((tool) => tool.name === 'get_review_context')).toBe(true);
+    expect(tools.some((tool) => tool.name === 'restore_record')).toBe(true);
+    expect(
+      tools.some((tool) =>
+        [
+          'commit_action',
+          'prepare_batch',
+          'cancel_action',
+          'undo_action',
+          'get_action_status',
+        ].includes(tool.name),
+      ),
+    ).toBe(false);
+    // 运行器注入幂等身份，不能让模型为重试更换身份。
+    expect(
+      JSON.stringify(
+        tools.find((tool) => tool.name === 'create_note')!.inputSchema,
+      ),
+    ).not.toContain('requestId');
+    expect(
+      JSON.stringify(
+        tools.find((tool) => tool.name === 'restore_record')!.inputSchema,
+      ),
+    ).not.toContain('requestId');
+  });
+
+  it('真实升级回填旧 MCP 来源身份，保留连接、历史回执及持久保护', async () => {
+    // 记录实际来自本套 beforeAll 应用新迁移之前的数据库事实。
+    const migrated = await prisma.mcpAction.findUniqueOrThrow({
+      where: { id: legacyActionId },
+    });
+    expect(migrated).toMatchObject({
+      source: 'mcp',
+      sourceId: legacyConnectionId,
+      connectionId: legacyConnectionId,
+      status: 'succeeded',
+      result: legacyResult,
+    });
+    expect(
+      await prisma.mcpConnection.findUnique({
+        where: { id: legacyConnectionId },
+      }),
+    ).toMatchObject({ userId: legacyOwnerId, expiresAt: null });
+    // 数据库约束禁止伪造 MCP 来源身份，不能绕过服务层隔离。
+    await expect(
+      prisma.mcpAction.update({
+        where: { id: legacyActionId },
+        data: { sourceId: randomUUID() },
+      }),
+    ).rejects.toThrow();
+    expect(
+      (
+        await prisma.mcpAction.findUniqueOrThrow({
+          where: { id: legacyActionId },
+        })
+      ).result,
+    ).toEqual(legacyResult);
+  });
+
+  it('停止或关闭助手后不能在 prepare 事务中新建孤立 pending 动作', async () => {
+    // 合法任务由真实持久状态创建，不省略准备授权。
+    const context = await assistantContext();
+    // 停止先获得 owner 锁并取消任务后，迟到准备必须失败。
+    await prisma.assistantTask.update({
+      where: { id: context.taskId },
+      data: { status: 'cancelled' },
+    });
+    await prisma.assistantRun.update({
+      where: { id: context.runId },
+      data: { status: 'cancelled' },
+    });
+    await expect(
+      module
+        .get(ActionExecutor)
+        .prepare(context, randomUUID(), [
+          { name: 'create_quote', input: { content: '停止后不能预演' } },
+        ]),
+    ).rejects.toThrow('助手准备授权已失效');
+    expect(
+      await prisma.mcpAction.count({
+        where: { source: 'assistant', sourceId: context.taskId },
+      }),
+    ).toBe(0);
+    // 开关也在同一准备事务内校验，不能使用旧的启用快照。
+    const second = await assistantContext();
+    await prisma.assistantSettings.update({
+      where: { userId: actor.sub },
+      data: { enabled: false },
+    });
+    await expect(
+      module
+        .get(ActionExecutor)
+        .prepare(second, randomUUID(), [
+          { name: 'create_quote', input: { content: '关闭后不能预演' } },
+        ]),
+    ).rejects.toThrow('助手准备授权已失效');
+    expect(
+      await prisma.mcpAction.count({
+        where: { source: 'assistant', sourceId: second.taskId },
+      }),
+    ).toBe(0);
+  });
+
+  it('future 单工具按实际重复实例触发批量计数，单父对象正常级联孩子仍计一项', async () => {
+    // 真实业务预演必须看见多个已保存实例，不以步骤数量判断批量。
+    const context = await assistantContext();
+    const seriesId = randomUUID(),
+      futureId = randomUUID();
+    await prisma.todoItem.createMany({
+      data: [
+        {
+          id: seriesId,
+          userId: actor.sub,
+          title: '重复实例一',
+          scheduledDate: new Date('2026-10-23'),
+          repeatRule: 'daily',
+          repeatSeriesId: seriesId,
+        },
+        {
+          id: futureId,
+          userId: actor.sub,
+          title: '重复实例二',
+          scheduledDate: new Date('2026-10-24'),
+          repeatRule: 'daily',
+          repeatSeriesId: seriesId,
+        },
+        {
+          id: randomUUID(),
+          userId: actor.sub,
+          parentId: seriesId,
+          title: '父项的正常孩子',
+          scheduledDate: new Date('2026-10-23'),
+        },
+      ],
+    });
+    // 删除未来范围包含两个独立实例及合法子项，计数为二。
+    const executor = module.get(ActionExecutor);
+    const future = await executor.prepare(context, randomUUID(), [
+      { name: 'delete_todo', input: { id: seriesId, scope: 'future' } },
+    ]);
+    expect((future.preview as { targetCount: number }).targetCount).toBe(2);
+    // 完整计划计数跨批合并同一对象，不叠加重复出现的步骤。
+    expect(
+      await executor.countPlanTargets(
+        context,
+        [
+          { name: 'delete_todo', input: { id: seriesId, scope: 'future' } },
+          { name: 'delete_todo', input: { id: seriesId, scope: 'single' } },
+        ],
+        (future.preview as { changes: Array<Record<string, unknown>> }).changes,
+      ),
+    ).toBe(2);
+    // 仅删除父项这次记录时，子项级联不另算独立目标。
+    const single = await executor.prepare(context, randomUUID(), [
+      { name: 'delete_todo', input: { id: seriesId, scope: 'single' } },
+    ]);
+    expect((single.preview as { targetCount: number }).targetCount).toBe(1);
+    // 所有测试只预演，正式业务数据仍保持原状。
+    expect(
+      (await prisma.todoItem.findUniqueOrThrow({ where: { id: seriesId } }))
+        .deletedAt,
+    ).toBeNull();
+    expect(
+      (await prisma.todoItem.findUniqueOrThrow({ where: { id: futureId } }))
+        .deletedAt,
+    ).toBeNull();
   });
 });

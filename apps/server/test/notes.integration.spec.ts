@@ -93,6 +93,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
     // 确认既有数据不存在。
     const tables = await database.query("SELECT tablename FROM pg_tables WHERE schemaname='public'");
     if (tables.rows.length) throw new Error('笔记集成要求空 schema，不清理既有数据库');
+    if ((await database.query("SELECT 1 FROM pg_namespace WHERE nspname='assistant_graph'")).rows.length) throw new Error('笔记集成要求不存在助手私有 schema');
     ownsSchema = true;
     for (const migration of readdirSync(join(__dirname, '../prisma/migrations'), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()) await database.query(readFileSync(join(__dirname, '../prisma/migrations', migration, 'migration.sql'), 'utf8'));
     directory = mkdtempSync(join(tmpdir(), 'omni-notes-test-'));
@@ -132,7 +133,7 @@ integration('笔记真实 PostgreSQL + 私有文件 + JWT HTTP', () => {
     }
     await app?.close();
     minio?.onModuleDestroy();
-    if (ownsSchema) { await database.query('DROP PUBLICATION IF EXISTS powersync'); await database.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public'); }
+    if (ownsSchema) { await database.query('DROP PUBLICATION IF EXISTS powersync'); await database.query('DROP SCHEMA IF EXISTS assistant_graph CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public'); }
     await database?.end();
     if (directory) rmSync(directory, { recursive: true, force: true });
   });

@@ -115,7 +115,21 @@ void main() {
     final Size timeStatusSize = tester.getSize(
       find.byKey(const ValueKey<String>('home-time-status-card')),
     );
-    expect(contextSize.width, inInclusiveRange(380, 430));
+    // 折叠导航后，首页左右留白应相对剩余内容区对称。
+    final Rect navigationBounds = tester.getRect(
+      find.byKey(const ValueKey<String>('medium-navigation')),
+    );
+    final Rect quoteBounds = tester.getRect(
+      find.byKey(const ValueKey<String>('home-quote-card')),
+    );
+    final Rect rulerBounds = tester.getRect(
+      find.byKey(const ValueKey<String>('home-day-ruler')),
+    );
+    expect(navigationBounds.width, OmniSize.navigationRail);
+    expect(
+      quoteBounds.left - navigationBounds.right,
+      closeTo(viewport.width - rulerBounds.right, .1),
+    );
     expect(quoteSize.width, closeTo(contextSize.width * 2 + 8, 0.1));
     expect(quoteSize.height, 156);
     expect(rulerSize.height, 156);

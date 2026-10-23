@@ -91,6 +91,7 @@ class _EndToEndAuth extends AuthRepository {
     ResponseType? responseType,
     Duration? receiveTimeout,
     bool preserveTransportErrors = false,
+    CancelToken? cancelToken,
   }) async {
     if (path == '/sync/operations') {
       uploads.add(jsonDecode(jsonEncode(data)) as Map<String, dynamic>);

@@ -690,4 +690,28 @@ void main() {
       'http://192.168.1.10:9000/omni-butler/api/v1/auth/disconnect',
     ]);
   });
+  test('会话断开立即取消SSE，旧代次不能注册新流', () async {
+    // 仅测试本机取消语义，不访问真实服务器。
+    final AuthRepository repository = AuthRepository(storage);
+    // 原会话流令牌。
+    final CancelToken token = repository.createSessionStreamToken(
+      repository.sessionGeneration,
+    );
+    // 保存旧代次用于拒绝注册。
+    final int originalGeneration = repository.sessionGeneration;
+    await repository.clearSession();
+    expect(token.isCancelled, isTrue);
+    expect(
+      () => repository.createSessionStreamToken(originalGeneration),
+      throwsA(isA<ApiFailure>()),
+    );
+    repository.releaseSessionStreamToken(token);
+    // 新代次的独立流不受上一次取消结果影响。
+    final CancelToken next = repository.createSessionStreamToken(
+      repository.sessionGeneration,
+    );
+    expect(next.isCancelled, isFalse);
+    await repository.clearSession();
+    expect(next.isCancelled, isTrue);
+  });
 }

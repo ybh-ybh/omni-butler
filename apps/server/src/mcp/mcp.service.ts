@@ -1,32 +1,25 @@
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
   Injectable,
+  Optional,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import {
-  createHash,
-  randomBytes,
-  randomUUID,
-  timingSafeEqual,
-} from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { AuthUser } from '../auth/auth.types';
 import {
   businessRead,
   withinBusinessTransaction,
 } from '../business/business-access';
-import { localParts, timeZoneInput } from '../business/business-input';
+import { timeZoneInput } from '../business/business-input';
 import type {
   McpAction,
   McpConnection,
   Prisma,
 } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { canonicalize } from '../sync/sync.service';
-import { stableBusinessId } from '../sync/sync-consistency';
 import {
   McpCatalog,
   mcpId,
@@ -37,57 +30,9 @@ import {
   type McpToolDefinition,
 } from './mcp-catalog';
 import { McpEditTokenService } from './mcp-edit-token.service';
+import { ActionExecutor, mcpHash, type McpStep } from './action-executor';
+export { mcpJson, mcpHash, type McpStep } from './action-executor';
 
-/// MCP 业务步骤只能引用已登记的具体工具。
-export interface McpStep {
-  /// 固定工具目录身份。
-  name: string;
-  /// 经过严格Schema校验的业务参数。
-  input: Record<string, unknown>;
-}
-/// 用于基线和影响比较的数据库事实，不包含密钥表。
-type Snapshot = Record<string, Array<Record<string, Prisma.JsonValue>>>;
-/// 固定表映射只用于服务端快照，不接受模型选择表。
-const moduleTables: Record<McpModule, string[]> = {
-  quotes: ['quotes', 'daily_quote_selections'],
-  time: ['time_entries'],
-  todos: ['todo_items', 'todo_progress_steps'],
-  inventory: ['inventory_items'],
-  memberships: ['memberships', 'membership_payments'],
-  events: ['events', 'event_completions'],
-  notes: [
-    'note_entries',
-    'note_versions',
-    'note_audio_segments',
-    'note_images',
-  ],
-};
-/// 共用分类模块的旧协议名称。
-const taxonomyModules: Partial<Record<McpModule, string>> = {
-  time: 'timeline',
-  inventory: 'inventory',
-  memberships: 'membership',
-  notes: 'notes',
-};
-
-/// 将日期与其他 JSON 值固定为可持久回放的形状。
-export function mcpJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(
-    JSON.stringify(value, (_key: string, item: unknown) =>
-      typeof item === 'bigint' ? item.toString() : item,
-    ),
-  ) as Prisma.InputJsonValue;
-}
-/// 摘要绑定规范内容，不能由调用方修改预览后继续使用旧基线。
-export function mcpHash(value: unknown): string {
-  return createHash('sha256')
-    .update(JSON.stringify(canonicalize(mcpJson(value))))
-    .digest('hex');
-}
-/// 专用授权映射为独立内部身份，绝不复制某个设备的长期凭据。
-function connectionActor(connection: McpConnection): AuthUser {
-  return { sub: connection.userId, sid: connection.sessionId, typ: 'access' };
-}
 /// 安全列表不返回哈希、内部会话或完整令牌。
 function connectionView(connection: McpConnection): Record<string, unknown> {
   return {
@@ -109,8 +54,14 @@ export class McpService {
   constructor(
     private readonly prisma: PrismaService,
     readonly catalog: McpCatalog,
-    private readonly editTokens: McpEditTokenService,
-  ) {}
+    editTokens: McpEditTokenService,
+    @Optional() executor?: ActionExecutor,
+  ) {
+    this.executor = executor ?? new ActionExecutor(prisma, catalog, editTokens);
+  }
+
+  /// 共用引擎无本地会话状态，所有授权由数据库决定。
+  private readonly executor: ActionExecutor;
 
   /// 仅已认证设备可以创建限期或永久连接，默认30天及所有模块只读。
   async createConnection(
@@ -184,6 +135,7 @@ export class McpService {
       const pending = await transaction.mcpAction.findMany({
         where: {
           userId: actor.sub,
+          source: 'mcp',
           status: 'pending',
           expiresAt: { gt: new Date() },
         },
@@ -194,6 +146,7 @@ export class McpService {
       const history = await transaction.mcpAction.findMany({
         where: {
           userId: actor.sub,
+          source: 'mcp',
           id: { notIn: pending.map((action) => action.id) },
         },
         orderBy: { createdAt: 'desc' },
@@ -384,53 +337,13 @@ export class McpService {
     };
   }
 
-  /// 普通查询逐项校验，不接收自由表名或任意列操作。
-  async read(
+  /// 查询复用共享执行器，MCP 身份只由协议层传入。
+  read(
     connectionId: string,
     name: string,
     value: unknown,
   ): Promise<Prisma.JsonValue> {
-    // 已认证连接决定唯一 actor，不允许参数覆盖。
-    const connection = await this.requireConnection(this.prisma, connectionId);
-    // 运行时严格 Schema 再校验一次，不能只依靠模型遵守 Schema。
-    const tool = this.tool(connection, name, false);
-    // 编辑凭据必须来自同一次详情查询，不在生成凭据时再读最新事实。
-    const result = await tool.run(
-      connectionActor(connection),
-      tool.schema.parse(this.defaultZone(connection, tool, value)),
-    );
-    if (
-      (name === 'get_note' || name === 'get_todo') &&
-      result &&
-      typeof result === 'object' &&
-      !Array.isArray(result)
-    ) {
-      return {
-        ...result,
-        editToken: this.editTokens.issue(
-          connection,
-          mcpId.parse(result.id),
-          name === 'get_note'
-            ? {
-                kind: 'note',
-                revision: mcpId.parse(result.revision),
-                tags: JSON.parse(z.string().parse(result.tags)) as string[],
-              }
-            : {
-                kind: 'todoSteps',
-                structureHash: mcpHash(
-                  (
-                    result.progressSteps as Array<{
-                      id: string;
-                      name: string | null;
-                    }>
-                  ).map((step) => ({ id: step.id, name: step.name })),
-                ),
-              },
-        ),
-      };
-    }
-    return result;
+    return this.executor.read(connectionId, name, value);
   }
 
   /// 统一统计入口仍使用各模块严格契约，拒绝不适用的参数。
@@ -489,665 +402,43 @@ export class McpService {
     return this.commit(connectionId, String(prepared.id));
   }
 
-  /// 只给工具已声明的时区字段应用显式连接默认值，不向其他工具注入额外字段。
-  private defaultZone(
-    connection: McpConnection,
-    tool: McpToolDefinition,
-    value: unknown,
-  ): unknown {
-    if (
-      connection.timeZone &&
-      Object.hasOwn(tool.schema.shape, 'timeZone') &&
-      value &&
-      typeof value === 'object' &&
-      !Array.isArray(value) &&
-      !Object.hasOwn(value, 'timeZone')
-    )
-      return { ...value, timeZone: connection.timeZone };
-    return value;
-  }
-
-  /// 固定映射中的完整授权模块快照，宁可让无关同模块编辑要求重新预览。
-  private async snapshot(
-    transaction: Prisma.TransactionClient,
-    userId: string,
-    modules: McpModule[],
-  ): Promise<Snapshot> {
-    // 所有 SQL 标识来自源码固定清单，值全部参数化。
-    const result: Snapshot = {};
-    for (const table of [
-      ...new Set(modules.flatMap((module) => moduleTables[module])),
-    ]) {
-      // PostgreSQL JSON 固定数据库时间表示，不混入 Prisma 对象转换。
-      const rows = await transaction.$queryRawUnsafe<
-        Array<{ data: Record<string, Prisma.JsonValue> }>
-      >(
-        `SELECT row_to_json(record) AS data FROM "${table}" AS record WHERE user_id=$1::uuid ORDER BY id`,
-        userId,
-      );
-      result[table] = rows.map((row) => row.data);
-    }
-    // 分类和永久墓碑同样属于写入前提，不能只比较主记录。
-    result.taxonomy_entries = (
-      await transaction.taxonomyEntry.findMany({
-        where: {
-          userId,
-          module: {
-            in: modules
-              .map((module) => taxonomyModules[module])
-              .filter((module): module is string => !!module),
-          },
-        },
-        orderBy: { id: 'asc' },
-      })
-    ).map((row) => mcpJson(row) as Record<string, Prisma.JsonValue>);
-    result.record_taxonomy_links = (
-      await transaction.recordTaxonomyLink.findMany({
-        where: {
-          userId,
-          module: {
-            in: modules
-              .map((module) => taxonomyModules[module])
-              .filter((module): module is string => !!module),
-          },
-        },
-        orderBy: { id: 'asc' },
-      })
-    ).map((row) => mcpJson(row) as Record<string, Prisma.JsonValue>);
-    result.tombstones = (
-      await transaction.syncTombstone.findMany({
-        where: {
-          userId,
-          tableName: { in: modules.flatMap((module) => moduleTables[module]) },
-        },
-        orderBy: [{ tableName: 'asc' }, { recordId: 'asc' }],
-      })
-    ).map((row) => mcpJson(row) as Record<string, Prisma.JsonValue>);
-    return result;
-  }
-
-  /// 预览只展示实际变化的字段与关联数量，不把整个库复制到操作预览。
-  private changes(
-    before: Snapshot,
-    after: Snapshot,
-  ): Array<Record<string, unknown>> {
-    // 大范围动作必须拆分，不能截断后提交未展示影响。
-    const result: Array<Record<string, unknown>> = [];
-    for (const [table, rows] of Object.entries(after))
-      for (const row of rows) {
-        // 预览中新建身份与正式提交的随机身份不同，不把临时身份当正式引用。
-        const prior = before[table]?.find((item) => item.id === row.id);
-        // 时间戳及归属不是用户变更字段，但仍进入基线摘要。
-        const fields = Object.keys(row).filter(
-          (key) =>
-            ![
-              'id',
-              'user_id',
-              'created_at',
-              'updated_at',
-              'userId',
-              'createdAt',
-              'updatedAt',
-            ].includes(key) &&
-            JSON.stringify(prior?.[key]) !== JSON.stringify(row[key]),
-        );
-        if (fields.length)
-          result.push({
-            table,
-            id: prior ? row.id : null,
-            newRecord: !prior,
-            label:
-              [row.name, row.title, row.content, row.body]
-                .find((value): value is string => typeof value === 'string')
-                ?.slice(0, 120) ?? table,
-            before: prior
-              ? Object.fromEntries(
-                  fields.map((key) => [key, prior[key] ?? null]),
-                )
-              : null,
-            after: Object.fromEntries(fields.map((key) => [key, row[key]])),
-          });
-      }
-    if (result.length > 200)
-      throw new BadRequestException(
-        '本次影响超过200条记录，请拆分为更小操作后重新预览',
-      );
-    return result;
-  }
-
-  /// 从原始步骤生成固定的绝对事实；提交跨午夜不会重新解释“现在”。
-  private async fixedSteps(
-    transaction: Prisma.TransactionClient,
-    connection: McpConnection,
-    steps: McpStep[],
-    now: Date,
-  ): Promise<McpStep[]> {
-    // 顺序解析在同一owner锁内完成，不并行访问事务连接。
-    const fixed: McpStep[] = [];
-    for (const step of steps) {
-      // 严格输入不接受 operationId、confirmed、owner 等非业务参数。
-      const mapped =
-        step.name === 'restore_record'
-          ? z
-              .strictObject({ module: z.enum(mcpModules), id: mcpId })
-              .parse(step.input)
-          : null;
-      // 统一恢复工具只展开到固定目录，不能构造隐藏业务工具名。
-      const name = mapped ? `restore_${mapped.module}` : step.name;
-      // 批量只接受公开业务动作；历史隐藏入口不能通过字符串绕过目录。
-      if (
-        !mapped &&
-        !this.catalog
-          .visible(connection.readModules, connection.writeModules)
-          .some((item) => item.name === name && item.write)
-      )
-        throw new ForbiddenException('当前连接未开放该写工具');
-      // 内部目录保留恢复映射的领域实现。
-      const tool = this.tool(connection, name, true);
-      // 初次校验之后才补服务端默认值，不能为模型保留任意字段。
-      const input = tool.schema.parse(
-        this.defaultZone(
-          connection,
-          tool,
-          mapped ? { id: mapped.id } : step.input,
-        ),
-      );
-      if (input.editToken !== undefined) {
-        // 解包读取时签名的事实，不从当前数据库补造过期基线。
-        const baseline = this.editTokens.read(
-          connection,
-          String(name === 'replace_todo_steps' ? input.todoId : input.id),
-          z.string().parse(input.editToken),
-          name === 'replace_todo_steps' ? 'todoSteps' : 'note',
-        );
-        if (baseline.kind === 'note') {
-          if (name === 'append_note' || input.body !== undefined)
-            input.expectedRevision = baseline.revision;
-          if (input.tags !== undefined) input.tagsBase = baseline.tags;
-        } else {
-          // 大型历史结构只签摘要；当前结构必须与已读取的签名事实完全相同。
-          const current = await transaction.todoProgressStep.findMany({
-            where: {
-              userId: connection.userId,
-              todoId: String(input.todoId),
-              deletedAt: null,
-            },
-            orderBy: [
-              { sortOrder: 'asc' },
-              { createdAt: 'asc' },
-              { id: 'asc' },
-            ],
-            select: { id: true, name: true },
-          });
-          if (mcpHash(current) !== baseline.structureHash)
-            throw new ConflictException('进度结构已变化，请停止并核对变更');
-          input.baseline = current;
-        }
-        delete input.editToken;
-      }
-      if (
-        (name === 'create_membership' || name === 'update_membership') &&
-        input.billingCycle !== undefined
-      ) {
-        // 单一周期字段映射到旧存储，转换永久时清除不适用的到期日。
-        input.isPermanent = input.billingCycle === 'permanent';
-        if (input.isPermanent) {
-          if (
-            input.expirationDate !== undefined &&
-            input.expirationDate !== null
-          )
-            throw new BadRequestException('永久会员不能设置到期日');
-          input.expirationDate = null;
-        }
-      }
-      if (input.recordedAt !== undefined) {
-        // 保留输入偏移与墙钟时间，不能转成UTC后丢失原记录日期。
-        const recorded = z.string().parse(input.recordedAt);
-        // ISO Schema已验证格式，偏移另外限制在现有笔记存储范围。
-        const offset = /([+-])(\d{2}):(\d{2})$/.exec(recorded);
-        input.dayKey = recorded.slice(0, 10);
-        input.recordTimeSeconds =
-          Number(recorded.slice(11, 13)) * 3600 +
-          Number(recorded.slice(14, 16)) * 60 +
-          Number(recorded.slice(17, 19) || 0);
-        input.recordUtcOffsetMinutes = offset
-          ? (offset[1] === '-' ? -1 : 1) *
-            (Number(offset[2]) * 60 + Number(offset[3]))
-          : 0;
-        delete input.recordedAt;
-      }
-      if (step.name === 'start_time_entry' && input.startedAt === undefined)
-        input.startedAt = now.toISOString();
-      if (step.name === 'finish_time_entry' && input.endedAt === undefined)
-        input.endedAt = now.toISOString();
-      if (step.name === 'complete_event' && input.completedAt === undefined)
-        input.completedAt = now.toISOString();
-      if (
-        step.name === 'record_membership_payment' &&
-        input.paidAt === undefined
-      )
-        input.paidAt = now.toISOString();
-      if (
-        step.name === 'create_note' &&
-        input.dayKey === undefined &&
-        input.recordTimeSeconds === undefined &&
-        input.recordUtcOffsetMinutes === undefined
-      ) {
-        // 笔记自然日与钟点固定为准备时的明确业务时区。
-        const local = localParts(now, timeZoneInput(input.timeZone));
-        input.dayKey = local.day;
-        input.recordTimeSeconds = local.seconds;
-        input.recordUtcOffsetMinutes = local.offsetMinutes;
-      }
-      fixed.push({ name, input });
-    }
-    return fixed;
-  }
-
-  /// 一次可见清单在一个事务内模拟或提交，最多8个明确动作。
-  private async runSteps(
-    connection: McpConnection,
-    actionId: string,
-    steps: McpStep[],
-  ): Promise<Prisma.JsonValue[]> {
-    // 同批业务回执使用稳定派生身份，提交重放不生成新副作用。
-    const results: Prisma.JsonValue[] = [];
-    for (const [index, step] of steps.entries())
-      results.push(
-        await this.tool(connection, step.name, true).run(
-          connectionActor(connection),
-          {
-            ...step.input,
-            operationId: stableBusinessId('mcp-operation', [
-              actionId,
-              String(index),
-            ]),
-          },
-        ),
-      );
-    return results;
-  }
-
-  /// 预览运行真实业务规则后回滚到保存点，业务表和业务回执均不改变。
-  async prepare(
+  /// 准备、提交和保护链在应用内助手及 MCP 之间共用。
+  prepare(
     connectionId: string,
     requestId: string,
     steps: McpStep[],
     undoOf?: string,
   ): Promise<Record<string, unknown>> {
-    mcpId.parse(requestId);
-    if (!steps.length || steps.length > 8)
-      throw new BadRequestException('一次准备1至8个明确操作');
-    // 外层校验后由事务重新复验，避免撤销时仍创建待执行动作。
-    const initial = await this.requireConnection(this.prisma, connectionId);
-    return withinBusinessTransaction(
-      this.prisma,
-      connectionActor(initial),
-      async (transaction) => {
-        // 当前连接权限是本次操作的唯一授权来源。
-        const connection = await this.requireConnection(
-          transaction,
-          connectionId,
-        );
-        // 原请求身份与原参数摘要绑定，重放不重新解释默认时刻。
-        const inputHash = mcpHash({ steps, undoOf: undoOf ?? null });
-        // 重复准备返回旧操作，不生成第二份预览。
-        const prior = await transaction.mcpAction.findUnique({
-          where: { connectionId_requestId: { connectionId, requestId } },
-        });
-        if (prior) {
-          if (prior.inputHash !== inputHash)
-            throw new ConflictException('同一请求身份不能准备不同内容');
-          return this.actionView(prior, true);
-        }
-        // 执行前固定动作、时间和授权。
-        const fixed = await this.fixedSteps(
-          transaction,
-          connection,
-          steps,
-          new Date(),
-        );
-        // 基线包含本次所有模块及其关系，数据变化后不能沿用旧预览。
-        const modules = [
-          ...new Set(
-            fixed.map((step) => this.tool(connection, step.name, true).module),
-          ),
-        ];
-        // 准备时的数据库事实。
-        const before = await this.snapshot(
-          transaction,
-          connection.userId,
-          modules,
-        );
-        // 补偿不能因为晚准备而延长原操作的10分钟窗口。
-        let undoExpiresAt = Infinity;
-        if (undoOf) {
-          // 补偿只能针对仍满足原后置状态且在窗口内的原动作。
-          const original = await transaction.mcpAction.findFirst({
-            where: { id: undoOf, connectionId, status: 'succeeded' },
-          });
-          if (
-            !original ||
-            Date.now() - original.updatedAt.getTime() > 600000 ||
-            (original.result as Record<string, Prisma.JsonValue> | null)
-              ?.afterBaseline !== mcpHash(before)
-          )
-            throw new ConflictException('原操作已过撤销窗口或数据已有后续变化');
-          undoExpiresAt = original.updatedAt.getTime() + 600000;
-        }
-        // 固定动作身份不由模型指定数据库记录ID。
-        const id = randomUUID();
-        await transaction.$executeRawUnsafe('SAVEPOINT mcp_preview');
-        // 冲突候选属于保存候选而非采用正文，必须在提交前说明。
-        const simulated = await this.runSteps(connection, id, fixed);
-        // 只记录真实变化，不把预览生成的业务回执提交。
-        const after = await this.snapshot(
-          transaction,
-          connection.userId,
-          modules,
-        );
-        // 预览必须完整，过大的级联不允许被静默截断。
-        const changes = this.changes(before, after);
-        await transaction.$executeRawUnsafe(
-          'ROLLBACK TO SAVEPOINT mcp_preview',
-        );
-        // 操作固定内容、前置事实、完整影响及截止时刻。
-        const expiresAt = new Date(
-          Math.min(
-            Date.now() + 600000,
-            connection.expiresAt?.getTime() ?? Infinity,
-            undoExpiresAt,
-          ),
-        );
-        // 新建记录ID在执行时分配，预览不将临时身份当作正式数据。
-        const preview = {
-          expectedOutcomes: simulated.map((value) =>
-            value &&
-            typeof value === 'object' &&
-            !Array.isArray(value) &&
-            value.status === 'conflict'
-              ? '仅保存冲突候选，正式正文不采用'
-              : '按清单变更',
-          ),
-          steps: fixed.map((step) => ({
-            tool: step.name,
-            description: this.tool(connection, step.name, true).description,
-            input: step.input,
-          })),
-          changes,
-          affectedRecords: changes.length,
-          atomic: true,
-          undoOf: undoOf ?? null,
-          newRecordIds: '执行时分配，预览中的关联身份仅用于表示关联关系',
-          systemGeneratedValues:
-            '状态完成/回收站等系统生成的时刻在正式执行时确定，预览时刻用于说明变更方向；明确指定的业务时间保持固定。',
-        };
-        // 沿用历史必填摘要列，摘要不再代表设备审批凭据。
-        const approvalHash = mcpHash({ id, fixed, before, preview, expiresAt });
-        // 私有动作表不触发客户端业务创建。
-        const action = await transaction.mcpAction.create({
-          data: {
-            id,
-            userId: connection.userId,
-            connectionId,
-            requestId,
-            inputHash,
-            steps: mcpJson(fixed),
-            baseline: mcpHash(before),
-            preview: mcpJson(preview),
-            approvalHash,
-            expiresAt,
-          },
-        });
-        return this.actionView(action, true);
-      },
-    );
+    return this.executor.prepare(connectionId, requestId, steps, undoOf);
   }
-
-  /// 取消与提交共用owner锁，终态仅返回回执，取消不是补偿撤销。
-  async cancel(
+  /// 取消只影响当前来源尚未提交的动作。
+  cancel(
     connectionId: string,
     actionId: string,
   ): Promise<Record<string, unknown>> {
-    mcpId.parse(actionId);
-    // 外部鉴权后在事务内重新检查，不能使用已撤销的旧连接对象。
-    const initial = await this.requireConnection(this.prisma, connectionId);
-    return withinBusinessTransaction(
-      this.prisma,
-      connectionActor(initial),
-      async (transaction) => {
-        // 只有当前有效连接能够操作自己的待执行动作。
-        const connection = await this.requireConnection(
-          transaction,
-          connectionId,
-        );
-        // 所有模块范围仍以当前权限为准，不能猜测其他连接动作身份。
-        const action = await transaction.mcpAction.findFirst({
-          where: { id: actionId, connectionId, userId: connection.userId },
-        });
-        if (!action) throw new NotFoundException('操作不存在');
-        if (action.result || action.status !== 'pending')
-          return this.actionView(action, true);
-        for (const step of action.steps as unknown as McpStep[])
-          this.tool(connection, step.name, true);
-        return this.actionView(
-          await transaction.mcpAction.update({
-            where: { id: actionId },
-            data: {
-              status: action.expiresAt <= new Date() ? 'expired' : 'cancelled',
-            },
-          }),
-          true,
-        );
-      },
-    );
+    return this.executor.cancel(connectionId, actionId);
   }
-
-  /// 按连接写权限原子提交固定动作，响应丢失后按原ID重放回执。
-  async commit(
+  /// 原 MCP 提交仍按连接写权限执行。
+  commit(
     connectionId: string,
     actionId: string,
   ): Promise<Record<string, unknown>> {
-    mcpId.parse(actionId);
-    // 事务内再次检查撤销/到期和每个工具权限。
-    const initial = await this.requireConnection(this.prisma, connectionId);
-    return withinBusinessTransaction(
-      this.prisma,
-      connectionActor(initial),
-      async (transaction) => {
-        // 未过期授权在 owner 锁内重新确认。
-        const connection = await this.requireConnection(
-          transaction,
-          connectionId,
-        );
-        // 不跨连接提交或查询他人操作。
-        const action = await transaction.mcpAction.findFirst({
-          where: { id: actionId, connectionId, userId: connection.userId },
-        });
-        if (!action) throw new NotFoundException('操作不存在');
-        if (action.result) return this.actionView(action, true);
-        // 终态只读返回，旧approved动作也不能被新流程自动放行。
-        if (action.status !== 'pending') return this.actionView(action, true);
-        if (action.expiresAt <= new Date())
-          return this.actionView(
-            await transaction.mcpAction.update({
-              where: { id: actionId },
-              data: { status: 'expired' },
-            }),
-            true,
-          );
-        // 私有步骤由服务端准备，提交不接收模型修改参数。
-        const steps = action.steps as unknown as McpStep[];
-        // 前置摘要包含主项、子项、关系、历史和永久墓碑。
-        const modules = [
-          ...new Set(
-            steps.map((step) => this.tool(connection, step.name, true).module),
-          ),
-        ];
-        // 同一份真实前置快照还用于记录实际提交的受保护身份。
-        const beforeSnapshot = await this.snapshot(
-          transaction,
-          connection.userId,
-          modules,
-        );
-        // 补偿在真正提交时再次验证原动作和窗口，不依赖准备时校验。
-        const undoOf = (action.preview as Record<string, Prisma.JsonValue>)
-          .undoOf;
-        if (typeof undoOf === 'string') {
-          // 原结果只能来自当前连接，后置基线仍必须与当前完整事实相同。
-          const original = await transaction.mcpAction.findFirst({
-            where: {
-              id: undoOf,
-              connectionId,
-              userId: connection.userId,
-              status: 'succeeded',
-            },
-          });
-          if (
-            !original ||
-            Date.now() >= original.updatedAt.getTime() + 600000 ||
-            (original.result as Record<string, Prisma.JsonValue> | null)
-              ?.afterBaseline !== mcpHash(beforeSnapshot)
-          )
-            return this.actionView(
-              await transaction.mcpAction.update({
-                where: { id: actionId },
-                data: { status: 'conflict' },
-              }),
-              true,
-            );
-        }
-        if (mcpHash(beforeSnapshot) !== action.baseline)
-          return this.actionView(
-            await transaction.mcpAction.update({
-              where: { id: actionId },
-              data: { status: 'conflict' },
-            }),
-            true,
-          );
-        // 所有步骤及领域回执和最终操作状态共用一个事务。
-        const values = await this.runSteps(connection, actionId, steps);
-        // 候选提交成功仍属于正文冲突，不能把它伪装成正式正文已经采用。
-        const hasConflict = values.some(
-          (value) =>
-            value &&
-            typeof value === 'object' &&
-            !Array.isArray(value) &&
-            value.status === 'conflict',
-        );
-        // 补偿基线只能由服务器保存，不能由模型伪造。
-        const afterSnapshot = await this.snapshot(
-          transaction,
-          connection.userId,
-          modules,
-        );
-        // 后置摘要只用于条件补偿；实际身份用于阻止迟到离线字段覆盖。
-        const afterBaseline = mcpHash(afterSnapshot);
-        // 动作回执持久保留这些身份，不随令牌撤销或日志轮换丢弃保护。
-        const protectedRecords = Object.entries(afterSnapshot).flatMap(
-          ([table, rows]) =>
-            rows
-              .filter(
-                (row) =>
-                  typeof row.id === 'string' &&
-                  mcpHash(row) !==
-                    mcpHash(
-                      beforeSnapshot[table]?.find(
-                        (prior) => prior.id === row.id,
-                      ) ?? null,
-                    ),
-              )
-              .map((row) => ({ table, id: row.id })),
-        );
-        return this.actionView(
-          await transaction.mcpAction.update({
-            where: { id: actionId },
-            data: {
-              status: hasConflict ? 'conflict' : 'succeeded',
-              result: mcpJson({
-                values,
-                afterBaseline,
-                protectedRecords,
-                serverSavedAt: new Date().toISOString(),
-                syncStatus: hasConflict
-                  ? '冲突候选已保存，正式正文未采用；客户端下行状态未知'
-                  : '服务器已保存，客户端下行状态未知',
-              }),
-            },
-          }),
-          true,
-        );
-      },
-    );
+    return this.executor.commit(connectionId, actionId);
   }
-
-  /// 持久回执可重启恢复，查询不会修改状态或再次执行业务。
-  async status(
+  /// 原回执重放不重新执行业务。
+  status(
     connectionId: string,
     actionId: string,
   ): Promise<Record<string, unknown>> {
-    mcpId.parse(actionId);
-    // 不缓存旧的能力和操作授权。
-    const connection = await this.requireConnection(this.prisma, connectionId);
-    // 限定当前连接，避免另一只读连接探查写入结果。
-    const action = await this.prisma.mcpAction.findFirst({
-      where: { id: actionId, connectionId, userId: connection.userId },
-    });
-    if (!action) throw new NotFoundException('操作不存在');
-    return this.actionView(action, true);
+    return this.executor.status(connectionId, actionId);
   }
-
-  /// 新增操作的条件补偿先准备固定预览，再由提交工具执行软删除。
-  async undo(
+  /// 条件撤销沿用原十分钟窗口。
+  undo(
     connectionId: string,
     actionId: string,
     requestId: string,
   ): Promise<Record<string, unknown>> {
-    mcpId.parse(actionId);
-    // 状态结果包含真实正式记录身份，不能使用预览中的临时身份。
-    const original = await this.status(connectionId, actionId);
-    // 私有步骤不从MCP响应反向接受。
-    const action = await this.prisma.mcpAction.findFirstOrThrow({
-      where: { id: actionId, connectionId },
-    });
-    // 只给可靠单条新增显示补偿，批量及其他变更需明确业务动作。
-    const steps = action.steps as unknown as McpStep[];
-    // 当前目录必须仍将此动作标为可补偿。
-    const connection = await this.requireConnection(this.prisma, connectionId);
-    if (
-      original.status !== 'succeeded' ||
-      steps.length !== 1 ||
-      !this.tool(connection, steps[0]!.name, true).undoCreate
-    )
-      throw new BadRequestException('此操作不支持通用撤销，请使用明确业务操作');
-    // 真实创建结果的正式身份，笔记结果包装在note字段。
-    const value = (
-      (action.result as Record<string, Prisma.JsonValue>)
-        .values as Prisma.JsonValue[]
-    )[0] as Record<string, Prisma.JsonValue>;
-    // 笔记正文保存返回带状态的对象。
-    const record = (value.note ?? value) as Record<string, Prisma.JsonValue>;
-    // 模块固定删除入口，不使用任意记录执行器。
-    const deletes: Record<McpModule, string> = {
-      quotes: 'delete_quote',
-      time: 'delete_time_entry',
-      todos: 'delete_todo',
-      inventory: 'delete_item',
-      memberships: 'delete_membership',
-      events: 'delete_event',
-      notes: 'delete_note',
-    };
-    return this.prepare(
-      connectionId,
-      requestId,
-      [
-        {
-          name: deletes[this.tool(connection, steps[0]!.name, true).module],
-          input: { id: record.id },
-        },
-      ],
-      actionId,
-    );
+    return this.executor.undo(connectionId, actionId, requestId);
   }
 
   /// 同一状态视图用于协议和设置页，敏感内部基线不返回。
@@ -1204,7 +495,7 @@ export class McpService {
     return businessRead(this.prisma, actor, async (transaction) => {
       // 仅当前归属，链接本身不是审批凭据。
       const action = await transaction.mcpAction.findFirst({
-        where: { id: actionId, userId: actor.sub },
+        where: { id: actionId, userId: actor.sub, source: 'mcp' },
       });
       if (!action) throw new NotFoundException('操作不存在');
       return this.actionView(action, true);

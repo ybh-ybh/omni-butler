@@ -79,6 +79,18 @@ class AuthRepository {
   /// 本机会话代次，防止断开后旧请求重新写回凭证。
   int _generation = 0;
 
+  /// 当前会话中的流请求，换服或断开立即取消。
+  final Set<CancelToken> _streamRequests = <CancelToken>{};
+
+  /// 推进会话代次并结束旧连接的流。
+  int _advanceGeneration() {
+    for (final CancelToken token in _streamRequests) {
+      token.cancel('同步会话已变更');
+    }
+    _streamRequests.clear();
+    return ++_generation;
+  }
+
   /// 当前会话已确认的同步结构代次，切换会话后自然失效。
   int? _verifiedSchemaGeneration;
 
@@ -128,6 +140,7 @@ class AuthRepository {
     ResponseType? responseType,
     Duration? receiveTimeout,
     bool preserveTransportErrors = false,
+    CancelToken? cancelToken,
   }) {
     if (generation != _generation) {
       throw const ApiFailure('同步会话已变更，请重新建立同步连接');
@@ -140,6 +153,7 @@ class AuthRepository {
       responseType: responseType,
       receiveTimeout: receiveTimeout,
       preserveTransportErrors: preserveTransportErrors,
+      cancelToken: cancelToken,
     );
   }
 
@@ -319,7 +333,7 @@ class AuthRepository {
     String? expectedOwnerId,
   }) async {
     // 本次连接对应新的本机会话代次。
-    final int generation = ++_generation;
+    final int generation = _advanceGeneration();
     _pendingRefresh = null;
     // 从服务器地址和固定路径生成 API 根地址。
     final String baseUrl = normalizeBaseUrl(apiBaseUrl);
@@ -412,6 +426,7 @@ class AuthRepository {
     ResponseType? responseType,
     Duration? receiveTimeout,
     bool preserveTransportErrors = false,
+    CancelToken? cancelToken,
   }) async {
     // 请求从读取会话起就固定所属代次。
     final int generation = _generation;
@@ -432,6 +447,7 @@ class AuthRepository {
         queryParameters: queryParameters,
         responseType: responseType,
         receiveTimeout: receiveTimeout,
+        cancelToken: cancelToken,
       );
       await _assertUnchangedSession(saved, generation);
       return response;
@@ -459,6 +475,7 @@ class AuthRepository {
             queryParameters: queryParameters,
             responseType: responseType,
             receiveTimeout: receiveTimeout,
+            cancelToken: cancelToken,
           );
           await _assertUnchangedSession(saved, generation);
           return response;
@@ -501,11 +518,13 @@ class AuthRepository {
     Map<String, dynamic>? queryParameters,
     ResponseType? responseType,
     Duration? receiveTimeout,
+    CancelToken? cancelToken,
   }) {
     return _dio(baseUrl).request<T>(
       path,
       data: data,
       queryParameters: queryParameters,
+      cancelToken: cancelToken,
       options: Options(
         method: method,
         responseType: responseType,
@@ -513,6 +532,22 @@ class AuthRepository {
         headers: <String, String>{'Authorization': 'Bearer $token'},
       ),
     );
+  }
+
+  /// 创建绑定当前会话代次的流取消令牌。
+  CancelToken createSessionStreamToken(int generation) {
+    if (generation != _generation) {
+      throw const ApiFailure('同步会话已变更，请重试');
+    }
+    // 每条 SSE 请求独立取消，避免关闭页面影响其他网络请求。
+    final CancelToken token = CancelToken();
+    _streamRequests.add(token);
+    return token;
+  }
+
+  /// 流结束后移除会话注册。
+  void releaseSessionStreamToken(CancelToken token) {
+    _streamRequests.remove(token);
   }
 
   /// 断开当前设备，立即阻止旧异步请求重新写入凭证。
@@ -533,7 +568,7 @@ class AuthRepository {
 
   /// 清除当前设备凭证，并使所有已发出的刷新结果过时。
   Future<void> clearSession() {
-    _generation++;
+    _advanceGeneration();
     _pendingRefresh = null;
     return _enqueueStorage(() => _storage.delete(key: storageKey));
   }

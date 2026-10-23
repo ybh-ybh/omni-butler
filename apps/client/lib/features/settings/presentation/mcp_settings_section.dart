@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/features/settings/presentation/business_change_preview.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
 import 'package:omni_butler/features/settings/data/mcp_repository.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
@@ -292,117 +293,220 @@ class _McpSettingsSectionState extends ConsumerState<McpSettingsSection> {
       ),
       data: (Map<String, dynamic>? data) {
         if (data == null) return const Text('连接后端后可管理 Codex 的 MCP 连接并查看操作记录。');
+        // 已撤销连接保留服务端历史，只在当前连接卡片中过滤。
+        final List<Map<String, dynamic>> connections =
+            (data['connections'] as List)
+                .map((dynamic value) => Map<String, dynamic>.from(value as Map))
+                .where(
+                  (Map<String, dynamic> connection) =>
+                      connection['revokedAt'] == null,
+                )
+                .toList();
+        // 接口按状态分组返回，展示前统一按时间排序以取最近30条。
+        final List<Map<String, dynamic>> actions =
+            (data['actions'] as List)
+                .map((dynamic value) => Map<String, dynamic>.from(value as Map))
+                .toList()
+              ..sort(
+                (Map<String, dynamic> first, Map<String, dynamic> second) =>
+                    DateTime.parse(
+                      second['createdAt'] as String,
+                    ).compareTo(DateTime.parse(first['createdAt'] as String)),
+              );
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            const Text(
-              'Codex MCP 连接',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              '默认只读，按模块授权。授予写权限后，单条任务由 Codex 直接执行；同一任务涉及两个及以上业务对象时，在 Codex 对话中展示清单并确认。单个对象正常产生的账单、版本或子项不另计。仅访问服务器已接收的数据，不读取本机草稿，也不调用后端大模型。',
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: <Widget>[
-                OmniButton(
-                  label: '新增连接',
-                  onPressed: _busy ? null : () => _create(repository),
-                ),
-                OmniButton(
-                  label: '刷新状态',
-                  variant: OmniButtonVariant.secondary,
-                  onPressed: _busy
-                      ? null
-                      : () => ref.invalidate(mcpSettingsProvider),
-                ),
-              ],
-            ),
-            if (_message != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(_message!),
+            OmniPanel(
+              key: const ValueKey<String>('mcp-connections-card'),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  LayoutBuilder(
+                    builder:
+                        (BuildContext context, BoxConstraints constraints) {
+                          // 窄屏或大字号将操作另起一行靠右，保留完整按钮文字。
+                          final bool stacked =
+                              constraints.maxWidth <
+                              520 * MediaQuery.textScalerOf(context).scale(1);
+                          // 连接列表的共同操作固定放在卡头右侧。
+                          final Widget actions = Wrap(
+                            alignment: WrapAlignment.end,
+                            spacing: OmniSpacing.sm,
+                            runSpacing: OmniSpacing.xs,
+                            children: <Widget>[
+                              OmniButton(
+                                label: '新增连接',
+                                onPressed: _busy
+                                    ? null
+                                    : () => _create(repository),
+                              ),
+                              OmniButton(
+                                label: '刷新状态',
+                                variant: OmniButtonVariant.secondary,
+                                onPressed: _busy
+                                    ? null
+                                    : () => ref.invalidate(mcpSettingsProvider),
+                              ),
+                            ],
+                          );
+                          // 卡片标题沿用设置区域的标题层级。
+                          final Widget title = Text(
+                            'MCP 连接',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          );
+                          return stacked
+                              ? Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: <Widget>[
+                                    title,
+                                    const SizedBox(height: OmniSpacing.sm),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: actions,
+                                    ),
+                                  ],
+                                )
+                              : Row(
+                                  children: <Widget>[
+                                    Expanded(child: title),
+                                    const SizedBox(width: OmniSpacing.sm),
+                                    actions,
+                                  ],
+                                );
+                        },
+                  ),
+                  if (_message != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: OmniSpacing.sm),
+                      child: Text(_message!),
+                    ),
+                  if (connections.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.only(top: OmniSpacing.md),
+                      child: Text('暂无 MCP 连接'),
+                    ),
+                  for (final Map<String, dynamic> connection in connections)
+                    Padding(
+                      key: ValueKey<String>(
+                        'mcp-connection-${connection['id']}',
+                      ),
+                      padding: const EdgeInsets.only(top: OmniSpacing.md),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Row(
+                            children: <Widget>[
+                              Expanded(
+                                child: Text(
+                                  connection['name'] as String,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: OmniSpacing.sm),
+                              OmniButton(
+                                label: '撤销连接',
+                                variant: OmniButtonVariant.secondary,
+                                onPressed: _busy
+                                    ? null
+                                    : () => _revoke(repository, connection),
+                              ),
+                            ],
+                          ),
+                          Text(
+                            '读取：${(connection['readModules'] as List).map((dynamic module) => mcpModuleLabels[module]).join('、')}',
+                          ),
+                          Text(
+                            '写入：${(connection['writeModules'] as List).isEmpty ? '未授权' : (connection['writeModules'] as List).map((dynamic module) => mcpModuleLabels[module]).join('、')}',
+                          ),
+                          Text(
+                            '到期：${connection['expiresAt'] ?? '永久'}\n时区：${connection['timeZone'] ?? '未配置，调用时需明确提供'}',
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
-            for (final dynamic value in data['connections'] as List)
-              Builder(
-                builder: (BuildContext context) {
-                  // 安全连接列表不含明文令牌或内部会话。
-                  final Map<String, dynamic> connection =
-                      Map<String, dynamic>.from(value as Map);
-                  // 固定到期与撤销由服务器时间解释，失效连接仍可显示审计。
-                  final bool revoked = connection['revokedAt'] != null;
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Text(
-                          '${connection['name']}${revoked ? ' · 已撤销' : ''}',
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        Text(
-                          '读取：${(connection['readModules'] as List).map((dynamic module) => mcpModuleLabels[module]).join('、')}',
-                        ),
-                        Text(
-                          '写入：${(connection['writeModules'] as List).isEmpty ? '未授权' : (connection['writeModules'] as List).map((dynamic module) => mcpModuleLabels[module]).join('、')}',
-                        ),
-                        Text(
-                          '到期：${connection['expiresAt'] ?? '永久'}\n时区：${connection['timeZone'] ?? '未配置，调用时需明确提供'}',
-                        ),
-                        if (!revoked)
-                          OmniButton(
-                            label: '撤销连接',
+            ),
+            const SizedBox(height: OmniSpacing.lg),
+            OmniPanel(
+              key: const ValueKey<String>('mcp-actions-card'),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Text('操作记录', style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: OmniSpacing.sm),
+                  if (actions.isEmpty)
+                    const Text('暂无 MCP 操作。使用 Codex 操作后，可刷新查看记录与结果。'),
+                  // 相邻记录之间使用主题灰色细线，首尾不额外加线。
+                  for (final (int index, Map<String, dynamic> action)
+                      in actions.take(30).indexed) ...<Widget>[
+                    if (index > 0) const Divider(),
+                    Padding(
+                      key: ValueKey<String>('mcp-action-row-${action['id']}'),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: OmniSpacing.sm,
+                      ),
+                      child: LayoutBuilder(
+                        builder: (BuildContext context, BoxConstraints constraints) {
+                          // 窄屏和大字号让信息占满一行，按钮另起一行靠右。
+                          final bool stacked =
+                              constraints.maxWidth <
+                              480 * MediaQuery.textScalerOf(context).scale(1);
+                          // 摘要只展示状态与身份，完整预览仍从服务器读取。
+                          final Widget details = Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text(_statusLabel(action['status'])),
+                              SelectableText(action['id'] as String),
+                              Text(
+                                '影响 ${(action['preview'] as Map)['affectedRecords']} 条记录 · ${action['createdAt']}',
+                              ),
+                            ],
+                          );
+                          // 查看按钮绑定操作身份，不依赖排序后的列表索引。
+                          final Widget review = OmniButton(
+                            key: ValueKey<String>(
+                              'mcp-action-review-${action['id']}',
+                            ),
+                            label: '查看操作',
                             variant: OmniButtonVariant.secondary,
                             onPressed: _busy
                                 ? null
-                                : () => _revoke(repository, connection),
-                          ),
-                      ],
+                                : () => _review(
+                                    repository,
+                                    action['id'] as String,
+                                  ),
+                          );
+                          return stacked
+                              ? Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: <Widget>[
+                                    details,
+                                    const SizedBox(height: OmniSpacing.xs),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: review,
+                                    ),
+                                  ],
+                                )
+                              : Row(
+                                  children: <Widget>[
+                                    Expanded(child: details),
+                                    const SizedBox(width: OmniSpacing.sm),
+                                    review,
+                                  ],
+                                );
+                        },
+                      ),
                     ),
-                  );
-                },
+                  ],
+                ],
               ),
-            const Divider(),
-            const Text(
-              '操作记录',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
-            const SizedBox(height: 8),
-            if ((data['actions'] as List).isEmpty)
-              const Text('暂无 MCP 操作。使用 Codex 操作后，可刷新查看记录与结果。'),
-            for (final dynamic value in data['actions'] as List)
-              Builder(
-                builder: (BuildContext context) {
-                  // 摘要行只导航到完整服务器预览。
-                  final Map<String, dynamic> action = Map<String, dynamic>.from(
-                    value as Map,
-                  );
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Text(_statusLabel(action['status'])),
-                        SelectableText(action['id'] as String),
-                        Text(
-                          '影响 ${(action['preview'] as Map)['affectedRecords']} 条记录 · ${action['createdAt']}',
-                        ),
-                        OmniButton(
-                          label: '查看操作',
-                          variant: OmniButtonVariant.secondary,
-                          onPressed: _busy
-                              ? null
-                              : () =>
-                                    _review(repository, action['id'] as String),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
           ],
         );
       },
@@ -448,7 +552,7 @@ class _McpConnectionEditorState extends State<_McpConnectionEditor> {
   /// 授权字段完整可见，新增不依赖模型建议的权限。
   @override
   Widget build(BuildContext context) => OmniDialogScaffold(
-    title: '新增 Codex MCP 连接',
+    title: '新增 MCP 连接',
     actions: <Widget>[
       OmniButton(
         label: '取消',

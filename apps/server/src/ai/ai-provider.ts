@@ -59,6 +59,19 @@ export function isPublicAiAddress(address: string): boolean {
   return false;
 }
 
+/// 笔记与助手共用公网校验和 DNS 固定，禁止 SDK 绕过这条出站边界。
+export async function resolveAiEndpoint(baseUrl: string, signal?: AbortSignal): Promise<{ url: URL; address: { address: string; family: number } }> {
+  // 基址规范化保留合法路径前缀，只拼接一次 Responses 端点。
+  const url = new URL(`${normalizeAiBaseUrl(baseUrl)}/responses`);
+  // IPv6 字面量不携带 URL 中的中括号。
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  // DoH 必须校验所有结果，混合公网与私网地址也不能通过。
+  let addresses: { address: string; family: number }[];
+  try { addresses = await resolveAiAddresses(hostname, signal); } catch { throw new AiProviderError('AI_DNS_FAILED'); }
+  if (!addresses.length || addresses.some((entry) => !isPublicAiAddress(entry.address))) throw new BadRequestException({ code: 'AI_PRIVATE_URL', message: '模型服务必须使用公网 HTTPS 地址，不能连接本机、内网或保留网段' });
+  return { url, address: addresses[0]! };
+}
+
 /// 三种供应商只使用 Responses API，不回退其他协议。
 @Injectable()
 export class AiProvider {
