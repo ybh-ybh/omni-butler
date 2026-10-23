@@ -1,0 +1,1626 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/core/auth/auth_models.dart';
+import 'package:omni_butler/features/assistant/data/assistant_chat_controller.dart';
+import 'package:omni_butler/features/assistant/data/assistant_models.dart';
+import 'package:omni_butler/features/assistant/data/assistant_repository.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_cards.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_conversation_search.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_windows_tokens.dart';
+import 'package:omni_butler/features/notes/presentation/note_markdown_text.dart';
+import 'package:omni_butler/shared/ui/omni_ui.dart';
+
+/// Windows 独立工作区，继续使用原会话控制器和认证隔离生命周期。
+class AssistantWindowsView extends ConsumerStatefulWidget {
+  /// 当前服务器的真实聊天状态。
+  final AssistantChatController chat;
+
+  /// 与原页面共享的草稿输入控制器。
+  final TextEditingController input;
+
+  /// 原页面持有的输入焦点。
+  final FocusNode inputFocus;
+
+  /// 原页面管理的消息滚动位置。
+  final ScrollController scroll;
+
+  /// 保留原幂等发送入口。
+  final Future<void> Function() onSend;
+
+  /// 按明确会话身份重命名。
+  final Future<void> Function(String id) onRename;
+
+  /// 按明确会话身份确认删除。
+  final Future<void> Function(String id) onDelete;
+
+  /// 创建仅供 Windows 使用的助手工作区。
+  const AssistantWindowsView({
+    required this.chat,
+    required this.input,
+    required this.inputFocus,
+    required this.scroll,
+    required this.onSend,
+    required this.onRename,
+    required this.onDelete,
+    super.key,
+  });
+
+  /// 创建局部交互状态。
+  @override
+  ConsumerState<AssistantWindowsView> createState() =>
+      _AssistantWindowsViewState();
+}
+
+/// 页面只维护搜索浮层与模型提交状态，任务事实仍以控制器为准。
+class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
+  /// 模型按钮的真实屏幕锚点。
+  final GlobalKey _modelKey = GlobalKey();
+
+  /// 首次进入后接收工作区快捷键，避免焦点停留在外层导航壳。
+  final FocusNode _workspaceFocus = FocusNode(debugLabel: 'AssistantWorkspace');
+
+  /// 防止连续快捷键重复打开搜索。
+  bool _searchOpen = false;
+
+  /// 防止模型选择重复提交。
+  bool _savingModel = false;
+
+  /// 模型更新失败需要持续展示。
+  String? _modelError;
+
+  /// 接入输入焦点与草稿变化，不改写输入法的组合区。
+  @override
+  void initState() {
+    super.initState();
+    widget.input.addListener(_inputChanged);
+    widget.inputFocus.onKeyEvent = _inputKey;
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (mounted && !_workspaceFocus.hasFocus) {
+        _workspaceFocus.requestFocus();
+      }
+    });
+  }
+
+  /// 移除局部监听，输入控制器仍由原页面释放。
+  @override
+  void dispose() {
+    widget.input.removeListener(_inputChanged);
+    widget.inputFocus.onKeyEvent = null;
+    _workspaceFocus.dispose();
+    super.dispose();
+  }
+
+  /// 输入内容变化时仅更新发送按钮状态。
+  void _inputChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// 只有真实设置和连接均有效时可提交聊天。
+  bool _enabled(AsyncValue<Map<String, dynamic>?> settings) =>
+      widget.chat.connected &&
+      !widget.chat.offline &&
+      !widget.chat.loading &&
+      !settings.isLoading &&
+      !settings.hasError &&
+      settings.value?['enabled'] == true;
+
+  /// 按钮和键盘共用相同发送门禁，未知结果只能恢复原请求。
+  bool _canSend(AsyncValue<Map<String, dynamic>?> settings) =>
+      _enabled(settings) &&
+      !widget.chat.busy &&
+      !_savingModel &&
+      (!widget.chat.active || widget.chat.run?['requiresTakeover'] != true) &&
+      (widget.chat.pending != null ||
+          (widget.input.text.trim().isNotEmpty &&
+              (!widget.chat.active ||
+                  <String>{
+                    'waitingInput',
+                    'waitingConfirmation',
+                  }.contains(widget.chat.run?['status']))));
+
+  /// 只有输入框内无组合文字的普通 Enter 才发送。
+  KeyEventResult _inputKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        !widget.input.value.composing.isCollapsed ||
+        HardwareKeyboard.instance.isShiftPressed ||
+        HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isAltPressed ||
+        HardwareKeyboard.instance.isMetaPressed ||
+        (event.logicalKey != LogicalKeyboardKey.enter &&
+            event.logicalKey != LogicalKeyboardKey.numpadEnter)) {
+      return KeyEventResult.ignored;
+    }
+    if (_canSend(ref.read(assistantSettingsProvider))) {
+      unawaited(widget.onSend());
+    }
+    return KeyEventResult.handled;
+  }
+
+  /// 全文搜索返回会话身份后才尝试切换，保留控制器的 pending 检查。
+  Future<void> _search() async {
+    if (_searchOpen) return;
+    // 取消搜索时恢复原来的有效焦点，不强制跳入输入框。
+    final FocusNode? previousFocus = FocusManager.instance.primaryFocus;
+    // 只有真正选择了聊天，关闭后才把焦点交给输入框。
+    bool selectedConversation = false;
+    _searchOpen = true;
+    try {
+      // 弹窗只返回用户选中的真实会话。
+      final String? selected = await showOmniDialog<String>(
+        context: context,
+        barrierColor: Colors.black.withValues(alpha: .16),
+        builder: (_) => AssistantConversationSearch(
+          chat: widget.chat,
+          onNew: _newConversation,
+        ),
+      );
+      if (mounted && selected != null) {
+        selectedConversation = true;
+        await widget.chat.select(selected);
+      }
+    } finally {
+      _searchOpen = false;
+      if (mounted) {
+        // 路由切换可能移除旧焦点节点，只有仍挂载的节点可以恢复。
+        final FocusNode? target = selectedConversation
+            ? widget.inputFocus
+            : previousFocus;
+        if (target?.context != null && target!.canRequestFocus) {
+          target.requestFocus();
+        }
+      }
+    }
+  }
+
+  /// 新聊天沿用服务端创建及旧草稿持久化流程。
+  void _newConversation() {
+    if (!widget.chat.connected ||
+        widget.chat.busy ||
+        widget.chat.pending != null) {
+      return;
+    }
+    unawaited(
+      widget.chat.create().then((_) {
+        if (mounted) widget.inputFocus.requestFocus();
+      }),
+    );
+  }
+
+  /// 右键菜单中的操作始终固定被点击条目，不能切换后误操作当前会话。
+  Future<void> _contextMenu(
+    Map<String, dynamic> conversation,
+    Offset position,
+  ) async {
+    // 当前会话真实身份。
+    final String id = conversation['id'] as String;
+    // 由服务器提供的置顶状态。
+    final bool pinned = conversation['isPinned'] == true;
+    // 真实窗口覆盖层的边界。
+    final RenderBox overlay =
+        Navigator.of(context).overlay!.context.findRenderObject()! as RenderBox;
+    // 本次右键明确选中的动作。
+    final String? selected = await showOmniMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(position.dx, position.dy, 1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: <PopupMenuEntry<String>>[
+        OmniPopupMenuItem<String>(
+          value: 'rename',
+          label: '重命名',
+          icon: Icons.drive_file_rename_outline,
+          enabled: widget.chat.connected && !widget.chat.busy,
+        ),
+        OmniPopupMenuItem<String>(
+          value: 'pin',
+          label: pinned ? '取消置顶' : '置顶',
+          icon: pinned ? Icons.push_pin_outlined : Icons.push_pin,
+          enabled: widget.chat.connected && !widget.chat.busy,
+        ),
+        OmniPopupMenuItem<String>(
+          value: 'delete',
+          label: '删除聊天',
+          icon: Icons.delete_outline,
+          danger: true,
+          enabled:
+              widget.chat.connected &&
+              !widget.chat.busy &&
+              widget.chat.pending == null,
+        ),
+      ],
+    );
+    if (!mounted) return;
+    if (selected == 'rename') await widget.onRename(id);
+    if (selected == 'pin') await widget.chat.setPinned(id, !pinned);
+    if (selected == 'delete') await widget.onDelete(id);
+  }
+
+  /// 模型面板紧贴按钮上方，并仅展示设置中真实存在的配置。
+  Future<void> _models(Map<String, dynamic>? settings) async {
+    if (_savingModel || settings == null || !widget.chat.connected) return;
+    // 当前按钮与窗口的真实坐标，用于向上定位菜单。
+    final RenderBox? button =
+        _modelKey.currentContext?.findRenderObject() as RenderBox?;
+    if (button == null) return;
+    // 输入框内按钮的完整边界。
+    final Rect anchor = button.localToGlobal(Offset.zero) & button.size;
+    // 选择前固定配置，禁止弹窗期间的设置刷新替换修订号。
+    final Map<String, dynamic> fixed = Map<String, dynamic>.from(settings);
+    // 真实已配置模型选项。
+    final List<Map<String, dynamic>> profiles = assistantItems(
+      fixed['profiles'],
+    );
+    // 面板只返回目标配置身份。
+    final String? id = await showOmniDialog<String>(
+      context: context,
+      barrierColor: Colors.transparent,
+      builder: (_) => _AssistantModelPicker(
+        anchor: anchor,
+        profiles: profiles,
+        selectedId: fixed['profileId'] as String?,
+      ),
+    );
+    if (!mounted || id == null || id == fixed['profileId']) return;
+    // 固定认证代次，避免切换服务器后提交旧配置。
+    final AssistantRepository repository = ref.read(
+      assistantRepositoryProvider,
+    );
+    if (!repository.isCurrent || !widget.chat.connected) return;
+    setState(() {
+      _savingModel = true;
+      _modelError = null;
+    });
+    try {
+      await repository.request(
+        'PUT',
+        '/settings',
+        data: <String, dynamic>{
+          'revision': fixed['revision'],
+          'enabled': fixed['enabled'],
+          'profileId': id,
+          'memoryReadEnabled': fixed['memoryReadEnabled'],
+          'memoryWriteEnabled': fixed['memoryWriteEnabled'],
+          'timeZone': fixed['timeZone'] ?? 'Asia/Shanghai',
+        },
+      );
+      if (!mounted || !repository.isCurrent) return;
+      ref.invalidate(assistantSettingsProvider);
+    } catch (error) {
+      if (!mounted || !repository.isCurrent) return;
+      setState(
+        () => _modelError = error is ApiFailure ? error.message : '模型切换失败，请重试',
+      );
+      ref.invalidate(assistantSettingsProvider);
+    } finally {
+      if (mounted) setState(() => _savingModel = false);
+    }
+  }
+
+  /// 左侧为品牌、新聊天以及按置顶状态分组的历史。
+  Widget _sidebar(AssistantWindowsPalette colors) {
+    // 置顶历史使用服务端稳定排序。
+    final List<Map<String, dynamic>> pinned = widget.chat.conversations
+        .where((item) => item['isPinned'] == true)
+        .toList();
+    // 普通历史保持服务端更新时间顺序。
+    final List<Map<String, dynamic>> recent = widget.chat.conversations
+        .where((item) => item['isPinned'] != true)
+        .toList();
+    return Container(
+      key: const ValueKey<String>('assistant-windows-sidebar'),
+      width: AssistantWindowsMetrics.sidebarWidth,
+      decoration: BoxDecoration(
+        color: colors.sidebar,
+        border: Border(right: BorderSide(color: colors.line)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 12, 4),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    '知序',
+                    style: TextStyle(
+                      color: colors.ink,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                OmniIconButton(
+                  key: const ValueKey<String>('assistant-search-button'),
+                  icon: const Icon(Icons.search),
+                  tooltip: '搜索聊天 (Ctrl+K)',
+                  color: colors.muted,
+                  onPressed: _search,
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 10, 8, 20),
+            child: OmniInkWell(
+              key: const ValueKey<String>('assistant-new-chat'),
+              onTap:
+                  widget.chat.connected &&
+                      !widget.chat.busy &&
+                      widget.chat.pending == null
+                  ? _newConversation
+                  : null,
+              borderRadius: BorderRadius.circular(
+                AssistantWindowsMetrics.rowRadius,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: <Widget>[
+                    Icon(Icons.edit_square, size: 18, color: colors.ink),
+                    const SizedBox(width: 12),
+                    Text(
+                      '新聊天',
+                      style: TextStyle(color: colors.ink, fontSize: 16),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              children: <Widget>[
+                if (pinned.isNotEmpty) _groupLabel('置顶', colors),
+                for (final Map<String, dynamic> item in pinned)
+                  _conversation(item, colors),
+                if (recent.isNotEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(top: pinned.isEmpty ? 0 : 18),
+                    child: _groupLabel('聊天', colors),
+                  ),
+                for (final Map<String, dynamic> item in recent)
+                  _conversation(item, colors),
+                if (widget.chat.conversations.isEmpty && !widget.chat.loading)
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                      '暂无聊天',
+                      style: TextStyle(color: colors.muted, fontSize: 14),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 轻量分组标签。
+  Widget _groupLabel(String label, AssistantWindowsPalette colors) => Padding(
+    padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+    child: Text(label, style: TextStyle(color: colors.muted, fontSize: 14)),
+  );
+
+  /// 每行显示操作由行内悬停与键盘焦点决定。
+  Widget _conversation(
+    Map<String, dynamic> item,
+    AssistantWindowsPalette colors,
+  ) {
+    // 会话操作必须绑定本行身份。
+    final String id = item['id'] as String;
+    return _AssistantConversationRow(
+      key: ValueKey<String>('assistant-conversation-$id'),
+      conversation: item,
+      selected: widget.chat.conversationId == id,
+      colors: colors,
+      onSelect: widget.chat.busy
+          ? null
+          : () => unawaited(widget.chat.select(id)),
+      onPin: widget.chat.connected && !widget.chat.busy
+          ? () => unawaited(widget.chat.setPinned(id, item['isPinned'] != true))
+          : null,
+      onDelete:
+          widget.chat.connected &&
+              !widget.chat.busy &&
+              widget.chat.pending == null
+          ? () => unawaited(widget.onDelete(id))
+          : null,
+      onRename: widget.chat.connected && !widget.chat.busy
+          ? () => unawaited(widget.onRename(id))
+          : null,
+      onContextMenu: (Offset position) =>
+          unawaited(_contextMenu(item, position)),
+    );
+  }
+
+  /// 标题本身是重命名入口，窄窗口提供搜索入口以恢复历史访问。
+  Widget _header(bool wide, AssistantWindowsPalette colors) {
+    // 当前聊天名称来自服务端历史列表。
+    final String title =
+        widget.chat.conversations
+                .where((item) => item['id'] == widget.chat.conversationId)
+                .firstOrNull?['title']
+            as String? ??
+        '新聊天';
+    return ConstrainedBox(
+      constraints: const BoxConstraints(
+        minHeight: AssistantWindowsMetrics.headerHeight,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+        child: Row(
+          children: <Widget>[
+            if (!wide) ...<Widget>[
+              OmniIconButton(
+                key: const ValueKey<String>('assistant-search-button'),
+                icon: const Icon(Icons.search),
+                tooltip: '搜索聊天 (Ctrl+K)',
+                onPressed: _search,
+              ),
+              OmniIconButton(
+                icon: const Icon(Icons.edit_square),
+                tooltip: '新聊天 (Ctrl+N)',
+                onPressed:
+                    widget.chat.connected &&
+                        !widget.chat.busy &&
+                        widget.chat.pending == null
+                    ? _newConversation
+                    : null,
+              ),
+              const SizedBox(width: 8),
+            ],
+            Icon(Icons.chat_bubble_outline, color: colors.ink, size: 18),
+            const SizedBox(width: 12),
+            Flexible(
+              child: Tooltip(
+                message: '重命名对话',
+                child: OmniInkWell(
+                  onTap:
+                      widget.chat.conversationId != null &&
+                          widget.chat.connected &&
+                          !widget.chat.busy
+                      ? () => unawaited(
+                          widget.onRename(widget.chat.conversationId!),
+                        )
+                      : null,
+                  borderRadius: BorderRadius.circular(OmniRadius.control),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 8,
+                      horizontal: 4,
+                    ),
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colors.ink,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 消息和输入区共享靠右的内容列，避免两个区域各自居中。
+  Widget _contentColumn({required Widget child, required double inset}) =>
+      Align(
+        alignment: Alignment.topRight,
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: inset),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: AssistantWindowsMetrics.contentWidth,
+            ),
+            child: SizedBox(width: double.infinity, child: child),
+          ),
+        ),
+      );
+
+  /// 已完成回答展示服务端记录的真实耗时，未知值不猜测。
+  Widget _elapsed(num milliseconds, AssistantWindowsPalette colors) {
+    // 秒数按完成时间向上取整，避免把非零请求显示成零秒。
+    final int seconds = (milliseconds / 1000).ceil();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.only(bottom: 9),
+            child: Text(
+              milliseconds == 0 ? '用时不足1秒' : '用时 $seconds秒',
+              style: TextStyle(fontSize: 14, color: colors.muted),
+            ),
+          ),
+          Divider(height: 1, color: colors.line),
+        ],
+      ),
+    );
+  }
+
+  /// 轻量回答操作保留保存笔记与受控结构化卡片。
+  Widget _message(
+    Map<String, dynamic> message,
+    bool enabled,
+    AssistantWindowsPalette colors,
+  ) {
+    // 消息身份稳定绑定视觉测试和流式节点。
+    final String id = '${message['id']}';
+    // 用户与助手采用不同表面，移除重复的角色标题。
+    final bool user = message['role'] == 'user';
+    // 完整正文仍复用原有 Markdown 解析和文本选择。
+    final String content = message['content'] as String? ?? '';
+    // 服务端保存的本条回答耗时。
+    final num? elapsed = message['elapsedMs'] as num?;
+    // 当前回答仍在执行或等待结算时，不展示暂存的零耗时。
+    final bool timingPending =
+        widget.chat.run?['answerMessageId'] == id &&
+        (widget.chat.run?['timingPending'] == true ||
+            <String>{'running', 'queued'}.contains(widget.chat.run?['status']));
+    // 当前发送与业务卡片可用状态。
+    final bool actionsEnabled =
+        enabled && !widget.chat.busy && widget.chat.pending == null;
+    return Padding(
+      padding: EdgeInsets.only(bottom: user ? 56 : 36),
+      child: Align(
+        alignment: user ? Alignment.centerRight : Alignment.centerLeft,
+        child: FractionallySizedBox(
+          widthFactor: user ? .72 : 1,
+          child: Container(
+            key: ValueKey<String>(
+              user ? 'assistant-user-message-$id' : 'assistant-answer-$id',
+            ),
+            padding: user
+                ? const EdgeInsets.symmetric(horizontal: 18, vertical: 14)
+                : EdgeInsets.zero,
+            decoration: user
+                ? BoxDecoration(
+                    color: colors.soft,
+                    borderRadius: BorderRadius.circular(
+                      AssistantWindowsMetrics.bubbleRadius,
+                    ),
+                  )
+                : null,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                if (!user && !timingPending && elapsed != null && elapsed >= 0)
+                  _elapsed(elapsed, colors),
+                if (!user && message['_streaming'] == true && content.isEmpty)
+                  Text(
+                    '正在思考…',
+                    style: TextStyle(color: colors.muted, fontSize: 14),
+                  ),
+                SelectableText.rich(
+                  NoteMarkdownText.span(
+                    content,
+                    style: TextStyle(
+                      color: colors.ink,
+                      fontSize: 16,
+                      height: 1.7,
+                    ),
+                  ),
+                ),
+                for (final Map<String, dynamic> card in assistantItems(
+                  message['cards'],
+                ))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: AssistantMessageCard(
+                      card: card,
+                      enabled: actionsEnabled,
+                      onEditReference:
+                          widget.chat.active || widget.chat.pending != null
+                          ? null
+                          : (Map<String, dynamic> reference) {
+                              widget.input.text =
+                                  '请修改「${reference['label'] ?? '这条记录'}」：';
+                              widget.chat.setDraft(
+                                widget.input.text,
+                                reference: reference,
+                              );
+                              widget.inputFocus.requestFocus();
+                            },
+                      onChoice: (String value, Map<String, dynamic> selection) {
+                        widget.input.text = value;
+                        widget.chat.setDraft(value);
+                        unawaited(
+                          widget.chat.send(selection: selection).then((_) {
+                            if (mounted && widget.chat.pending == null) {
+                              widget.input.clear();
+                            }
+                          }),
+                        );
+                      },
+                    ),
+                  ),
+                if (!user &&
+                    message['_streaming'] != true &&
+                    content.trim().isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OmniTextButton(
+                      style: TextButton.styleFrom(
+                        foregroundColor: colors.muted,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        minimumSize: const Size(0, 28),
+                      ),
+                      onPressed:
+                          actionsEnabled &&
+                              !widget.chat.active &&
+                              content.length <= 19000
+                          ? () {
+                              widget.input.text =
+                                  '请把以下内容完整保存为一篇笔记：\n\n$content';
+                              widget.chat.setDraft(
+                                widget.input.text,
+                                clearReference: true,
+                              );
+                              unawaited(widget.onSend());
+                            }
+                          : null,
+                      child: Text(
+                        '保存为笔记',
+                        style: TextStyle(color: colors.muted, fontSize: 12),
+                      ),
+                    ),
+                  ),
+                if (!user && widget.chat.run?['answerMessageId'] == id)
+                  _runActions(enabled, colors),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 当前任务操作跟随对应回答；没有回答时由消息列表末尾承载。
+  Widget _runActions(bool enabled, AssistantWindowsPalette colors) {
+    // 运行错误与受服务器控制的操作只渲染一份。
+    final List<Widget> children = <Widget>[
+      if (widget.chat.run?['errorMessage'] is String)
+        Text(
+          widget.chat.run!['errorMessage'] as String,
+          style: TextStyle(color: OmniColors.of(context).danger, fontSize: 13),
+        ),
+      if (widget.chat.active ||
+          widget.chat.run?['canUndo'] == true ||
+          <String>{
+            'failed',
+            'submissionUnknown',
+          }.contains(widget.chat.run?['status']))
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          children: <Widget>[
+            Text(
+              widget.chat.run?['requiresTakeover'] == true && widget.chat.active
+                  ? '任务由其他设备处理，请先接管'
+                  : assistantStatusLabel(widget.chat.run?['status'] as String?),
+              style: TextStyle(color: colors.muted, fontSize: 13),
+            ),
+            if (widget.chat.run?['canUndo'] == true)
+              OmniButton(
+                label: '撤销新增',
+                variant: OmniButtonVariant.text,
+                onPressed: !widget.chat.busy && enabled
+                    ? widget.chat.undo
+                    : null,
+              ),
+            if (widget.chat.active)
+              OmniButton(
+                label: '停止',
+                variant: OmniButtonVariant.text,
+                onPressed:
+                    !widget.chat.busy &&
+                        widget.chat.connected &&
+                        !widget.chat.offline
+                    ? widget.chat.stop
+                    : null,
+              ),
+            if (widget.chat.run?['requiresTakeover'] == true &&
+                !<String>{
+                  'succeeded',
+                  'cancelled',
+                }.contains(widget.chat.run?['status']))
+              OmniButton(
+                label: '在此设备接管',
+                variant: OmniButtonVariant.text,
+                onPressed:
+                    !widget.chat.busy &&
+                        widget.chat.connected &&
+                        !widget.chat.offline
+                    ? widget.chat.takeover
+                    : null,
+              ),
+            if (<String>{
+              'failed',
+              'submissionUnknown',
+            }.contains(widget.chat.run?['status']))
+              OmniButton(
+                label: '重试任务',
+                variant: OmniButtonVariant.text,
+                onPressed: !widget.chat.busy && enabled
+                    ? widget.chat.retry
+                    : null,
+              ),
+          ],
+        ),
+    ];
+    if (children.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      key: const ValueKey<String>('assistant-run-actions'),
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: children,
+      ),
+    );
+  }
+
+  /// 连接、设置和草稿状态留在输入区，运行操作由对应回答承载。
+  Widget _status(
+    AsyncValue<Map<String, dynamic>?> settings,
+    AssistantWindowsPalette colors,
+    double availableHeight,
+  ) {
+    // 各状态共用可换行的小型操作区。
+    final List<Widget> children = <Widget>[
+      if (widget.chat.offline || !widget.chat.connected)
+        Text(
+          '当前仅显示本机缓存；恢复连接后核实服务器状态。',
+          style: TextStyle(color: colors.muted, fontSize: 13),
+        ),
+      if (widget.chat.connected && settings.isLoading)
+        const LinearProgressIndicator(minHeight: 2),
+      if (widget.chat.connected &&
+          !settings.isLoading &&
+          (settings.hasError || settings.value?['enabled'] != true))
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          children: <Widget>[
+            Text(
+              settings.hasError ? '无法读取助手设置，请重试' : '请在 AI 设置中选择助手模型并开启助手。',
+              style: TextStyle(color: colors.muted, fontSize: 13),
+            ),
+            OmniButton(
+              label: 'AI 设置',
+              variant: OmniButtonVariant.text,
+              onPressed: () => context.go('/settings?section=ai'),
+            ),
+            if (settings.hasError)
+              OmniButton(
+                label: '重试',
+                variant: OmniButtonVariant.text,
+                onPressed: () => ref.invalidate(assistantSettingsProvider),
+              ),
+          ],
+        ),
+      if (_modelError != null)
+        Text(
+          _modelError!,
+          style: TextStyle(color: OmniColors.of(context).danger, fontSize: 13),
+        ),
+      if (widget.chat.error != null)
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          children: <Widget>[
+            Text(
+              widget.chat.error!,
+              style: TextStyle(
+                color: OmniColors.of(context).danger,
+                fontSize: 13,
+              ),
+            ),
+            OmniButton(
+              label: '刷新状态',
+              variant: OmniButtonVariant.text,
+              onPressed: widget.chat.connected && !widget.chat.busy
+                  ? widget.chat.refresh
+                  : null,
+            ),
+          ],
+        ),
+      if (widget.chat.draftReference != null)
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          children: <Widget>[
+            Text(
+              '编辑目标：${widget.chat.draftReference!['label'] ?? '所选记录'}',
+              style: TextStyle(color: colors.muted, fontSize: 13),
+            ),
+            OmniButton(
+              label: '取消定位',
+              variant: OmniButtonVariant.text,
+              onPressed: widget.chat.busy || widget.chat.pending != null
+                  ? null
+                  : widget.chat.clearDraftReference,
+            ),
+          ],
+        ),
+      if (widget.chat.pending != null)
+        Text(
+          '上一条消息结果尚未核实，请恢复发送。',
+          style: TextStyle(color: colors.muted, fontSize: 13),
+        ),
+    ];
+    if (children.isEmpty) return const SizedBox.shrink();
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: math.max(56, availableHeight * .23),
+      ),
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: children,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 输入区域固定两层：多行文本在上，模型与发送在右下角。
+  Widget _composer(
+    AsyncValue<Map<String, dynamic>?> settings,
+    AssistantWindowsPalette colors,
+    double height,
+  ) {
+    // 全局默认配置的可读名称。
+    final Map<String, dynamic>? profile = assistantItems(
+      settings.value?['profiles'],
+    ).where((item) => item['id'] == settings.value?['profileId']).firstOrNull;
+    // 没有配置时提供真实设置入口。
+    final String model = profile == null
+        ? '选择模型'
+        : '${profile['model'] ?? profile['name'] ?? '选择模型'}';
+    // 用户发送和未知结果恢复使用相同箭头但不同可访问名称。
+    final bool canSend = _canSend(settings);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        _status(settings, colors, height),
+        Container(
+          key: const ValueKey<String>('assistant-windows-composer'),
+          constraints: const BoxConstraints(
+            minHeight: AssistantWindowsMetrics.composerHeight,
+          ),
+          decoration: BoxDecoration(
+            color: colors.canvas,
+            border: Border.all(color: colors.line),
+            borderRadius: BorderRadius.circular(
+              AssistantWindowsMetrics.panelRadius,
+            ),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withValues(alpha: .035),
+                blurRadius: 12,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                OmniTextField(
+                  key: const ValueKey<String>('assistant-input'),
+                  controller: widget.input,
+                  focusNode: widget.inputFocus,
+                  minLines: 2,
+                  maxLines: 5,
+                  maxLength: 20000,
+                  textInputAction: TextInputAction.newline,
+                  readOnly:
+                      widget.chat.busy ||
+                      widget.chat.pending != null ||
+                      _savingModel,
+                  enabled: _enabled(settings),
+                  onChanged: widget.chat.setDraft,
+                  style: TextStyle(
+                    fontSize: 16,
+                    height: 1.6,
+                    color: colors.ink,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: '和知序一起工作',
+                    hintStyle: TextStyle(
+                      color: colors.muted.withValues(alpha: .65),
+                    ),
+                    counterText: '',
+                    filled: false,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    disabledBorder: InputBorder.none,
+                    contentPadding: const EdgeInsets.only(top: 6, bottom: 6),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: <Widget>[
+                    Flexible(
+                      child: Container(
+                        key: _modelKey,
+                        child: OmniTextButton(
+                          key: const ValueKey<String>('assistant-model-button'),
+                          onPressed:
+                              widget.chat.connected &&
+                                  !widget.chat.busy &&
+                                  !_savingModel &&
+                                  !settings.isLoading &&
+                                  widget.chat.pending == null
+                              ? () => _models(settings.value)
+                              : null,
+                          style: TextButton.styleFrom(
+                            foregroundColor: colors.ink,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            minimumSize: const Size(0, 34),
+                            shape: const StadiumBorder(),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              if (_savingModel)
+                                const SizedBox.square(
+                                  dimension: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              else
+                                const Icon(Icons.bolt, size: 16),
+                              const SizedBox(width: 5),
+                              Flexible(
+                                child: Text(
+                                  model,
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
+                                  style: const TextStyle(fontSize: 14),
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              Icon(
+                                Icons.keyboard_arrow_down,
+                                size: 16,
+                                color: colors.muted,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    SizedBox.square(
+                      dimension: AssistantWindowsMetrics.sendSize,
+                      child: Material(
+                        key: const ValueKey<String>('assistant-send-surface'),
+                        shape: const CircleBorder(),
+                        clipBehavior: Clip.antiAlias,
+                        color: canSend
+                            ? colors.ink
+                            : colors.muted.withValues(alpha: .7),
+                        child: Tooltip(
+                          message: widget.chat.pending == null
+                              ? '发送 (Enter)'
+                              : '恢复发送',
+                          child: Semantics(
+                            button: true,
+                            enabled: canSend,
+                            child: OmniInkWell(
+                              key: const ValueKey<String>(
+                                'assistant-send-button',
+                              ),
+                              customBorder: const CircleBorder(),
+                              onTap: canSend
+                                  ? () => unawaited(widget.onSend())
+                                  : null,
+                              child: Center(
+                                child: widget.chat.busy
+                                    ? SizedBox.square(
+                                        dimension: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: colors.canvas,
+                                        ),
+                                      )
+                                    : Icon(
+                                        Icons.arrow_upward,
+                                        size: 21,
+                                        color: colors.canvas,
+                                      ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 构建截图同款的平面聊天工作区，并在窄窗口保留完整入口。
+  @override
+  Widget build(BuildContext context) {
+    // 当前真实助手设置。
+    final AsyncValue<Map<String, dynamic>?> settings = ref.watch(
+      assistantSettingsProvider,
+    );
+    // 本页面的中性表面。
+    final AssistantWindowsPalette colors = AssistantWindowsPalette.of(context);
+    // 当前业务卡片与输入门禁。
+    final bool enabled = _enabled(settings);
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
+            unawaited(_search()),
+        const SingleActivator(LogicalKeyboardKey.keyN, control: true):
+            _newConversation,
+      },
+      child: Focus(
+        focusNode: _workspaceFocus,
+        child: Material(
+          color: colors.canvas,
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              // 大字号优先保证聊天与输入宽度。
+              final bool wide =
+                  constraints.maxWidth >=
+                  AssistantWindowsMetrics.collapseWidth *
+                      MediaQuery.textScalerOf(context).scale(14) /
+                      14;
+              // 靠右的留白随剩余工作区宽度收紧。
+              final double inset = constraints.maxWidth > 1350
+                  ? AssistantWindowsMetrics.contentInset
+                  : AssistantWindowsMetrics.compactInset;
+              return Row(
+                children: <Widget>[
+                  if (wide) _sidebar(colors),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        _header(wide, colors),
+                        Expanded(
+                          child: widget.chat.loading
+                              ? const Center(child: CircularProgressIndicator())
+                              : ListView(
+                                  key: const ValueKey<String>(
+                                    'assistant-windows-messages',
+                                  ),
+                                  controller: widget.scroll,
+                                  padding: const EdgeInsets.only(
+                                    top: 28,
+                                    bottom: 24,
+                                  ),
+                                  children: <Widget>[
+                                    _contentColumn(
+                                      inset: inset,
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: <Widget>[
+                                          if (widget.chat.messages.isEmpty &&
+                                              widget.chat.plan == null)
+                                            Padding(
+                                              padding: EdgeInsets.only(
+                                                top: math.max(
+                                                  20,
+                                                  constraints.maxHeight * .20,
+                                                ),
+                                              ),
+                                              child: Text(
+                                                '把事情交代给知序',
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(
+                                                  color: colors.ink,
+                                                  fontSize: 28,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ),
+                                          for (final Map<String, dynamic>
+                                              message
+                                              in widget.chat.messages)
+                                            _message(message, enabled, colors),
+                                          if (widget.chat.plan != null &&
+                                              widget.chat.run?['status'] ==
+                                                  'waitingConfirmation')
+                                            AssistantPlanCard(
+                                              plan: widget.chat.plan!,
+                                              enabled:
+                                                  enabled &&
+                                                  !widget.chat.busy &&
+                                                  !widget.chat.offline &&
+                                                  widget.chat.pending == null &&
+                                                  widget.chat.draft
+                                                      .trim()
+                                                      .isEmpty &&
+                                                  widget
+                                                          .chat
+                                                          .run?['timingPending'] !=
+                                                      true &&
+                                                  widget
+                                                          .chat
+                                                          .run?['requiresTakeover'] !=
+                                                      true,
+                                              onDecision: (String value) =>
+                                                  unawaited(
+                                                    widget.chat.decide(value),
+                                                  ),
+                                              onEdit: () {
+                                                widget.input.text = '修改方案：';
+                                                widget.chat.setDraft(
+                                                  widget.input.text,
+                                                  clearReference: true,
+                                                );
+                                                widget.inputFocus
+                                                    .requestFocus();
+                                              },
+                                            ),
+                                          if (widget.chat.run != null &&
+                                              !widget.chat.messages.any(
+                                                (message) =>
+                                                    message['role'] ==
+                                                        'assistant' &&
+                                                    message['id'] ==
+                                                        widget
+                                                            .chat
+                                                            .run?['answerMessageId'],
+                                              ))
+                                            _runActions(enabled, colors),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                        ),
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: constraints.maxHeight * .52,
+                          ),
+                          child: SingleChildScrollView(
+                            reverse: true,
+                            child: Padding(
+                              padding: const EdgeInsets.only(
+                                top: 8,
+                                bottom: 18,
+                              ),
+                              child: _contentColumn(
+                                inset: inset,
+                                child: _composer(
+                                  settings,
+                                  colors,
+                                  constraints.maxHeight,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 历史条目把标题与悬停操作分开，出现按钮时不会推动整行。
+class _AssistantConversationRow extends StatefulWidget {
+  /// 条目真实会话。
+  final Map<String, dynamic> conversation;
+
+  /// 当前选中状态。
+  final bool selected;
+
+  /// 颜色与工作区保持一致。
+  final AssistantWindowsPalette colors;
+
+  /// 选择会话回调。
+  final VoidCallback? onSelect;
+
+  /// 置顶或取消置顶回调。
+  final VoidCallback? onPin;
+
+  /// 删除明确条目回调。
+  final VoidCallback? onDelete;
+
+  /// 重命名明确条目回调。
+  final VoidCallback? onRename;
+
+  /// 打开右键菜单回调。
+  final ValueChanged<Offset> onContextMenu;
+
+  /// 创建保留键盘访问的历史行。
+  const _AssistantConversationRow({
+    required this.conversation,
+    required this.selected,
+    required this.colors,
+    required this.onSelect,
+    required this.onPin,
+    required this.onDelete,
+    required this.onRename,
+    required this.onContextMenu,
+    super.key,
+  });
+
+  /// 创建悬停状态。
+  @override
+  State<_AssistantConversationRow> createState() =>
+      _AssistantConversationRowState();
+}
+
+/// 只在鼠标或焦点位于本行时展示尾部操作。
+class _AssistantConversationRowState extends State<_AssistantConversationRow> {
+  /// 当前鼠标是否位于整行。
+  bool _hovered = false;
+
+  /// 当前键盘焦点是否属于整行。
+  bool _focused = false;
+
+  /// 构建固定高度的历史标题与两枚独立操作。
+  @override
+  Widget build(BuildContext context) {
+    // 条目真实身份用于独立测试定位。
+    final String id = widget.conversation['id'] as String;
+    // 鼠标或键盘均可展开操作。
+    final bool actions = _hovered || _focused;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: Focus(
+          onFocusChange: (bool value) => setState(() => _focused = value),
+          onKeyEvent: (FocusNode node, KeyEvent event) {
+            if (event is KeyDownEvent &&
+                event.logicalKey == LogicalKeyboardKey.f2 &&
+                widget.onRename != null) {
+              widget.onRename!();
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },
+          child: Material(
+            color: widget.selected || actions
+                ? widget.colors.soft
+                : widget.colors.sidebar,
+            borderRadius: BorderRadius.circular(
+              AssistantWindowsMetrics.rowRadius,
+            ),
+            child: OmniInkWell(
+              onTap: widget.onSelect,
+              onSecondaryTapDown: (TapDownDetails details) =>
+                  widget.onContextMenu(details.globalPosition),
+              borderRadius: BorderRadius.circular(
+                AssistantWindowsMetrics.rowRadius,
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minHeight: AssistantWindowsMetrics.historyHeight,
+                ),
+                child: Stack(
+                  alignment: Alignment.centerRight,
+                  children: <Widget>[
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(10, 9, actions ? 76 : 10, 9),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '${widget.conversation['title'] ?? '新聊天'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: widget.colors.ink,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                    ),
+                    ExcludeFocus(
+                      excluding: !actions,
+                      child: ExcludeSemantics(
+                        excluding: !actions,
+                        child: IgnorePointer(
+                          ignoring: !actions,
+                          child: AnimatedOpacity(
+                            opacity: actions ? 1 : 0,
+                            duration: OmniMotion.duration(
+                              context,
+                              OmniMotion.fast,
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 2),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  OmniIconButton(
+                                    key: ValueKey<String>('assistant-pin-$id'),
+                                    icon: Icon(
+                                      widget.conversation['isPinned'] != true
+                                          ? Icons.push_pin_outlined
+                                          : Icons.push_pin,
+                                    ),
+                                    tooltip:
+                                        widget.conversation['isPinned'] != true
+                                        ? '置顶聊天'
+                                        : '取消置顶',
+                                    onPressed: widget.onPin,
+                                    iconSize: 16,
+                                  ),
+                                  OmniIconButton(
+                                    key: ValueKey<String>(
+                                      'assistant-delete-$id',
+                                    ),
+                                    icon: const Icon(Icons.delete_outline),
+                                    tooltip: '删除聊天',
+                                    onPressed: widget.onDelete,
+                                    iconSize: 16,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 模型面板以真实按钮为锚点，完整保留当前配置名称与选择勾。
+class _AssistantModelPicker extends StatelessWidget {
+  /// 输入栏按钮的窗口坐标。
+  final Rect anchor;
+
+  /// 当前服务器全部模型配置。
+  final List<Map<String, dynamic>> profiles;
+
+  /// 已保存的全局默认配置。
+  final String? selectedId;
+
+  /// 创建向上弹出的模型列表。
+  const _AssistantModelPicker({
+    required this.anchor,
+    required this.profiles,
+    required this.selectedId,
+  });
+
+  /// 只有模型名称重复时附加配置名称，便于区分不同服务端的同款模型。
+  String _profileLabel(
+    Map<String, dynamic> profile,
+    Map<String, int> modelCounts,
+  ) {
+    // 普通配置维持原来的紧凑模型标签。
+    final String model = '${profile['model'] ?? profile['name'] ?? '模型'}';
+    // 用户保存的配置名称只用于重名消歧。
+    final String name = '${profile['name'] ?? ''}'.trim();
+    return (modelCounts[model] ?? 0) > 1 && name.isNotEmpty && name != model
+        ? '$model · $name'
+        : model;
+  }
+
+  /// 构建跟随窗口大小钳制的选择面板。
+  @override
+  Widget build(BuildContext context) {
+    // 本页面浮层使用同组中性色。
+    final AssistantWindowsPalette colors = AssistantWindowsPalette.of(context);
+    // 按实际显示模型名统计重复项，避免菜单逐行重复扫描配置。
+    final Map<String, int> modelCounts = <String, int>{};
+    // 每个服务端配置仍保留独立身份，名称只用于展示。
+    for (final Map<String, dynamic> profile in profiles) {
+      // 与菜单标签采用相同的兼容回退规则。
+      final String model = '${profile['model'] ?? profile['name'] ?? '模型'}';
+      modelCounts[model] = (modelCounts[model] ?? 0) + 1;
+    }
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 窄窗口菜单保持完整留白。
+        final double width = math.min(
+          AssistantWindowsMetrics.modelWidth,
+          math.max(0, constraints.maxWidth - 24),
+        );
+        // 优先把菜单右侧与模型按钮对齐。
+        final double left = (anchor.right - width).clamp(
+          12.0,
+          math.max(12.0, constraints.maxWidth - width - 12),
+        );
+        // 从按钮上边向上展开，短窗口限制可滚动高度。
+        final double bottom = math.max(
+          12,
+          constraints.maxHeight - anchor.top + 8,
+        );
+        // 保证高字号时不会超出窗口上边缘。
+        final double maxHeight = math.max(
+          80,
+          math.min(460, constraints.maxHeight - bottom - 12),
+        );
+        return Stack(
+          children: <Widget>[
+            Positioned(
+              left: left,
+              bottom: bottom,
+              width: width,
+              child: Material(
+                key: const ValueKey<String>('assistant-model-menu'),
+                color: colors.canvas,
+                borderRadius: BorderRadius.circular(
+                  AssistantWindowsMetrics.modelRadius,
+                ),
+                clipBehavior: Clip.antiAlias,
+                elevation: 6,
+                shadowColor: Colors.black.withValues(alpha: .12),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: maxHeight),
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 12,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(8, 0, 8, 14),
+                            child: Text(
+                              '选择模型',
+                              style: TextStyle(
+                                color: colors.muted,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            child: Text(
+                              '默认',
+                              style: TextStyle(color: colors.ink, fontSize: 15),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
+                            child: Text(
+                              '已配置模型',
+                              style: TextStyle(
+                                color: colors.muted,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                          if (profiles.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Text(
+                                '请先在 AI 设置中添加模型配置。',
+                                style: TextStyle(color: colors.muted),
+                              ),
+                            ),
+                          for (final Map<String, dynamic> profile in profiles)
+                            Material(
+                              color: profile['id'] == selectedId
+                                  ? colors.soft
+                                  : colors.canvas,
+                              borderRadius: BorderRadius.circular(
+                                AssistantWindowsMetrics.rowRadius,
+                              ),
+                              child: OmniInkWell(
+                                key: ValueKey<String>(
+                                  'assistant-model-${profile['id']}',
+                                ),
+                                onTap: profile['hasApiKey'] == true
+                                    ? () =>
+                                          Navigator.of(context)
+                                              .pop(profile['id'] as String)
+                                    : null,
+                                borderRadius: BorderRadius.circular(
+                                  AssistantWindowsMetrics.rowRadius,
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 11,
+                                  ),
+                                  child: Row(
+                                    children: <Widget>[
+                                      Expanded(
+                                        child: Text(
+                                          _profileLabel(profile, modelCounts),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 15,
+                                            color: profile['hasApiKey'] == true
+                                                ? colors.ink
+                                                : colors.muted,
+                                          ),
+                                        ),
+                                      ),
+                                      if (profile['id'] == selectedId)
+                                        Icon(
+                                          Icons.check,
+                                          color: colors.ink,
+                                          size: 19,
+                                        ),
+                                      if (profile['hasApiKey'] != true)
+                                        Text(
+                                          '未配置密钥',
+                                          style: TextStyle(
+                                            color: colors.muted,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}

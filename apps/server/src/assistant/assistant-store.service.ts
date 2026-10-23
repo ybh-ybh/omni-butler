@@ -114,8 +114,14 @@ export class AssistantStore {
   }
 
   /// 会话按更新时间及身份稳定分页，两端共享同一历史。
-  async conversations(actor: AuthUser, cursorId?: string): Promise<unknown> {
+  async conversations(
+    actor: AuthUser,
+    cursorId?: string,
+    query?: string,
+  ): Promise<unknown> {
     if (cursorId) z.uuid().parse(cursorId);
+    // 空白查询沿用最近会话列表；正文搜索不接受无界字符串。
+    const search = z.string().trim().max(200).optional().parse(query);
     return this.authorized(actor, async (transaction) => {
       // 游标必须来自当前归属，不能作为跨 owner 的时间探针。
       const cursor = cursorId
@@ -124,10 +130,38 @@ export class AssistantStore {
           })
         : null;
       if (cursorId && !cursor) throw new NotFoundException('会话游标不存在');
+      // 明确转义 LIKE 的通配符，反斜杠在自定义转义符下只是普通文字。
+      const pattern = search ? `%${search.replace(/[!%_]/g, '!$&')}%` : null;
+      // EXISTS 在数据库内去重和分页，不拉取全量消息正文或逐会话查询。
+      const matches = pattern
+        ? await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            SELECT conversation.id
+            FROM assistant_conversations AS conversation
+            WHERE conversation.user_id = ${actor.sub}::uuid
+              AND (
+                conversation.title ILIKE ${pattern} ESCAPE '!'
+                OR EXISTS (
+                  SELECT 1 FROM assistant_messages AS message
+                  WHERE message.user_id = ${actor.sub}::uuid
+                    AND message.conversation_id = conversation.id
+                    AND message.role IN ('user', 'assistant')
+                    AND message.content ILIKE ${pattern} ESCAPE '!'
+                )
+              )
+              ${
+                cursor
+                  ? Prisma.sql`AND (conversation.updated_at, conversation.id) < (${cursor.updatedAt}, ${cursor.id}::uuid)`
+                  : Prisma.empty
+              }
+            ORDER BY conversation.updated_at DESC, conversation.id DESC
+            LIMIT 101
+          `)
+        : null;
       // 多取一条只判断是否有下一页，不隐藏第101条之后的会话。
       const rows = await transaction.assistantConversation.findMany({
         where: {
           userId: actor.sub,
+          ...(matches ? { id: { in: matches.map((match) => match.id) } } : {}),
           ...(cursor
             ? {
                 OR: [
@@ -163,17 +197,33 @@ export class AssistantStore {
     );
   }
 
-  /// 重命名和删除只作用于当前归属，不根据裸UUID访问记录。
+  /// 重命名和置顶只作用于当前归属，不根据裸UUID访问记录。
   async rename(actor: AuthUser, id: string, raw: unknown): Promise<unknown> {
-    // 名称长度与数据库限制一致。
+    // 保持旧重命名契约兼容，同时拒绝空更新和未知字段。
     const input = z
-      .strictObject({ title: z.string().trim().min(1).max(100) })
+      .strictObject({
+        title: z.string().trim().min(1).max(100).optional(),
+        isPinned: z.boolean().optional(),
+      })
+      .refine(
+        (value) => value.title !== undefined || value.isPinned !== undefined,
+      )
       .parse(raw);
     return this.authorized(actor, async (transaction) => {
       await this.conversation(transaction, actor.sub, id);
+      // 仅改变置顶时保留活动时间，取消置顶后不会跳到历史列表最前。
+      const previous =
+        await transaction.assistantConversation.findUniqueOrThrow({
+          where: { id },
+        });
       return transaction.assistantConversation.update({
         where: { id },
-        data: input,
+        data: {
+          ...input,
+          ...(input.title === undefined
+            ? { updatedAt: previous.updatedAt }
+            : {}),
+        },
       });
     });
   }
@@ -270,9 +320,46 @@ export class AssistantStore {
       const oldestPersisted = [...page]
         .reverse()
         .find((message) => rows.some((row) => row.id === message.id));
+      // 只读取本页回答的计时列，不读取可清理状态或模型密钥。
+      const durations = await transaction.assistantRun.findMany({
+        where: {
+          userId: actor.sub,
+          conversationId: id,
+          answerMessageId: {
+            in: page
+              .filter((message) => message.role === 'assistant')
+              .map((message) => message.id),
+          },
+        },
+        select: {
+          answerMessageId: true,
+          elapsedMs: true,
+          leaseOwner: true,
+          leaseUntil: true,
+        },
+      });
+      // 每个持久运行只累加一次；同一任务的不同回答不会相互借用时长。
+      const elapsedByMessage = new Map<string, number>();
+      // 正文先落库的回答不展示临时零值或上一执行段的旧时长。
+      const pendingMessages = new Set<string>();
+      for (const duration of durations) {
+        if (duration.answerMessageId) {
+          if (this.timingPending(duration))
+            pendingMessages.add(duration.answerMessageId);
+          elapsedByMessage.set(
+            duration.answerMessageId,
+            (elapsedByMessage.get(duration.answerMessageId) ?? 0) +
+              duration.elapsedMs,
+          );
+        }
+      }
       return {
         items: page.reverse().map((message) => ({
           ...message,
+          elapsedMs:
+            message.role === 'assistant' && !pendingMessages.has(message.id)
+              ? (elapsedByMessage.get(message.id) ?? null)
+              : null,
           cards: (message.cards as Array<Record<string, unknown>>).filter(
             (card) => card.type !== 'userInput',
           ),
@@ -728,6 +815,7 @@ export class AssistantStore {
           conversationId: id,
           taskId,
           sessionId: actor.sid,
+          answerMessageId: state.messageId,
           profileSnapshot: assistantJson(profile),
           state: assistantJson(state),
         },
@@ -829,6 +917,15 @@ export class AssistantStore {
       if (input.decision === 'cancel') {
         await this.cancelTask(transaction, task.id);
       } else {
+        // 暂停状态可能先于 worker finally 落库，确认不能抢先清租约丢失本轮用时。
+        const current = await transaction.assistantRun.findUniqueOrThrow({
+          where: { id: task.runId },
+        });
+        if (this.timingPending(current))
+          throw new ConflictException({
+            code: 'ASSISTANT_PROCESSING',
+            message: '助手正在完成本轮处理，请稍后再确认',
+          });
         // 当前确认设备显式接管，旧worker不能再使用原租约。
         await transaction.assistantTask.update({
           where: { id },
@@ -967,6 +1064,7 @@ export class AssistantStore {
           conversationId: previous.conversationId,
           taskId: task.id,
           sessionId: actor.sid,
+          answerMessageId: resumed.messageId,
           status,
           state: assistantJson(resumed),
           profileSnapshot: assistantJson(profile),
@@ -1228,7 +1326,14 @@ export class AssistantStore {
     return run;
   }
 
-  /// 敏感运行内部状态和配置绝不进入API。
+  /// 有效 worker 租约代表当前段尚未结算，过期租约不使界面永久等待。
+  private timingPending(
+    run: Pick<AssistantRun, 'leaseOwner' | 'leaseUntil'>,
+  ): boolean {
+    return !!run.leaseOwner && !!run.leaseUntil && run.leaseUntil > new Date();
+  }
+
+  /// 公开运行视图只包含展示事实，不暴露模型快照和内部状态。
   async runView(
     transaction: Prisma.TransactionClient,
     run: AssistantRun,
@@ -1243,6 +1348,10 @@ export class AssistantStore {
       taskId: run.taskId,
       conversationId: run.conversationId,
       status: run.status,
+      answerMessageId: run.answerMessageId ?? null,
+      elapsedMs: run.elapsedMs,
+      // 回答可能先于 finally 保存；租约释放前客户端仍应等待计时结算。
+      timingPending: this.timingPending(run),
       errorCode: run.errorCode,
       errorMessage: run.errorMessage,
       plan:
@@ -1346,6 +1455,7 @@ export class AssistantStore {
           conversationId: original.conversationId,
           taskId: task.id,
           sessionId: actor.sid,
+          answerMessageId: next.messageId,
           profileSnapshot: assistantJson(profile),
           state: assistantJson(next),
         },

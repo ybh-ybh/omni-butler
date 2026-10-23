@@ -76,6 +76,9 @@ class AssistantChatController extends ChangeNotifier {
   /// 当前 HTTP 流取消令牌。
   CancelToken? _streamToken;
 
+  /// 最终用时事件已到达，但完整消息仍需从服务器核实。
+  bool _settlementRefreshPending = false;
+
   /// 断流后的受控重连定时器。
   Timer? _reconnect;
 
@@ -106,6 +109,10 @@ class AssistantChatController extends ChangeNotifier {
   /// 任务是否仍由后端处理或等待卡片。
   bool get active =>
       run != null && !assistantTerminalStates.contains(run!['status']);
+
+  /// 正文结束后仍需接收最终计时，等待用户确认时继续监听远端变化。
+  bool get _needsEvents =>
+      active || run?['timingPending'] == true || _settlementRefreshPending;
 
   /// 判断异步结果仍属于当前视图。
   bool _current(int generation) =>
@@ -265,6 +272,117 @@ class AssistantChatController extends ChangeNotifier {
     return <String, dynamic>{...first, 'items': items};
   }
 
+  /// 搜索结果独立返回，不能覆盖侧栏、当前消息或运行订阅。
+  Future<Map<String, dynamic>> searchConversations(
+    String query, {
+    String? cursor,
+  }) async {
+    if (_disposed) throw const ApiFailure('聊天页面已关闭，请重新搜索');
+    // 与服务端保持一致的查询长度，不悄悄截断用户输入。
+    final String normalized = query.trim();
+    if (normalized.length > 200) {
+      throw const ApiFailure('搜索内容不能超过200个字符');
+    }
+    if (!connected) return _searchCachedConversations(normalized, cursor);
+    try {
+      // 参数编码后交给服务器执行字面子串匹配。
+      final String parameters = <String>[
+        'query=${Uri.encodeQueryComponent(normalized)}',
+        if (cursor != null && cursor.isNotEmpty)
+          'cursor=${Uri.encodeQueryComponent(cursor)}',
+      ].join('&');
+      // 只读取当前页，由弹窗负责分页、去重与过期请求丢弃。
+      final Map<String, dynamic> response = await repository!.request(
+        'GET',
+        '/conversations?$parameters',
+      );
+      if (!connected || _disposed) {
+        throw const ApiFailure('连接已改变，请重新搜索');
+      }
+      return <String, dynamic>{...response, 'cachedOnly': false};
+    } catch (_) {
+      if (!connected || _disposed) rethrow;
+      return _searchCachedConversations(normalized, cursor);
+    }
+  }
+
+  /// 离线仅检索本作用域已缓存的用户和助手正文，卡片不参与匹配。
+  Map<String, dynamic> _searchCachedConversations(
+    String query,
+    String? cursor,
+  ) {
+    // 统一大小写，中文及百分号等字符保持字面含义。
+    final String needle = query.toLowerCase();
+    // 使用会话身份去重，不读取其他账号或服务器的缓存。
+    final Map<String, Map<String, dynamic>> matches =
+        <String, Map<String, dynamic>>{};
+    for (final Map<String, dynamic> conversation in conversations) {
+      // 当前会话可能含尚未触发缓存落盘的最新正文。
+      final String? id = conversation['id'] as String?;
+      if (id == null || matches.containsKey(id)) continue;
+      // 历史只包含此前打开过的会话，未缓存正文不补造搜索结果。
+      final List<Map<String, dynamic>> cachedMessages = id == conversationId
+          ? messages
+          : assistantItems(assistantMap(_histories[id])['messages']);
+      if (needle.isEmpty ||
+          (conversation['title'] as String? ?? '').toLowerCase().contains(
+            needle,
+          ) ||
+          cachedMessages.any(
+            (Map<String, dynamic> message) =>
+                (message['role'] == 'user' || message['role'] == 'assistant') &&
+                (message['content'] as String? ?? '').toLowerCase().contains(
+                  needle,
+                ),
+          )) {
+        matches[id] = Map<String, dynamic>.from(conversation);
+      }
+    }
+    // 离线按最近更新时间排序，身份作为相同时间的稳定次序。
+    final List<Map<String, dynamic>> items = matches.values.toList()
+      ..sort((Map<String, dynamic> left, Map<String, dynamic> right) {
+        // ISO 时间戳与服务器返回格式一致，可直接比较。
+        final int byTime = (right['updatedAt'] as String? ?? '').compareTo(
+          left['updatedAt'] as String? ?? '',
+        );
+        return byTime != 0
+            ? byTime
+            : (right['id'] as String).compareTo(left['id'] as String);
+      });
+    // 在线断流后的游标若不在本机缓存中，应明确结束而非返回重复首页。
+    final int index = cursor == null
+        ? -1
+        : items.indexWhere((Map<String, dynamic> item) => item['id'] == cursor);
+    if (cursor != null && index < 0) {
+      return <String, dynamic>{
+        'items': <Map<String, dynamic>>[],
+        'nextCursor': null,
+        'cachedOnly': true,
+      };
+    }
+    // 与在线接口相同，每页最多一百个真实会话。
+    final List<Map<String, dynamic>> page = items
+        .skip(index + 1)
+        .take(100)
+        .toList();
+    return <String, dynamic>{
+      'items': page,
+      'nextCursor': index + 1 + page.length < items.length
+          ? page.last['id']
+          : null,
+      'cachedOnly': true,
+    };
+  }
+
+  /// 会话元数据变更只刷新列表，不切换当前聊天或重开事件流。
+  Future<void> _refreshConversationList() async {
+    // 服务器返回完整分页列表，包含跨设备置顶状态。
+    final Map<String, dynamic> response = await _readPages('/conversations');
+    if (!connected || _disposed) return;
+    conversations = assistantItems(response['items']);
+    await _persist();
+  }
+
   /// 从服务器重新获取会话和任务，不重新提交消息。
   Future<void> refresh() async {
     if (!connected) return;
@@ -283,6 +401,7 @@ class AssistantChatController extends ChangeNotifier {
       if (!_current(generation)) return;
       error = _message(failure);
       offline = true;
+      if (_needsEvents) _scheduleReconnect(generation);
     }
     if (!_disposed) notifyListeners();
   }
@@ -315,10 +434,12 @@ class AssistantChatController extends ChangeNotifier {
         : null;
     if (run?['id'] != current?['id']) cursor = 0;
     run = current;
+    _settlementRefreshPending = false;
     plan = current?['plan'] is Map ? assistantMap(current!['plan']) : null;
-    if (current != null &&
-        !assistantTerminalStates.contains(current['status'])) {
+    if (_needsEvents) {
       _listen(generation);
+    } else {
+      _closeEvents();
     }
   }
 
@@ -332,6 +453,7 @@ class AssistantChatController extends ChangeNotifier {
     _rememberHistory();
     _closeEvents();
     _viewGeneration++;
+    _settlementRefreshPending = false;
     conversationId = id;
     // 先显示此前打开过的只读缓存，再查询最新服务器事实。
     final Map<String, dynamic> saved = assistantMap(_histories[id]);
@@ -361,32 +483,63 @@ class AssistantChatController extends ChangeNotifier {
     await select(conversation['id'] as String);
   });
 
-  /// 重命名当前会话。
-  Future<void> rename(String title) => _operate(() async {
+  /// 重命名指定会话，省略身份时保持现有当前会话调用兼容。
+  Future<void> rename(String title, {String? id}) => _operate(() async {
+    // 在首次异步等待前固定目标，避免切换会话时误改另一个标题。
+    final String? targetId = id ?? conversationId;
+    if (targetId == null) return;
     await repository!.request(
       'PATCH',
-      '/conversations/${Uri.encodeComponent(conversationId!)}',
+      '/conversations/${Uri.encodeComponent(targetId)}',
       data: <String, String>{'title': title.trim()},
     );
-    await refresh();
+    if (!connected || _disposed) return;
+    await _refreshConversationList();
+  });
+
+  /// 持久化指定会话的置顶状态，活动时间由服务器保持不变。
+  Future<void> setPinned(String id, bool pinned) => _operate(() async {
+    await repository!.request(
+      'PATCH',
+      '/conversations/${Uri.encodeComponent(id)}',
+      data: <String, bool>{'isPinned': pinned},
+    );
+    if (!connected || _disposed) return;
+    await _refreshConversationList();
   });
 
   /// 删除聊天后只清除显示，不删除服务器业务操作凭据。
-  Future<void> delete() => _operate(() async {
+  Future<void> delete({String? id}) => _operate(() async {
+    // 在请求前固定点击目标，非当前会话不会关闭当前订阅。
+    final String? targetId = id ?? conversationId;
+    if (targetId == null) return;
+    if (pending?['conversationId'] == targetId) {
+      throw const ApiFailure('请先核实此会话上一条消息的提交结果');
+    }
     await repository!.request(
       'DELETE',
-      '/conversations/${Uri.encodeComponent(conversationId!)}',
+      '/conversations/${Uri.encodeComponent(targetId)}',
     );
     if (!connected || _disposed) return;
-    _closeEvents();
-    _viewGeneration++;
-    _histories.remove(conversationId);
-    conversationId = null;
-    messages = <Map<String, dynamic>>[];
-    run = null;
-    plan = null;
-    cursor = 0;
-    await refresh();
+    _histories.remove(targetId);
+    conversations.removeWhere(
+      (Map<String, dynamic> item) => item['id'] == targetId,
+    );
+    if (conversationId == targetId) {
+      _closeEvents();
+      _viewGeneration++;
+      _settlementRefreshPending = false;
+      conversationId = null;
+      messages = <Map<String, dynamic>>[];
+      _completedMessages.clear();
+      run = null;
+      plan = null;
+      draft = '';
+      draftReference = null;
+      cursor = 0;
+    }
+    await _persist();
+    await _refreshConversationList();
   });
 
   /// 明确提交一条消息；未知响应保留原请求身份供显式重试。
@@ -495,6 +648,49 @@ class AssistantChatController extends ChangeNotifier {
     }
   }
 
+  /// 最终用时到达后仅读取消息，不重放流或用运行总时长替代回答聚合。
+  Future<void> _refreshSettledMessages(int generation, String runId) async {
+    // 固定当前回答，重试或继续确认后不能应用前一轮的异步结果。
+    final Object? answerId = run?['answerMessageId'];
+    // 固定当前会话，防止请求完成时切换了展示目标。
+    final String? targetId = conversationId;
+    if (targetId == null) return;
+    _settlementRefreshPending = true;
+    try {
+      // 服务端消息包含跨重试聚合后的最终用时。
+      final Map<String, dynamic> response = await _readPages(
+        '/conversations/${Uri.encodeComponent(targetId)}/messages',
+      );
+      if (!_current(generation) ||
+          run?['id'] != runId ||
+          run?['answerMessageId'] != answerId) {
+        return;
+      }
+      // 同一流可能继续输出新消息，查询快照不能删掉后来抵达的正文。
+      final Map<String, Map<String, dynamic>> byId =
+          <String, Map<String, dynamic>>{
+            for (final Map<String, dynamic> message in messages)
+              message['id'] as String: message,
+          };
+      for (final Map<String, dynamic> message in assistantItems(
+        response['items'],
+      )) {
+        byId[message['id'] as String] = message;
+        _completedMessages.add(message['id'] as String);
+      }
+      messages = byId.values.toList();
+      _settlementRefreshPending = false;
+      if (!_needsEvents) _closeEvents();
+      _saveForDisplay();
+      notifyListeners();
+    } catch (failure) {
+      if (!_current(generation) || run?['id'] != runId) return;
+      error = '回答已收到，正在恢复最终用时';
+      _scheduleReconnect(generation);
+      notifyListeners();
+    }
+  }
+
   /// 按持久游标订阅事件，重复轮询不会重复拼接。
   void _listen(int generation) {
     _closeEvents();
@@ -511,6 +707,7 @@ class AssistantChatController extends ChangeNotifier {
         .listen(
           (AssistantEvent event) {
             if (!_current(generation) ||
+                token.isCancelled ||
                 event.runId != runId ||
                 event.seq <= cursor) {
               return;
@@ -562,10 +759,11 @@ class AssistantChatController extends ChangeNotifier {
             }
             _saveForDisplay();
             notifyListeners();
-            if (event.type == 'plan.ready' ||
-                (event.type == 'run.updated' && !active)) {
-              _closeEvents();
-              unawaited(refresh());
+            if (event.type == 'run.updated' &&
+                run?['timingPending'] != true &&
+                run?['status'] != 'running' &&
+                run?['status'] != 'queued') {
+              unawaited(_refreshSettledMessages(generation, runId));
             }
           },
           onError: (Object failure) {
@@ -576,7 +774,7 @@ class AssistantChatController extends ChangeNotifier {
             }
           },
           onDone: () {
-            if (_current(generation) && active && !token.isCancelled) {
+            if (_current(generation) && _needsEvents && !token.isCancelled) {
               _scheduleReconnect(generation);
             }
           },

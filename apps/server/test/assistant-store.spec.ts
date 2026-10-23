@@ -213,6 +213,9 @@ class StoreDatabase {
         approvedHash: null,
         committed: false,
         excluded: false,
+        elapsedMs: 0,
+        answerMessageId: null,
+        isPinned: false,
         createdAt: new Date(),
         updatedAt: new Date(),
         cards: [],
@@ -796,6 +799,130 @@ describe('应用内助手持久任务与上下文授权', () => {
     await expect(store.memories(database.actor, randomUUID())).rejects.toThrow(
       '游标不存在',
     );
+  });
+
+  it('置顶保持活动时间，旧标题更新仍兼容，空字段及他人会话被拒绝', async () => {
+    // 固定历史活动时间，验证置顶不冒充新消息。
+    const updatedAt = new Date('2026-10-01T00:00:00Z');
+    Object.assign(database.tables.assistantConversation![0]!, { updatedAt });
+    expect(
+      await store.rename(database.actor, conversationId, { isPinned: true }),
+    ).toMatchObject({ isPinned: true, title: '测试会话', updatedAt });
+    expect(
+      await store.rename(database.actor, conversationId, { title: ' 新标题 ' }),
+    ).toMatchObject({ isPinned: true, title: '新标题' });
+    expect(
+      await store.rename(database.actor, conversationId, { isPinned: false }),
+    ).toMatchObject({ isPinned: false, updatedAt });
+    await expect(
+      store.rename(database.actor, conversationId, {}),
+    ).rejects.toThrow();
+    await expect(
+      store.rename(database.actor, conversationId, { isPinned: 'true' }),
+    ).rejects.toThrow();
+    await expect(
+      store.rename(database.actor, randomUUID(), { isPinned: true }),
+    ).rejects.toThrow('会话不存在');
+    await expect(
+      store.conversations(database.actor, undefined, 'x'.repeat(201)),
+    ).rejects.toThrow();
+  });
+
+  it('回答按稳定身份聚合已结算用时，遗忘状态不丢失历史且不混入其他回答或归属', async () => {
+    // 首条任务由真实发送生成稳定回答身份。
+    const first = await initial();
+    // 运行状态被遗忘清理后仍保留独立计时关联。
+    const run = database.tables.assistantRun![0]!;
+    // 第二条回答与无可靠旧关联回答分别验证隔离和空值。
+    const answerId = run.answerMessageId as string;
+    // 同任务的第二条回答必须独立累计。
+    const nextAnswerId = randomUUID();
+    // 无可靠运行关联的旧回答保持未知时长。
+    const unknownAnswerId = randomUUID();
+    expect(answerId).toBe((run.state as Row).messageId);
+    Object.assign(run, { elapsedMs: 1200, state: { memoryInvalidated: true } });
+    database.tables.assistantRun!.push(
+      { ...run, id: randomUUID(), elapsedMs: 800 },
+      {
+        ...run,
+        id: randomUUID(),
+        answerMessageId: nextAnswerId,
+        elapsedMs: 500,
+      },
+      { ...run, id: randomUUID(), userId: randomUUID(), elapsedMs: 90000 },
+      {
+        ...run,
+        id: randomUUID(),
+        conversationId: randomUUID(),
+        elapsedMs: 90000,
+      },
+    );
+    for (const id of [answerId, nextAnswerId, unknownAnswerId])
+      database.tables.assistantMessage!.push({
+        id,
+        taskId: first.taskId,
+        userId: database.actor.sub,
+        conversationId,
+        role: 'assistant',
+        content: '回答',
+        cards: [],
+        createdAt: new Date(),
+      });
+    // 重复读取与事件重放不能再次累加数据库中同一段时间。
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // 查询只依赖持久列，公开消息不含运行内部状态。
+      const result = (await store.messages(database.actor, conversationId)) as {
+        items: Row[];
+      };
+      expect(
+        result.items.find((message) => message.id === answerId)?.elapsedMs,
+      ).toBe(2000);
+      expect(
+        result.items.find((message) => message.id === nextAnswerId)?.elapsedMs,
+      ).toBe(500);
+      expect(
+        result.items.find((message) => message.id === unknownAnswerId)
+          ?.elapsedMs,
+      ).toBeNull();
+      expect(
+        result.items.find((message) => message.role === 'user')?.elapsedMs,
+      ).toBeNull();
+      expect(result.items.every((message) => !('state' in message))).toBe(true);
+    }
+  });
+
+  it.each([
+    'succeeded',
+    'failed',
+    'waitingInput',
+    'waitingConfirmation',
+    'submissionUnknown',
+  ])('%s 等待最终计时落库时保留订阅标志，租约释放后解除', async (status) => {
+    // 使用真实创建路径，避免无关联测试桩掩盖运行视图行为。
+    const first = await initial();
+    // 状态先落库但 worker 尚未执行 finally 的真实窗口。
+    const run = database.tables.assistantRun![0]!;
+    Object.assign(run, {
+      status,
+      elapsedMs: 123,
+      leaseOwner: randomUUID(),
+      leaseUntil: new Date(Date.now() + 150000),
+    });
+    expect(await store.run(database.actor, first.id)).toMatchObject({
+      answerMessageId: run.answerMessageId,
+      elapsedMs: 123,
+      timingPending: true,
+    });
+    Object.assign(run, { elapsedMs: 456, leaseOwner: null });
+    expect(await store.run(database.actor, first.id)).toMatchObject({
+      elapsedMs: 456,
+      timingPending: false,
+    });
+    // worker 崩溃后的过期租约不能让终态界面无限等待。
+    Object.assign(run, { leaseOwner: randomUUID(), leaseUntil: new Date(0) });
+    expect(await store.run(database.actor, first.id)).toMatchObject({
+      timingPending: false,
+    });
   });
 
   it('多批任务最后一批的单条新增不能冒充整个任务可撤销', async () => {

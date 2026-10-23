@@ -670,7 +670,10 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('知序助手'), findsOneWidget);
+      expect(
+        find.text(platform == TargetPlatform.windows ? '新聊天' : '知序助手'),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey<String>('assistant-input')),
         findsOneWidget,

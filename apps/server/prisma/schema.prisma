@@ -438,6 +438,8 @@ model AssistantConversation {
   id String @id @db.Uuid
   userId String @map("user_id") @db.Uuid
   title String @db.VarChar(100)
+  /// 侧栏置顶不改变会话最近活动时间。
+  isPinned Boolean @default(false) @map("is_pinned")
   summary String @default("")
   summaryThrough DateTime? @map("summary_through") @db.Timestamptz(3)
   memoryVersion Int @default(0) @map("memory_version")
@@ -476,6 +478,8 @@ model AssistantRun {
   userId String @map("user_id") @db.Uuid
   conversationId String @map("conversation_id") @db.Uuid
   taskId String @map("task_id") @db.Uuid
+  /// 展示回答的稳定身份，遗忘内部上下文后仍可关联已结算用时。
+  answerMessageId String? @map("answer_message_id") @db.Uuid
   sessionId String @map("session_id") @db.Uuid
   status String @default("queued") @db.VarChar(32)
   profileSnapshot Json @map("profile_snapshot")
@@ -491,6 +495,7 @@ model AssistantRun {
   user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@index([status, leaseUntil])
   @@index([userId, conversationId, createdAt])
+  @@index([userId, conversationId, answerMessageId])
   @@map("assistant_runs")
 }
 

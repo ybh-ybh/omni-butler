@@ -14,6 +14,7 @@ import 'package:omni_butler/features/assistant/data/assistant_chat_controller.da
 import 'package:omni_butler/features/assistant/data/assistant_models.dart';
 import 'package:omni_butler/features/assistant/data/assistant_repository.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_cards.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_windows_view.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 两端共用助手入口，认证变化时销毁旧服务器页面。
@@ -160,7 +161,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
       );
 
   /// 会话删除需要明确说明仅删除聊天。
-  Future<void> _deleteConversation() async {
+  Future<void> _deleteConversation({String? id}) async {
     // 明确删除聊天不会撤销业务数据。
     final bool confirmed =
         await showOmniDialog<bool>(
@@ -183,7 +184,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
           ),
         ) ??
         false;
-    if (confirmed) await _chat.delete();
+    if (confirmed) await _chat.delete(id: id);
   }
 
   /// 窄屏通过统一对话框切换历史。
@@ -526,6 +527,28 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
         !_chat.offline &&
         !_chat.loading &&
         settings.value?['enabled'] == true;
+    if (Theme.of(context).platform == TargetPlatform.windows) {
+      return AssistantWindowsView(
+        chat: _chat,
+        input: _input,
+        inputFocus: _focus,
+        scroll: _scroll,
+        onSend: _send,
+        onDelete: (String id) => _deleteConversation(id: id),
+        onRename: (String id) async {
+          // 重命名固定用户选中的会话，而不是此刻打开的会话。
+          final String title =
+              _chat.conversations
+                      .where((Map<String, dynamic> item) => item['id'] == id)
+                      .firstOrNull?['title']
+                  as String? ??
+              '新聊天';
+          // 弹窗与旧页面共用受控输入生命周期。
+          final String? value = await _askText('重命名对话', title);
+          if (value != null && mounted) await _chat.rename(value, id: id);
+        },
+      );
+    }
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // 大字号时更早折叠会话列表。
@@ -686,6 +709,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                                       !_chat.offline &&
                                       _chat.pending == null &&
                                       _chat.draft.trim().isEmpty &&
+                                      _chat.run?['timingPending'] != true &&
                                       _chat.run?['requiresTakeover'] != true,
                                   onDecision: (String value) =>
                                       unawaited(_chat.decide(value)),

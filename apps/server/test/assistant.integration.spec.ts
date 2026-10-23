@@ -311,6 +311,319 @@ integration('应用内助手 / 真实 PostgreSQL 和 LangGraph checkpoint', () =
     return { conversation, input, run };
   };
 
+  it('迁移仅从合法旧状态回填稳定回答身份，已遗忘或损坏关联保持未知', async () => {
+    // 回填用例运行在本套独占隔离空库，使用实际迁移中的 UPDATE。
+    const conversation = (await store.createConversation(actor, {})) as {
+      id: string;
+    };
+    // 唯一合法回答身份作为回填结果证据。
+    const answerMessageId = randomUUID();
+    // 对照行分别模拟合法、格式损坏及已遗忘的旧状态。
+    const runs = [
+      { messageId: answerMessageId },
+      { messageId: 'invalid-uuid' },
+      { memoryInvalidated: true },
+    ].map((state) => ({
+      id: randomUUID(),
+      userId: actor.sub,
+      conversationId: conversation.id,
+      taskId: randomUUID(),
+      sessionId: actor.sid,
+      status: 'cancelled',
+      profileSnapshot: {},
+      state,
+    }));
+    await prisma.assistantRun.createMany({ data: runs });
+    // 取实际迁移语句验证数据修复，不复制另一套回填实现。
+    const migration = readFileSync(
+      join(
+        __dirname,
+        '../prisma/migrations/20261023020000_assistant_desktop/migration.sql',
+      ),
+      'utf8',
+    );
+    // 此正则只提取受版本管理的固定 SQL，不接收请求输入。
+    const backfill = migration.match(/^UPDATE[\s\S]+?;/m)?.[0];
+    expect(backfill).toBeDefined();
+    await database.query(backfill!);
+    expect(
+      await prisma.assistantRun.findUnique({ where: { id: runs[0]!.id } }),
+    ).toMatchObject({ answerMessageId });
+    expect(
+      await prisma.assistantRun.findUnique({ where: { id: runs[1]!.id } }),
+    ).toMatchObject({ answerMessageId: null });
+    expect(
+      await prisma.assistantRun.findUnique({ where: { id: runs[2]!.id } }),
+    ).toMatchObject({ answerMessageId: null });
+  });
+
+  it('正文及标题搜索保持字面匹配、归属隔离、稳定分页和旧接口兼容', async () => {
+    // 唯一词避免此前测试数据影响搜索证据。
+    const needle = `搜索_${randomUUID()}%\\`;
+    // 同毫秒记录强制使用 UUID 作为跨页第二排序键。
+    const updatedAt = new Date('2026-10-01T00:00:00Z');
+    // 前一项仅标题命中，其余通过正文命中同一查询。
+    const conversations = Array.from({ length: 105 }, (_, index) => ({
+      id: randomUUID(),
+      userId: actor.sub,
+      title: index === 0 ? needle : `正文会话 ${index}`,
+      updatedAt,
+    }));
+    await prisma.assistantConversation.createMany({ data: conversations });
+    await prisma.assistantMessage.createMany({
+      data: conversations.slice(1).flatMap((conversation) =>
+        ['user', 'assistant'].map((role) => ({
+          id: randomUUID(),
+          userId: actor.sub,
+          conversationId: conversation.id,
+          taskId: randomUUID(),
+          role,
+          content: `正文包含 ${needle}`,
+          cards: [],
+        })),
+      ),
+    });
+    // 隐藏角色、其他 owner 的正文及近似通配串都不能制造命中。
+    const excluded = await prisma.assistantConversation.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        title: needle.replace('_', 'X').replace('%', 'Y'),
+      },
+    });
+    await prisma.assistantMessage.createMany({
+      data: [
+        {
+          id: randomUUID(),
+          userId: actor.sub,
+          conversationId: excluded.id,
+          taskId: randomUUID(),
+          role: 'system',
+          content: needle,
+          cards: [],
+        },
+        {
+          id: randomUUID(),
+          userId: other.sub,
+          conversationId: excluded.id,
+          taskId: randomUUID(),
+          role: 'assistant',
+          content: needle,
+          cards: [],
+        },
+      ],
+    });
+    // 他人相同标题不能泄漏到当前用户搜索。
+    const foreign = (await store.createConversation(other, {
+      title: needle,
+    })) as { id: string };
+    // 查询通过真实 HTTP 参数通道传入，而不是测试直接绕过控制器。
+    const response = await fetch(
+      `${baseUrl}/conversations?query=${encodeURIComponent(` ${needle.toUpperCase()} `)}`,
+      {
+        headers: { Authorization: `Bearer ${await token(actor)}` },
+      },
+    );
+    expect(response.status).toBe(200);
+    // 首屏结果沿用原响应结构并包含置顶默认值。
+    const first = (await response.json()) as {
+      items: Array<{ id: string; isPinned: boolean }>;
+      nextCursor: string;
+    };
+    expect(first.items).toHaveLength(100);
+    expect(first.items.every((item) => item.isPinned === false)).toBe(true);
+    // 同一关键词的下一页不能丢失或重复匹配会话。
+    const next = (await store.conversations(
+      actor,
+      first.nextCursor,
+      needle,
+    )) as { items: Array<{ id: string }>; nextCursor: string | null };
+    expect(next.items).toHaveLength(5);
+    expect(next.nextCursor).toBeNull();
+    expect(
+      new Set([...first.items, ...next.items].map((item) => item.id)).size,
+    ).toBe(105);
+    await expect(
+      store.conversations(actor, foreign.id, needle),
+    ).rejects.toThrow('游标不存在');
+    // 空白搜索与无查询兼容，不改变普通最近会话列表。
+    expect(await store.conversations(actor, undefined, '  ')).toEqual(
+      await store.conversations(actor),
+    );
+    // 修改仅置顶保留分页时标，标题更新仍可独立使用。
+    expect(
+      await store.rename(actor, conversations[0]!.id, { isPinned: true }),
+    ).toMatchObject({ isPinned: true, updatedAt });
+    expect(
+      await store.rename(actor, conversations[0]!.id, {
+        title: '改名仍保留置顶',
+      }),
+    ).toMatchObject({ isPinned: true, title: '改名仍保留置顶' });
+    expect(
+      await store.rename(actor, conversations[0]!.id, { isPinned: false }),
+    ).toMatchObject({ isPinned: false });
+  });
+
+  it('一万条消息中的正文搜索返回会话并保留参数化查询边界', async () => {
+    // 噪声正文与命中正文放在同会话，避免借助标题直接命中。
+    const conversation = (await store.createConversation(actor, {
+      title: '大历史搜索测试',
+    })) as { id: string };
+    // 唯一标记也覆盖单引号不能脱离 SQL 参数边界。
+    const needle = `检索'OR 1=1--${randomUUID()}`;
+    await prisma.assistantMessage.createMany({
+      data: Array.from({ length: 10000 }, (_, index) => ({
+        id: randomUUID(),
+        userId: actor.sub,
+        conversationId: conversation.id,
+        taskId: randomUUID(),
+        role: 'assistant',
+        cards: [],
+        content: index === 9999 ? needle : `历史正文 ${index}`,
+      })),
+    });
+    // 测量真实数据库查询，不以测试桩推断吞吐表现。
+    const started = Date.now();
+    // 有界结果无需传回万条正文。
+    const result = (await store.conversations(actor, undefined, needle)) as {
+      items: Array<{ id: string }>;
+      nextCursor: string | null;
+    };
+    expect(result.items.map((item) => item.id)).toEqual([conversation.id]);
+    expect(result.nextCursor).toBeNull();
+    console.info(`助手一万条消息正文搜索耗时 ${Date.now() - started}ms`);
+  });
+
+  it('回答完成和等待确认都在最终计时事件后收敛，重新读取保留稳定回答时长', async () => {
+    model.complete.mockResolvedValue(reply([], '这是可读回答'));
+    // 当前完整任务使用真实 worker 与持久事件。
+    const { conversation, run } = await send('只回答一句话');
+    // 在 message.completed 发出时观察终态先于 finally 的真实窗口。
+    const originalEmit = store.emit.bind(store);
+    // 事件中途快照只用于验证尚未结算标志，不改变生产时序。
+    let pendingView:
+      | {
+          activeRun: { timingPending: boolean };
+          items: Array<{ role: string; elapsedMs: number | null }>;
+        }
+      | undefined;
+    // 仅观察本例运行，测试结束恢复原始发事件函数。
+    const emit = jest
+      .spyOn(store, 'emit')
+      .mockImplementation(async (id, type, data) => {
+        if (id === run.id && type === 'message.completed')
+          pendingView = (await store.messages(actor, conversation.id)) as {
+            activeRun: { timingPending: boolean };
+            items: Array<{ role: string; elapsedMs: number | null }>;
+          };
+        await originalEmit(id, type, data);
+      });
+    try {
+      await runner.tick();
+    } finally {
+      emit.mockRestore();
+    }
+    expect(await store.run(actor, run.id)).toMatchObject({
+      status: 'succeeded',
+    });
+    expect(pendingView?.activeRun.timingPending).toBe(true);
+    expect(
+      pendingView?.items.find((message) => message.role === 'assistant')
+        ?.elapsedMs,
+    ).toBeNull();
+    // 终态事件在 elapsedMs 累加及租约释放之后产生。
+    const view = (await store.run(actor, run.id)) as {
+      answerMessageId: string;
+      elapsedMs: number;
+      timingPending: boolean;
+    };
+    expect(view.elapsedMs).toBeGreaterThan(0);
+    expect(view.timingPending).toBe(false);
+    // 历史时长仅从稳定 ID 关联，不再依赖可清理状态。
+    await prisma.assistantRun.update({
+      where: { id: run.id },
+      data: { state: { memoryInvalidated: true } },
+    });
+    // 已结算运行稳定身份应当保留在消息查询里。
+    const history = (await store.messages(actor, conversation.id)) as {
+      items: Array<{ id: string; elapsedMs: number | null }>;
+    };
+    expect(
+      history.items.find((message) => message.id === view.answerMessageId)
+        ?.elapsedMs,
+    ).toBe(view.elapsedMs);
+    // 独立批量任务停在等待确认，结算后的事件同样明确结束当前计时段。
+    model.complete
+      .mockResolvedValueOnce(reply(['计时甲', '计时乙']))
+      .mockResolvedValueOnce(reply([], '计划完成'));
+    // 确认等待不会被算成模型执行时间。
+    const waiting = await send('新增两条名言');
+    // 在 gate 已持久暂停但 finally 尚未结算的窗口模拟立即点击确认。
+    const originalGate = runner.gate.bind(runner);
+    // 记录确实覆盖了易竞态窗口，防止测试因无计划而空通过。
+    let observedGate = false;
+    // 保持真实 gate 及图中断，只注入过早确认请求。
+    const gate = jest.spyOn(runner, 'gate').mockImplementation(async (id) => {
+      // 真正的服务器预览由 gate 返回，不由测试重建。
+      const pending = (await originalGate(id)) as {
+        plan: { id: string; version: number; previewHash: string };
+      } | null;
+      if (id === waiting.run.id && pending) {
+        observedGate = true;
+        await expect(
+          store.decision(actor, pending.plan.id, {
+            decision: 'confirm',
+            version: pending.plan.version,
+            previewHash: pending.plan.previewHash,
+          }),
+        ).rejects.toThrow('稍后再确认');
+      }
+      return pending;
+    });
+    try {
+      await runner.tick();
+    } finally {
+      gate.mockRestore();
+    }
+    expect(observedGate).toBe(true);
+    expect(await store.run(actor, waiting.run.id)).toMatchObject({
+      status: 'waitingConfirmation',
+      timingPending: false,
+    });
+    // 最后一条运行事件必须对应结算后的服务器视图。
+    const events = (await store.events(actor, waiting.run.id, 0)) as Array<{
+      type: string;
+      data: { run?: { timingPending: boolean; elapsedMs: number } };
+    }>;
+    expect(events.at(-1)).toMatchObject({
+      type: 'run.updated',
+      data: { run: { timingPending: false } },
+    });
+    expect(events.at(-1)!.data.run!.elapsedMs).toBeGreaterThan(0);
+    // 结算完成后同一个预览可正常确认并累计下一段处理时间。
+    const settled = (await store.run(actor, waiting.run.id)) as {
+      elapsedMs: number;
+      plan: { id: string; version: number; previewHash: string };
+    };
+    await store.decision(actor, settled.plan.id, {
+      decision: 'confirm',
+      version: settled.plan.version,
+      previewHash: settled.plan.previewHash,
+    });
+    await runner.tick();
+    // 两段之间等待确认的间隔不作为任何执行段加入计时。
+    const completed = (await store.run(actor, waiting.run.id)) as {
+      status: string;
+      elapsedMs: number;
+      timingPending: boolean;
+    };
+    expect(completed).toMatchObject({
+      status: 'succeeded',
+      timingPending: false,
+    });
+    expect(completed.elapsedMs).toBeGreaterThan(settled.elapsedMs);
+  });
+
   it('HTTP 使用真实设备 JWT、严格输入和 owner 隔离，公开接口不泄露密文', async () => {
     expect((await fetch(`${baseUrl}/settings`)).status).toBe(401);
     // 已保存密文只用于服务器请求，设置中也不可见。

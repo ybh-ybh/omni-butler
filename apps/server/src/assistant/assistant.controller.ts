@@ -64,8 +64,9 @@ export class AssistantController {
   @Get('conversations') conversations(
     @CurrentUser() actor: AuthUser,
     @Query('cursor') cursor?: string,
+    @Query('query') query?: string,
   ): Promise<unknown> {
-    return this.store.conversations(actor, cursor);
+    return this.store.conversations(actor, cursor, query);
   }
   /// 建立空会话，不启动模型。
   @Post('conversations') create(
@@ -74,7 +75,7 @@ export class AssistantController {
   ): Promise<unknown> {
     return this.store.createConversation(actor, body);
   }
-  /// 重命名只改显示文字。
+  /// 重命名和置顶只改变会话展示信息。
   @Patch('conversations/:id') rename(
     @CurrentUser() actor: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,

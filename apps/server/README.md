@@ -53,6 +53,16 @@ API Key 只在后端以 AES-256-GCM 加密保存。首次保存模型 Key 时，
 
 本次客户端 SQLite26、同步 schema11、本机快照11（兼容1–10）；服务器换服 wire3不变。AI 私有表不进入 PowerSync publication，下行查询无需新增模型配置或任务字段。正式部署仍需备份→数据库迁移/API及配套PowerSync→全部客户端，旧客户端必须升级。
 
+## 助手会话界面接口
+
+`GET /assistant/conversations?query=<文字>&cursor=<会话UUID>` 按最近活动时间及 UUID 倒序分页，每页最多 100 条。可选 `query` 去除首尾空格后最多 200 字符，大小写无关地匹配当前用户的会话标题或用户/助手消息正文；`%`、`_`、反斜杠均按普通文字匹配，不检索内部状态、摘要或结果卡 JSON。不同查询必须从第一页重新加载。正文检索使用带归属约束的参数化 `EXISTS`，同会话多次命中仍只有一项；任意子串搜索仍可能扫描本用户相关正文，不承诺全文索引性能。
+
+会话返回 `isPinned`。`PATCH /assistant/conversations/:id` 接受 `title`、`isPinned` 中的一项或两项，仍兼容旧的仅标题更新；仅置顶时保留 `updatedAt`。删除沿用原接口及业务回执保留规则。输入框模型列表及全局助手默认选择沿用 `/assistant/settings`，不会改变笔记整理的活动配置。
+
+消息返回可空 `elapsedMs`：助手回答按稳定 `answerMessageId` 聚合同归属运行的已结算处理时间，不包含用户等待确认时间；没有可靠历史关联或当前执行段尚未结算时为 `null`。运行视图及 SSE 增加 `answerMessageId`、`elapsedMs`、`timingPending`；worker 持有有效租约时 `timingPending=true`，客户端须继续订阅，并在结算后的 `run.updated` 到达时刷新消息用时。`message.completed` 只确认正文，不代表计时已经结算。等待确认状态仍在结算时，确认接口返回可重试的 `409 ASSISTANT_PROCESSING`，客户端应暂禁确认直至最终事件；取消仍可立即执行。取消、接管或进程中断沿用已结算值，不推测尚未落库的处理时间；过期租约不使界面永久等待。
+
+发布前执行 `20261023020000_assistant_desktop` 迁移：新增会话置顶字段和运行回答身份，并从合法旧状态回填；已被遗忘清理的历史保持无时长。上述字段属于助手私有表，不改变 PowerSync 或客户端业务 SQLite 版本。
+
 ## 设备连接接口
 
 - `POST /omni-butler/api/v1/auth/connect`：提交 `syncKey`，建立设备会话。
