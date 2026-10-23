@@ -485,19 +485,24 @@ void androidSidebarTests() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Android侧栏改版 删除标签和笔记保护冻结修改，不停止其他篇录音', (tester) async {
-    // 标签批量回收保护目标修改，其他篇的采集继续。
+  testWidgets('Android侧栏改版 删除标签和笔记保留退出保存的正文，不停止其他篇录音', (tester) async {
+    // 历史页退出已保存，批量回收保留正式正文，其他篇的采集继续。
     final _App app = await _mount(
       tester,
       seed: true,
       allowRecording: true,
       initialLocation: '/notes?id=target',
     );
-    await _enterBody(tester, '标签回收前的未发布修改');
+    await _enterBody(tester, '标签回收前的已保存修改');
     await _closeAndroidComposer(tester);
     // 周报无工作标签，其录音不得被工作标签删除停止。
     final NoteEditorController editor = app.container.read(noteEditorProvider);
     await tester.runAsync(() async {
+      // 先证明退出产生正式保存，不能把已保存修改误当成冻结草稿。
+      expect(
+        (await NoteRepository(app.database).find('target'))!.body,
+        '标签回收前的已保存修改',
+      );
       await editor.open('weekly-note');
       await editor.startRecording();
     });
@@ -531,10 +536,15 @@ void androidSidebarTests() {
     expect(app.recorder.state.isActive, isTrue);
     expect(app.recorder.state.noteId, 'weekly-note');
     expect(
-      (await tester.runAsync(editor.listLocalDrafts))!.any(
-        (draft) => draft.noteId == 'target' && draft.body == '标签回收前的未发布修改',
-      ),
-      isTrue,
+      (await tester.runAsync(
+        () => NoteRepository(app.database).find('target'),
+      ))!.body,
+      '标签回收前的已保存修改',
+    );
+    expect(
+      (await tester.runAsync(editor.listLocalDrafts))!
+          .any((draft) => draft.noteId == 'target'),
+      isFalse,
     );
     await _dispose(tester, app);
     expect(tester.takeException(), isNull);

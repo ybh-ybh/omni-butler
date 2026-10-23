@@ -327,6 +327,26 @@ void main() {
                       entry.op == UpdateType.patch &&
                       entry.opData!.containsKey('tags'))
                     'tags_base': entry.previousValues?['tags'],
+                  // 时间选择组从队列前值补齐未变列，不能使用上传时的最新记录。
+                  if (entry.table == 'note_entries' &&
+                      entry.op == UpdateType.patch &&
+                      entry.previousValues?.containsKey(
+                            'record_time_seconds',
+                          ) ==
+                          true &&
+                      const [
+                        'day_key',
+                        'record_time_seconds',
+                        'record_utc_offset_minutes',
+                      ].any(entry.opData!.containsKey))
+                    // 逐个核对完整时间组，同时保留实际变化值。
+                    for (final String column in const [
+                      'day_key',
+                      'record_time_seconds',
+                      'record_utc_offset_minutes',
+                    ])
+                      if (!entry.opData!.containsKey(column))
+                        column: entry.previousValues![column],
                 },
             },
           )

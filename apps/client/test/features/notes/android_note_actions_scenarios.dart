@@ -879,7 +879,7 @@ void androidNoteActionTests() {
       () => precacheImage(
         tester.widget<Image>(thumbnail).image,
         tester.element(thumbnail),
-      ),
+      ).timeout(const Duration(seconds: 10)),
     );
     await tester.pump();
     await _capture(tester, app, 'existing-media-editor');
