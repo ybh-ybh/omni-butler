@@ -627,7 +627,9 @@ integration('MCP Streamable HTTP / PostgreSQL真实闭环', () => {
       expect(tool.inputSchema.properties?.priorityQuadrant).toMatchObject({
         minimum: 0,
         maximum: 3,
-        description: mcpTodoQuadrantPolicy,
+        description: name === 'set_todo_quadrant'
+          ? mcpTodoQuadrantPolicy
+          : `${mcpTodoQuadrantPolicy}新增省略默认2重要不紧急，更新省略保留。`,
       });
     }
     // 新增使用客户端最低优先象限0，不再被后端拒绝。

@@ -124,6 +124,9 @@ integration('ImagesService 真实 PostgreSQL + MinIO', () => {
       "SELECT tablename FROM pg_tables WHERE schemaname='public'",
     );
     if (existing.rows.length) throw new Error('图片集成测试要求空数据库');
+    // 助手私有模式也必须不存在，不能误清其他测试留下的私有数据。
+    if ((await database.query("SELECT 1 FROM pg_namespace WHERE nspname='assistant_graph'")).rows.length)
+      throw new Error('图片集成测试要求不存在助手私有 schema');
     ownsSchema = true;
     // 按真实升级顺序应用全部迁移。
     for (const directory of readdirSync(
@@ -218,7 +221,7 @@ integration('ImagesService 真实 PostgreSQL + MinIO', () => {
     }
     await prisma?.onModuleDestroy();
     if (ownsSchema)
-      await database.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+      await database.query('DROP SCHEMA IF EXISTS assistant_graph CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public');
     await database?.end();
   });
 

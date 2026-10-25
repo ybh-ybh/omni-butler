@@ -67,6 +67,8 @@ void androidNoteTests() {
       ValueKey('notes-statistics-day-${businessDayKey(DateTime.now())}'),
     );
     await tester.ensureVisible(today);
+    // 窄屏月份滚动后先完成布局，避免按滚动前的日期坐标点击。
+    await _settle(tester);
     await tester.tap(today);
     await _settle(tester);
     expect(find.byKey(const ValueKey('notes-statistics-dialog')), findsNothing);
