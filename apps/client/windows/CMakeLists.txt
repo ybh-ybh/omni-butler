@@ -60,6 +60,9 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# 固定 SDK 下的 Windows 拖放兼容，长路径读取按 UTF-16 实际长度分配。
+include(cmake/desktop_drop_compat.cmake)
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can

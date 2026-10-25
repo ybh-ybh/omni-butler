@@ -4,6 +4,60 @@ generator client {
   moduleFormat = "cjs"
 }
 
+/// 私有附件的上传身份、解析状态与对象引用，正文不写入数据库。
+model AssistantAttachment {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  conversationId String @map("conversation_id") @db.Uuid
+  sessionId String @map("session_id") @db.Uuid
+  name String @db.VarChar(180)
+  mimeType String @map("mime_type") @db.VarChar(120)
+  size Int
+  sha256 String @db.VarChar(64)
+  kind String @db.VarChar(16)
+  status String @default("uploading") @db.VarChar(16)
+  requiresVision Boolean @default(false) @map("requires_vision")
+  objectKey String @map("object_key") @db.VarChar(220)
+  manifestKey String? @map("manifest_key") @db.VarChar(220)
+  imageKeys Json? @map("image_keys")
+  chunkCount Int @default(0) @map("chunk_count")
+  units Int @default(0)
+  errorCode String? @map("error_code") @db.VarChar(80)
+  leaseToken String? @map("lease_token") @db.Uuid
+  leaseUntil DateTime? @map("lease_until") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message AssistantMessageAttachment?
+  @@index([userId, conversationId, createdAt])
+  @@index([status, leaseUntil])
+  @@map("assistant_attachments")
+}
+
+/// 一个上传最多绑定一条消息，重发同一消息安全重放。
+model AssistantMessageAttachment {
+  messageId String @map("message_id") @db.Uuid
+  attachmentId String @unique @map("attachment_id") @db.Uuid
+  message AssistantMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  attachment AssistantAttachment @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
+  @@id([messageId, attachmentId])
+  @@map("assistant_message_attachments")
+}
+
+/// 清理队列不关联会话外键，数据库删除后仍能清除私有对象。
+model AssistantAttachmentGc {
+  id String @id @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  attachmentId String @map("attachment_id") @db.Uuid
+  keys Json
+  attempts Int @default(0)
+  availableAt DateTime @default(now()) @map("available_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@index([availableAt])
+  @@map("assistant_attachment_gc")
+}
+
 datasource db {
   provider = "postgresql"
 }
@@ -74,6 +128,8 @@ model SyncOwner {
   assistantEvents AssistantEvent[]
   assistantMemories AssistantMemory[]
   assistantAttempts AssistantAttempt[]
+  /// 助手附件仅保存私有对象引用，不进入同步。
+  assistantAttachments AssistantAttachment[]
 
   @@map("sync_owners")
 }
@@ -207,12 +263,18 @@ model AiSettings {
 
 /// 供应商配置和加密密钥，不参与 PowerSync。
 model AiProfile {
+  /// 助手能力绑定配置修订；笔记整理不读取此字段。
+  assistantCapabilities Json? @map("assistant_capabilities")
   id String @id @db.Uuid
   userId String @map("user_id") @db.Uuid
   name String @db.VarChar(80)
   provider String @db.VarChar(16)
   baseUrl String @map("base_url") @db.VarChar(2048)
   model String @db.VarChar(128)
+  /// 用户显式声明此配置支持图片输入，不通过模型名称或测试推断。
+  multimodal Boolean @default(false)
+  /// 由用户明确选择思考模式，旧配置默认关闭。
+  thinkingEnabled Boolean @default(false) @map("thinking_enabled")
   encryptedApiKey String? @map("encrypted_api_key")
   revision Int @default(1)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -236,6 +298,8 @@ model NotePolishJob {
   provider String? @db.VarChar(16)
   baseUrl String? @map("base_url")
   model String? @db.VarChar(128)
+  /// 付费任务固定创建时的思考模式，不跟随后续配置编辑变化。
+  thinkingEnabled Boolean @default(false) @map("thinking_enabled")
   encryptedApiKey String? @map("encrypted_api_key")
   promptVersion Int @default(1) @map("prompt_version")
   sourceHash String? @map("source_hash") @db.VarChar(64)
@@ -446,6 +510,8 @@ model AssistantConversation {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
   user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 会话删除前先登记对象清理任务。
+  attachments AssistantAttachment[]
   @@index([userId, updatedAt])
   @@map("assistant_conversations")
 }
@@ -512,6 +578,8 @@ model AssistantMessage {
   excluded Boolean @default(false)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 已发送附件通过独立关联固定到用户消息。
+  attachments AssistantMessageAttachment[]
   @@unique([userId, clientMessageId])
   @@index([userId, conversationId, createdAt])
   @@map("assistant_messages")
@@ -550,6 +618,8 @@ model AssistantMemory {
 
 /// 付费请求先持久登记，未知提交不自动再次收费。
 model AssistantAttempt {
+  /// 每次真实出站及恢复计划均单独持久记录。
+  requests AssistantAttemptRequest[]
   id String @id @db.Uuid
   userId String @map("user_id") @db.Uuid
   runId String @map("run_id") @db.Uuid
@@ -563,6 +633,27 @@ model AssistantAttempt {
   user SyncOwner @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@unique([runId, ordinal])
   @@map("assistant_attempts")
+}
+
+/// 一个逻辑模型调用的实际请求；未知出站绝不自动再次执行。
+model AssistantAttemptRequest {
+  id String @id @db.Uuid
+  attemptId String @map("attempt_id") @db.Uuid
+  index Int
+  requestHash String @map("request_hash") @db.VarChar(64)
+  status String @db.VarChar(32)
+  failure Json?
+  retryAt DateTime? @map("retry_at") @db.Timestamptz(3)
+  deadlineAt DateTime @map("deadline_at") @db.Timestamptz(3)
+  /// 私有请求只包含引用，图像数据在出站前临时加载。
+  request Json
+  /// 明确上下文拒绝后的下一版输入，不改写被拒绝请求。
+  nextRequest Json? @map("next_request")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  attempt AssistantAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  @@unique([attemptId, index])
+  @@map("assistant_attempt_requests")
 }
 
 /// 已提交客户端事务的幂等回执，与业务写入一同提交。

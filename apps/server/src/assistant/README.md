@@ -8,6 +8,7 @@ Windows/Android 使用设备 JWT 访问 `/omni-butler/api/v1/assistant`，独立
 
 - 只读工具可以循环执行，写工具先登记意图，完整任务结束后才真实预演。当前顶层请求没有明确业务写指令时不提供对应写工具；资料、检索和记忆不能扩大写范围。无法确定时澄清。
 - 单个独立业务对象直接提交；两个及以上对象通过原生卡片确认。确认绑定任务、版本和预览摘要，修改方案使旧确认失效。
+- 最小必要输入：新增待办只有名称必填，计划日期默认本次操作准备时的业务时区当天，类型默认普通、象限默认重要不紧急。不为可选日期、截止、提醒或拆分步骤追问；有真实目标歧义、冲突或缺少无法确定的必要信息时才澄清。默认规则与 MCP 共用，服务端固定实际参数，更新不会重新套用新增默认值。
 - `stage_changes` 可登记最多64步完整清单。每批最多8步/200条实际变化；超过8步的完整预演在保存点中全部回滚，确认后逐批执行。每批提交、幂等回执、进度和下一批基线在同一事务保存；外部修改导致停止。跨批不具备原子性。
 - checkpoint 只保存图阶段指针；会话、确认、运行租约、模型请求和执行回执分别持久保存。任务来源不能从模型或客户端参数指定。
 - `mcp_actions` 保留物理表和历史动作，新增 `source/source_id` 隔离助手与 MCP，持续使用 `protectedRecords`。删除聊天不删除这些业务回执或同步保护。
@@ -20,10 +21,11 @@ Windows/Android 使用设备 JWT 访问 `/omni-butler/api/v1/assistant`，独立
 | 路径 | 方法与行为 |
 |---|---|
 | `/settings` | GET / PUT；`revision,enabled,profileId,memoryReadEnabled,memoryWriteEnabled,timeZone` |
-| `/test` | POST `{profileId}`；固定文本和 echo 工具两轮探测，不发送业务数据 |
+| `/test` | POST `{profileId}`；固定文本和 echo 工具两轮探测，不发送图片或业务数据；兼容旧 `vision` 字段但忽略 |
 | `/conversations` | GET `?cursor=` / POST `{title?}` |
 | `/conversations/:id` | PATCH `{title}` / DELETE；仅删除聊天及派生状态 |
-| `/conversations/:id/messages` | GET `?before=`；POST `{clientMessageId,content,timeZone?,selection?,reference?}` |
+| `/conversations/:id/messages` | GET `?before=`；POST `{clientMessageId,content,attachmentIds?,timeZone?,selection?,reference?}` |
+| `/messages/:id/note` | POST无正文或`{}`；将持久助手回答直接保存为笔记，返回`{noteId,savedAt}`，同一回答仅创建一次 |
 | `/runs/:id` | GET；只返回状态、公开计划与可操作能力 |
 | `/runs/:id/events` | GET `?after=seq` SSE；`seq,type,runId,data` |
 | `/runs/:id/stop` | POST；取消未提交动作，保留实际结果 |
@@ -34,11 +36,21 @@ Windows/Android 使用设备 JWT 访问 `/omni-butler/api/v1/assistant`，独立
 | `/plans/:taskId/decision` | POST `{version,previewHash,decision:"confirm"或"cancel"}` |
 | `/memories` | GET `?cursor=` / POST / DELETE清空 |
 | `/memories/:id` | PATCH完整内容及revision / DELETE |
-| `/entities/:module/:id` | GET；七模块精确服务器快照，未同步到本机也可查看 |
+| `/entities/:module/:id` | GET精确快照与`editVersion`；PATCH受版本保护的人工编辑，未同步到本机也可操作 |
 
 `selection` 仅能引用当前澄清卡片；`reference` 仅能引用本会话真实结果卡片，二者格式均为 `{id,module}`。未知 POST 结果按原 `clientMessageId` 核实，不生成新身份。
 
 SSE事件包括 `message.delta`、`message.completed`、`plan.ready`、`run.updated`、`error`。事件与序号同事务保存，流最长一分钟后可带游标续接；断开流不会停止任务。客户端仍须逐事件核对服务器及认证代次。
+
+`run.updated` 的公开运行快照包含 `liveElapsedMs` 和 `executionSteps`。前者为已结算时间加当前执行段的显示基线，客户端仅在排队或运行时继续走表，等待用户操作时暂停；最终采用 `elapsedMs`。Windows 在发送同步检查开始时就显示本机计时，尚未提交的草稿不启动计时。
+
+执行步骤公开 `{id,kind,label,status,startedAt,finishedAt?,detail?,tool?,reasoning?}`，`kind` 为 `model/tool/commit`；状态为 `running/succeeded/failed/planned/waiting/cancelled`。工具登记写意图仅标 `planned`，实际提交单独记录 `commit`，不能把计划当成已保存。步骤开始和结束均发布运行快照，完整回答及历史消息携带按回答身份聚合的执行记录；客户端按步骤 ID 去重，已结束步骤不因旧快照回退。标签来自服务端固定映射，工具的 `tool:{name,arguments,truncated?}` 供归属用户逐项展开查看实际输入：凭据字段脱敏、参数限制16KiB及嵌套深度，省略明确标记。历史状态未保存参数时明确提示不可用。执行链默认收起，单行显示当前阶段；用时文字悬停变色且背景透明。
+
+模型明确返回的可读思考以 `reasoning:{text,truncated?}` 附在对应模型步骤，Windows/Android在同一执行链中独立展开“思考过程”；不拼入最终答案或保存笔记正文。流式接收 `response.reasoning_summary_text.delta` 和 `response.reasoning_text.delta`，以累计快照更新，成功回执恢复及历史读取沿用相同投影；失败/取消后关闭交付队列。只读取 reasoning 项的公开 `summary_text/reasoning_text`，不展示 `encrypted_content` 或原始工具结果。展示每轮最多16,000个Unicode码点、整链64,000个，超限明确标记；供应商原始续接协议与付费回执保持不变。
+
+客户端点击“新聊天”只切换至本机空白草稿，第一条非空消息（含纯附件）发送时才创建真实会话。未发送草稿与附件私有副本可跨会话/重启恢复；新聊天中添加附件不创建空会话，首次发送先上传并等待全部解析就绪，再按当前模型视觉能力校验后提交消息。
+
+输入区主按钮在提交、排队或生成中替换为“停止”，提交响应尚未返回时先持久记录停止意图，复用原消息身份核实后停止真实运行；尚未出站的消息取消准备并保留草稿。服务端确认取消后，空草稿显示“开始”，点击以可见的“继续”消息沿当前聊天发起新任务，沿用正常上下文与授权校验；不通过 `retry` 复活取消任务、旧批准或待提交动作。输入新内容时恢复正常发送，未知提交仍先恢复原请求。
 
 ## 上下文、记忆与限制
 
@@ -46,8 +58,12 @@ SSE事件包括 `message.delta`、`message.completed`、`plan.ready`、`run.upda
 - 显式“记住”才开放记忆写工具；管理页支持查看、编辑、停用、到期和清空。凭据类内容拒绝保存。记忆在 PostgreSQL 按结构及关键词检索，权限和删除过滤先行。
 - 记忆变更推进版本，使关联摘要、源消息输入、旧运行状态和checkpoint失效；已发送到第三方的请求不能撤回数据。业务记录不会随删除聊天或记忆自动删除。
 - 每轮最多8次工具调用/12次模型请求，累计执行120秒、单次模型60秒；等待确认不计时。未知计费响应只能显式重试。
+- 待办列表支持可选 `priorityQuadrant:0..3`，数据库先过滤再分页；助手只读标量和进度计数，完整JSON最多16KiB，不加载描述及逐条步骤。缩短响应页时按实际交付条数推进 `nextOffset`，保留 `hasMore`，不以空截断提示替代全部结果；外部MCP仍返回既有完整结构。
+- 当前任务 `state.readProgress` 最多保留8个查询、合计16KiB，记录规范筛选、实际已读范围、后续游标和有界真实对象摘要；上下文压缩保留该只读资料，遗忘与记忆版本失效会清除。`itemsOmitted/titleOmitted` 表示摘要存在省略，不代表未返回记录不存在。
+- 纯查询耗尽8次工具预算后进入 `answerOnly/tool_choice:none`；查询和安全重试预留第12次实际请求供最终回答，旧auto恢复计划同样受门禁。无剩余额度则展示固定说明及已保存摘要，不再请求模型；未完成写计划不能降级为已完成。最终回答必须标明只覆盖已读取资料。
+- `ASSISTANT_TOOL_LIMIT/ASSISTANT_MODEL_LIMIT/ASSISTANT_EXECUTION_TIMEOUT` 与 `ASSISTANT_DATA_CONFLICT` 分开；只有明确业务基线冲突显示“数据已发生变化”。执行详情可显示固定计数句式“已读取N条，进度步骤已摘要”，工具输出超限不能仅标已完成。最终回答阶段供应商违规返回的工具调用不会执行。
 - `ASSISTANT_CONTEXT_PROVIDERS` 是后续 Skills 的受控资料扩展点，当前默认无实现。扩展资料不改变工具权限、确认规则或运行身份。
-- 仅处理服务器已接收的数据；本机写前建立同步检查点，未发布草稿不发送。只读来源卡最多20条，不能把引用数量解释为统计覆盖量。
+- 仅处理服务器已接收的数据；本机写前建立同步检查点，未发布的业务模块草稿不发送。只读来源卡最多20条，不能把引用数量解释为统计覆盖量。
 
 ## 持久化与上线
 
@@ -58,3 +74,61 @@ SSE事件包括 `message.delta`、`message.completed`、`plan.ready`、`run.upda
 **完整灾备恢复**必须先停 API，恢复数据库和密钥卷，再执行 `deploy/assistant-restore-safety.sql`，确认助手关闭、旧设备/MCP连接及未完成任务失效后启动。保留业务记录、聊天正文、记忆、历史回执和保护事实，重新连接设备及开启助手。仅恢复数据库不能被视为已安全恢复执行授权。
 
 真实供应商流式工具能力、两台真实设备和真人自然语言效果需分别验收；测试模型网络替身、数据库集成、Widget测试及Release编译不能代替这些验收。
+
+## 提示词与最终交付
+
+`assistant-prompts.ts` 集中组装身份、授权、查询、日期语义和简洁自然的回答规则；时间/业务时区为独立环境段，查询进度继续由上下文资料提供。工具参数的范围和象限映射由既有 schema 描述。阶段由服务器的 `answerOnly`、`readLimit` 和真实任务 `committed` 选择，分别处理查询、正常回答、限额回答和提交后回执。
+
+查询阶段不公开模型正文，但完整输出和不透明推理项仍按原协议保存在付费回执/当前任务输入中。进入最终流式阶段时，指令明确先前正文是尚未展示的草稿，当前回答必须完整交付具体结果；不能用“上一条已说明”、范围声明或来源卡替代答案。成功回执恢复仍走同一路由，不增加润色请求或重试未知结果。正常查询只在实际限制影响结论时说明范围，计划日期已过不能当作截止逾期。
+
+引用卡默认显示“相关记录”，仅当服务端确认单页或累计引用超过二十条时设置可选 `referencesTruncated: true`。此标记只表示引用入口裁剪，不表示查询覆盖是否完整；客户端对旧卡缺少该事实时显示中性名称，不沿用旧版无条件“部分来源”说明。
+
+## 执行结果原地编辑
+
+结果卡按真实 `entityRefs` 默认折叠，摘要为“执行结果 • 新增待办 • 任务名称”。操作名称取实际执行步骤的可选 `operation`，旧回执缺少操作事实时显示“已保存”，不猜测新增。展开后按业务分组显示表单，隐藏主键、同步字段及内部时间戳；只读与编辑共用布局，Windows/Android 均可在聊天内保存，不创建新的模型任务。
+
+编辑前 `GET /assistant/entities/:module/:id` 读取同归属最新记录及顶层 `editVersion`。`PATCH` 同路径提交 `{ operationId, expectedUpdatedAt, expectedVersion, changes }`；版本取原始业务行规范摘要，客户端不得根据装饰后的记录自行计算。后端在同一 owner 锁事务中校验版本、调用既有领域服务及保存幂等回执；跨用户、已删除或失效会话拒绝。同毫秒的并发更新仍由摘要检测，未知响应使用原请求身份重放，不自动生成新保存请求。
+
+仅提交用户改动的业务字段，未改字段保持原值；分类/标签/位置关联、任务类型、完成状态等结构性操作仍只读，不在此面板改变聚合结构。时间记录更新沿用业务时区；日期字段按自然日处理，金额以整数分提交。客户端保存冲突保留草稿并要求显式重新载入，网络结果未知时冻结该次请求及表单，用户可重试核实；请求保留在当前面板内，离开页面后再次展开先读取服务器状态。历史回执保持执行当时快照，不改写原模型输出。
+
+无需数据库迁移；需同时更新服务器与客户端才能启用原地保存。旧服务缺少 `editVersion` 时，客户端继续显示同归属最新记录，提示需要更新 API，并提供“重新读取”；不会展示无法工作的编辑按钮。服务升级后重新读取即可恢复编辑。保存响应仍必须带回版本，缺失时按结果未知处理，保留原请求身份核实，不能误报成功。
+
+## 回答操作与保存笔记
+
+Windows的回答底部“保存为笔记”和创建时间按整条回答悬停/键盘聚焦显示，预留固定高度；手机入口常驻。悬停保存只改变文字颜色，不出现背景。成功后显示“已保存”，历史消息通过可选`savedNote:{noteId,savedAt}`恢复该事实。保存中和失败反馈独立于模型任务，不改变聊天输入、草稿、消息或计时。
+
+`POST /assistant/messages/:id/note`由设备JWT认证，拒绝客户端正文和额外字段；只读取同归属且会话有效的持久助手消息。首次保存拒绝仍生成或持有有效租约的回答，保存完整Markdown原文，沿用20,000字符上限，不拼接问题、卡片、思考或附件。笔记使用首次保存时业务时区的当天/时刻、无标签且不置顶；消息旁时间仍为消息真实`createdAt`。
+
+同一用户和消息派生稳定外层操作身份，复用`NotesBusinessService.create`及独立内层身份，使笔记、首版本和两层回执同事务提交。重复点击、跨设备和未知结果重试返回首次结果；原笔记后来被编辑或删除，也不覆盖或重建。来源会话和归属授权仍在重放前检查。历史页一次批量查询外层回执，仅公开笔记ID及保存时间，无数据库迁移。旧服务器缺少接口时客户端提示更新，不回退为AI发送。
+
+底部独立“已完成”状态不再重复显示；执行链、错误和必要操作保留。“撤销新增”位于对应结果卡标题右侧，绑定明确运行ID且不触发展开。可撤销运行额外返回`undoExpiresAt`，由真实成功动作的更新时间加十分钟产生，与正式撤销资格共用判断；客户端到期隐藏入口，实际撤销仍以服务器校验为准。
+
+## 有界模型恢复
+
+Responses兼容画像固定在运行快照中，包含版本、图像能力、上下文容量、输出和完整请求体上限。图片输入仅取模型配置的 `multimodal` 布尔开关：新增及已有配置默认关闭，新增/编辑时由用户显式开启；无需图片探测，不根据模型名或旧测试结果推断。普通连接测试不会修改开关。旧客户端更新省略此字段时保留原值；`null`、字符串和数字不能开启。笔记整理仍使用原配置和参数，不自动切换协议或供应商。
+
+配置的 `thinkingEnabled` 开关同样默认关闭，新增/编辑时明确选择，旧客户端省略保留原值，严格接受布尔。普通连接测试使用当前表单值而不保存配置；助手任务及笔记整理任务固定接受时的模式快照。Responses请求关闭时发送 `reasoning.effort:none`，开启时发送 `high`；仅官方 `api.openai.com` 在开启时附 `summary:auto` 申请公开摘要，其他供应商按已确认兼容的公开思考事件读取。不自动回退参数或换模型；供应商未返回可读思考时不伪造。需先部署增量迁移 `20261024060000_ai_thinking` 和配套API，再更新两端客户端。协议参考：[OpenAI思考摘要](https://developers.openai.com/api/docs/guides/reasoning)、[DeepSeek Responses](https://api-docs.deepseek.com/api/create-response/)。
+
+一个逻辑attempt下的每次真实请求写入 `assistant_attempt_requests`，保留不可变请求摘要及输入引用、安全失败事实、等待时间和共同截止时间。只对已证明未提交的瞬时连接错误、明确临时429拒绝自动重试一次；退避500ms±20%，Retry-After作为下限且超过5秒停止自动恢复。重试、DNS和图像加载共享60秒预算，所有实际请求计入12次任务上限。5xx、半流及已有生成/用量证据始终按未知计费处理，必须显式继续。
+
+明确上下文超限最多进行一次确定性缩减并单独保存新输入，不能裁开调用/结果或丢弃当前授权、计划。失败关闭正文交付队列并等待在途回调结束；部分函数永不执行。记忆工具修改与对应结果/检查点同事务提交；遗忘同时清除请求账本原文，保留摘要及安全诊断事实。
+
+## 文件附件
+
+服务器 `ASSISTANT_ATTACHMENTS_ENABLED` 默认关闭，能力未开启时客户端隐藏入口。使用独立私有MinIO桶 `omni-butler-assistant-attachments`，不依赖业务图片开关。两端支持文件选择，Windows支持PNG/DIB剪贴板图片；纯附件消息使用“请概括附件内容”。
+
+| 路径 | 方法与行为 |
+|---|---|
+| `/attachments/capabilities` | GET；开关、支持后缀及数量/体积限制 |
+| `/conversations/:id/attachments/:uploadId` | PUT multipart `file`；原UUID、名称与字节hash幂等 |
+| `/attachments/:id` | GET解析状态；DELETE未发送附件 |
+| `/attachments/:id/file` | GET鉴权原件，private/no-store且强制下载 |
+| `/attachments/:id/retry` | POST重做同一原件解析，不调用模型 |
+
+每条消息最多5个文件、单文件20MiB、合计50MiB；支持PNG/JPEG/WebP、PDF、TXT/MD、CSV、DOCX、XLSX。解析进程30秒超时，限制ZIP实际展开量、100页PDF、20张扫描页、20个工作表、50000单元格和提取文本；损坏、加密、超限及旧DOC/XLS均明确失败。Mammoth只提取文字、Excel不执行公式或宏、PDF无文本页生成受限图片，不调用OCR。
+
+发送在owner事务内校验就绪并绑定有序附件ID，清单参与消息幂等；历史只保存引用。文档工具 `read_attachment/search_attachment` 按页、段、块、工作表/行提供有限资料和来源；执行链可显示真实附件名称及读取范围。附件正文、文件名及检索结果均不是写授权，实际业务修改仍由顶层用户请求和原确认门禁决定。
+
+图像每次请求最多5张、每张2MiB，完整请求不超过20MiB且服从更低供应商限制；扫描页按需读取，保留最近5图的请求窗口，旧页可按来源重新读取。图像只在出站前加载，数据库/缓存/SSE不保存base64或公开URL。当前配置未开启多模态时，发送前提示在AI设置中编辑模型配置；文本附件不受此开关影响。开关是用户对配置的能力声明，不保证供应商实际接受图片请求。
+
+未发送文件24小时后回收，已发送文件随聊天保留；删除聊天先撤销引用，再由持久GC清理。清理与解析发布争用同owner锁，兜底延时覆盖在途对象写入。部署和备份必须同时覆盖新增迁移、数据库、对象存储卷及凭据，见 `deploy/README.md`。

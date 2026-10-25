@@ -15,6 +15,7 @@
 | `API_HOST_PORT` | API 的宿主机映射端口，默认 `3000` |
 | `POWERSYNC_HOST_PORT` | PowerSync 的宿主机映射端口，默认 `8080` |
 | `PUBLIC_BASE_URL` | 同域名 HTTPS 公网根地址，例如 `https://butler.example.com`；后端自动推导同步与取音地址 |
+| `ASSISTANT_ATTACHMENTS_ENABLED` | 助手文件附件开关，默认 `false`；升级附件迁移及API后按需开启 |
 | `IMAGE_SYNC_ENABLED` | 图片业务开关，默认 `false`；MinIO 始终运行，供笔记原音使用 |
 
 Compose 自动读取当前目录的 `.env`，容器内部端口固定为 `3000`、`8080`。已有 `.env` 时补上 `API_HOST_PORT=3000`、`POWERSYNC_HOST_PORT=8080`，或填写自己的映射端口。
@@ -391,3 +392,13 @@ API 文档：局域网为 `http://<服务器IP>:<API端口>/omni-butler/api/v1/d
 先完整备份PostgreSQL、MinIO图片及原音、存储凭据和API密钥，再依次部署增量迁移 `20261019000000_note_record_time`、`20261019010000_note_pinning`、API及PowerSync下行配置，最后升级Windows与Android全部客户端。SQLite25、本机快照10（兼容1–9），换服wire3不变；旧客户端受schema10门禁限制，保留离线数据及原队列，不通过清库解决版本不兼容。
 
 置顶字段 `note_entries.is_pinned` 为非空布尔且默认false；置顶PATCH不生成正文版本，旧正文PATCH缺失该字段时保留最新状态。下行必须包含置顶、记录秒数和偏移。升级后在独立环境验证两端置顶/取消、旧离线正文回放不重置置顶、备份恢复及记录时间往返，再推广真实客户端。本轮未执行正式备份、迁移、部署或真实联网验收。
+
+### 助手文件附件与恢复
+
+附件新增增量迁移 `20261024030000_assistant_attachments`，请求恢复记录为 `20261024040000_assistant_recovery`。先完整备份数据库、`image-storage-data`、`image-storage-credentials` 和密钥卷，再迁移数据库并更新API及客户端。设置 `ASSISTANT_ATTACHMENTS_ENABLED=true` 才开放上传；旧客户端可继续发送纯文本。此开关不依赖业务图片同步。
+
+助手使用私有桶 `omni-butler-assistant-attachments`，由认证API代理上传下载。备份必须同时覆盖数据库与整个对象存储卷，单独恢复元数据不能恢复文件。未发送附件24小时后及删除会话后的对象由持久清理队列回收；停止任务不会删除已发送附件。灾备恢复继续执行 `assistant-restore-safety.sql`，旧等待和付费尝试不得重新获得执行授权。
+
+模型配置新增 `multimodal` 开关；部署包含增量迁移 `20261024050000_ai_profile_multimodal`，先备份并迁移数据库、更新API，再更新客户端。已有和新增配置默认关闭，用户在新增/编辑模型配置时手动开启后即可发送图片或扫描页，无需付费图片测试；旧测试结果不能自动开启。附件解析在服务端独立子进程执行，不会调用额外OCR服务，不自动切换供应商。
+
+模型配置的“思考模式”使用 `thinkingEnabled`，默认关闭，旧客户端更新省略时保留原值。新增迁移 `20261024060000_ai_thinking` 为模型配置及笔记整理任务增加非空默认false字段；助手沿用现有运行JSON快照。与上述附件、恢复、多模态迁移一同上线时，完整备份后按迁移顺序更新数据库和API，最后更新客户端，不清空现有卷。普通连接测试使用表单当前开关；笔记整理与助手请求使用任务接受时的快照，开为 `reasoning.effort:high`、关为 `none`。两端执行链默认折叠，模型公开返回的思考文本或摘要可逐项展开；加密续接内容不会展示，供应商没有公开文本时不补造。真实模型兼容性和思考输出效果需另行联调，本地模拟与Release构建不能替代真实供应商验收。

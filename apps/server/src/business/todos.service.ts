@@ -100,13 +100,19 @@ export class TodosService {
   constructor(private readonly prisma: PrismaService) {}
 
   /// 纯列表不物化重复实例，明确返回当前已保存的记录。
-  list(actor: AuthUser, value: unknown = {}): Promise<Prisma.JsonValue> {
+  list(
+    actor: AuthUser,
+    value: unknown = {},
+    /// 仅目录中的助手入口设置，不接受用户参数控制返回范围。
+    forAssistant = false,
+  ): Promise<Prisma.JsonValue> {
     // 查询作用范围由业务字段限定。
     const input = objectInput(value, [
       'query',
       'fromDay',
       'toDay',
       'completed',
+      'priorityQuadrant',
       'limit',
       'offset',
     ]);
@@ -131,41 +137,107 @@ export class TodosService {
       input.completed === undefined
         ? undefined
         : booleanInput(input.completed, 'completed');
-    return businessRead(this.prisma, actor, async (transaction) => ({
-      ...pageResult(
-        await transaction.todoItem.findMany({
-          where: {
-            userId: actor.sub,
-            deletedAt: null,
-            isCompleted: completed,
-            scheduledDate: { gte: from, lt: to },
-            ...(query
-              ? { title: { contains: query, mode: 'insensitive' } }
-              : {}),
+    // 象限在数据库分页前筛选，零值不能被当成未指定。
+    const priorityQuadrant =
+      input.priorityQuadrant === undefined
+        ? undefined
+        : integerInput(input.priorityQuadrant, 'priorityQuadrant', 0, 3);
+    // 两种输出共用相同归属、筛选及排序规则。
+    const where: Prisma.TodoItemWhereInput = {
+      userId: actor.sub,
+      deletedAt: null,
+      isCompleted: completed,
+      priorityQuadrant,
+      scheduledDate: { gte: from, lt: to },
+      ...(query ? { title: { contains: query, mode: 'insensitive' } } : {}),
+    };
+    // 确定顺序确保缩减响应后仍从实际交付位置继续分页。
+    const orderBy: Prisma.TodoItemOrderByWithRelationInput[] = [
+      { scheduledDate: 'asc' },
+      { priorityQuadrant: 'asc' },
+      { sortOrder: 'asc' },
+      { id: 'asc' },
+    ];
+    return businessRead(this.prisma, actor, async (transaction) => {
+      if (forAssistant) {
+        // 列表只读取标量摘要，不加载描述、步骤全文或同步元数据。
+        const rows = await transaction.todoItem.findMany({
+          where,
+          select: {
+            id: true,
+            title: true,
+            taskType: true,
+            priorityQuadrant: true,
+            scheduledDate: true,
+            dueAt: true,
+            isCompleted: true,
+            parentId: true,
           },
-          include: {
-            progressSteps: {
-              where: { deletedAt: null },
-              orderBy: [
-                { sortOrder: 'asc' },
-                { createdAt: 'asc' },
-                { id: 'asc' },
-              ],
-            },
-          },
-          orderBy: [
-            { scheduledDate: 'asc' },
-            { priorityQuadrant: 'asc' },
-            { sortOrder: 'asc' },
-            { id: 'asc' },
-          ],
+          orderBy,
           skip: page.skip,
           take: page.take + 1,
-        }),
-        page,
-      ),
-      includesUnmaterializedRecurring: false,
-    }));
+        });
+        // 数据库仅聚合当前页步骤计数，最多返回每个待办两组。
+        const counts = rows.length
+          ? await transaction.todoProgressStep.groupBy({
+              by: ['todoId', 'isCompleted'],
+              where: {
+                userId: actor.sub,
+                todoId: { in: rows.map((row) => row.id) },
+                deletedAt: null,
+              },
+              _count: { _all: true },
+            })
+          : [];
+        // 完整进度仅保留总数和完成数。
+        const progress = new Map<
+          string,
+          { total: number; completed: number }
+        >();
+        for (const count of counts) {
+          // 合并同一待办的已完成和未完成分组。
+          const summary = progress.get(count.todoId) ?? {
+            total: 0,
+            completed: 0,
+          };
+          summary.total += count._count._all;
+          if (count.isCompleted) summary.completed += count._count._all;
+          progress.set(count.todoId, summary);
+        }
+        return {
+          ...pageResult(
+            rows.map((row) => ({
+              ...row,
+              progress: progress.get(row.id) ?? { total: 0, completed: 0 },
+            })),
+            page,
+          ),
+          includesUnmaterializedRecurring: false,
+        };
+      }
+      return {
+        ...pageResult(
+          await transaction.todoItem.findMany({
+            where,
+            include: {
+              progressSteps: {
+                where: { deletedAt: null },
+                orderBy: [
+                  { sortOrder: 'asc' },
+                  { createdAt: 'asc' },
+                  { id: 'asc' },
+                ],
+              },
+            },
+            orderBy,
+            skip: page.skip,
+            take: page.take + 1,
+          }),
+          page,
+        ),
+        includesUnmaterializedRecurring: false,
+      };
+    });
   }
 
   /// 详情包含有效直属孩子和进度步骤。
@@ -837,7 +909,10 @@ export class TodosService {
               baseline[index]?.name !== step.name,
           )
         )
-          throw new ConflictException('进度结构已变化，请重新读取');
+          throw new ConflictException({
+            code: 'TODO_STRUCTURE_CONFLICT',
+            message: '进度结构已变化，请重新读取',
+          });
         if (
           drafts.length > maxProgressSteps &&
           (drafts.length > current.length || drafts.some((step) => !step.id))

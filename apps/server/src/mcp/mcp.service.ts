@@ -25,6 +25,7 @@ import {
   mcpId,
   mcpModules,
   mcpAutoTaxonomyPolicy,
+  mcpTodoCreatePolicy,
   mcpWritePolicy,
   type McpModule,
   type McpToolDefinition,
@@ -300,6 +301,7 @@ export class McpService {
         prepare: 'prepare_batch固定输入与影响预览，尚未修改业务数据',
         confirmation: mcpWritePolicy,
         autoTaxonomy: mcpAutoTaxonomyPolicy,
+        todoDefaults: mcpTodoCreatePolicy,
         editing: 'get_note/get_todo返回editToken；原样回传编辑，冲突停止核对',
         authorization:
           '连接模块写权限为后端执行授权；不验证Codex对话中的人工确认',

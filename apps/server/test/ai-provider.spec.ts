@@ -82,7 +82,7 @@ describe('AI Responses 公网协议与正文边界', () => {
     const source = '嗯，今天，今天 3 件事情，不确定，不确定是否完成。';
     expect(await new AiProvider().polish(input, source)).toContain('3');
     expect(sentUrl.pathname).toBe('/prefix/v1/responses');
-    expect(JSON.parse(sentPayload)).toEqual({ model: input.model, instructions: expect.stringContaining('不得推断补充事实'), input: source, max_output_tokens: 12000, stream: false, store: false });
+    expect(JSON.parse(sentPayload)).toEqual({ model: input.model, instructions: expect.stringContaining('不得推断补充事实'), input: source, max_output_tokens: 12000, stream: false, store: false, reasoning: { effort: 'none' } });
     // 正式请求必须同时表达通顺改写、卡顿清理和保留有意义限定，不能只做删词。
     const instructions = (JSON.parse(sentPayload) as { instructions: string }).instructions;
     expect(instructions).toContain('通顺的文章或笔记');
@@ -107,9 +107,19 @@ describe('AI Responses 公网协议与正文边界', () => {
     const current = { ...input, provider: preset.provider, baseUrl: preset.baseUrl || input.baseUrl, model: preset.model || input.model };
     await expect(new AiProvider().test(current)).resolves.toEqual({ ok: true, message: '模型服务连接成功' });
     expect(sentUrl.toString()).toBe(`${current.baseUrl}/responses`);
-    expect(JSON.parse(sentPayload)).toEqual({ model: current.model, instructions: '只回复“连接成功”。', input: '连接测试', max_output_tokens: 256, stream: false, store: false, ...(preset.provider === 'custom' ? {} : { reasoning: { effort: 'none' } }) });
+    expect(JSON.parse(sentPayload)).toEqual({ model: current.model, instructions: '只回复“连接成功”。', input: '连接测试', max_output_tokens: 256, stream: false, store: false, reasoning: { effort: 'none' } });
     expect(sentOptions.headers).toMatchObject({ authorization: `Bearer ${input.apiKey}`, 'content-length': Buffer.byteLength(sentPayload) });
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(AI_PRESETS)('$provider 开启思考后连接测试和笔记整理均发送high，不额外探测', async (preset) => {
+    // 只改变用户开关，其余仍走真实Responses序列化与模拟HTTPS。
+    const current = { ...input, provider: preset.provider, baseUrl: preset.baseUrl || input.baseUrl, thinkingEnabled: true };
+    await new AiProvider().test(current);
+    expect(JSON.parse(sentPayload)).toMatchObject({ reasoning: { effort: 'high' }, max_output_tokens: 2048 });
+    await new AiProvider().polish(current, '待整理正文');
+    expect(JSON.parse(sentPayload)).toMatchObject({ reasoning: { effort: 'high' }, max_output_tokens: 12000 });
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it('官方预设使用新的 Responses 基址和默认模型', () => {

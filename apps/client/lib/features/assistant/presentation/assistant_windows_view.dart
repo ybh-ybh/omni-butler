@@ -8,11 +8,19 @@ import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
+import 'package:omni_butler/core/attachments/windows_clipboard_images.dart';
+import 'package:omni_butler/features/assistant/data/assistant_attachments.dart';
 import 'package:omni_butler/features/assistant/data/assistant_chat_controller.dart';
 import 'package:omni_butler/features/assistant/data/assistant_models.dart';
 import 'package:omni_butler/features/assistant/data/assistant_repository.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_cards.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_markdown.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_attachment_widgets.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_conversation_search.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_execution_progress.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_file_drop_area.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_user_message_row.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_answer_actions.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_windows_tokens.dart';
 import 'package:omni_butler/features/notes/presentation/note_markdown_text.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
@@ -75,6 +83,9 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
   /// 模型更新失败需要持续展示。
   String? _modelError;
 
+  /// 图片编码期间忽略重复粘贴，不产生重复上传。
+  bool _pasting = false;
+
   /// 接入输入焦点与草稿变化，不改写输入法的组合区。
   @override
   void initState() {
@@ -116,9 +127,16 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
       _enabled(settings) &&
       !widget.chat.busy &&
       !_savingModel &&
+      (widget.chat.pending != null ||
+          widget.chat.attachments.blockReason(
+                settings.value,
+                includeVision: false,
+              ) ==
+              null) &&
       (!widget.chat.active || widget.chat.run?['requiresTakeover'] != true) &&
       (widget.chat.pending != null ||
-          (widget.input.text.trim().isNotEmpty &&
+          ((widget.input.text.trim().isNotEmpty ||
+                  widget.chat.attachments.hasDrafts) &&
               (!widget.chat.active ||
                   <String>{
                     'waitingInput',
@@ -127,6 +145,22 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
 
   /// 只有输入框内无组合文字的普通 Enter 才发送。
   KeyEventResult _inputKey(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent &&
+        node.hasFocus &&
+        event.logicalKey == LogicalKeyboardKey.keyV &&
+        HardwareKeyboard.instance.isControlPressed &&
+        !HardwareKeyboard.instance.isAltPressed &&
+        !HardwareKeyboard.instance.isShiftPressed &&
+        widget.input.value.composing.isCollapsed &&
+        widget.chat.attachments.enabled &&
+        !_pasting &&
+        widget.chat.attachments.editable &&
+        !widget.chat.attachments.transferring &&
+        _enabled(ref.read(assistantSettingsProvider)) &&
+        ref.read(windowsClipboardImagesProvider).hasImage) {
+      unawaited(_pasteImage());
+      return KeyEventResult.handled;
+    }
     if (event is! KeyDownEvent ||
         !widget.input.value.composing.isCollapsed ||
         HardwareKeyboard.instance.isShiftPressed ||
@@ -141,6 +175,39 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
       unawaited(widget.onSend());
     }
     return KeyEventResult.handled;
+  }
+
+  /// 只在输入区读取图片；无图片的 Ctrl+V 完全交给系统文字粘贴。
+  Future<void> _pasteImage() async {
+    if (_pasting) return;
+    _pasting = true;
+    // 编码结果不能进入用户后来切换到的聊天。
+    final int draftToken = widget.chat.attachments.draftToken;
+    try {
+      // 剪贴板原生句柄在编码前释放，返回独立 PNG 内容。
+      final bytes = await ref.read(windowsClipboardImagesProvider).readPng();
+      if (!mounted ||
+          !widget.inputFocus.hasFocus ||
+          bytes == null ||
+          draftToken != widget.chat.attachments.draftToken) {
+        return;
+      }
+      await widget.chat.attachments.add(<AssistantPickedFile>[
+        AssistantPickedFile(name: '粘贴图片.png', bytes: bytes),
+      ]);
+    } catch (failure) {
+      if (mounted) {
+        showOmniMessage(
+          context,
+          message: failure is ApiFailure
+              ? failure.message
+              : '图片粘贴失败，请重新复制或选择文件',
+          tone: OmniMessageTone.error,
+        );
+      }
+    } finally {
+      _pasting = false;
+    }
   }
 
   /// 全文搜索返回会话身份后才尝试切换，保留控制器的 pending 检查。
@@ -179,7 +246,7 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
     }
   }
 
-  /// 新聊天沿用服务端创建及旧草稿持久化流程。
+  /// 新聊天切换本地空白草稿并恢复输入焦点。
   void _newConversation() {
     if (!widget.chat.connected ||
         widget.chat.busy ||
@@ -250,8 +317,16 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
     final RenderBox? button =
         _modelKey.currentContext?.findRenderObject() as RenderBox?;
     if (button == null) return;
-    // 输入框内按钮的完整边界。
-    final Rect anchor = button.localToGlobal(Offset.zero) & button.size;
+    // 弹窗与按钮统一使用根导航覆盖层坐标，避免窗口安全区造成偏移。
+    final RenderBox overlay =
+        Navigator.of(
+              context,
+              rootNavigator: true,
+            ).overlay!.context.findRenderObject()!
+            as RenderBox;
+    // 输入框内按钮相对于弹窗覆盖层的完整边界。
+    final Rect anchor =
+        button.localToGlobal(Offset.zero, ancestor: overlay) & button.size;
     // 选择前固定配置，禁止弹窗期间的设置刷新替换修订号。
     final Map<String, dynamic> fixed = Map<String, dynamic>.from(settings);
     // 真实已配置模型选项。
@@ -262,6 +337,7 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
     final String? id = await showOmniDialog<String>(
       context: context,
       barrierColor: Colors.transparent,
+      useSafeArea: false,
       builder: (_) => _AssistantModelPicker(
         anchor: anchor,
         profiles: profiles,
@@ -350,31 +426,48 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 10, 8, 20),
-            child: OmniInkWell(
-              key: const ValueKey<String>('assistant-new-chat'),
-              onTap:
-                  widget.chat.connected &&
-                      !widget.chat.busy &&
-                      widget.chat.pending == null
-                  ? _newConversation
-                  : null,
+            child: Material(
+              color: colors.sidebar,
               borderRadius: BorderRadius.circular(
                 AssistantWindowsMetrics.rowRadius,
               ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 10,
+              child: OmniInkWell(
+                key: const ValueKey<String>('assistant-new-chat'),
+                hoverColor: colors.soft,
+                focusColor: colors.soft,
+                onTap:
+                    widget.chat.connected &&
+                        !widget.chat.busy &&
+                        widget.chat.pending == null
+                    ? _newConversation
+                    : null,
+                borderRadius: BorderRadius.circular(
+                  AssistantWindowsMetrics.rowRadius,
                 ),
-                child: Row(
-                  children: <Widget>[
-                    Icon(Icons.edit_square, size: 18, color: colors.ink),
-                    const SizedBox(width: 12),
-                    Text(
-                      '新聊天',
-                      style: TextStyle(color: colors.ink, fontSize: 16),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    minHeight: AssistantWindowsMetrics.historyHeight,
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
                     ),
-                  ],
+                    child: Row(
+                      children: <Widget>[
+                        Icon(Icons.edit_square, size: 16, color: colors.ink),
+                        const SizedBox(width: 12),
+                        Text(
+                          '新聊天',
+                          style: TextStyle(
+                            color: colors.ink,
+                            fontSize: AssistantWindowsMetrics.historyFontSize,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -523,10 +616,10 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
     );
   }
 
-  /// 消息和输入区共享靠右的内容列，避免两个区域各自居中。
+  /// 消息和输入区在侧栏右侧的工作区共用同一条居中内容列。
   Widget _contentColumn({required Widget child, required double inset}) =>
       Align(
-        alignment: Alignment.topRight,
+        alignment: Alignment.topCenter,
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: inset),
           child: ConstrainedBox(
@@ -538,26 +631,43 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
         ),
       );
 
-  /// 已完成回答展示服务端记录的真实耗时，未知值不猜测。
-  Widget _elapsed(num milliseconds, AssistantWindowsPalette colors) {
-    // 秒数按完成时间向上取整，避免把非零请求显示成零秒。
-    final int seconds = (milliseconds / 1000).ceil();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.only(bottom: 9),
-            child: Text(
-              milliseconds == 0 ? '用时不足1秒' : '用时 $seconds秒',
-              style: TextStyle(fontSize: 14, color: colors.muted),
-            ),
-          ),
-          Divider(height: 1, color: colors.line),
-        ],
-      ),
-    );
+  /// 首个正文片段到达之前，进度也位于同一回答列中。
+  Widget _pendingProgress(
+    AssistantWindowsPalette colors,
+  ) => AssistantExecutionProgress(
+    key: ValueKey<String>(
+      'assistant-progress-${widget.chat.submitting ? 'sending' : widget.chat.run?['answerMessageId'] ?? widget.chat.run?['id']}',
+    ),
+    elapsedMs: widget.chat.liveElapsedMs,
+    running:
+        widget.chat.submitting ||
+        <String>{'queued', 'running'}.contains(widget.chat.run?['status']),
+    steps: widget.chat.submitting
+        ? const <Map<String, dynamic>>[]
+        : assistantItems(widget.chat.run?['executionSteps']),
+    colors: colors,
+  );
+
+  /// 正文终态可能先于运行终态到达，旧快照不能让已完成步骤回退。
+  List<Map<String, dynamic>> _messageSteps(
+    Map<String, dynamic> message,
+    bool current,
+  ) {
+    // 以稳定步骤身份保留原顺序，重复回放仅更新同一行。
+    final Map<String, Map<String, dynamic>> steps = {};
+    for (final Map<String, dynamic> step in <Map<String, dynamic>>[
+      ...assistantItems(message['executionSteps']),
+      if (current) ...assistantItems(widget.chat.run?['executionSteps']),
+    ]) {
+      // 公开步骤缺少身份时不能参与合并。
+      final Object? id = step['id'];
+      if (id is! String) continue;
+      if (steps[id]?['finishedAt'] != null && step['finishedAt'] == null) {
+        continue;
+      }
+      steps[id] = step;
+    }
+    return steps.values.toList();
   }
 
   /// 轻量回答操作保留保存笔记与受控结构化卡片。
@@ -570,30 +680,50 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
     final String id = '${message['id']}';
     // 用户与助手采用不同表面，移除重复的角色标题。
     final bool user = message['role'] == 'user';
-    // 完整正文仍复用原有 Markdown 解析和文本选择。
+    // 原始正文不经转换，分别交给助手 Markdown 和用户消息渲染。
     final String content = message['content'] as String? ?? '';
     // 服务端保存的本条回答耗时。
     final num? elapsed = message['elapsedMs'] as num?;
+    // 发送新消息的本机秒表不能附着到上一条已完成回答。
+    final bool current =
+        !widget.chat.submitting && widget.chat.run?['answerMessageId'] == id;
+    // 只有真实排队与执行阶段持续走表，等待用户操作时暂停。
+    final bool running =
+        current &&
+        <String>{'queued', 'running'}.contains(widget.chat.run?['status']);
     // 当前回答仍在执行或等待结算时，不展示暂存的零耗时。
     final bool timingPending =
-        widget.chat.run?['answerMessageId'] == id &&
+        current &&
         (widget.chat.run?['timingPending'] == true ||
             <String>{'running', 'queued'}.contains(widget.chat.run?['status']));
     // 当前发送与业务卡片可用状态。
     final bool actionsEnabled =
         enabled && !widget.chat.busy && widget.chat.pending == null;
-    return Padding(
-      padding: EdgeInsets.only(bottom: user ? 56 : 36),
-      child: Align(
-        alignment: user ? Alignment.centerRight : Alignment.centerLeft,
-        child: FractionallySizedBox(
-          widthFactor: user ? .72 : 1,
+    // 只给对应回答的唯一结果卡传递当前真实撤销身份。
+    final String? undoRunId =
+        widget.chat.run?['answerMessageId'] == id &&
+            widget.chat.run?['canUndo'] == true
+        ? widget.chat.run!['id'] as String
+        : null;
+    // 卡片索引与视觉顺序一致，撤销入口最多渲染一次。
+    final List<Map<String, dynamic>> cards = assistantItems(message['cards'])
+        .where((item) => item['type'] != 'attachment')
+        .toList();
+    // 用户行的底部空间由悬停工具栏固定预留。
+    final Widget row = Padding(
+      padding: EdgeInsets.zero,
+      child: FractionallySizedBox(
+        widthFactor: user ? .72 : 1,
+        alignment: Alignment.centerRight,
+        // 比例仅限制可用宽度，内层对齐让短消息气泡按文字收缩。
+        child: Align(
+          alignment: user ? Alignment.centerRight : Alignment.centerLeft,
           child: Container(
             key: ValueKey<String>(
               user ? 'assistant-user-message-$id' : 'assistant-answer-$id',
             ),
             padding: user
-                ? const EdgeInsets.symmetric(horizontal: 18, vertical: 14)
+                ? const EdgeInsets.symmetric(horizontal: 12, vertical: 8)
                 : EdgeInsets.zero,
             decoration: user
                 ? BoxDecoration(
@@ -604,45 +734,87 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                   )
                 : null,
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+              crossAxisAlignment: user
+                  ? CrossAxisAlignment.start
+                  : CrossAxisAlignment.stretch,
               children: <Widget>[
-                if (!user && !timingPending && elapsed != null && elapsed >= 0)
-                  _elapsed(elapsed, colors),
+                if (!user)
+                  AssistantExecutionProgress(
+                    key: ValueKey<String>('assistant-progress-$id'),
+                    elapsedMs: running
+                        ? widget.chat.liveElapsedMs
+                        : !timingPending && elapsed != null && elapsed >= 0
+                        ? elapsed
+                        : null,
+                    running: running,
+                    steps: _messageSteps(message, current),
+                    colors: colors,
+                  ),
                 if (!user && message['_streaming'] == true && content.isEmpty)
                   Text(
                     '正在思考…',
                     style: TextStyle(color: colors.muted, fontSize: 14),
                   ),
-                SelectableText.rich(
-                  NoteMarkdownText.span(
-                    content,
+                if (!user)
+                  AssistantMarkdown(
+                    source: content,
                     style: TextStyle(
                       color: colors.ink,
-                      fontSize: 16,
-                      height: 1.7,
+                      fontSize: 14,
+                      height: 1.35,
+                    ),
+                  )
+                else
+                  SelectableText.rich(
+                    textWidthBasis: TextWidthBasis.longestLine,
+                    NoteMarkdownText.span(
+                      content,
+                      style: TextStyle(
+                        color: colors.ink,
+                        fontSize: user ? 14 : 16,
+                        height: 1.7,
+                      ),
                     ),
                   ),
-                ),
-                for (final Map<String, dynamic> card in assistantItems(
-                  message['cards'],
-                ))
+                if (!user)
+                  AssistantHistoryAttachments(
+                    items: assistantMessageAttachments(message),
+                    repository: widget.chat.repository,
+                    enabled: widget.chat.connected && !widget.chat.offline,
+                  ),
+                for (final (int cardIndex, Map<String, dynamic> card)
+                    in cards.indexed)
                   Padding(
+                    key: ValueKey<String>('assistant-card-$id-$cardIndex'),
                     padding: const EdgeInsets.only(top: 12),
                     child: AssistantMessageCard(
                       card: card,
-                      enabled: actionsEnabled,
-                      onEditReference:
-                          widget.chat.active || widget.chat.pending != null
-                          ? null
-                          : (Map<String, dynamic> reference) {
-                              widget.input.text =
-                                  '请修改「${reference['label'] ?? '这条记录'}」：';
-                              widget.chat.setDraft(
-                                widget.input.text,
-                                reference: reference,
-                              );
-                              widget.inputFocus.requestFocus();
-                            },
+                      enabled:
+                          actionsEnabled &&
+                          (card['type'] != 'result' || !widget.chat.active),
+                      repository: widget.chat.repository,
+                      beforeEdit: widget.chat.catchUp,
+                      undoExpiresAt:
+                          widget.chat.run?['undoExpiresAt'] as String?,
+                      onUndo:
+                          undoRunId != null &&
+                              actionsEnabled &&
+                              !widget.chat.active &&
+                              cardIndex ==
+                                  cards.indexWhere(
+                                    (item) => item['type'] == 'result',
+                                  )
+                          ? () => unawaited(widget.chat.undo(runId: undoRunId))
+                          : null,
+                      onClarification:
+                          widget.chat.run?['status'] == 'waitingInput' &&
+                              widget.chat.run?['answerMessageId'] == id
+                          ? (String value) {
+                              widget.input.text = value;
+                              widget.chat.setDraft(value);
+                              unawaited(widget.chat.send());
+                            }
+                          : null,
                       onChoice: (String value, Map<String, dynamic> selection) {
                         widget.input.text = value;
                         widget.chat.setDraft(value);
@@ -656,40 +828,6 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                       },
                     ),
                   ),
-                if (!user &&
-                    message['_streaming'] != true &&
-                    content.trim().isNotEmpty)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: OmniTextButton(
-                      style: TextButton.styleFrom(
-                        foregroundColor: colors.muted,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        minimumSize: const Size(0, 28),
-                      ),
-                      onPressed:
-                          actionsEnabled &&
-                              !widget.chat.active &&
-                              content.length <= 19000
-                          ? () {
-                              widget.input.text =
-                                  '请把以下内容完整保存为一篇笔记：\n\n$content';
-                              widget.chat.setDraft(
-                                widget.input.text,
-                                clearReference: true,
-                              );
-                              unawaited(widget.onSend());
-                            }
-                          : null,
-                      child: Text(
-                        '保存为笔记',
-                        style: TextStyle(color: colors.muted, fontSize: 12),
-                      ),
-                    ),
-                  ),
                 if (!user && widget.chat.run?['answerMessageId'] == id)
                   _runActions(enabled, colors),
               ],
@@ -698,6 +836,50 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
         ),
       ),
     );
+    return user
+        ? AssistantUserMessageRow(
+            key: ValueKey<String>('assistant-user-row-$id'),
+            messageId: id,
+            content: content,
+            createdAt: message['createdAt'] is String
+                ? message['createdAt'] as String
+                : null,
+            colors: colors,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: <Widget>[
+                FractionallySizedBox(
+                  widthFactor: .72,
+                  alignment: Alignment.centerRight,
+                  child: AssistantHistoryAttachments(
+                    items: assistantMessageAttachments(message),
+                    repository: widget.chat.repository,
+                    enabled: widget.chat.connected && !widget.chat.offline,
+                    localPreview: message['_localOutgoing'] == true,
+                  ),
+                ),
+                row,
+              ],
+            ),
+          )
+        : Padding(
+            padding: const EdgeInsets.only(bottom: 36),
+            child: AssistantAnswerActions(
+              key: ValueKey<String>('assistant-answer-actions-row-$id'),
+              messageId: id,
+              createdAt: message['createdAt'] as String?,
+              colors: colors,
+              saved: widget.chat.savedNote(id) != null,
+              saving: widget.chat.savingNote(id),
+              error: widget.chat.noteSaveError(id),
+              showSave:
+                  message['_streaming'] != true && content.trim().isNotEmpty,
+              onSave: widget.chat.connected && !widget.chat.offline
+                  ? () => unawaited(widget.chat.saveNote(id))
+                  : null,
+              child: row,
+            ),
+          );
   }
 
   /// 当前任务操作跟随对应回答；没有回答时由消息列表末尾承载。
@@ -710,7 +892,6 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
           style: TextStyle(color: OmniColors.of(context).danger, fontSize: 13),
         ),
       if (widget.chat.active ||
-          widget.chat.run?['canUndo'] == true ||
           <String>{
             'failed',
             'submissionUnknown',
@@ -725,25 +906,6 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                   : assistantStatusLabel(widget.chat.run?['status'] as String?),
               style: TextStyle(color: colors.muted, fontSize: 13),
             ),
-            if (widget.chat.run?['canUndo'] == true)
-              OmniButton(
-                label: '撤销新增',
-                variant: OmniButtonVariant.text,
-                onPressed: !widget.chat.busy && enabled
-                    ? widget.chat.undo
-                    : null,
-              ),
-            if (widget.chat.active)
-              OmniButton(
-                label: '停止',
-                variant: OmniButtonVariant.text,
-                onPressed:
-                    !widget.chat.busy &&
-                        widget.chat.connected &&
-                        !widget.chat.offline
-                    ? widget.chat.stop
-                    : null,
-              ),
             if (widget.chat.run?['requiresTakeover'] == true &&
                 !<String>{
                   'succeeded',
@@ -784,7 +946,7 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
     );
   }
 
-  /// 连接、设置和草稿状态留在输入区，运行操作由对应回答承载。
+  /// 连接、设置与草稿提示留在输入区，停止操作由主按钮承载。
   Widget _status(
     AsyncValue<Map<String, dynamic>?> settings,
     AssistantWindowsPalette colors,
@@ -792,6 +954,11 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
   ) {
     // 各状态共用可换行的小型操作区。
     final List<Widget> children = <Widget>[
+      if (widget.chat.recoveryReason != null)
+        Text(
+          widget.chat.recoveryReason!,
+          style: TextStyle(color: colors.muted, fontSize: 13),
+        ),
       if (widget.chat.offline || !widget.chat.connected)
         Text(
           '当前仅显示本机缓存；恢复连接后核实服务器状态。',
@@ -840,6 +1007,15 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                 fontSize: 13,
               ),
             ),
+            if (widget.chat.attachments.imageInputBlockReason(settings.value) !=
+                null)
+              OmniButton(
+                label: 'AI 设置',
+                variant: OmniButtonVariant.text,
+                onPressed: widget.chat.busy
+                    ? null
+                    : () => context.go('/settings?section=ai'),
+              ),
             OmniButton(
               label: '刷新状态',
               variant: OmniButtonVariant.text,
@@ -890,11 +1066,22 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
     );
   }
 
-  /// 输入区域固定两层：多行文本在上，模型与发送在右下角。
+  /// 在同一聊天明确继续，输入框始终保留实际发送的可见正文。
+  Future<void> _continueConversation() async {
+    if (!widget.chat.canContinue || widget.input.text.trim().isNotEmpty) return;
+    // 可见正文与控制器草稿同步，失败时也保留实际发送内容。
+    final String? target = widget.chat.conversationId;
+    widget.input.text = '继续';
+    await widget.chat.continueConversation();
+    if (!mounted || widget.chat.conversationId != target) return;
+    widget.input.text = widget.chat.draft;
+    widget.inputFocus.requestFocus();
+  }
+
+  /// 输入区域固定两层：多行文本在上，模型与主操作在右下角。
   Widget _composer(
     AsyncValue<Map<String, dynamic>?> settings,
     AssistantWindowsPalette colors,
-    double height,
   ) {
     // 全局默认配置的可读名称。
     final Map<String, dynamic>? profile = assistantItems(
@@ -906,11 +1093,30 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
         : '${profile['model'] ?? profile['name'] ?? '选择模型'}';
     // 用户发送和未知结果恢复使用相同箭头但不同可访问名称。
     final bool canSend = _canSend(settings);
+    // 生成中优先停止，确认停止且空输入时显示开始，其余使用原发送规则。
+    final bool stopping = widget.chat.processing;
+    final bool continuing =
+        !stopping &&
+        widget.chat.canContinue &&
+        widget.input.text.trim().isEmpty;
+    // 停止不依赖模型设置，开始与发送仍需当前设置明确可用。
+    final bool canAct = stopping
+        ? widget.chat.canStop
+        : continuing
+        ? _enabled(settings) && !_savingModel
+        : canSend;
+    // 同一位置保留不同语义和稳定定位键。
+    final String action = stopping
+        ? '停止'
+        : continuing
+        ? '开始'
+        : widget.chat.pending == null
+        ? '发送 (Enter)'
+        : '恢复发送';
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        _status(settings, colors, height),
         Container(
           key: const ValueKey<String>('assistant-windows-composer'),
           constraints: const BoxConstraints(
@@ -936,6 +1142,12 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
+                if (!widget.chat.hideComposerDraft)
+                  AssistantAttachmentDrafts(
+                    attachments: widget.chat.attachments,
+                    settings: settings.value,
+                    desktopPreview: true,
+                  ),
                 OmniTextField(
                   key: const ValueKey<String>('assistant-input'),
                   controller: widget.input,
@@ -951,7 +1163,7 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                   enabled: _enabled(settings),
                   onChanged: widget.chat.setDraft,
                   style: TextStyle(
-                    fontSize: 16,
+                    fontSize: 14,
                     height: 1.6,
                     color: colors.ink,
                   ),
@@ -973,56 +1185,68 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: <Widget>[
-                    Flexible(
-                      child: Container(
-                        key: _modelKey,
-                        child: OmniTextButton(
-                          key: const ValueKey<String>('assistant-model-button'),
-                          onPressed:
-                              widget.chat.connected &&
-                                  !widget.chat.busy &&
-                                  !_savingModel &&
-                                  !settings.isLoading &&
-                                  widget.chat.pending == null
-                              ? () => _models(settings.value)
-                              : null,
-                          style: TextButton.styleFrom(
-                            foregroundColor: colors.ink,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
+                    if (widget.chat.attachments.enabled) ...<Widget>[
+                      AssistantAttachmentButton(
+                        attachments: widget.chat.attachments,
+                        enabled: _enabled(settings) && !_savingModel,
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: Container(
+                          key: _modelKey,
+                          child: OmniTextButton(
+                            key: const ValueKey<String>(
+                              'assistant-model-button',
                             ),
-                            minimumSize: const Size(0, 34),
-                            shape: const StadiumBorder(),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              if (_savingModel)
-                                const SizedBox.square(
-                                  dimension: 14,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
+                            onPressed:
+                                widget.chat.connected &&
+                                    !widget.chat.busy &&
+                                    !_savingModel &&
+                                    !settings.isLoading &&
+                                    widget.chat.pending == null
+                                ? () => _models(settings.value)
+                                : null,
+                            style: TextButton.styleFrom(
+                              foregroundColor: colors.ink,
+                              backgroundColor: colors.soft,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              minimumSize: const Size(0, 34),
+                              shape: const StadiumBorder(),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                if (_savingModel) ...<Widget>[
+                                  const SizedBox.square(
+                                    dimension: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
                                   ),
-                                )
-                              else
-                                const Icon(Icons.bolt, size: 16),
-                              const SizedBox(width: 5),
-                              Flexible(
-                                child: Text(
-                                  model,
-                                  overflow: TextOverflow.ellipsis,
-                                  maxLines: 1,
-                                  style: const TextStyle(fontSize: 14),
+                                  const SizedBox(width: 5),
+                                ],
+                                Flexible(
+                                  child: Text(
+                                    model,
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                    style: const TextStyle(fontSize: 14),
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 5),
-                              Icon(
-                                Icons.keyboard_arrow_down,
-                                size: 16,
-                                color: colors.muted,
-                              ),
-                            ],
+                                const SizedBox(width: 5),
+                                Icon(
+                                  Icons.keyboard_arrow_down,
+                                  size: 16,
+                                  color: colors.muted,
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -1034,26 +1258,34 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                         key: const ValueKey<String>('assistant-send-surface'),
                         shape: const CircleBorder(),
                         clipBehavior: Clip.antiAlias,
-                        color: canSend
+                        color: canAct
                             ? colors.ink
                             : colors.muted.withValues(alpha: .7),
                         child: Tooltip(
-                          message: widget.chat.pending == null
-                              ? '发送 (Enter)'
-                              : '恢复发送',
+                          message: action,
                           child: Semantics(
                             button: true,
-                            enabled: canSend,
+                            enabled: canAct,
                             child: OmniInkWell(
-                              key: const ValueKey<String>(
-                                'assistant-send-button',
+                              key: ValueKey<String>(
+                                stopping
+                                    ? 'assistant-stop-button'
+                                    : continuing
+                                    ? 'assistant-continue-button'
+                                    : 'assistant-send-button',
                               ),
                               customBorder: const CircleBorder(),
-                              onTap: canSend
-                                  ? () => unawaited(widget.onSend())
+                              onTap: canAct
+                                  ? () => unawaited(
+                                      stopping
+                                          ? widget.chat.stop()
+                                          : continuing
+                                          ? _continueConversation()
+                                          : widget.onSend(),
+                                    )
                                   : null,
                               child: Center(
-                                child: widget.chat.busy
+                                child: widget.chat.busy && !stopping
                                     ? SizedBox.square(
                                         dimension: 16,
                                         child: CircularProgressIndicator(
@@ -1062,7 +1294,11 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                                         ),
                                       )
                                     : Icon(
-                                        Icons.arrow_upward,
+                                        stopping
+                                            ? Icons.stop_rounded
+                                            : continuing
+                                            ? Icons.play_arrow_rounded
+                                            : Icons.arrow_upward,
                                         size: 21,
                                         color: colors.canvas,
                                       ),
@@ -1112,7 +1348,7 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                   AssistantWindowsMetrics.collapseWidth *
                       MediaQuery.textScalerOf(context).scale(14) /
                       14;
-              // 靠右的留白随剩余工作区宽度收紧。
+              // 居中内容列的两侧留白随工作区宽度收紧。
               final double inset = constraints.maxWidth > 1350
                   ? AssistantWindowsMetrics.contentInset
                   : AssistantWindowsMetrics.compactInset;
@@ -1120,127 +1356,157 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                 children: <Widget>[
                   if (wide) _sidebar(colors),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        _header(wide, colors),
-                        Expanded(
-                          child: widget.chat.loading
-                              ? const Center(child: CircularProgressIndicator())
-                              : ListView(
-                                  key: const ValueKey<String>(
-                                    'assistant-windows-messages',
-                                  ),
-                                  controller: widget.scroll,
-                                  padding: const EdgeInsets.only(
-                                    top: 28,
-                                    bottom: 24,
-                                  ),
-                                  children: <Widget>[
-                                    _contentColumn(
-                                      inset: inset,
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.stretch,
-                                        children: <Widget>[
-                                          if (widget.chat.messages.isEmpty &&
-                                              widget.chat.plan == null)
-                                            Padding(
-                                              padding: EdgeInsets.only(
-                                                top: math.max(
-                                                  20,
-                                                  constraints.maxHeight * .20,
-                                                ),
-                                              ),
-                                              child: Text(
-                                                '把事情交代给知序',
-                                                textAlign: TextAlign.center,
-                                                style: TextStyle(
-                                                  color: colors.ink,
-                                                  fontSize: 28,
-                                                  fontWeight: FontWeight.w500,
-                                                ),
-                                              ),
-                                            ),
-                                          for (final Map<String, dynamic>
-                                              message
-                                              in widget.chat.messages)
-                                            _message(message, enabled, colors),
-                                          if (widget.chat.plan != null &&
-                                              widget.chat.run?['status'] ==
-                                                  'waitingConfirmation')
-                                            AssistantPlanCard(
-                                              plan: widget.chat.plan!,
-                                              enabled:
-                                                  enabled &&
-                                                  !widget.chat.busy &&
-                                                  !widget.chat.offline &&
-                                                  widget.chat.pending == null &&
-                                                  widget.chat.draft
-                                                      .trim()
-                                                      .isEmpty &&
-                                                  widget
-                                                          .chat
-                                                          .run?['timingPending'] !=
-                                                      true &&
-                                                  widget
-                                                          .chat
-                                                          .run?['requiresTakeover'] !=
-                                                      true,
-                                              onDecision: (String value) =>
-                                                  unawaited(
-                                                    widget.chat.decide(value),
-                                                  ),
-                                              onEdit: () {
-                                                widget.input.text = '修改方案：';
-                                                widget.chat.setDraft(
-                                                  widget.input.text,
-                                                  clearReference: true,
-                                                );
-                                                widget.inputFocus
-                                                    .requestFocus();
-                                              },
-                                            ),
-                                          if (widget.chat.run != null &&
-                                              !widget.chat.messages.any(
-                                                (message) =>
-                                                    message['role'] ==
-                                                        'assistant' &&
-                                                    message['id'] ==
-                                                        widget
-                                                            .chat
-                                                            .run?['answerMessageId'],
-                                              ))
-                                            _runActions(enabled, colors),
-                                        ],
-                                      ),
+                    child: AssistantFileDropArea(
+                      attachments: widget.chat.attachments,
+                      enabled: enabled && !_savingModel,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: <Widget>[
+                          _header(wide, colors),
+                          Expanded(
+                            child: widget.chat.loading
+                                ? const Center(
+                                    child: CircularProgressIndicator(),
+                                  )
+                                : ListView(
+                                    key: const ValueKey<String>(
+                                      'assistant-windows-messages',
                                     ),
-                                  ],
-                                ),
-                        ),
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxHeight: constraints.maxHeight * .52,
+                                    controller: widget.scroll,
+                                    padding: const EdgeInsets.only(
+                                      top: 28,
+                                      bottom: 24,
+                                    ),
+                                    children: <Widget>[
+                                      _contentColumn(
+                                        inset: inset,
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          children: <Widget>[
+                                            if (widget
+                                                    .chat
+                                                    .displayMessages
+                                                    .isEmpty &&
+                                                widget.chat.plan == null &&
+                                                !widget.chat.submitting &&
+                                                widget.chat.run == null)
+                                              Padding(
+                                                padding: EdgeInsets.only(
+                                                  top: math.max(
+                                                    20,
+                                                    constraints.maxHeight * .20,
+                                                  ),
+                                                ),
+                                                child: Text(
+                                                  '把事情交代给知序',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                    color: colors.ink,
+                                                    fontSize: 28,
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                ),
+                                              ),
+                                            for (final Map<String, dynamic>
+                                                message
+                                                in widget.chat.displayMessages)
+                                              _message(
+                                                message,
+                                                enabled,
+                                                colors,
+                                              ),
+                                            if (widget.chat.plan != null &&
+                                                widget.chat.run?['status'] ==
+                                                    'waitingConfirmation')
+                                              AssistantPlanCard(
+                                                plan: widget.chat.plan!,
+                                                enabled:
+                                                    enabled &&
+                                                    !widget.chat.busy &&
+                                                    !widget.chat.offline &&
+                                                    widget.chat.pending ==
+                                                        null &&
+                                                    widget.chat.draft
+                                                        .trim()
+                                                        .isEmpty &&
+                                                    widget
+                                                            .chat
+                                                            .run?['timingPending'] !=
+                                                        true &&
+                                                    widget
+                                                            .chat
+                                                            .run?['requiresTakeover'] !=
+                                                        true,
+                                                onDecision: (String value) =>
+                                                    unawaited(
+                                                      widget.chat.decide(value),
+                                                    ),
+                                                onEdit: () {
+                                                  widget.input.text = '修改方案：';
+                                                  widget.chat.setDraft(
+                                                    widget.input.text,
+                                                    clearReference: true,
+                                                  );
+                                                  widget.inputFocus
+                                                      .requestFocus();
+                                                },
+                                              ),
+                                            if (widget.chat.submitting)
+                                              _pendingProgress(colors)
+                                            else if (widget.chat.run != null &&
+                                                !widget.chat.messages.any(
+                                                  (message) =>
+                                                      message['role'] ==
+                                                          'assistant' &&
+                                                      message['id'] ==
+                                                          widget
+                                                              .chat
+                                                              .run?['answerMessageId'],
+                                                ))
+                                              Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.stretch,
+                                                children: <Widget>[
+                                                  _pendingProgress(colors),
+                                                  _runActions(enabled, colors),
+                                                ],
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                           ),
-                          child: SingleChildScrollView(
-                            reverse: true,
-                            child: Padding(
-                              padding: const EdgeInsets.only(
-                                top: 8,
-                                bottom: 18,
-                              ),
-                              child: _contentColumn(
-                                inset: inset,
-                                child: _composer(
-                                  settings,
-                                  colors,
-                                  constraints.maxHeight,
+                          // 错误不能随底部反向滚动的附件输入区一起被裁掉。
+                          _contentColumn(
+                            inset: inset,
+                            child: _status(
+                              settings,
+                              colors,
+                              constraints.maxHeight,
+                            ),
+                          ),
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxHeight: constraints.maxHeight * .52,
+                            ),
+                            child: SingleChildScrollView(
+                              reverse: true,
+                              child: Padding(
+                                padding: const EdgeInsets.only(
+                                  top: 8,
+                                  bottom: 18,
+                                ),
+                                child: _contentColumn(
+                                  inset: inset,
+                                  child: _composer(settings, colors),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -1313,6 +1579,11 @@ class _AssistantConversationRowState extends State<_AssistantConversationRow> {
     final String id = widget.conversation['id'] as String;
     // 鼠标或键盘均可展开操作。
     final bool actions = _hovered || _focused;
+    // 沿用原悬停的实际混合色，选中、悬停和焦点共用同一层背景。
+    final Color highlighted = Color.alphaBlend(
+      Theme.of(context).hoverColor,
+      widget.colors.soft,
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: MouseRegion(
@@ -1331,12 +1602,15 @@ class _AssistantConversationRowState extends State<_AssistantConversationRow> {
           },
           child: Material(
             color: widget.selected || actions
-                ? widget.colors.soft
+                ? highlighted
                 : widget.colors.sidebar,
             borderRadius: BorderRadius.circular(
               AssistantWindowsMetrics.rowRadius,
             ),
             child: OmniInkWell(
+              // 表面已负责交互底色，墨水不再叠加悬停或焦点色。
+              hoverColor: Colors.transparent,
+              focusColor: Colors.transparent,
               onTap: widget.onSelect,
               onSecondaryTapDown: (TapDownDetails details) =>
                   widget.onContextMenu(details.globalPosition),
@@ -1351,7 +1625,7 @@ class _AssistantConversationRowState extends State<_AssistantConversationRow> {
                   alignment: Alignment.centerRight,
                   children: <Widget>[
                     Padding(
-                      padding: EdgeInsets.fromLTRB(10, 9, actions ? 76 : 10, 9),
+                      padding: EdgeInsets.fromLTRB(10, 6, actions ? 68 : 10, 6),
                       child: Align(
                         alignment: Alignment.centerLeft,
                         child: Text(
@@ -1360,7 +1634,8 @@ class _AssistantConversationRowState extends State<_AssistantConversationRow> {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: widget.colors.ink,
-                            fontSize: 16,
+                            fontSize: AssistantWindowsMetrics.historyFontSize,
+                            height: 1.4,
                           ),
                         ),
                       ),
@@ -1384,6 +1659,12 @@ class _AssistantConversationRowState extends State<_AssistantConversationRow> {
                                 children: <Widget>[
                                   OmniIconButton(
                                     key: ValueKey<String>('assistant-pin-$id'),
+                                    constraints: const BoxConstraints.tightFor(
+                                      width: AssistantWindowsMetrics
+                                          .historyActionSize,
+                                      height: AssistantWindowsMetrics
+                                          .historyActionSize,
+                                    ),
                                     icon: Icon(
                                       widget.conversation['isPinned'] != true
                                           ? Icons.push_pin_outlined
@@ -1399,6 +1680,12 @@ class _AssistantConversationRowState extends State<_AssistantConversationRow> {
                                   OmniIconButton(
                                     key: ValueKey<String>(
                                       'assistant-delete-$id',
+                                    ),
+                                    constraints: const BoxConstraints.tightFor(
+                                      width: AssistantWindowsMetrics
+                                          .historyActionSize,
+                                      height: AssistantWindowsMetrics
+                                          .historyActionSize,
                                     ),
                                     icon: const Icon(Icons.delete_outline),
                                     tooltip: '删除聊天',
@@ -1470,25 +1757,30 @@ class _AssistantModelPicker extends StatelessWidget {
     }
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
+        // 浮层已使用覆盖层坐标，边缘避让在同一坐标系内计算。
+        final EdgeInsets safe = MediaQuery.paddingOf(context);
         // 窄窗口菜单保持完整留白。
         final double width = math.min(
           AssistantWindowsMetrics.modelWidth,
-          math.max(0, constraints.maxWidth - 24),
+          math.max(0, constraints.maxWidth - safe.horizontal - 24),
         );
         // 优先把菜单右侧与模型按钮对齐。
         final double left = (anchor.right - width).clamp(
-          12.0,
-          math.max(12.0, constraints.maxWidth - width - 12),
+          safe.left + 12,
+          math.max(
+            safe.left + 12,
+            constraints.maxWidth - safe.right - width - 12,
+          ),
         );
         // 从按钮上边向上展开，短窗口限制可滚动高度。
         final double bottom = math.max(
-          12,
+          safe.bottom + 12,
           constraints.maxHeight - anchor.top + 8,
         );
         // 保证高字号时不会超出窗口上边缘。
         final double maxHeight = math.max(
-          80,
-          math.min(460, constraints.maxHeight - bottom - 12),
+          0,
+          math.min(460, constraints.maxHeight - bottom - safe.top - 12),
         );
         return Stack(
           children: <Widget>[
@@ -1499,8 +1791,11 @@ class _AssistantModelPicker extends StatelessWidget {
               child: Material(
                 key: const ValueKey<String>('assistant-model-menu'),
                 color: colors.canvas,
-                borderRadius: BorderRadius.circular(
-                  AssistantWindowsMetrics.modelRadius,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(
+                    AssistantWindowsMetrics.modelRadius,
+                  ),
+                  side: BorderSide(color: colors.line),
                 ),
                 clipBehavior: Clip.antiAlias,
                 elevation: 6,
@@ -1518,29 +1813,12 @@ class _AssistantModelPicker extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(8, 0, 8, 14),
+                            padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
                             child: Text(
                               '选择模型',
                               style: TextStyle(
                                 color: colors.muted,
                                 fontSize: 14,
-                              ),
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            child: Text(
-                              '默认',
-                              style: TextStyle(color: colors.ink, fontSize: 15),
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
-                            child: Text(
-                              '已配置模型',
-                              style: TextStyle(
-                                color: colors.muted,
-                                fontSize: 13,
                               ),
                             ),
                           ),
@@ -1572,41 +1850,49 @@ class _AssistantModelPicker extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(
                                   AssistantWindowsMetrics.rowRadius,
                                 ),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 11,
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    minHeight:
+                                        AssistantWindowsMetrics.modelRowHeight,
                                   ),
-                                  child: Row(
-                                    children: <Widget>[
-                                      Expanded(
-                                        child: Text(
-                                          _profileLabel(profile, modelCounts),
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 15,
-                                            color: profile['hasApiKey'] == true
-                                                ? colors.ink
-                                                : colors.muted,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 6,
+                                    ),
+                                    child: Row(
+                                      children: <Widget>[
+                                        Expanded(
+                                          child: Text(
+                                            _profileLabel(profile, modelCounts),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              height: 1.4,
+                                              color:
+                                                  profile['hasApiKey'] == true
+                                                  ? colors.ink
+                                                  : colors.muted,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                      if (profile['id'] == selectedId)
-                                        Icon(
-                                          Icons.check,
-                                          color: colors.ink,
-                                          size: 19,
-                                        ),
-                                      if (profile['hasApiKey'] != true)
-                                        Text(
-                                          '未配置密钥',
-                                          style: TextStyle(
-                                            color: colors.muted,
-                                            fontSize: 12,
+                                        if (profile['id'] == selectedId)
+                                          Icon(
+                                            Icons.check,
+                                            color: colors.ink,
+                                            size: 16,
                                           ),
-                                        ),
-                                    ],
+                                        if (profile['hasApiKey'] != true)
+                                          Text(
+                                            '未配置密钥',
+                                            style: TextStyle(
+                                              color: colors.muted,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),

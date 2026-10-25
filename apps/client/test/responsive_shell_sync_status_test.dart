@@ -1,5 +1,6 @@
 // ignore_for_file: invalid_use_of_internal_member
 
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -17,6 +18,15 @@ import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/shared/layout/responsive_shell.dart';
 import 'package:powersync/powersync.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// Windows生产字体直接取自系统，不向仓库复制字体文件。
+final File _windowsTooltipFont = File(
+  '${Platform.environment['WINDIR'] ?? 'C:/Windows'}/Fonts/msyhbd.ttc',
+);
+
+/// 仅在具备真实Windows字体时执行字形像素测试，其他环境验证布局契约。
+final bool _canCheckNativeTooltipFont =
+    Platform.isWindows && _windowsTooltipFont.existsSync();
 
 /// 测试使用的在线设备会话。
 const SyncSession _onlineSession = SyncSession(
@@ -54,6 +64,13 @@ class _IdleSyncController extends SyncController {
 
 /// 验证桌面壳层同步状态与顶栏入口。
 void main() {
+  setUpAll(() async {
+    if (!_canCheckNativeTooltipFont) return;
+    // 测试引擎默认字体不代表Windows中文字体的真实升降部度量。
+    final FontLoader loader = FontLoader('Microsoft YaHei UI')
+      ..addFont(_windowsTooltipFont.readAsBytes().then(ByteData.sublistView));
+    await loader.load();
+  });
   testWidgets('Windows全局顶栏仅首页显示，其他页面直接使用顶部空间', (WidgetTester tester) async {
     // 窄窗和宽窗都必须按路由隐藏整条顶栏，而不是仅隐藏搜索文字。
     for (final double width in <double>[640, 1440]) {
@@ -158,6 +175,44 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     });
+    // 检查真实字形像素而不只检查文字布局框，覆盖普通和双倍字号。
+    for (final double scale in <double>[1, 2]) {
+      testWidgets(
+        'Windows ${brightness.name} $scale 倍字号的tip字形上下居中',
+        (WidgetTester tester) async {
+          await _pumpShell(
+            tester,
+            syncEnabled: false,
+            brightness: brightness,
+            scale: scale,
+          );
+          // 使用真实鼠标打开管理提示，等待原生浮层完成淡入。
+          final TestGesture mouse = await tester.createGesture(
+            kind: PointerDeviceKind.mouse,
+          );
+          await mouse.addPointer(location: const Offset(300, 400));
+          await mouse.moveTo(
+            tester.getCenter(
+              find.byKey(const ValueKey<String>('navigation-/inventory')),
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pumpAndSettle();
+          // 可见字形而不是包含行高的文字框应与背景垂直中心重合。
+          final Finder message = find.text('管理');
+          // 文字前景像素的最小边界。
+          final Rect ink = await _tooltipInkBounds(tester, message);
+          // 字形自身度量与栅格量化允许每倍率一个像素的光学校正余量。
+          final Rect bubble = _tooltipBounds(tester, message);
+          expect(ink.center.dy, closeTo(bubble.center.dy, scale));
+          await mouse.removePointer();
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+        },
+        variant: TargetPlatformVariant.only(TargetPlatform.windows),
+        skip: !_canCheckNativeTooltipFont,
+      );
+    }
   }
 
   testWidgets('短窗口保留同步和设置入口，功能图标可滚动到达', (WidgetTester tester) async {
@@ -263,6 +318,15 @@ void main() {
       final Text text = tester.widget<Text>(message);
       expect(text.style!.fontSize, 14);
       expect(text.style!.fontWeight, FontWeight.w600);
+      expect(text.style!.leadingDistribution, TextLeadingDistribution.even);
+      // 圆角取自真实提示背景，不只核对外层主题。
+      final Container background = tester.widget<Container>(
+        find.ancestor(of: message, matching: find.byType(Container)).first,
+      );
+      expect(
+        (background.decoration! as BoxDecoration).borderRadius,
+        BorderRadius.circular(12),
+      );
       // 浮层相对图标的32dp背景保持5dp，而不是相对整个热区。
       final Rect icon = tester.getRect(target);
       expect(bubble.left - (icon.center.dx + 16), closeTo(5, .01));
@@ -514,20 +578,23 @@ Future<void> _pumpShell(
           AsyncData<int>(queueCount),
         ),
       ],
-      child: MaterialApp(
-        theme: AppTheme.build(brightness: brightness)
-            .copyWith(platform: TargetPlatform.windows),
-        builder: (BuildContext context, Widget? child) => MediaQuery(
-          data: MediaQuery.of(context)
-              .copyWith(textScaler: TextScaler.linear(scale)),
-          child: child!,
-        ),
-        home: RepaintBoundary(
-          key: const ValueKey<String>('shell-test-pixels'),
-          child: ResponsiveShell(
-            location: location,
-            child: const SizedBox.expand(
-              key: ValueKey<String>('shell-page-content'),
+      child: RepaintBoundary(
+        key: const ValueKey<String>('shell-with-tooltip-pixels'),
+        child: MaterialApp(
+          theme: AppTheme.build(brightness: brightness)
+              .copyWith(platform: TargetPlatform.windows),
+          builder: (BuildContext context, Widget? child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: TextScaler.linear(scale)),
+            child: child!,
+          ),
+          home: RepaintBoundary(
+            key: const ValueKey<String>('shell-test-pixels'),
+            child: ResponsiveShell(
+              location: location,
+              child: const SizedBox.expand(
+                key: ValueKey<String>('shell-page-content'),
+              ),
             ),
           ),
         ),
@@ -537,11 +604,14 @@ Future<void> _pumpShell(
   await tester.pumpAndSettle();
 }
 
-/// 读取壳层实际合成像素，不包含MaterialApp外层的提示浮层。
-Future<({ByteData bytes, int width})> _shellPixels(WidgetTester tester) async {
+/// 读取指定边界的真实合成像素，默认只读取不含提示浮层的壳层。
+Future<({ByteData bytes, int width})> _shellPixels(
+  WidgetTester tester, {
+  String boundaryKey = 'shell-test-pixels',
+}) async {
   // 显式绘制边界允许不依赖截图文件比较灰色背景大小。
   final RenderRepaintBoundary boundary = tester.renderObject(
-    find.byKey(const ValueKey<String>('shell-test-pixels')),
+    find.byKey(ValueKey<String>(boundaryKey)),
   );
   return (await tester.runAsync(() async {
     // 固定一个逻辑像素对应一个图像像素。
@@ -555,6 +625,41 @@ Future<({ByteData bytes, int width})> _shellPixels(WidgetTester tester) async {
       image.dispose();
     }
   }))!;
+}
+
+/// 在文字框内定位实际字形，避免背景圆角及外围图标影响采样。
+Future<Rect> _tooltipInkBounds(WidgetTester tester, Finder message) async {
+  // 文字框包含字体行高，只有前景像素属于真正可见的字形。
+  final Rect bounds = tester.getRect(message);
+  // 使用实际主题前景色识别明暗模式下的文字。
+  final int foreground = tester.widget<Text>(message).style!.color!.toARGB32();
+  // 外层绘制边界包含原生Tooltip浮层。
+  final ({ByteData bytes, int width}) pixels = await _shellPixels(
+    tester,
+    boundaryKey: 'shell-with-tooltip-pixels',
+  );
+  // 逐个合并接近前景色的像素，允许文字抗锯齿造成的小量色差。
+  Rect? ink;
+  for (int y = bounds.top.floor(); y < bounds.bottom.ceil(); y++) {
+    // 每一行独立扫描，保留浮层在屏幕上的真实坐标。
+    for (int x = bounds.left.floor(); x < bounds.right.ceil(); x++) {
+      // 原始图像按RGBA连续存储每个像素。
+      final int offset = (y * pixels.width + x) * 4;
+      // 前景色越接近，RGB差值之和越小。
+      final int distance =
+          (pixels.bytes.getUint8(offset) - ((foreground >> 16) & 255)).abs() +
+          (pixels.bytes.getUint8(offset + 1) - ((foreground >> 8) & 255))
+              .abs() +
+          (pixels.bytes.getUint8(offset + 2) - (foreground & 255)).abs();
+      if (distance < 24) {
+        // 每个采样像素占据一个逻辑像素的面积。
+        final Rect pixel = Rect.fromLTWH(x.toDouble(), y.toDouble(), 1, 1);
+        ink = ink?.expandToInclude(pixel) ?? pixel;
+      }
+    }
+  }
+  expect(ink, isNotNull, reason: '提示文字必须实际绘制到浮层');
+  return ink!;
 }
 
 /// 创建可控制关键字段的 PowerSync 状态。

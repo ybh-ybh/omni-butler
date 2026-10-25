@@ -25,7 +25,7 @@ describe('AI 持久 worker 的领取、未知提交和独立撤回', () => {
 
   beforeEach(() => {
     remoteStatus = 'processing'; deletedAt = null; canClaim = true;
-    job = { id: randomUUID(), userId: randomUUID(), segmentId: randomUUID(), recognitionId: randomUUID(), attempt: 0, enabled: true, status: 'queued', profileId: randomUUID(), profileRevision: 1, provider: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'unit-model', encryptedApiKey: 'unit-ciphertext', promptVersion: 1, sourceHash: createHash('sha256').update(source).digest('hex'), text: null, errorCode: null, createdAt: new Date(), updatedAt: new Date() };
+    job = { id: randomUUID(), userId: randomUUID(), segmentId: randomUUID(), recognitionId: randomUUID(), attempt: 0, enabled: true, status: 'queued', profileId: randomUUID(), profileRevision: 1, provider: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'unit-model', thinkingEnabled: false, encryptedApiKey: 'unit-ciphertext', promptVersion: 1, sourceHash: createHash('sha256').update(source).digest('hex'), text: null, errorCode: null, createdAt: new Date(), updatedAt: new Date() };
     polish.mockReset().mockResolvedValue('今天 3 件事还不确定。');
     updateMany.mockReset().mockImplementation((input) => Promise.resolve({ count: input.data.status === 'processing' && !canClaim ? 0 : 1 }));
     // 只模拟持久状态读写，不在 mock 内重复实现队列算法。
@@ -60,6 +60,13 @@ describe('AI 持久 worker 的领取、未知提交和独立撤回', () => {
     expect(updateMany).toHaveBeenCalledWith({ where: { id: job.id, status: 'queued' }, data: { status: 'processing', promptVersion: 2 } });
     expect(polish).toHaveBeenCalledWith(expect.objectContaining({ model: 'unit-model', apiKey: 'unit-only-key' }), source, expect.any(AbortSignal));
     expect(updateMany).toHaveBeenCalledWith({ where: { id: job.id, status: 'processing' }, data: { status: 'succeeded', text: '今天 3 件事还不确定。', errorCode: null, encryptedApiKey: null } });
+  });
+
+  it.each([false, true])('笔记任务采用固定思考快照%s，不读取之后的配置', async (thinkingEnabled) => {
+    job.thinkingEnabled = thinkingEnabled;
+    await service.tick();
+    expect(polish).toHaveBeenCalledWith(expect.objectContaining({ thinkingEnabled }), source, expect.any(AbortSignal));
+    expect(polish).toHaveBeenCalledTimes(1);
   });
 
   it.each(['remoteCancel', 'softDelete'])('模型请求仍挂起时独立轮询能中止 %s', async (scenario) => {

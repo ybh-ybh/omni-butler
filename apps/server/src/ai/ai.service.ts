@@ -6,6 +6,7 @@ import { AiKeyStore } from './ai-key-store';
 import { AI_POLISH_PROMPT_VERSION, AI_PRESETS, AiProvider, AiProviderError, aiFailure, normalizeAiBaseUrl } from './ai-provider';
 import type { AiProfileDto, AiSettingsDto, AiTestDto } from './ai.dto';
 import type { AssistantProfileSnapshot } from './assistant-model.types';
+import { assistantCompatibility } from './assistant-model-policy';
 
 /// 原文和密钥均不在公共任务响应中回传。
 export interface PolishResult {
@@ -92,7 +93,7 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
       // 必须在更新前比较凭据，防止事务替身或对象引用变化丢失旧值。
       const credentialsChanged = !!existing && encryptedApiKey !== existing.encryptedApiKey;
       // 不完整配置可保存，但不能开启整理。
-      const data = { name: input.name.trim(), provider: input.provider, baseUrl, model: input.model.trim(), encryptedApiKey };
+      const data = { name: input.name.trim(), provider: input.provider, baseUrl, model: input.model.trim(), multimodal: input.multimodal ?? existing?.multimodal ?? false, thinkingEnabled: input.thinkingEnabled ?? existing?.thinkingEnabled ?? false, encryptedApiKey };
       // 保存结果用于在同一事务内选择首个配置，避免客户端另发设置请求。
       const profile = existing
         ? await transaction.aiProfile.update({ where: { id: existing.id }, data: { ...data, revision: { increment: 1 } } })
@@ -138,7 +139,7 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
     // 留空时才能使用已保存密钥，绝不把密文返回前端。
     const apiKey = input.apiKey?.trim() || (profile?.encryptedApiKey ? this.keys.decrypt(profile.encryptedApiKey) : '');
     if (!apiKey || /[\r\n\0]/.test(apiKey)) throw new BadRequestException({ code: 'AI_KEY_REQUIRED', message: '请填写有效 API Key' });
-    try { return await this.provider.test({ ...input, baseUrl: normalizeAiBaseUrl(input.baseUrl), apiKey }); } catch (error: unknown) { if (error instanceof BadRequestException) throw error; throw aiFailure(error); }
+    try { return await this.provider.test({ ...input, thinkingEnabled: input.thinkingEnabled ?? profile?.thinkingEnabled ?? false, baseUrl: normalizeAiBaseUrl(input.baseUrl), apiKey }); } catch (error: unknown) { if (error instanceof BadRequestException) throw error; throw aiFailure(error); }
   }
 
   /// 助手独立选取已保存配置，密钥保持密文，不能借配置 UUID 跨归属读取。
@@ -147,14 +148,19 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
     const profile = await this.prisma.aiProfile.findFirst({ where: { id: profileId, userId } });
     if (!profile) throw new NotFoundException({ code: 'AI_PROFILE_NOT_FOUND', message: '模型配置不存在，请重新选择' });
     if (!profile.encryptedApiKey || !profile.model.trim()) throw new BadRequestException({ code: 'AI_PROFILE_REQUIRED', message: '请先补全模型名称和 API Key' });
-    return { profileId: profile.id, profileRevision: profile.revision, provider: profile.provider, baseUrl: normalizeAiBaseUrl(profile.baseUrl), model: profile.model, encryptedApiKey: profile.encryptedApiKey };
+    // 旧测试的容量配置仍按修订取值，图片输入始终由多模态开关决定。
+    const tested = profile.assistantCapabilities as { revision?: number; compatibility?: AssistantProfileSnapshot['compatibility'] } | null;
+    // 固定到本轮任务快照，后续普通配置编辑不改写已接受任务的目标。
+    const compatibility = assistantCompatibility(tested?.revision === profile.revision ? tested.compatibility : undefined);
+    return { profileId: profile.id, profileRevision: profile.revision, provider: profile.provider, baseUrl: normalizeAiBaseUrl(profile.baseUrl), model: profile.model, thinkingEnabled: profile.thinkingEnabled === true, encryptedApiKey: profile.encryptedApiKey, compatibility: { ...compatibility, imageInput: profile.multimodal === true ? 'supported' : 'unsupported' } };
   }
 
-  /// 普通配置编辑不改变任务目标，删除、清空或替换密钥立即禁止旧凭据继续出站。
-  async assertAssistantProfileAvailable(userId: string, snapshot: AssistantProfileSnapshot): Promise<void> {
+  /// 普通编辑不改变任务目标；撤换密钥禁止继续出站，关闭多模态禁止后续图片请求。
+  async assertAssistantProfileAvailable(userId: string, snapshot: AssistantProfileSnapshot, requiresMultimodal = false): Promise<void> {
     // 每次请求都重新检查当前配置与同归属密钥事实，不仅在任务创建时检查。
-    const profile = await this.prisma.aiProfile.findFirst({ where: { id: snapshot.profileId, userId }, select: { encryptedApiKey: true } });
+    const profile = await this.prisma.aiProfile.findFirst({ where: { id: snapshot.profileId, userId }, select: { encryptedApiKey: true, multimodal: true } });
     if (!profile?.encryptedApiKey || profile.encryptedApiKey !== snapshot.encryptedApiKey) throw new ConflictException({ code: 'AI_CONFIGURATION_UNAVAILABLE', message: '模型配置或密钥已被删除或替换，请重新开始任务' });
+    if (requiresMultimodal && profile.multimodal !== true) throw new AiProviderError('AI_IMAGE_INPUT_UNSUPPORTED');
   }
 
   /// 凭据撤回与配置保存共享归属锁及事务，不能让待确认计划保留旧执行授权。
@@ -180,7 +186,7 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
     const profile = settings?.notePolishEnabled && settings.activeProfileId ? await transaction.aiProfile.findFirst({ where: { id: settings.activeProfileId, userId: input.userId } }) : null;
     // 即使关闭也保存本次 disabled 事实，之后开启不能追溯生效。
     const enabled = !!(profile?.encryptedApiKey && settings?.notePolishEnabled);
-    await transaction.notePolishJob.create({ data: { id: randomUUID(), userId: input.userId, segmentId: input.segmentId, recognitionId: input.id, enabled, status: enabled ? 'waiting' : 'disabled', ...(enabled && profile ? { profileId: profile.id, profileRevision: profile.revision, provider: profile.provider, model: profile.model, baseUrl: profile.baseUrl, encryptedApiKey: profile.encryptedApiKey } : {}) } });
+    await transaction.notePolishJob.create({ data: { id: randomUUID(), userId: input.userId, segmentId: input.segmentId, recognitionId: input.id, enabled, status: enabled ? 'waiting' : 'disabled', ...(enabled && profile ? { profileId: profile.id, profileRevision: profile.revision, provider: profile.provider, model: profile.model, thinkingEnabled: profile.thinkingEnabled, baseUrl: profile.baseUrl, encryptedApiKey: profile.encryptedApiKey } : {}) } });
   }
 
   /// ASR 原文提交成功后同事务排队，失败和撤回不产生模型调用。
@@ -223,7 +229,7 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
       if (!profile?.encryptedApiKey) throw new BadRequestException({ code: 'AI_DISABLED', message: '请先配置并开启笔记 AI 整理' });
       // 递增尝试序号提供稳定顺序，即使同毫秒连续重试也不依赖 UUID 排序。
       const attempts = await transaction.notePolishJob.aggregate({ where: { recognitionId }, _max: { attempt: true } });
-      await transaction.notePolishJob.create({ data: { id: operationId, userId, segmentId, recognitionId, attempt: (attempts._max.attempt ?? -1) + 1, enabled: true, status: 'queued', profileId: profile.id, profileRevision: profile.revision, provider: profile.provider, baseUrl: profile.baseUrl, model: profile.model, encryptedApiKey: profile.encryptedApiKey, sourceHash: this.hash(recognition.transcript) } });
+      await transaction.notePolishJob.create({ data: { id: operationId, userId, segmentId, recognitionId, attempt: (attempts._max.attempt ?? -1) + 1, enabled: true, status: 'queued', profileId: profile.id, profileRevision: profile.revision, provider: profile.provider, baseUrl: profile.baseUrl, model: profile.model, thinkingEnabled: profile.thinkingEnabled, encryptedApiKey: profile.encryptedApiKey, sourceHash: this.hash(recognition.transcript) } });
     });
     return this.current(userId, segmentId, recognitionId, operationId);
   }
@@ -287,7 +293,7 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
       // 解密只在出站调用前进行，明文不保存到任务。
       const apiKey = this.keys.decrypt(job.encryptedApiKey);
       // 仅当前段 ASR 文本作为模型输入。
-      const text = await this.provider.polish({ provider: job.provider, baseUrl: job.baseUrl, model: job.model, apiKey }, transcript, controller.signal);
+      const text = await this.provider.polish({ provider: job.provider, baseUrl: job.baseUrl, model: job.model, thinkingEnabled: job.thinkingEnabled, apiKey }, transcript, controller.signal);
       await this.prisma.$transaction(async (transaction) => {
         await this.lock(transaction, job.userId);
         // 同归属读取当前开关与删除事实，再比较任务仍未被取消。
@@ -320,12 +326,12 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
   }
 
   /// 响应只列出密钥是否存在和固定掩码，不解密、不回传长度。
-  private async snapshot(transaction: Prisma.TransactionClient, userId: string): Promise<{ revision: number; activeProfileId: string | null; notePolishEnabled: boolean; profiles: { id: string; name: string; provider: string; baseUrl: string; model: string; hasApiKey: boolean; maskedApiKey: string }[]; presets: typeof AI_PRESETS }> {
+  private async snapshot(transaction: Prisma.TransactionClient, userId: string): Promise<{ revision: number; activeProfileId: string | null; notePolishEnabled: boolean; profiles: { id: string; name: string; provider: string; baseUrl: string; model: string; multimodal: boolean; thinkingEnabled: boolean; hasApiKey: boolean; maskedApiKey: string }[]; presets: typeof AI_PRESETS }> {
     // 默认关闭设置与首次读原子建立。
     const settings = await transaction.aiSettings.upsert({ where: { userId }, create: { userId }, update: {} });
     // 不同设备按相同创建顺序展示。
     const profiles = await transaction.aiProfile.findMany({ where: { userId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
-    return { revision: settings.revision, activeProfileId: settings.activeProfileId, notePolishEnabled: settings.notePolishEnabled, profiles: profiles.map((profile) => ({ id: profile.id, name: profile.name, provider: profile.provider, baseUrl: profile.baseUrl, model: profile.model, hasApiKey: !!profile.encryptedApiKey, maskedApiKey: profile.encryptedApiKey ? '••••••••' : '' })), presets: AI_PRESETS };
+    return { revision: settings.revision, activeProfileId: settings.activeProfileId, notePolishEnabled: settings.notePolishEnabled, profiles: profiles.map((profile) => ({ id: profile.id, name: profile.name, provider: profile.provider, baseUrl: profile.baseUrl, model: profile.model, multimodal: profile.multimodal === true, thinkingEnabled: profile.thinkingEnabled === true, hasApiKey: !!profile.encryptedApiKey, maskedApiKey: profile.encryptedApiKey ? '••••••••' : '' })), presets: AI_PRESETS };
   }
 
   /// 对外终态只给经过取消保护的正文。

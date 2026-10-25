@@ -9,7 +9,7 @@ abstract final class AssistantWindowsMetrics {
   /// 可读聊天列的最大宽度。
   static const double contentWidth = 880;
 
-  /// 宽窗口内容距右边缘的留白。
+  /// 宽窗口居中内容列两侧的最小留白。
   static const double contentInset = 72;
 
   /// 窄窗口边缘留白。
@@ -22,13 +22,22 @@ abstract final class AssistantWindowsMetrics {
   static const double headerHeight = 56;
 
   /// 常规历史行的最小高度。
-  static const double historyHeight = 38;
+  static const double historyHeight = 34;
+
+  /// 历史与新聊天入口共用的字号。
+  static const double historyFontSize = 14;
+
+  /// 紧凑历史行内操作的热区尺寸。
+  static const double historyActionSize = 30;
+
+  /// 模型菜单单行选项的最小高度。
+  static const double modelRowHeight = 32;
 
   /// 历史行与菜单选项圆角。
   static const double rowRadius = 12;
 
   /// 用户消息气泡圆角。
-  static const double bubbleRadius = 22;
+  static const double bubbleRadius = 12;
 
   /// 输入与搜索面板圆角。
   static const double panelRadius = 28;

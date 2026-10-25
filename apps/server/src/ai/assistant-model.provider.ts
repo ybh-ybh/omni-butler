@@ -1,10 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { HttpException, Injectable } from '@nestjs/common';
 import { request } from 'node:https';
 import { StringDecoder } from 'node:string_decoder';
+import type { ClientRequest } from 'node:http';
+import { TLSSocket } from 'node:tls';
 import { AiKeyStore } from './ai-key-store';
 import { AiProviderError, resolveAiEndpoint } from './ai-provider';
 import { AiService } from './ai.service';
-import type { AssistantFunctionCall, AssistantFunctionTool, AssistantModelRequest, AssistantModelResult, AssistantProfileSnapshot } from './assistant-model.types';
+import type { AssistantFunctionCall, AssistantFunctionTool, AssistantModelCapabilities, AssistantModelRequest, AssistantModelResult, AssistantProfileSnapshot } from './assistant-model.types';
+import { AssistantModelFailure, assistantRejectionCode, assistantReportedUsage, assistantResponseMetadata, assistantTemporaryRateLimit } from './assistant-model-failure';
+import type { AssistantModelFailureFacts } from './assistant-model-failure';
+import { AssistantReasoningBuffer, assistantResponseReasoning } from './assistant-reasoning';
+import { ASSISTANT_REQUEST_BUDGET_MS, assistantCompatibility, assertAssistantImageInputs } from './assistant-model-policy';
 
 /// SSE 流、完整结果及工具参数共享有限字节上限，防止无界供应商输出。
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -21,44 +27,122 @@ export class AssistantModelProvider {
 
   /// 完整终态前只发送可见正文增量，不向上层提供部分工具参数。
   async complete(userId: string, snapshot: AssistantProfileSnapshot, input: AssistantModelRequest): Promise<AssistantModelResult> {
+    // DNS和配置校验消耗同一预算，不在创建HTTPS请求时重新获得一分钟。
+    const startedAt = Date.now();
+    // 本地校验阶段尚未创建模型请求，不能与已提交网络失败混淆。
+    let facts: AssistantModelFailureFacts = { submission: 'notSubmitted', retryable: false };
+    try {
     await this.profiles.assertAssistantProfileAvailable(userId, snapshot);
     if (input.signal?.aborted) throw new AiProviderError('AI_CANCELLED');
     // 允许目录在本次请求前固定，供应商返回的陌生函数不可执行。
     const names = validateTools(input.tools);
+    // 纯回答阶段没有可执行工具，即使供应商违约返回原目录函数也必须拒绝。
+    if (input.toolChoice === 'none') names.clear();
     // 只接受受控预算，不透传供应商的任意选项。
-    const maxOutputTokens = input.maxOutputTokens ?? 8192;
-    if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > 32768) throw new AiProviderError('AI_INVALID_REQUEST');
+    const compatibility = assistantCompatibility(snapshot.compatibility);
+    // 旧快照使用保守画像，新快照只能在自身已声明预算内运行。
+    const maxOutputTokens = input.maxOutputTokens ?? compatibility.maxOutputTokens;
+    if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > compatibility.maxOutputTokens) throw new AiProviderError('AI_INVALID_REQUEST');
     if (!Array.isArray(input.input) || !input.input.length || input.input.some((item) => !isObject(item))) throw new AiProviderError('AI_INVALID_REQUEST');
     if (typeof input.toolChoice === 'object' && (!input.toolChoice || input.toolChoice.type !== 'function' || !names.has(input.toolChoice.name))) throw new AiProviderError('AI_INVALID_REQUEST');
+    // 复用校验遍历判断真实图片载荷，旧快照也须核对当前开关后才出站。
+    const requiresMultimodal = assertAssistantImageInputs(input.input, compatibility);
+    // 剩余预算由持久化调度器扣减等待时间后传入。
+    const timeoutMs = input.timeoutMs ?? ASSISTANT_REQUEST_BUDGET_MS;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > ASSISTANT_REQUEST_BUDGET_MS) throw new AiProviderError('AI_INVALID_REQUEST');
     // 固定快照中的地址仍须经过与笔记相同的公网解析及 TLS 边界。
     const { url, address } = await resolveAiEndpoint(snapshot.baseUrl, input.signal);
-    await this.profiles.assertAssistantProfileAvailable(userId, snapshot);
+    await this.profiles.assertAssistantProfileAvailable(userId, snapshot, requiresMultimodal);
     if (input.signal?.aborted) throw new AiProviderError('AI_CANCELLED');
     // 解密结果只用于当前 HTTP 认证头，永不进入返回值或日志。
     const apiKey = this.keys.decrypt(snapshot.encryptedApiKey);
     if (!apiKey || /[\r\n\0]/.test(apiKey)) throw new AiProviderError('AI_KEY_INVALID');
-    // 不继承笔记整理的 reasoning.effort=none，让助手采用供应商默认设置。
-    const payload = JSON.stringify({ model: snapshot.model.trim(), instructions: input.instructions, input: input.input, tools: input.tools.map((tool) => ({ ...tool, strict: false })), tool_choice: input.toolChoice ?? 'auto', max_output_tokens: maxOutputTokens, stream: true, store: false });
-    if (Buffer.byteLength(payload) > 2 * 1024 * 1024) throw new AiProviderError('AI_INPUT_TOO_LARGE');
+    // 纯回答省略工具目录，避免供应商按工具续轮校验此阶段不需要的推理历史。
+    // 思考开关固定在任务快照中；官方OpenAI路由显式申请公开摘要，其他服务只发送已确认兼容的effort。
+    const payload = JSON.stringify({ model: snapshot.model.trim(), instructions: input.instructions, input: input.input, reasoning: { effort: snapshot.thinkingEnabled === true ? 'high' : 'none', ...(snapshot.thinkingEnabled && url.hostname === 'api.openai.com' ? { summary: 'auto' } : {}) }, ...(input.toolChoice === 'none' ? {} : { tools: input.tools.map((tool) => ({ ...tool, strict: false })) }), tool_choice: input.toolChoice ?? 'auto', max_output_tokens: maxOutputTokens, stream: true, store: false });
+    if (Buffer.byteLength(payload) > compatibility.maxRequestBytes) throw new AiProviderError('AI_INPUT_TOO_LARGE');
+    // 预处理耗尽预算时绝不创建可能付费的请求。
+    const remainingMs = Math.floor(timeoutMs - (Date.now() - startedAt));
+    if (remainingMs < 1) throw new AiProviderError('AI_RETRY_BUDGET_EXHAUSTED');
     // 网络提交后发生取消、断流、超时均不能推断为没有计费。
+    // 流式可读思考只保留有界副本，独立于供应商完整回执。
+    const reasoningBuffer = new AssistantReasoningBuffer();
     const completed = await new Promise<unknown>((resolve, reject) => {
       // 记录成功终态，仍需等 HTTP 完整结束后再释放函数调用。
       let terminal: unknown;
       // 传输字节、可见字符及事件缓冲各自都有独立上限。
       let receivedBytes = 0;
-      // 只累计正文增量用于流量保护，不存储或展示 reasoning 增量。
+      // 正文流量单独计数，可读思考由有界缓冲与独立回调处理。
       let visibleCharacters = 0;
+      // 低频交付累计思考，避免每个token都重写任务状态。
+      let reasoningDeliveredAt = 0;
+      // 已排队快照大小只用于合并节流，不作为模型内容可信度依据。
+      let reasoningDeliveredLength = 0;
+      // 推理和工具参数增量也证明上游已经开始工作，不能安全自动重发。
+      let sawDelta = false;
       // 异步事件落库顺序与供应商增量顺序一致，结束前等待全部交付。
       let delivery = Promise.resolve();
-      // 数据库回调失败时停止后续交付，不能产生未处理的 Promise 拒绝。
-      let deliveryFailure: AiProviderError | undefined;
+      // 任意失败立即关闭新交付，但必须等已经开始的回调收尾。
+      let failure: AssistantModelFailure | undefined;
+      // 正常终态与失败共享一次结算身份，迟到事件不能反转结果。
+      let settled = false;
+      // HTTP 结束后不再接受新的正文，已排队交付仍需正常完成。
+      let ended = false;
+      // TLS 握手前 HTTPS 不会发送应用请求，可证明尚未提交。
+      let tlsConnecting = false;
+      // 请求对象允许在同步构造失败前保持为空。
+      const transport: { outgoing?: ClientRequest; deadline?: ReturnType<typeof setTimeout> } = {};
+      // 错误正文只暂存有限内存，用于识别明确临时限流。
+      let errorBody = '';
+      // 非成功正文超过诊断预算即不再尝试分类。
+      let errorBodyTruncated = false;
+      // 失败不向外泄露原始 cause，并等待在途数据库回调稳定后拒绝。
+      const fail = (error: unknown, evidence = facts): void => {
+        if (failure || settled) return;
+        // 固定本次错误供异步拒绝使用，不捕获可变的可空属性。
+        const currentFailure = error instanceof AssistantModelFailure ? error : new AssistantModelFailure(error instanceof AiProviderError ? error.code : 'AI_SUBMISSION_UNKNOWN', { ...evidence });
+        failure = currentFailure;
+        ended = true;
+        if (transport.deadline) clearTimeout(transport.deadline);
+        transport.outgoing?.destroy();
+        void delivery.then(() => { if (!settled) { settled = true; reject(currentFailure); } });
+      };
       // 流解析器支持 UTF-8 和 CRLF 在任意网络包边界拆开。
       const stream = new AssistantSseReader((event) => {
+        if (failure || ended) return;
         if (!isObject(event) || typeof event.type !== 'string') throw new AiProviderError('AI_INVALID_RESPONSE');
         if (terminal !== undefined) throw new AiProviderError('AI_INVALID_RESPONSE');
-        if (event.type === 'error' || event.type === 'response.failed') throw new AiProviderError('AI_PROVIDER_REJECTED');
+        // 用量只投影三项受控整数，失败响应也不能丢失已知用量。
+        const usage = isObject(event.response) ? assistantReportedUsage(event.response.usage) : null;
+        if (usage) facts = { ...facts, usage };
+        if (event.type.endsWith('.delta') || event.type.startsWith('response.output_item.') || event.type.startsWith('response.content_part.')) sawDelta = true;
+        if (event.type === 'error' || event.type === 'response.failed') {
+          // 明确输入拒绝且没有任何生成证据，才可供运行器压缩后重新提交。
+          const code = assistantRejectionCode(event.response ?? event);
+          // 完整失败对象也可能包含已生成输出，即使此前没有正文增量。
+          const hasOutput = isObject(event.response) && Array.isArray(event.response.output) && event.response.output.length > 0;
+          facts = { ...facts, submission: !sawDelta && !facts.usage && !hasOutput && code !== 'AI_PROVIDER_REJECTED' ? 'rejected' : 'unknown', retryable: false };
+          throw new AiProviderError(code);
+        }
         if (event.type === 'response.incomplete') throw new AiProviderError(isObject(event.response) && isObject(event.response.incomplete_details) && event.response.incomplete_details.reason === 'max_output_tokens' ? 'AI_OUTPUT_TRUNCATED' : 'AI_PROVIDER_REJECTED');
-        if (event.type === 'response.completed') { terminal = event.response; return; }
+        if (event.type === 'response.completed') {
+          terminal = event.response;
+          // 最后一小段即使未达到节流阈值，也要在成功结算前交付。
+          const reasoning = assistantResponseReasoning(isObject(event.response) ? event.response.output : undefined) ?? reasoningBuffer.snapshot();
+          if (reasoning) delivery = delivery.then(async () => { if (failure) return; try { await input.onReasoning?.(reasoning); } catch { fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)); } });
+          return;
+        }
+        if (event.type === 'response.reasoning_summary_text.delta' || event.type === 'response.reasoning_text.delta') {
+          if (typeof event.delta !== 'string') throw new AiProviderError('AI_INVALID_RESPONSE');
+          // 仅这两个协议事件能够进入可读思考，工具和加密增量继续忽略。
+          const reasoning = reasoningBuffer.append(event);
+          if (reasoning && (reasoningDeliveredAt === 0 || Date.now() - reasoningDeliveredAt >= 150 || reasoning.text.length - reasoningDeliveredLength >= 512)) {
+            reasoningDeliveredAt = Date.now();
+            reasoningDeliveredLength = reasoning.text.length;
+            delivery = delivery.then(async () => { if (failure) return; try { await input.onReasoning?.(reasoning); } catch { fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)); } });
+          }
+          return;
+        }
         if (event.type !== 'response.output_text.delta') return;
         if (typeof event.delta !== 'string') throw new AiProviderError('AI_INVALID_RESPONSE');
         visibleCharacters += event.delta.length;
@@ -66,48 +150,99 @@ export class AssistantModelProvider {
         // 异步闭包固定当前增量，不能在后续事件中复用可变字段。
         const delta = event.delta;
         delivery = delivery.then(async () => {
-          if (deliveryFailure) return;
-          try { await input.onDelta?.(delta); } catch { deliveryFailure = new AiProviderError('AI_SUBMISSION_UNKNOWN', true); outgoing.destroy(deliveryFailure); }
+          if (failure) return;
+          try { await input.onDelta?.(delta); } catch { fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)); }
         });
       });
       // lookup 固定已验证 IP，保留原域名的 SNI 与证书检查，禁止重定向。
-      const outgoing = request(url, { method: 'POST', agent: false, headers: { 'content-type': 'application/json', accept: 'text/event-stream', 'content-length': Buffer.byteLength(payload), authorization: `Bearer ${apiKey}` }, family: address.family, lookup: (_name, options, callback) => options.all ? callback(null, [address]) : callback(null, address.address, address.family), timeout: 60000, signal: input.signal }, (response) => {
+      const outgoing = request(url, { method: 'POST', agent: false, headers: { 'content-type': 'application/json', accept: 'text/event-stream', 'content-length': Buffer.byteLength(payload), authorization: `Bearer ${apiKey}` }, family: address.family, lookup: (_name, options, callback) => options.all ? callback(null, [address]) : callback(null, address.address, address.family), timeout: remainingMs, signal: input.signal }, (response) => {
         // 状态码仅分类为本地稳定错误，不包含供应商敏感正文。
         const status = response.statusCode ?? 0;
+        facts = { submission: 'unknown', retryable: false, ...(status ? { httpStatus: status } : {}), ...assistantResponseMetadata(response.headers ?? {}) };
+        tlsConnecting = false;
         response.on('data', (chunk: Buffer) => {
+          if (failure || ended) return;
           try {
             receivedBytes += chunk.length;
             if (receivedBytes > MAX_RESPONSE_BYTES) throw new AiProviderError('AI_RESPONSE_TOO_LARGE', true);
-            if (status < 200 || status >= 300) return;
+            if (status < 200 || status >= 300) {
+              if (receivedBytes <= 16384) errorBody += chunk.toString('utf8'); else errorBodyTruncated = true;
+              return;
+            }
             stream.push(chunk);
-          } catch (error: unknown) { outgoing.destroy(providerError(error)); }
+          } catch (error: unknown) { fail(error); }
         });
-        response.on('aborted', () => reject(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)));
-        response.on('error', () => reject(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)));
+        response.on('aborted', () => fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)));
+        response.on('error', () => fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)));
+        response.on('close', () => { if (!ended) fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)); });
         response.on('end', () => {
+          if (failure || ended) return;
           try {
-            if (status < 200 || status >= 300) throw httpFailure(status);
+            if (status < 200 || status >= 300) {
+              // 即使状态为4xx，正文带用量或输出也不能假定未执行。
+              let generationEvidence = false;
+              try {
+                // 错误JSON受16KiB预算约束，所有原文字段仍不离开内存。
+                const errorValue: unknown = errorBodyTruncated ? null : JSON.parse(errorBody);
+                if (isObject(errorValue)) {
+                  generationEvidence = 'usage' in errorValue || 'output' in errorValue || 'response' in errorValue;
+                  // 已知用量单独投影，不能带出附加错误详情。
+                  const usage = assistantReportedUsage(errorValue.usage);
+                  if (usage) facts = { ...facts, usage };
+                }
+              } catch { /* 无法解析的错误不获得额外恢复能力。 */ }
+              facts = { ...facts, submission: status >= 300 && status < 500 && !generationEvidence ? 'rejected' : 'unknown', retryable: status === 429 && !generationEvidence && !errorBodyTruncated && assistantTemporaryRateLimit(errorBody) };
+              throw httpFailure(status, errorBodyTruncated ? '' : errorBody);
+            }
             stream.finish();
             if (terminal === undefined) throw new AiProviderError('AI_SUBMISSION_UNKNOWN', true);
+            ended = true;
+            if (transport.deadline) clearTimeout(transport.deadline);
             // 完整结果在正文事件全部持久保存之后才交给图运行器。
-            void delivery.then(() => { if (deliveryFailure) reject(deliveryFailure); else resolve(terminal); });
-          } catch (error: unknown) { reject(providerError(error)); }
+            void delivery.then(() => { if (!failure && !settled) { settled = true; resolve(terminal); } });
+          } catch (error: unknown) { fail(error); }
         });
       });
+      transport.outgoing = outgoing;
+      // 只信任真实 TLS socket，不能把没有阶段证据的未知错误标记未计费。
+      outgoing.on('socket', (socket) => {
+        if (socket instanceof TLSSocket && !socket.authorized) {
+          tlsConnecting = true;
+          socket.once('secureConnect', () => { tlsConnecting = false; });
+        }
+      });
       // 独立总时限同时限制不断滴流的供应商，不依赖 socket 空闲超时。
-      const deadline = setTimeout(() => outgoing.destroy(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)), 60000);
-      outgoing.on('close', () => clearTimeout(deadline));
-      outgoing.on('timeout', () => outgoing.destroy(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)));
-      outgoing.on('error', (error: Error) => reject(providerError(error)));
+      const deadline = setTimeout(() => fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true), { ...facts, submission: tlsConnecting ? 'notSubmitted' : 'unknown', retryable: false }), remainingMs);
+      transport.deadline = deadline;
+      outgoing.on('close', () => { clearTimeout(deadline); if (!ended) fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)); });
+      outgoing.on('timeout', () => fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true), { ...facts, submission: tlsConnecting ? 'notSubmitted' : 'unknown', retryable: false }));
+      outgoing.on('error', (error: Error & { code?: string }) => {
+        // 拒绝连接或临时解析失败且 TLS 尚未建立，才确认为可重试未提交。
+        const transient = tlsConnecting && !input.signal?.aborted && ['ECONNREFUSED', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'ECONNRESET'].includes(error.code ?? '');
+        fail(new AiProviderError(transient ? 'AI_CONNECTION_FAILED' : 'AI_SUBMISSION_UNKNOWN', !tlsConnecting), { ...facts, submission: tlsConnecting ? 'notSubmitted' : 'unknown', retryable: transient });
+      });
+      // 请求排入传输后默认未知；只有真实 TLS 前置证据才能收窄为未提交。
+      facts = { submission: 'unknown', retryable: false };
       outgoing.end(payload);
     });
     // 后台配置删除或换 Key 后，迟到结果也不可用于新工具计划。
     await this.profiles.assertAssistantProfileAvailable(userId, snapshot);
-    return readCompleted(completed, snapshot.provider, names);
+    // 某些服务只在增量中返回思考，另一些只在完整回执中返回。
+    const result = readCompleted(completed, snapshot.provider, names);
+    // 回执已包含可读内容时优先使用它，保持流和恢复的最终结果一致。
+    const reasoning = assistantResponseReasoning(result.output) ?? reasoningBuffer.snapshot();
+    return { ...result, ...(reasoning ? { reasoning } : {}) };
+    } catch (error: unknown) {
+      if (error instanceof AssistantModelFailure) throw error;
+      if (error instanceof AiProviderError) throw new AssistantModelFailure(error.code, { ...facts, retryable: facts.submission === 'notSubmitted' && error.code === 'AI_DNS_FAILED' && !input.signal?.aborted });
+      // 保留配置撤回和地址校验的既有 HTTP 语义，不把它们误判网络故障。
+      if (error instanceof HttpException) throw error;
+      throw new AssistantModelFailure(facts.submission === 'notSubmitted' ? 'AI_INVALID_REQUEST' : 'AI_SUBMISSION_UNKNOWN', { ...facts, retryable: false });
+    }
   }
 
   /// 固定无业务副作用的两轮测试，验证函数参数、结果回传和真实正文流。
-  async testCapability(userId: string, snapshot: AssistantProfileSnapshot): Promise<{ ok: true; message: string }> {
+  async testCapability(userId: string, snapshot: AssistantProfileSnapshot): Promise<{ ok: true; message: string; capabilities: AssistantModelCapabilities }> {
     // 固定测试工具不会接触业务资料，实际执行只是返回固定字符串。
     const tool: AssistantFunctionTool = { type: 'function', name: 'assistant_capability_echo', description: '连接测试：原样返回固定测试文本。', parameters: { type: 'object', properties: { text: { type: 'string', enum: ['连接测试'] } }, required: ['text'], additionalProperties: false } };
     // 测试上下文不使用任何用户笔记或聊天消息。
@@ -122,7 +257,9 @@ export class AssistantModelProvider {
     // 回传完整输出项，保留供应商要求的 reasoning 续接项。
     const second = await this.complete(userId, snapshot, { instructions: '测试函数已经返回。只回复“连接成功”。', input: [...messages, ...first.output, { type: 'function_call_output', call_id: call.callId, output: JSON.stringify({ text: '连接测试' }) }], tools: [], toolChoice: 'none', maxOutputTokens: 2048, onDelta: (text) => { if (text) streamed = true; } });
     if (!streamed || !second.text.trim() || second.functionCalls.length) throw new AiProviderError('AI_STREAMING_UNSUPPORTED');
-    return { ok: true, message: '助手流式回答与工具调用测试成功' };
+    // 仅回传配置快照声明的图片能力，连接测试不能改变多模态开关。
+    const capabilities: AssistantModelCapabilities = { version: 1, streaming: true, functionCalling: true, imageInput: assistantCompatibility(snapshot.compatibility).imageInput };
+    return { ok: true, message: '助手流式回答与工具调用测试成功', capabilities };
   }
 }
 
@@ -229,7 +366,7 @@ function readCompleted(value: unknown, provider: string, tools: Set<string>): As
   if (!text && !functionCalls.length) throw new AiProviderError('AI_EMPTY_OUTPUT');
   if (text.length > MAX_TEXT_CHARACTERS) throw new AiProviderError('AI_OUTPUT_TOO_LONG');
   // 用量缺失不推算为零，只有完整非负整数组合才进入回执。
-  const usage = isObject(value.usage) && validTokens(value.usage.input_tokens) && validTokens(value.usage.output_tokens) && validTokens(value.usage.total_tokens) ? { inputTokens: value.usage.input_tokens, outputTokens: value.usage.output_tokens, totalTokens: value.usage.total_tokens } : null;
+  const usage = assistantReportedUsage(value.usage);
   return { responseId: value.id, text, functionCalls, output, usage };
 }
 
@@ -248,11 +385,14 @@ function validateTools(tools: AssistantFunctionTool[]): Set<string> {
 /// 只验证未知 JSON 是否为普通对象，不依赖供应商类型声明。
 function isObject(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }
 
-/// 用量必须为有限的非负安全整数。
-function validTokens(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0; }
-
-/// 本地固定错误保留，未知网络或回调错误只标记不确定提交。
-function providerError(error: unknown): AiProviderError { return error instanceof AiProviderError ? error : new AiProviderError('AI_SUBMISSION_UNKNOWN', true); }
-
 /// HTTP 错误不回传服务商原文，也不自动切换供应商或重复计费。
-function httpFailure(status: number): AiProviderError { return new AiProviderError(status === 401 || status === 403 ? 'AI_AUTH_FAILED' : status === 404 ? 'AI_MODEL_OR_URL_INVALID' : status === 429 ? 'AI_RATE_LIMITED' : status >= 500 ? 'AI_SUBMISSION_UNKNOWN' : 'AI_PROVIDER_REJECTED', status >= 500); }
+function httpFailure(status: number, body: string): AiProviderError {
+  if (status >= 500 || status < 100) return new AiProviderError('AI_SUBMISSION_UNKNOWN', true);
+  if (status === 401 || status === 403) return new AiProviderError('AI_AUTH_FAILED');
+  if (status === 404) return new AiProviderError('AI_MODEL_OR_URL_INVALID');
+  if (status === 402) return new AiProviderError('AI_QUOTA_EXHAUSTED');
+  // 只有受限完整JSON的标准字段参与细分，未知正文不会出现在异常中。
+  let code = 'AI_PROVIDER_REJECTED';
+  try { if (status >= 400 && status < 500) code = assistantRejectionCode(JSON.parse(body)); } catch { /* 损坏错误正文保持通用分类。 */ }
+  return new AiProviderError(code === 'AI_PROVIDER_REJECTED' && status === 429 ? 'AI_RATE_LIMITED' : code);
+}

@@ -10,8 +10,38 @@ export interface AssistantProfileSnapshot {
   baseUrl: string;
   /// 本轮使用的模型名称。
   model: string;
+  /// 本任务固定的思考模式，旧快照缺失时保持关闭。
+  thinkingEnabled?: boolean;
   /// 独立持久密钥加密后的凭据。
   encryptedApiKey: string;
+  /// 运行开始时固定的 Responses 能力及预算，旧快照采用保守默认值。
+  compatibility?: AssistantModelCompatibility;
+}
+
+/// 能力画像只描述 Responses，不允许切换协议或供应商。
+export interface AssistantModelCompatibility {
+  /// 画像结构版本，未知版本必须拒绝。
+  version: 1;
+  /// 新快照由配置多模态开关决定，旧快照缺少声明时仍不推断支持。
+  imageInput: 'unknown' | 'supported' | 'unsupported';
+  /// 上下文预算由运行器在组装历史时使用。
+  contextWindowTokens: number;
+  /// 单次输出上限包含推理和工具参数。
+  maxOutputTokens: number;
+  /// 完整 JSON 请求字节预算包含图片 base64 开销。
+  maxRequestBytes: number;
+}
+
+/// 固定连接测试得到的能力事实，不表示真实业务效果已验。
+export interface AssistantModelCapabilities {
+  /// 能力格式独立版本，方便旧配置保守恢复。
+  version: 1;
+  /// 普通文本流已由实际增量验证。
+  streaming: true;
+  /// 无副作用函数两轮续接已验证。
+  functionCalling: true;
+  /// 只回传配置的多模态声明，连接测试不授予图像能力。
+  imageInput: 'unknown' | 'supported' | 'unsupported';
 }
 
 /// 只接受普通 Function Calling，不开放远程工具、代码或供应商内建工具。
@@ -44,6 +74,10 @@ export interface AssistantModelRequest {
   signal?: AbortSignal;
   /// 仅展示可见助手正文，绝不传递 reasoning 或工具参数。
   onDelta?: (text: string) => void | Promise<void>;
+  /// 模型明确公开的思考或摘要累计快照，与回答正文和工具参数分开交付。
+  onReasoning?: (reasoning: AssistantVisibleReasoning) => void | Promise<void>;
+  /// 调度器传入本次允许的剩余时间，不能超过单次总预算。
+  timeoutMs?: number;
 }
 
 /// 仅在完整成功终态后返回可提交给业务校验的调用。
@@ -64,10 +98,20 @@ export interface AssistantModelResult {
   responseId: string;
   /// 已验证完整的助手可见文本。
   text: string;
+  /// 仅可读思考的有界展示副本，完整协议output仍保持原样。
+  reasoning?: AssistantVisibleReasoning;
   /// 未完成流不会返回部分函数调用。
   functionCalls: AssistantFunctionCall[];
   /// 包含不透明推理项，仅供下一轮模型协议续接。
   output: Record<string, unknown>[];
   /// 供应商实际报告的用量，缺失时明确为 null。
   usage: { inputTokens: number; outputTokens: number; totalTokens: number } | null;
+}
+
+/// 供应商明确公开的可读思考，不包含加密推理或内部协议数据。
+export interface AssistantVisibleReasoning {
+  /// 原返回文字，前端不将它混入正式回答。
+  text: string;
+  /// 达到展示上限时明确标记省略。
+  truncated?: boolean;
 }

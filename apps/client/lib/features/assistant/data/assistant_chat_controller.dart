@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
+import 'package:omni_butler/features/assistant/data/assistant_attachments.dart';
 import 'package:omni_butler/features/assistant/data/assistant_cache.dart';
 import 'package:omni_butler/features/assistant/data/assistant_models.dart';
 import 'package:omni_butler/features/assistant/data/assistant_repository.dart';
@@ -25,6 +26,9 @@ class AssistantChatController extends ChangeNotifier {
   /// 本机时区名称，不能作为模型自行提供的授权参数。
   final String? timeZone;
 
+  /// 可注入显示时钟，测试不依赖真实等待或服务器时间偏差。
+  final DateTime Function() now;
+
   /// 当前会话列表。
   List<Map<String, dynamic>> conversations = <Map<String, dynamic>>[];
 
@@ -33,6 +37,37 @@ class AssistantChatController extends ChangeNotifier {
 
   /// 当前显示消息。
   List<Map<String, dynamic>> messages = <Map<String, dynamic>>[];
+
+  /// 每条回答的业务保存回执独立于模型任务，按固定数据源缓存。
+  Map<String, dynamic> _savedNotes = <String, dynamic>{};
+
+  /// 未核实结果的消息身份在重启后仍可显式重放同一个保存请求。
+  final Set<String> _pendingNoteSaves = <String>{};
+
+  /// 保存中的按钮只锁定对应回答，不改变聊天输入或任务计时。
+  final Set<String> _savingNotes = <String>{};
+
+  /// 公开的逐消息错误，避免将保存笔记错误混入模型执行状态。
+  final Map<String, String> _noteErrors = <String, String>{};
+
+  /// 仅供当前视图展示的发送快照，私有路径不进入消息缓存或请求。
+  Map<String, dynamic>? _outgoingMessage;
+
+  /// 发送期间把正文和附件移到消息区，底层草稿仍保留以便失败恢复。
+  bool get hideComposerDraft =>
+      _outgoingMessage?['_localOutgoing'] == true && (busy || pending != null);
+
+  /// 服务端按原消息身份接管发送快照，不重复展示同一次提交。
+  List<Map<String, dynamic>> get displayMessages => <Map<String, dynamic>>[
+    ...messages,
+    if (_outgoingMessage != null &&
+        !messages.any(
+          (message) =>
+              message['clientMessageId'] ==
+              _outgoingMessage!['clientMessageId'],
+        ))
+      _outgoingMessage!,
+  ];
 
   /// 当前会话身份。
   String? conversationId;
@@ -52,6 +87,9 @@ class AssistantChatController extends ChangeNotifier {
   /// 未明确完成提交的原始消息身份。
   Map<String, dynamic>? pending;
 
+  /// 附件与正文共享当前会话和恢复身份，实际文件独立保存。
+  late final AssistantAttachments attachments;
+
   /// 服务端已完整保存的消息，重放流片段不能再次追加。
   final Set<String> _completedMessages = <String>{};
 
@@ -63,6 +101,30 @@ class AssistantChatController extends ChangeNotifier {
 
   /// 页面正在执行按钮操作。
   bool busy = false;
+
+  /// 发送专属状态，重命名、置顶等操作不会启动提交计时。
+  bool _submitting = false;
+
+  /// 提交结果尚未返回时记录停止意图，获得真实运行身份后立即停止。
+  bool _stopRequested = false;
+
+  /// 提交开始时的视图代次，切换会话后不能串到旧回答。
+  int? _submissionGeneration;
+
+  /// 当前计时基线所属的运行；提交阶段尚无服务器身份。
+  String? _elapsedRunId;
+
+  /// 当前视图收到的服务器用时或提交用时基线。
+  int? _elapsedBaseMs;
+
+  /// 只对提交中、排队和运行中的状态外推显示时长。
+  DateTime? _elapsedStartedAt;
+
+  /// 定时器累计值兼容挂起后的补发节拍及 Flutter 测试虚拟时间。
+  int _elapsedTickMs = 0;
+
+  /// 每秒只触发界面重绘，不落盘缓存或发送请求。
+  Timer? _elapsedTicker;
 
   /// 首次加载状态。
   bool loading = true;
@@ -101,14 +163,162 @@ class AssistantChatController extends ChangeNotifier {
     required this.scope,
     required this.catchUp,
     this.timeZone,
-  });
+    DateTime Function()? now,
+  }) : now = now ?? DateTime.now {
+    attachments = AssistantAttachments(
+      repository: repository,
+      scope: scope,
+      ensureConversation: _ensureAttachmentConversation,
+      frozen: () => pending != null || busy || offline,
+      persist: _persist,
+      changed: () {
+        if (_disposed) return;
+        _saveForDisplay();
+        notifyListeners();
+      },
+    );
+  }
+
+  /// 新聊天附件先留本机，首次发送前不为上传创建空会话。
+  Future<String?> _ensureAttachmentConversation() async => conversationId;
 
   /// 只有固定仓储仍有效时允许发出请求。
   bool get connected => repository?.isCurrent == true && scope != null;
 
+  /// 仅当前视图的真实发送准备或提交阶段显示即时计时。
+  bool get submitting =>
+      !_disposed &&
+      connected &&
+      _submitting &&
+      _submissionGeneration == _viewGeneration;
+
+  /// 返回当前发送或运行的显示用时，暂停和终态以服务器结算值为准。
+  int? get liveElapsedMs {
+    if (_disposed) return null;
+    if (!submitting && run == null) return null;
+    if (!submitting && _elapsedRunId != run?['id']) {
+      return (((run?['status'] == 'queued' || run?['status'] == 'running')
+                      ? (run?['liveElapsedMs'])
+                      : null)
+                  as num? ??
+              run?['elapsedMs'] as num?)
+          ?.toInt();
+    }
+    // 断开认证后只能展示最后确认的基线，不继续制造运行时间。
+    final int clockExtra = connected && _elapsedStartedAt != null
+        ? now().difference(_elapsedStartedAt!).inMilliseconds
+        : 0;
+    // 使用两种显示时钟的较大值，系统时钟回拨也不能造成倒计时。
+    final int extra = connected && _elapsedStartedAt != null
+        ? (clockExtra > _elapsedTickMs ? clockExtra : _elapsedTickMs)
+        : 0;
+    return _elapsedBaseMs == null
+        ? null
+        : _elapsedBaseMs! + (extra < 0 ? 0 : extra);
+  }
+
+  /// 重新锚定当前运行；服务器完成值允许纠正本机显示估计。
+  void _syncElapsed({int? submissionElapsedMs}) {
+    // 当前运行是否仍在自动处理，等待用户时不计入后续等待时间。
+    final bool processing =
+        run?['status'] == 'queued' || run?['status'] == 'running';
+    // 只读缓存冻结最后一个实时快照，离线不继续增加估计用时。
+    final bool ticking = connected && processing;
+    // 同一运行更新不让显示值因快照传输延迟倒退。
+    final int? previous = _elapsedRunId == run?['id'] ? liveElapsedMs : null;
+    // 新服务端包含进行段用时，旧服务端仍可从累计值继续显示。
+    final int? server =
+        (((processing ? (run?['liveElapsedMs']) : null) as num?) ??
+                (run?['elapsedMs'] as num?))
+            ?.toInt();
+    _elapsedRunId = run?['id'] as String?;
+    _elapsedBaseMs = run == null ? null : (server ?? 0);
+    if (ticking) {
+      for (final int? candidate in <int?>[previous, submissionElapsedMs]) {
+        if (candidate != null && candidate > _elapsedBaseMs!) {
+          _elapsedBaseMs = candidate;
+        }
+      }
+    }
+    _elapsedStartedAt = ticking ? now() : null;
+    _updateElapsedTicker();
+  }
+
+  /// 用单一定时器重绘当前计时，取消订阅或缓存写入不影响显示节奏。
+  void _updateElapsedTicker() {
+    _elapsedTicker?.cancel();
+    _elapsedTicker = null;
+    _elapsedTickMs = 0;
+    if (_disposed || !connected || _elapsedStartedAt == null) return;
+    // 固定创建计时器的视图代次，旧页面回调不能更新新会话。
+    final int generation = _viewGeneration;
+    _elapsedTicker = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
+      if (!_current(generation)) {
+        _elapsedTicker?.cancel();
+        _elapsedTicker = null;
+        return;
+      }
+      _elapsedTickMs = timer.tick * 1000;
+      notifyListeners();
+    });
+  }
+
+  /// 切换视图和销毁时清除提交计时，保留服务器任务本身。
+  void _resetElapsed() {
+    _outgoingMessage = null;
+    _elapsedTicker?.cancel();
+    _elapsedTicker = null;
+    _elapsedRunId = null;
+    _elapsedBaseMs = null;
+    _elapsedStartedAt = null;
+    _elapsedTickMs = 0;
+    _submitting = false;
+    _stopRequested = false;
+    _submissionGeneration = null;
+  }
+
   /// 任务是否仍由后端处理或等待卡片。
   bool get active =>
       run != null && !assistantTerminalStates.contains(run!['status']);
+
+  /// 生成或排队时输入区主操作显示停止，等待用户输入时仍允许发送。
+  bool get processing =>
+      submitting || <String>{'queued', 'running'}.contains(run?['status']);
+
+  /// 运行期间允许停止，提交中先保存停止意图再等待真实身份。
+  bool get canStop =>
+      !_disposed &&
+      connected &&
+      !offline &&
+      !_stopRequested &&
+      (submitting ||
+          !busy && <String>{'queued', 'running'}.contains(run?['status']));
+
+  /// 已确认停止且没有新草稿时，允许明确发出继续消息。
+  bool get canContinue =>
+      !_disposed &&
+      connected &&
+      !offline &&
+      !busy &&
+      !processing &&
+      run?['status'] == 'cancelled' &&
+      pending == null &&
+      draft.trim().isEmpty &&
+      !attachments.hasDrafts &&
+      !attachments.transferring;
+
+  /// 只展示当前在线运行的安全重试提示，不写成历史执行事实。
+  String? get recoveryReason {
+    // 原因由服务器公开投影，不展示供应商异常原文。
+    final Object? reason = assistantMap(run?['recovery'])['reason'];
+    return connected &&
+            !offline &&
+            run?['status'] == 'running' &&
+            reason is String &&
+            reason.trim().isNotEmpty
+        ? reason
+        : null;
+  }
 
   /// 正文结束后仍需接收最终计时，等待用户确认时继续监听远端变化。
   bool get _needsEvents =>
@@ -127,6 +337,14 @@ class AssistantChatController extends ChangeNotifier {
       conversations = assistantItems(snapshot['conversations']);
       _histories = assistantMap(snapshot['histories']);
       messages = assistantItems(snapshot['messages']);
+      _savedNotes = assistantMap(snapshot['savedNotes']);
+      _pendingNoteSaves.addAll(
+        (snapshot['pendingNoteSaves'] as List? ?? const <Object>[])
+            .whereType<String>(),
+      );
+      for (final String id in _pendingNoteSaves) {
+        _noteErrors[id] = '保存结果尚未确认，请重试核实';
+      }
       conversationId = snapshot['conversationId'] as String?;
       draft = snapshot['draft'] as String? ?? '';
       draftReference = snapshot['draftReference'] is Map
@@ -135,10 +353,15 @@ class AssistantChatController extends ChangeNotifier {
       pending = snapshot['pending'] is Map
           ? assistantMap(snapshot['pending'])
           : null;
+      attachments.restore(snapshot['attachments']);
       run = snapshot['run'] is Map ? assistantMap(snapshot['run']) : null;
+      _syncElapsed();
       cursor = (snapshot['cursor'] as num?)?.toInt() ?? 0;
       offline = true;
-      if (connected) await refresh();
+      if (connected) {
+        await refresh();
+        await attachments.initialize();
+      }
     } catch (failure) {
       error = _message(failure);
     } finally {
@@ -155,8 +378,7 @@ class AssistantChatController extends ChangeNotifier {
 
   /// 切换会话前保留可读历史，不把缓存内容当执行授权。
   void _rememberHistory() {
-    if (conversationId == null) return;
-    _histories[conversationId!] = <String, dynamic>{
+    _histories[conversationId ?? '__new__'] = <String, dynamic>{
       'messages': messages
           .map(
             (Map<String, dynamic> message) =>
@@ -167,6 +389,7 @@ class AssistantChatController extends ChangeNotifier {
       'cursor': cursor,
       'draft': draft,
       'draftReference': draftReference,
+      'attachments': attachments.snapshot,
     };
   }
 
@@ -186,12 +409,15 @@ class AssistantChatController extends ChangeNotifier {
           .toList(),
       'conversationId': conversationId,
       'draft': draft,
+      'attachments': attachments.snapshot,
       'draftReference': draftReference == null
           ? null
           : Map<String, dynamic>.from(draftReference!),
       'pending': pending == null ? null : Map<String, dynamic>.from(pending!),
       'run': run == null ? null : Map<String, dynamic>.from(run!),
       'cursor': cursor,
+      'savedNotes': Map<String, dynamic>.from(_savedNotes),
+      'pendingNoteSaves': _pendingNoteSaves.toList(),
     };
     _writes = _writes
         .catchError((Object _) {})
@@ -220,6 +446,7 @@ class AssistantChatController extends ChangeNotifier {
     Map<String, dynamic>? reference,
     bool clearReference = false,
   }) {
+    if (pending != null) return;
     draft = value;
     if (reference != null) {
       draftReference = <String, dynamic>{
@@ -406,6 +633,89 @@ class AssistantChatController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
+  /// 执行步骤按服务端稳定身份合并，迟到快照不能让已结束步骤重新运行。
+  List<Map<String, dynamic>> _executionSteps(
+    Object? previous,
+    Object? incoming,
+  ) {
+    // 同一回答可能跨重试关联多个运行，但每个步骤只显示一次。
+    final Map<String, Map<String, dynamic>> byId =
+        <String, Map<String, dynamic>>{};
+    for (final Map<String, dynamic> step in <Map<String, dynamic>>[
+      ...assistantItems(previous),
+      ...assistantItems(incoming),
+    ]) {
+      // 缺少真实身份的旧字段不合成可展开执行记录。
+      final String? id = step['id'] as String?;
+      if (id == null || id.isEmpty) continue;
+      // 结束时间是服务端步骤已完成的事实，旧运行中快照不能覆盖它。
+      final Map<String, dynamic>? saved = byId[id];
+      byId[id] = saved?['finishedAt'] != null && step['finishedAt'] == null
+          ? <String, dynamic>{...step, ...saved!}
+          : <String, dynamic>{...?saved, ...step};
+    }
+    return byId.values.toList();
+  }
+
+  /// 消息更新保留已知执行链，只关联真实回答身份匹配的运行。
+  Map<String, dynamic> _messageWithExecution(
+    Map<String, dynamic> message,
+    Map<String, dynamic>? previous, {
+    Map<String, dynamic>? current,
+  }) {
+    // 查询和 SSE 都可提供更新的运行快照。
+    final Map<String, dynamic>? source = current ?? run;
+    // 正文完成帧可能先于最后一帧运行信息，按身份补全已有步骤。
+    final List<Map<String, dynamic>> steps = _executionSteps(
+      _executionSteps(previous?['executionSteps'], message['executionSteps']),
+      source?['answerMessageId'] == message['id']
+          ? (source?['executionSteps'])
+          : null,
+    );
+    return <String, dynamic>{
+      ...message,
+      if (steps.isNotEmpty) 'executionSteps': steps,
+    };
+  }
+
+  /// 服务端运行变更同步显示时钟和执行步骤，不把提交阶段归到旧回答。
+  void _acceptRun(Map<String, dynamic>? next, {int? submissionElapsedMs}) {
+    // 同一运行的步骤只补充或前进，不因兼容旧接口而被清空。
+    final List<Map<String, dynamic>> steps = _executionSteps(
+      run?['id'] == next?['id'] ? (run?['executionSteps']) : null,
+      next?['executionSteps'],
+    );
+    run = next == null
+        ? null
+        : <String, dynamic>{
+            ...next,
+            if (steps.isNotEmpty) 'executionSteps': steps,
+          };
+    if (!submitting) _syncElapsed(submissionElapsedMs: submissionElapsedMs);
+    messages = messages
+        .map(
+          (Map<String, dynamic> message) =>
+              _messageWithExecution(message, message),
+        )
+        .toList();
+  }
+
+  /// 真实结果卡片保留服务端版本，正文只拼接同一运行已经读取的流片段。
+  Map<String, dynamic> _unfinishedMessage(
+    Map<String, dynamic> message,
+    Map<String, dynamic>? local,
+  ) {
+    // 占位尚未收到首段时不能被当作可继续追加的正文。
+    final bool hasPartial =
+        local?['_streaming'] == true && local?['_awaitingDelta'] != true;
+    return <String, dynamic>{
+      ..._messageWithExecution(message, local),
+      'content': hasPartial ? local!['content'] : message['content'],
+      '_streaming': true,
+      '_awaitingDelta': !hasPartial,
+    };
+  }
+
   /// 查询任务事实后才恢复本会话的流。
   Future<void> _loadMessages(int generation) async {
     // 全部消息包含当前真实任务。
@@ -413,27 +723,85 @@ class AssistantChatController extends ChangeNotifier {
       '/conversations/${Uri.encodeComponent(conversationId!)}/messages',
     );
     if (!_current(generation)) return;
-    // 尚未完成的本机流文本与游标共同恢复。
-    final List<Map<String, dynamic>> streaming = messages
-        .where((Map<String, dynamic> message) => message['_streaming'] == true)
-        .toList();
-    messages = assistantItems(response['items']);
-    _completedMessages.clear();
-    _completedMessages.addAll(
-      messages.map((Map<String, dynamic> message) => message['id'] as String),
-    );
-    messages.addAll(
-      streaming.where(
-        (Map<String, dynamic> message) =>
-            !_completedMessages.contains(message['id']),
-      ),
-    );
-    // 任务更换时不能复用另一条任务的游标。
+    // 最终正文与终态同时保存，运行中的回答行仍可能只是业务回执占位。
     final Map<String, dynamic>? current = response['activeRun'] is Map
         ? assistantMap(response['activeRun'])
         : null;
-    if (run?['id'] != current?['id']) cursor = 0;
-    run = current;
+    // 重试可以沿用回答身份，但不同运行不能拼接旧的流式正文。
+    final bool sameRun = run?['id'] == current?['id'];
+    // 只有正在执行的回答允许继续接收正文，等待确认或输入的消息已定稿。
+    final String? unfinishedId =
+        current?['status'] == 'running' || current?['status'] == 'queued'
+        ? (current?['answerMessageId'] as String?)
+        : null;
+    // 同一运行的本机正文与事件游标一起保留，服务器占位不能覆盖已读片段。
+    final Map<String, Map<String, dynamic>> local =
+        <String, Map<String, dynamic>>{
+          if (sameRun)
+            for (final Map<String, dynamic> message in messages)
+              message['id'] as String: message,
+        };
+    // 已经收到完成事件时，迟到的运行中查询快照不能把回答降回占位状态。
+    final bool completedLocally =
+        unfinishedId != null &&
+        sameRun &&
+        _completedMessages.contains(unfinishedId);
+    // 只有实际收到过 delta 的缓存才能安全沿用断点，否则必须重放全部正文。
+    final bool hasPartial =
+        local[unfinishedId]?['_streaming'] == true &&
+        local[unfinishedId]?['_awaitingDelta'] != true;
+    if (!sameRun ||
+        (unfinishedId != null && !completedLocally && !hasPartial)) {
+      cursor = 0;
+    }
+    messages = assistantItems(response['items'])
+        .map((Map<String, dynamic> message) {
+          if (message['id'] != unfinishedId) {
+            return _messageWithExecution(
+              message,
+              local[message['id']],
+              current: current,
+            );
+          }
+          if (completedLocally) return local[unfinishedId] ?? message;
+          return _unfinishedMessage(message, local[unfinishedId]);
+        })
+        .toList();
+    _completedMessages.clear();
+    // 持久消息已可见后释放临时快照，后续分页不再重建旧发送消息。
+    if (!submitting &&
+        pending == null &&
+        _outgoingMessage != null &&
+        messages.any(
+          (message) =>
+              message['clientMessageId'] ==
+              _outgoingMessage!['clientMessageId'],
+        )) {
+      _outgoingMessage = null;
+    }
+    _completedMessages.addAll(
+      messages
+          .where(
+            (Map<String, dynamic> message) => message['_streaming'] != true,
+          )
+          .map((Map<String, dynamic> message) => message['id'] as String),
+    );
+    // 纯只读回答在结束前还没有服务端消息行，也必须保留已读取的正文。
+    final Set<String> loadedIds = messages
+        .map((Map<String, dynamic> message) => message['id'] as String)
+        .toSet();
+    messages.addAll(
+      local.values.where(
+        (Map<String, dynamic> message) =>
+            !loadedIds.contains(message['id']) &&
+            (message['_streaming'] == true ||
+                (completedLocally && message['id'] == unfinishedId)),
+      ),
+    );
+    if (completedLocally && local.containsKey(unfinishedId)) {
+      _completedMessages.add(unfinishedId);
+    }
+    _acceptRun(current);
     _settlementRefreshPending = false;
     plan = current?['plan'] is Map ? assistantMap(current!['plan']) : null;
     if (_needsEvents) {
@@ -445,6 +813,11 @@ class AssistantChatController extends ChangeNotifier {
 
   /// 选择会话后不自动提交缓存中的旧消息。
   Future<void> select(String id) async {
+    if (attachments.transferring) {
+      error = '请等待附件上传完成后切换聊天';
+      notifyListeners();
+      return;
+    }
     if (pending != null && pending!['conversationId'] != id) {
       error = '上一条消息结果尚未核实，请先恢复发送';
       notifyListeners();
@@ -453,16 +826,19 @@ class AssistantChatController extends ChangeNotifier {
     _rememberHistory();
     _closeEvents();
     _viewGeneration++;
+    _resetElapsed();
     _settlementRefreshPending = false;
     conversationId = id;
     // 先显示此前打开过的只读缓存，再查询最新服务器事实。
     final Map<String, dynamic> saved = assistantMap(_histories[id]);
     messages = assistantItems(saved['messages']);
     draft = saved['draft'] as String? ?? '';
+    attachments.restore(saved['attachments']);
     draftReference = saved['draftReference'] is Map
         ? assistantMap(saved['draftReference'])
         : null;
     run = saved['run'] is Map ? assistantMap(saved['run']) : null;
+    _syncElapsed();
     plan = null;
     cursor = (saved['cursor'] as num?)?.toInt() ?? 0;
     error = !connected && messages.isEmpty ? '此会话尚无本机缓存，请连接原服务器后查看' : null;
@@ -470,17 +846,30 @@ class AssistantChatController extends ChangeNotifier {
     await refresh();
   }
 
-  /// 新建会话通过真实接口持久化。
+  /// 新聊天只切换到本地草稿，第一条消息发送时才建立服务端会话。
   Future<void> create() => _operate(() async {
+    if (attachments.transferring) throw const ApiFailure('请等待附件上传完成');
     if (pending != null) throw const ApiFailure('请先核实上一条消息的提交结果');
-    // 后端创建的真实会话。
-    final Map<String, dynamic> conversation = await repository!.request(
-      'POST',
-      '/conversations',
-      data: <String, String>{'title': '新对话'},
-    );
-    if (!connected || _disposed) return;
-    await select(conversation['id'] as String);
+    if (conversationId == null) return;
+    _rememberHistory();
+    _closeEvents();
+    _viewGeneration++;
+    _resetElapsed();
+    _settlementRefreshPending = false;
+    conversationId = null;
+    // 未发送草稿可在切换历史后恢复，永远不出现在会话列表。
+    final Map<String, dynamic> saved = assistantMap(_histories['__new__']);
+    messages = <Map<String, dynamic>>[];
+    _completedMessages.clear();
+    draft = saved['draft'] as String? ?? '';
+    draftReference = saved['draftReference'] is Map
+        ? assistantMap(saved['draftReference'])
+        : null;
+    attachments.restore(saved['attachments']);
+    run = null;
+    plan = null;
+    cursor = 0;
+    await _persist();
   });
 
   /// 重命名指定会话，省略身份时保持现有当前会话调用兼容。
@@ -499,17 +888,29 @@ class AssistantChatController extends ChangeNotifier {
 
   /// 持久化指定会话的置顶状态，活动时间由服务器保持不变。
   Future<void> setPinned(String id, bool pinned) => _operate(() async {
-    await repository!.request(
+    // 使用服务器已经保存的回执，避免后续列表读取失败掩盖成功的置顶操作。
+    final Map<String, dynamic> updated = await repository!.request(
       'PATCH',
       '/conversations/${Uri.encodeComponent(id)}',
       data: <String, bool>{'isPinned': pinned},
     );
     if (!connected || _disposed) return;
-    await _refreshConversationList();
+    if (updated['id'] != id || updated['isPinned'] != pinned) {
+      throw const ApiFailure('服务器未能确认置顶状态，请刷新后重试');
+    }
+    conversations = conversations
+        .map(
+          (Map<String, dynamic> conversation) => conversation['id'] == id
+              ? <String, dynamic>{...conversation, ...updated}
+              : conversation,
+        )
+        .toList();
+    await _persist();
   });
 
   /// 删除聊天后只清除显示，不删除服务器业务操作凭据。
   Future<void> delete({String? id}) => _operate(() async {
+    if (attachments.transferring) throw const ApiFailure('请等待附件上传完成');
     // 在请求前固定点击目标，非当前会话不会关闭当前订阅。
     final String? targetId = id ?? conversationId;
     if (targetId == null) return;
@@ -521,6 +922,11 @@ class AssistantChatController extends ChangeNotifier {
       '/conversations/${Uri.encodeComponent(targetId)}',
     );
     if (!connected || _disposed) return;
+    if (conversationId != targetId) {
+      await attachments.releaseFiles(
+        assistantMap(_histories[targetId])['attachments'],
+      );
+    }
     _histories.remove(targetId);
     conversations.removeWhere(
       (Map<String, dynamic> item) => item['id'] == targetId,
@@ -528,6 +934,7 @@ class AssistantChatController extends ChangeNotifier {
     if (conversationId == targetId) {
       _closeEvents();
       _viewGeneration++;
+      _resetElapsed();
       _settlementRefreshPending = false;
       conversationId = null;
       messages = <Map<String, dynamic>>[];
@@ -535,6 +942,7 @@ class AssistantChatController extends ChangeNotifier {
       run = null;
       plan = null;
       draft = '';
+      await attachments.clearAccepted();
       draftReference = null;
       cursor = 0;
     }
@@ -544,53 +952,175 @@ class AssistantChatController extends ChangeNotifier {
 
   /// 明确提交一条消息；未知响应保留原请求身份供显式重试。
   Future<void> send({Map<String, dynamic>? selection}) => _operate(() async {
-    if (draft.trim().isEmpty && pending == null) return;
-    await catchUp();
-    if (!connected || _disposed) return;
-    if (conversationId == null) {
-      // 第一次发送需要先创建真实会话。
-      final Map<String, dynamic> conversation = await repository!.request(
-        'POST',
-        '/conversations',
-        data: <String, String>{'title': '新对话'},
-      );
-      conversationId = conversation['id'] as String;
+    if (draft.trim().isEmpty && pending == null && !attachments.hasDrafts) {
+      return;
     }
-    pending ??= <String, dynamic>{
-      'clientMessageId': const Uuid().v4(),
-      'content': draft.trim(),
-      'conversationId': conversationId,
-      'timeZone': ?timeZone,
-      'selection': ?selection,
-      if (selection == null && draftReference != null)
-        'reference': <String, dynamic>{
-          'id': draftReference!['id'],
-          'module': draftReference!['module'],
-        },
+    if (pending == null && attachments.hasDrafts) {
+      // 发送前向服务器读取当前模型能力，不能绕过界面门禁。
+      final Map<String, dynamic> settings = await repository!.request(
+        'GET',
+        '/settings',
+      );
+      // 附件需要全部解析就绪且匹配当前模型能力。
+      final String? reason = attachments.blockReason(settings);
+      if (reason != null) throw ApiFailure(reason);
+    }
+    // 原身份重放可能已经提交，停止意图必须保留到实际运行得到核实。
+    final bool replaying = pending != null;
+    _stopRequested = pending?['stopRequested'] == true;
+    // 发送准备属于当前视图，在同步检查和 POST 返回前就能显示计时。
+    final int generation = _viewGeneration;
+    _submitting = true;
+    _submissionGeneration = generation;
+    // 在任何异步上传之前固定可见消息和幂等身份，计时与消息同帧出现。
+    final String clientMessageId =
+        pending?['clientMessageId'] as String? ?? const Uuid().v4();
+    _outgoingMessage = <String, dynamic>{
+      'id': 'outgoing-$clientMessageId',
+      'clientMessageId': clientMessageId,
+      'role': 'user',
+      'content':
+          pending?['content'] ??
+          (draft.trim().isEmpty ? '请概括附件内容' : draft.trim()),
+      'createdAt': now().toIso8601String(),
+      '_localOutgoing': true,
+      'attachments': attachments.snapshot,
     };
-    await _persist();
-    // 永远使用原会话与消息身份重试。
-    final Map<String, dynamic> result = await repository!.request(
-      'POST',
-      '/conversations/${Uri.encodeComponent(pending!['conversationId'] as String)}/messages',
-      data: <String, dynamic>{
-        'clientMessageId': pending!['clientMessageId'],
-        'content': pending!['content'],
-        if (pending!['timeZone'] != null) 'timeZone': pending!['timeZone'],
-        if (pending!['selection'] != null) 'selection': pending!['selection'],
-        if (pending!['reference'] != null) 'reference': pending!['reference'],
-      },
-    );
-    if (!connected || _disposed) return;
-    run = result;
-    plan = result['plan'] is Map ? assistantMap(result['plan']) : null;
-    pending = null;
-    draft = '';
-    draftReference = null;
-    cursor = 0;
-    await _persist();
-    await refresh();
+    _elapsedRunId = null;
+    _elapsedBaseMs = 0;
+    _elapsedStartedAt = now();
+    _updateElapsedTicker();
+    notifyListeners();
+    try {
+      await catchUp();
+      if (!_current(generation)) return;
+      if (_stopRequested && !replaying) return;
+      if (conversationId == null) {
+        // 第一次发送需要先创建真实会话。
+        final Map<String, dynamic> conversation = await repository!.request(
+          'POST',
+          '/conversations',
+          data: <String, String>{'title': '新对话'},
+        );
+        if (!_current(generation)) return;
+        conversationId = conversation['id'] as String;
+        _histories.remove('__new__');
+        await _persist();
+      }
+      if (_stopRequested && !replaying) return;
+      if (pending == null && attachments.hasDrafts) {
+        await attachments.prepareForSend(conversationId!);
+        if (!_current(generation)) return;
+        // 扫描PDF的视觉需求只有解析后才明确，发送模型请求前重新检查。
+        final Map<String, dynamic> settings = await repository!.request(
+          'GET',
+          '/settings',
+        );
+        final String? reason = attachments.blockReason(settings);
+        if (reason != null) throw ApiFailure(reason);
+      }
+      if (_stopRequested && !replaying) return;
+      pending ??= <String, dynamic>{
+        'clientMessageId': clientMessageId,
+        'content': draft.trim().isEmpty ? '请概括附件内容' : draft.trim(),
+        if (attachments.hasDrafts) 'attachmentIds': attachments.ids,
+        'conversationId': conversationId,
+        'timeZone': ?timeZone,
+        'selection': ?selection,
+        if (selection == null && draftReference != null)
+          'reference': <String, dynamic>{
+            'id': draftReference!['id'],
+            'module': draftReference!['module'],
+          },
+      };
+      await _persist();
+      if (_stopRequested && !replaying) {
+        // 此次POST尚未发出，可解除本机冻结并保留原草稿。
+        pending = null;
+        await _persist();
+        return;
+      }
+      // 永远使用原会话与消息身份重试。
+      Map<String, dynamic> result = await _submitPending(generation);
+      if (!_current(generation)) return;
+      if (_stopRequested || pending?['stopRequested'] == true) {
+        // 消息已被服务器接受后才有停止目标；响应未知时仍保留原消息身份。
+        result = await repository!.request(
+          'POST',
+          '/runs/${Uri.encodeComponent(result['id'] as String)}/stop',
+        );
+        if (!_current(generation)) return;
+      }
+      // 已显示的提交等待时间平滑交给当前运行，最终用时仍由服务端结算。
+      final int? submissionElapsed = liveElapsedMs;
+      _submitting = false;
+      _submissionGeneration = null;
+      _acceptRun(result, submissionElapsedMs: submissionElapsed);
+      plan = result['plan'] is Map ? assistantMap(result['plan']) : null;
+      pending = null;
+      draft = '';
+      // 已接受的附件改用鉴权接口加载，清理草稿文件不会留下失效路径。
+      _outgoingMessage = <String, dynamic>{
+        ..._outgoingMessage!,
+        '_localOutgoing': false,
+        'attachments': attachments.snapshot
+            .map(
+              (item) => <String, dynamic>{
+                for (final entry in item.entries)
+                  if (entry.key != 'localPath') entry.key: entry.value,
+              },
+            )
+            .toList(),
+      };
+      await attachments.clearAccepted();
+      draftReference = null;
+      cursor = 0;
+      await _persist();
+      await refresh();
+    } finally {
+      if (_submissionGeneration == generation) {
+        // 明确失败或出站前停止时恢复草稿；未知结果保留原身份和消息快照。
+        if (pending == null) _outgoingMessage = null;
+        _submitting = false;
+        _submissionGeneration = null;
+        if (_current(generation)) _syncElapsed();
+      }
+    }
   });
+
+  /// 只有服务端明确拒绝接受的输入才解除冻结，未知结果始终保留原身份。
+  Future<Map<String, dynamic>> _submitPending(int generation) async {
+    try {
+      return await repository!.request(
+        'POST',
+        '/conversations/${Uri.encodeComponent(pending!['conversationId'] as String)}/messages',
+        data: <String, dynamic>{
+          'clientMessageId': pending!['clientMessageId'],
+          'content': pending!['content'],
+          if (pending!['attachmentIds'] != null)
+            'attachmentIds': pending!['attachmentIds'],
+          if (pending!['timeZone'] != null) 'timeZone': pending!['timeZone'],
+          if (pending!['selection'] != null) 'selection': pending!['selection'],
+          if (pending!['reference'] != null) 'reference': pending!['reference'],
+        },
+      );
+    } on AssistantApiFailure catch (failure) {
+      // 只信任固定业务错误码，泛化代理 400 不足以证明服务器没有接受消息。
+      final bool rejected =
+          failure.statusCode == 413 ||
+          (<int>{400, 422}.contains(failure.statusCode) &&
+              (<String>{
+                    'ASSISTANT_INPUT_INVALID',
+                    'AI_IMAGE_INPUT_UNSUPPORTED',
+                  }.contains(failure.code) ||
+                  failure.code?.startsWith('ATTACHMENT_') == true));
+      if (rejected && _current(generation)) {
+        pending = null;
+        await _persist();
+      }
+      rethrow;
+    }
+  }
 
   /// 按固定预览版本确认或取消；提交前先等待本机业务修改上传。
   Future<void> decide(String decision) => _operate(() async {
@@ -610,7 +1140,26 @@ class AssistantChatController extends ChangeNotifier {
   });
 
   /// 停止只影响未完成操作，不宣称撤销已保存数据。
-  Future<void> stop() => _runCommand('stop');
+  Future<void> stop() async {
+    if (submitting) {
+      if (_stopRequested) return;
+      _stopRequested = true;
+      if (pending != null) {
+        pending!['stopRequested'] = true;
+        await _persist();
+      }
+      if (!_disposed) notifyListeners();
+      return;
+    }
+    await _runCommand('stop');
+  }
+
+  /// 取消的任务不复活旧写入批准；用可见新消息在同一聊天继续。
+  Future<void> continueConversation() async {
+    if (!canContinue) return;
+    setDraft('继续');
+    await send();
+  }
 
   /// 显式重试保留原任务业务回执。
   Future<void> retry() => _runCommand('retry');
@@ -619,16 +1168,128 @@ class AssistantChatController extends ChangeNotifier {
   Future<void> takeover() => _runCommand('takeover');
 
   /// 撤销仅限服务器声明可以补偿的单条新增。
-  Future<void> undo() => _runCommand('undo');
+  Future<void> undo({String? runId}) => _runCommand('undo', runId: runId);
 
   /// 运行控制统一查询最新事实。
-  Future<void> _runCommand(String command) => _operate(() async {
-    await repository!.request(
-      'POST',
-      '/runs/${Uri.encodeComponent(run!['id'] as String)}/$command',
+  Future<void> _runCommand(String command, {String? runId}) =>
+      _operate(() async {
+        // 卡片回调不能在重绘前误用后来生成的新任务身份。
+        final String target = runId ?? run!['id'] as String;
+        if (runId != null && (run?['id'] != runId || run?['canUndo'] != true)) {
+          throw const ApiFailure('任务状态已更新，请重新核对执行结果');
+        }
+        await repository!.request(
+          'POST',
+          '/runs/${Uri.encodeComponent(target)}/$command',
+        );
+        await refresh();
+      });
+
+  /// 服务器历史和本机成功回执共同恢复只保存一次的展示事实。
+  Map<String, dynamic>? savedNote(String messageId) {
+    // 当前历史消息可能由另一设备保存过。
+    final Map<String, dynamic>? message = messages
+        .where((item) => item['id'] == messageId)
+        .firstOrNull;
+    // 缓存只作显示提示，写入去重始终由服务器回执保证。
+    final Map<String, dynamic> result = assistantMap(
+      message?['savedNote'] ?? _savedNotes[messageId],
     );
-    await refresh();
-  });
+    return result['noteId'] is String && result['savedAt'] is String
+        ? result
+        : null;
+  }
+
+  /// 对应消息正在等待业务接口响应。
+  bool savingNote(String messageId) => _savingNotes.contains(messageId);
+
+  /// 已保存的服务器事实优先于之前的暂时错误。
+  String? noteSaveError(String messageId) =>
+      savedNote(messageId) == null ? _noteErrors[messageId] : null;
+
+  /// 按消息身份直接保存正文，不修改草稿、pending或任何模型运行。
+  Future<void> saveNote(String messageId) async {
+    if (_disposed ||
+        !connected ||
+        offline ||
+        savingNote(messageId) ||
+        savedNote(messageId) != null) {
+      return;
+    }
+    // 临时流式片段和用户消息不能当作服务器持久回答保存。
+    final Map<String, dynamic>? message = messages
+        .where((item) => item['id'] == messageId)
+        .firstOrNull;
+    if (message == null ||
+        message['role'] != 'assistant' ||
+        message['_streaming'] == true) {
+      return;
+    }
+    // 与正式笔记领域接口保持相同的字符串长度口径，不截断正文。
+    final String content = message['content'] as String? ?? '';
+    if (content.trim().isEmpty || content.length > 20000) {
+      _noteErrors[messageId] = content.trim().isEmpty
+          ? '回答正文为空，无法保存为笔记'
+          : '笔记正文不能超过 20,000 字符，请缩短内容后保存';
+      notifyListeners();
+      return;
+    }
+    // 固定视图代次，切换会话或来源后不接收迟到结果。
+    final int generation = _viewGeneration;
+    _savingNotes.add(messageId);
+    _pendingNoteSaves.add(messageId);
+    _noteErrors.remove(messageId);
+    notifyListeners();
+    try {
+      await _persist();
+      if (!_current(generation)) return;
+      // 稳定消息身份就是重放身份；正文与记录时间只由服务器决定。
+      final Map<String, dynamic> result = await repository!.request(
+        'POST',
+        '/messages/${Uri.encodeComponent(messageId)}/note',
+      );
+      if (!_current(generation)) return;
+      if (result['noteId'] is! String ||
+          (result['noteId'] as String).isEmpty ||
+          result['savedAt'] is! String ||
+          DateTime.tryParse(result['savedAt'] as String) == null) {
+        throw const ApiFailure('保存响应未能核实');
+      }
+      _savedNotes[messageId] = <String, dynamic>{
+        'noteId': result['noteId'],
+        'savedAt': result['savedAt'],
+      };
+      _pendingNoteSaves.remove(messageId);
+      _noteErrors.remove(messageId);
+      _saveForDisplay();
+    } catch (failure) {
+      if (!_current(generation)) return;
+      // 明确拒绝没有新建笔记；网络和不完整响应须重放原消息核实。
+      if (failure is AssistantApiFailure &&
+          <int>{
+            400,
+            401,
+            403,
+            404,
+            405,
+            409,
+            422,
+          }.contains(failure.statusCode)) {
+        _pendingNoteSaves.remove(messageId);
+        _noteErrors[messageId] =
+            failure.statusCode == 405 ||
+                failure.message.startsWith('Cannot POST ')
+            ? '当前服务器尚不支持直接保存笔记，请更新服务器后重试'
+            : failure.message;
+      } else {
+        _noteErrors[messageId] = '保存结果尚未确认，请重试核实';
+      }
+      _saveForDisplay();
+    } finally {
+      _savingNotes.remove(messageId);
+      if (!_disposed && connected) notifyListeners();
+    }
+  }
 
   /// 包装按钮操作；异步响应必须仍属于原服务器。
   Future<void> _operate(Future<void> Function() action) async {
@@ -672,10 +1333,31 @@ class AssistantChatController extends ChangeNotifier {
             for (final Map<String, dynamic> message in messages)
               message['id'] as String: message,
           };
+      // 历史等待事件可能在确认后重放，以查询快照识别仍在生成的回答。
+      final Map<String, dynamic> current = assistantMap(response['activeRun']);
+      // 结算读取不能把同一运行的保存回执占位误标为最终正文。
+      final String? unfinishedId =
+          current['id'] == runId &&
+              (current['status'] == 'running' || current['status'] == 'queued')
+          ? (current['answerMessageId'] as String?)
+          : null;
       for (final Map<String, dynamic> message in assistantItems(
         response['items'],
       )) {
-        byId[message['id'] as String] = message;
+        if (message['id'] == unfinishedId) {
+          if (!_completedMessages.contains(unfinishedId)) {
+            byId[unfinishedId!] = _unfinishedMessage(
+              message,
+              byId[unfinishedId],
+            );
+          }
+          continue;
+        }
+        byId[message['id'] as String] = _messageWithExecution(
+          message,
+          byId[message['id']],
+          current: current,
+        );
         _completedMessages.add(message['id'] as String);
       }
       messages = byId.values.toList();
@@ -736,13 +1418,27 @@ class AssistantChatController extends ChangeNotifier {
                 messages[index] = <String, dynamic>{
                   ...messages[index],
                   'content':
-                      '${messages[index]['content'] ?? ''}${event.data['text'] ?? ''}',
+                      '${messages[index]['_awaitingDelta'] == true ? '' : messages[index]['content'] ?? ''}${event.data['text'] ?? ''}',
+                  '_streaming': true,
+                  '_awaitingDelta': false,
                 };
               }
             } else if (event.type == 'message.completed') {
               // 完整消息覆盖临时片段。
-              final Map<String, dynamic> message = assistantMap(
+              final Map<String, dynamic> completed = assistantMap(
                 event.data['message'],
+              );
+              // 完整正文到达时保留该回答已经展示的执行链。
+              final Map<String, dynamic>? previous = messages
+                  .where(
+                    (Map<String, dynamic> item) =>
+                        item['id'] == completed['id'],
+                  )
+                  .firstOrNull;
+              // 步骤绑定稳定回答身份，不能借用上一条任务的步骤。
+              final Map<String, dynamic> message = _messageWithExecution(
+                completed,
+                previous,
               );
               messages.removeWhere(
                 (Map<String, dynamic> item) => item['id'] == message['id'],
@@ -750,13 +1446,19 @@ class AssistantChatController extends ChangeNotifier {
               _completedMessages.add(message['id'] as String);
               messages.add(message);
             } else if (event.type == 'run.updated') {
-              run = assistantMap(event.data['run']);
+              _acceptRun(assistantMap(event.data['run']));
               plan = run?['plan'] is Map ? assistantMap(run!['plan']) : plan;
             } else if (event.type == 'plan.ready') {
               plan = assistantMap(event.data['plan']);
             } else if (event.type == 'error') {
               error = event.data['message'] as String? ?? '助手执行失败';
             }
+            messages = messages
+                .map(
+                  (Map<String, dynamic> message) =>
+                      _messageWithExecution(message, message),
+                )
+                .toList();
             _saveForDisplay();
             notifyListeners();
             if (event.type == 'run.updated' &&
@@ -795,6 +1497,8 @@ class AssistantChatController extends ChangeNotifier {
     _cacheWrite?.cancel();
     unawaited(_persist().catchError((Object _) {}));
     _disposed = true;
+    attachments.dispose();
+    _resetElapsed();
     _closeEvents();
     super.dispose();
   }

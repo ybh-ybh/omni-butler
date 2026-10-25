@@ -57,7 +57,7 @@ describe('助手真实业务卡片及可读分类', () => {
     const entry = keys[fixture.module] ? { [keys[fixture.module]!]: record, payment: { id: randomUUID() }, completion: { id: randomUUID() } } : record;
     // 执行顺序与冻结步骤对应。
     const result = await presentation.result(context, [{ name: fixture.tool, input: {} }], { values: [entry] });
-    expect(result.entityRefs).toEqual([{ module: fixture.module, id: record.id, label: fixture.name, record }]);
+    expect(result.entityRefs).toEqual([{ module: fixture.module, id: record.id, label: fixture.name, record, operation: 'create' }]);
     expect(JSON.stringify(result.entityRefs)).not.toContain('"label":"' + record.id);
   });
 
@@ -66,7 +66,20 @@ describe('助手真实业务卡片及可读分类', () => {
     const record = { id: randomUUID(), activity: '主项活动' };
     // 兼容不同现有业务接口包装，不更改原始回执形状。
     const result = await presentation.result(context, [{ name: 'create_time_entry', input: {} }], { values: [{ [key]: record }] });
-    expect(result.entityRefs).toEqual([{ module: 'time', id: record.id, label: '主项活动', record }]);
+    expect(result.entityRefs).toEqual([{ module: 'time', id: record.id, label: '主项活动', record, operation: 'create' }]);
+  });
+
+  it.each([
+    ['update_todo', {}, 'update'], ['delete_todo', {}, 'delete'],
+    ['set_todo_completed', { completed: true }, 'complete'], ['set_todo_completed', { completed: false }, 'revoke'],
+    ['delete_event_history', {}, 'update'], ['undo_event_completion', {}, 'revoke'],
+  ])('真实动作 %s 的摘要不把子项操作误报成主项新增删除', async (name, input, operation) => {
+    // 只借目录提供真实模块，操作语义必须来自冻结步骤。
+    const record = { id: randomUUID(), title: '当前主项' };
+    definitions.push({ name, module: 'todos', write: true, description: '合成更新工具', inputSchema: {} });
+    // 包装仍保留正式对象身份。
+    const result = await presentation.result(context, [{ name, input: input as Record<string, unknown> }], { values: [record] });
+    expect(result.entityRefs).toEqual([{ module: 'todos', id: record.id, label: '当前主项', record, operation }]);
   });
 
   it('分类标签及位置从正式关系补显示名称，关系查询带owner和删除过滤', async () => {
@@ -82,7 +95,7 @@ describe('助手真实业务卡片及可读分类', () => {
     database.recordTaxonomyLink!.findMany!.mockResolvedValue(taxonomies.map((taxonomy) => ({ id: randomUUID(), recordId: id, taxonomyId: taxonomy.id, userId: owner, module: 'inventory', deletedAt: null, taxonomy })));
     // 真实分类名称不依赖旧字段中的 UUID 文本。
     const result = await presentation.result(context, [{ name: 'create_item', input: {} }], { values: [{ id, name: '电脑' }] });
-    expect(result.entityRefs).toEqual([{ module: 'inventory', id, label: '电脑', record: { id, name: '电脑', categoryNames: ['数码'], tagNames: ['常用'], locationNames: ['书房'] } }]);
+    expect(result.entityRefs).toEqual([{ module: 'inventory', id, label: '电脑', record: { id, name: '电脑', categoryNames: ['数码'], tagNames: ['常用'], locationNames: ['书房'] }, operation: 'create' }]);
     expect(database.recordTaxonomyLink!.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: owner, recordId: { in: [id] }, deletedAt: null, taxonomy: { deletedAt: null } } }));
   });
 
@@ -98,14 +111,14 @@ describe('助手真实业务卡片及可读分类', () => {
   it('generic restore_record按input.module定位，补偿空intents从真实action.steps恢复', async () => {
     // 恢复返回的正式快照可以直接定位原记录。
     const id = randomUUID();
-    expect((await presentation.result(context, [{ name: 'restore_record', input: { module: 'events', id } }], { values: [{ id, name: '恢复事件' }] })).entityRefs).toEqual([{ module: 'events', id, label: '恢复事件', record: { id, name: '恢复事件' } }]);
+    expect((await presentation.result(context, [{ name: 'restore_record', input: { module: 'events', id } }], { values: [{ id, name: '恢复事件' }] })).entityRefs).toEqual([{ module: 'events', id, label: '恢复事件', record: { id, name: '恢复事件' }, operation: 'restore' }]);
     // 软删除补偿可能只返回 ids，必须使用真实步骤定位主项。
     const quote = { id: randomUUID(), userId: owner, content: '被补偿的名言', deletedAt: new Date().toISOString() };
     records.set(`quotes:${quote.id}`, quote);
     // 调用者无法通过空或伪造 intents 覆盖服务器步骤。
     const actionId = randomUUID();
     database.mcpAction!.findFirst!.mockResolvedValue({ status: 'succeeded', result: {}, steps: [{ name: 'trash_quote', input: { id: quote.id } }] });
-    expect((await presentation.result(context, [], { values: [{ ids: [quote.id] }] }, actionId)).entityRefs).toEqual([{ module: 'quotes', id: quote.id, label: quote.content, record: quote }]);
+    expect((await presentation.result(context, [], { values: [{ ids: [quote.id] }] }, actionId)).entityRefs).toEqual([{ module: 'quotes', id: quote.id, label: quote.content, record: quote, operation: 'delete' }]);
     expect(database.mcpAction!.findFirst).toHaveBeenCalledWith({ where: { id: actionId, userId: owner, source: 'assistant', sourceId: context.taskId, connectionId: null } });
     database.mcpAction!.findFirst!.mockResolvedValue(null);
     await expect(presentation.result(context, [], { values: [] }, randomUUID())).rejects.toThrow(NotFoundException);
@@ -115,7 +128,7 @@ describe('助手真实业务卡片及可读分类', () => {
     // 动作步骤来自真实来源记录，内部名称映射不依赖模型目录泄露。
     const record = { id: randomUUID(), title: '恢复笔记' };
     database.mcpAction!.findFirst!.mockResolvedValue({ status: 'succeeded', result: {}, steps: [{ name: 'restore_notes', input: { id: record.id } }] });
-    expect((await presentation.result(context, [], { values: [{ note: record }] }, randomUUID())).entityRefs).toEqual([{ module: 'notes', id: record.id, label: '恢复笔记', record }]);
+    expect((await presentation.result(context, [], { values: [{ note: record }] }, randomUUID())).entityRefs).toEqual([{ module: 'notes', id: record.id, label: '恢复笔记', record, operation: 'restore' }]);
   });
 
   it('未下行快照按固定module及owner读取，记录只有UUID时使用普通名称', async () => {

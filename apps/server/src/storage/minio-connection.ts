@@ -32,7 +32,7 @@ export class MinioConnection implements OnModuleDestroy {
 
   /// 确保内部固定桶存在，移除匿名策略后才返回可用连接。
   async forBucket(bucket: string): Promise<S3Client> {
-    if (!['omni-butler-images', 'omni-butler-note-audio'].includes(bucket)) throw new Error('不支持的私有存储桶');
+    if (!['omni-butler-images', 'omni-butler-note-audio', 'omni-butler-assistant-attachments'].includes(bucket)) throw new Error('不支持的私有存储桶');
     if (this.stopping) throw new Error('对象存储连接正在关闭');
     if (!this.ready) this.ready = this.initialize().catch((error: unknown) => { this.ready = undefined; throw error; });
     // 同一连接由两个领域共享，无需为每个文件读取凭证。

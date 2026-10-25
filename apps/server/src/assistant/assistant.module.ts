@@ -9,17 +9,25 @@ import { AssistantRunner } from './assistant-runner.service';
 import { AssistantPresentation } from './assistant-presentation.service';
 import { AssistantContextService } from './assistant-context.service';
 import { AssistantBatchService } from './assistant-batch.service';
+import { AssistantModelExecutor } from './assistant-model-executor';
+import { AssistantAttachmentsModule } from './attachments/assistant-attachments.module';
+import { BusinessModule } from '../business/business.module';
+import { AssistantEntityEditor } from './assistant-entity-editor.service';
+import { AssistantMessageNotes } from './assistant-message-notes.service';
 
 /// 助手私有状态与业务工具共享，不引入第二套领域CRUD。
 @Module({
-  imports: [AuthModule, AiModule, McpModule, PrismaModule],
+  imports: [AuthModule, AiModule, McpModule, PrismaModule, AssistantAttachmentsModule, BusinessModule],
   controllers: [AssistantController],
   providers: [
     AssistantStore,
     AssistantRunner,
     AssistantPresentation,
+    AssistantEntityEditor,
+    AssistantMessageNotes,
     AssistantContextService,
     AssistantBatchService,
+    AssistantModelExecutor,
   ],
   exports: [AssistantStore],
 })

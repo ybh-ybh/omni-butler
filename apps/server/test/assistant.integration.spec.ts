@@ -7,20 +7,26 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
 import { AssistantModule } from '../src/assistant/assistant.module';
+import { AssistantAttachmentsService } from '../src/assistant/attachments/assistant-attachments.service';
 import { AssistantStore } from '../src/assistant/assistant-store.service';
 import { AssistantRunner } from '../src/assistant/assistant-runner.service';
 import { AssistantBatchService } from '../src/assistant/assistant-batch.service';
 import { assistantJson } from '../src/assistant/assistant.types';
 import { AssistantModelProvider } from '../src/ai/assistant-model.provider';
 import { AiService } from '../src/ai/ai.service';
+import type { AiKeyStore } from '../src/ai/ai-key-store';
+import type { AiProvider } from '../src/ai/ai-provider';
+import { assistantCompatibility } from '../src/ai/assistant-model-policy';
 import type {
   AssistantModelResult,
   AssistantModelRequest,
   AssistantProfileSnapshot,
 } from '../src/ai/assistant-model.types';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { Prisma } from '../src/generated/prisma/client';
 import { TodoRecurrenceService } from '../src/business/todo-recurrence.service';
 import type { AuthUser } from '../src/auth/auth.types';
+import { ActionExecutor } from '../src/mcp/action-executor';
 
 /// 只接受显式隔离空库，不读取真实DATABASE_URL。
 const databaseUrl = process.env.OMNI_ASSISTANT_TEST_DATABASE_URL;
@@ -177,6 +183,8 @@ integration('应用内助手 / 真实 PostgreSQL 和 LangGraph checkpoint', () =
     const config = {
       DATABASE_URL: databaseUrl,
       SYNC_SECRET: 'isolated-assistant-test',
+      MINIO_ENDPOINT: process.env.OMNI_ASSISTANT_TEST_MINIO_ENDPOINT,
+      MINIO_CREDENTIALS_FILE: process.env.OMNI_ASSISTANT_TEST_MINIO_CREDENTIALS_FILE,
       JWT_PRIVATE_KEY_BASE64: Buffer.from(keys.privateKey).toString('base64'),
       JWT_PUBLIC_KEY_BASE64: Buffer.from(keys.publicKey).toString('base64'),
       JWT_KEY_ID: 'assistant-test',
@@ -202,6 +210,7 @@ integration('应用内助手 / 真实 PostgreSQL 和 LangGraph checkpoint', () =
           provider: profile.provider,
           baseUrl: profile.baseUrl,
           model: profile.model,
+          thinkingEnabled: profile.thinkingEnabled,
           encryptedApiKey: profile.encryptedApiKey,
         };
       },
@@ -285,6 +294,80 @@ integration('应用内助手 / 真实 PostgreSQL 和 LangGraph checkpoint', () =
     await database?.end();
   });
 
+  it('真实迁移默认关闭多模态，保存开关持久生效且旧探测结果不能覆盖', async () => {
+    // 此用例使用正式配置服务，仅替换不会调用的密钥和供应商依赖。
+    const ai = new AiService(prisma, {} as AiKeyStore, {} as AiProvider);
+    // 既有创建语句省略开关，由真实迁移中的数据库默认值决定。
+    const profile = await prisma.aiProfile.findUniqueOrThrow({ where: { id: profileId } });
+    expect(profile.multimodal).toBe(false);
+    // 伪造此前通过的图片探测事实，不能自动给关闭的配置放行。
+    await prisma.aiProfile.update({ where: { id: profileId }, data: { assistantCapabilities: { revision: profile.revision, compatibility: { ...assistantCompatibility(), imageInput: 'supported' } } } });
+    expect((await ai.captureAssistantProfile(actor.sub, profileId)).compatibility?.imageInput).toBe('unsupported');
+    // 保存请求沿用正式设置修订以及当前同归属配置。
+    let settings = await ai.settings(actor.sub);
+    try {
+      // 每次保存都重新读取持久值和助手能力，不能只检查请求体。
+      for (const multimodal of [true, false]) {
+        settings = await ai.saveProfile(actor.sub, { revision: settings.revision, name: profile.name, provider: profile.provider, model: profile.model, baseUrl: profile.baseUrl, multimodal }, profileId);
+        expect(settings.profiles.find((entry) => entry.id === profileId)?.multimodal).toBe(multimodal);
+        expect((await prisma.aiProfile.findUniqueOrThrow({ where: { id: profileId } })).multimodal).toBe(multimodal);
+        expect((await ai.captureAssistantProfile(actor.sub, profileId)).compatibility?.imageInput).toBe(multimodal ? 'supported' : 'unsupported');
+        if (multimodal) await expect(ai.assertAssistantProfileAvailable(actor.sub, { profileId, profileRevision: profile.revision, provider: profile.provider, model: profile.model, baseUrl: profile.baseUrl, encryptedApiKey: profile.encryptedApiKey! }, true)).resolves.toBeUndefined();
+        else await expect(ai.assertAssistantProfileAvailable(actor.sub, { profileId, profileRevision: profile.revision, provider: profile.provider, model: profile.model, baseUrl: profile.baseUrl, encryptedApiKey: profile.encryptedApiKey! }, true)).rejects.toMatchObject({ code: 'AI_IMAGE_INPUT_UNSUPPORTED' });
+        // 助手设置接口同样从数据库开关投影，不受旧回执影响。
+        const assistant = await store.settings(actor) as { profiles: Array<{ id: string; multimodal: boolean; capabilities: { imageInput: string } }> };
+        expect(assistant.profiles.find((entry) => entry.id === profileId)).toMatchObject({ multimodal, capabilities: { imageInput: multimodal ? 'supported' : 'unsupported' } });
+      }
+      await expect(ai.saveProfile(other.sub, { revision: 0, name: profile.name, provider: profile.provider, model: profile.model, baseUrl: profile.baseUrl, multimodal: true }, profileId)).rejects.toMatchObject({ response: { code: 'AI_PROFILE_NOT_FOUND' } });
+    } finally {
+      await prisma.aiProfile.update({ where: { id: profileId }, data: { multimodal: false, assistantCapabilities: Prisma.JsonNull } });
+    }
+  });
+
+  it.each([false, true])('旧客户端vision测试参数不会改变多模态%s或执行第三轮图像探测', async (multimodal) => {
+    await prisma.aiProfile.update({ where: { id: profileId }, data: { multimodal } });
+    model.testCapability.mockReset();
+    model.testCapability.mockResolvedValue({ ok: true, message: '文本工具测试成功', capabilities: { version: 1, streaming: true, functionCalling: true, imageInput: 'supported' } });
+    try {
+      // 真实JWT/HTTP入口兼容旧字段，但只向文本工具测试传两个参数。
+      const response = await fetch(`${baseUrl}/test`, { method: 'POST', headers: { authorization: `Bearer ${await token(actor)}`, 'content-type': 'application/json' }, body: JSON.stringify({ profileId, vision: true }) });
+      expect(response.status).toBe(201);
+      expect(model.testCapability).toHaveBeenCalledTimes(1);
+      expect(model.testCapability.mock.calls[0]).toHaveLength(2);
+      expect((await prisma.aiProfile.findUniqueOrThrow({ where: { id: profileId } })).multimodal).toBe(multimodal);
+      expect((await prisma.aiProfile.findUniqueOrThrow({ where: { id: profileId } })).assistantCapabilities).toBeNull();
+    } finally {
+      await prisma.aiProfile.update({ where: { id: profileId }, data: { multimodal: false } });
+      model.testCapability.mockReset();
+    }
+  });
+
+  it('真实迁移默认关闭思考，新配置保存及任务快照按明确开关取值', async () => {
+    // 正式配置领域服务不启动队列或请求模型。
+    const ai = new AiService(prisma, {} as AiKeyStore, {} as AiProvider);
+    // 初始SQL创建配置时省略字段，实际数据库默认值必须是false。
+    const profile = await prisma.aiProfile.findUniqueOrThrow({ where: { id: profileId } });
+    expect(profile.thinkingEnabled).toBe(false);
+    // 独立任务表也固定旧任务的关闭默认值，不跟随配置变化。
+    const columns = await database.query("SELECT column_default, is_nullable FROM information_schema.columns WHERE table_name='note_polish_jobs' AND column_name='thinking_enabled'");
+    expect(columns.rows).toEqual([{ column_default: 'false', is_nullable: 'NO' }]);
+    // 模型配置与助手运行快照都必须保存真实的用户选择。
+    let settings = await ai.settings(actor.sub);
+    try {
+      for (const thinkingEnabled of [true, false]) {
+        settings = await ai.saveProfile(actor.sub, { revision: settings.revision, name: profile.name, provider: profile.provider, baseUrl: profile.baseUrl, model: profile.model, thinkingEnabled }, profileId);
+        expect(settings.profiles.find((item) => item.id === profileId)?.thinkingEnabled).toBe(thinkingEnabled);
+        expect((await ai.captureAssistantProfile(actor.sub, profileId)).thinkingEnabled).toBe(thinkingEnabled);
+        // 创建后不执行worker，以确认持久任务已经固定该模式且不会计费。
+        const task = await send('验证思考快照');
+        expect((await prisma.assistantRun.findUniqueOrThrow({ where: { id: task.run.id } })).profileSnapshot).toMatchObject({ thinkingEnabled });
+        await store.stop(actor, task.run.id);
+      }
+    } finally {
+      await prisma.aiProfile.update({ where: { id: profileId }, data: { thinkingEnabled: false } });
+    }
+  });
+
   beforeEach(() => {
     model.complete.mockReset();
   });
@@ -310,6 +393,403 @@ integration('应用内助手 / 真实 PostgreSQL 和 LangGraph checkpoint', () =
     };
     return { conversation, input, run };
   };
+
+  /// 大步骤和中文正文直接写入独占测试库，避免把写工具限制混入列表回归。
+  const createTodoQueryFixture = async (): Promise<{
+    query: string;
+    heavyId: string;
+    expectedIds: string[];
+    foreignId: string;
+  }> => {
+    // 唯一前缀隔离同一套集成测试中的其他待办。
+    const query = `待办查询-${randomUUID()}`;
+    // 长中文标题按实际 UTF-8 字节触发摘要分页上限。
+    const rows = Array.from({ length: 80 }, (_, index) => ({
+      id: randomUUID(),
+      userId: actor.sub,
+      title: `${query}-${index}-${'紧急事项'.repeat(50)}`.slice(0, 200),
+      taskType: index === 0 ? 'progress' : 'normal',
+      description: index === 0 ? '原始详情'.repeat(25000) : null,
+      scheduledDate: new Date('2026-10-24T00:00:00Z'),
+      priorityQuadrant: 3,
+      sortOrder: index,
+      isCompleted: false,
+    }));
+    await prisma.todoItem.createMany({ data: rows });
+    // 排序靠前的其他象限、已完成项及他人记录都不得挤占筛选后的首屏。
+    const foreignId = randomUUID();
+    await prisma.todoItem.createMany({
+      data: [
+        ...[0, 1, 2].map((priorityQuadrant) => ({
+          id: randomUUID(),
+          userId: actor.sub,
+          title: `${query}-其他象限${priorityQuadrant}`,
+          scheduledDate: new Date('2026-10-01T00:00:00Z'),
+          priorityQuadrant,
+        })),
+        {
+          id: randomUUID(),
+          userId: actor.sub,
+          title: `${query}-已完成`,
+          scheduledDate: new Date('2026-10-01T00:00:00Z'),
+          priorityQuadrant: 3,
+          isCompleted: true,
+        },
+        {
+          id: foreignId,
+          userId: other.sub,
+          title: `${query}-其他用户`,
+          scheduledDate: new Date('2026-10-01T00:00:00Z'),
+          priorityQuadrant: 3,
+        },
+      ],
+    });
+    await prisma.todoProgressStep.createMany({
+      data: Array.from({ length: 1000 }, (_, index) => ({
+        id: randomUUID(),
+        userId: actor.sub,
+        todoId: rows[0]!.id,
+        name: `步骤${index}-${'待办执行说明'.repeat(20)}`.slice(0, 200),
+        sortOrder: index,
+        isCompleted: index < 300,
+      })),
+    });
+    return {
+      query,
+      heavyId: rows[0]!.id,
+      expectedIds: rows.map((row) => row.id),
+      foreignId,
+    };
+  };
+
+  it('千步骤待办经过真实助手入口保持16KiB分页、象限筛选及MCP完整输出兼容', async () => {
+    // 业务读取和归属校验使用真实执行器，不替换数据库查询。
+    const actions = module.get(ActionExecutor);
+    // 相同数据同时覆盖大记录、筛选前分页及外部协议兼容。
+    const fixture = await createTodoQueryFixture();
+    // 助手读取身份来自已签发设备，与模型参数严格分开。
+    const context = {
+      source: 'assistant' as const,
+      taskId: randomUUID(),
+      runId: randomUUID(),
+      actor,
+      timeZone: 'Asia/Shanghai',
+    };
+    // 显式结构仅用于验证 JSON 投影与下一页事实。
+    type Page = {
+      items: Array<{
+        id: string;
+        title: string;
+        priorityQuadrant: number;
+        progress: { total: number; completed: number };
+        description?: string;
+        progressSteps?: unknown[];
+        updatedAt?: string;
+      }>;
+      hasMore: boolean;
+      nextOffset: number | null;
+      returnedCount: number;
+      stepsSummarized: boolean;
+      truncated: boolean;
+    };
+    // 请求大页仍必须根据实际交付数量前进，不越过被预算裁掉的记录。
+    const input = {
+      query: fixture.query,
+      completed: false,
+      priorityQuadrant: 3,
+      limit: 200,
+      offset: 0,
+    };
+    // 完整遍历检查实际 SQL 筛选后不会漏项、重复或泄露他人记录。
+    const ids: string[] = [];
+    // 游标仅从上一页实际交付结果推进。
+    let offset = 0;
+    // 保留硬边界，分页错误不能让测试无限循环。
+    let pages = 0;
+    do {
+      // 每一页都重新通过真实会话授权，不绕过 ActionExecutor。
+      const page = (await actions.read(context, 'list_todos', {
+        ...input,
+        offset,
+      })) as unknown as Page;
+      expect(Buffer.byteLength(JSON.stringify(page), 'utf8')).toBeLessThanOrEqual(
+        16 * 1024,
+      );
+      expect(page.stepsSummarized).toBe(true);
+      expect(page.returnedCount).toBe(page.items.length);
+      expect(page.items.length).toBeGreaterThan(0);
+      expect(page.items.every((item) => item.priorityQuadrant === 3)).toBe(true);
+      expect(
+        page.items.every(
+          (item) =>
+            item.description === undefined &&
+            item.progressSteps === undefined &&
+            item.updatedAt === undefined,
+        ),
+      ).toBe(true);
+      if (pages === 0) {
+        expect(page.truncated).toBe(true);
+        expect(page.items[0]).toMatchObject({
+          id: fixture.heavyId,
+          progress: { total: 1000, completed: 300 },
+        });
+      }
+      ids.push(...page.items.map((item) => item.id));
+      pages++;
+      expect(pages).toBeLessThan(10);
+      expect(page.nextOffset).toBe(
+        page.hasMore ? offset + page.items.length : null,
+      );
+      if (!page.hasMore) break;
+      offset = page.nextOffset!;
+    } while (pages < 10);
+    expect(pages).toBeGreaterThan(1);
+    expect(ids).toEqual(fixture.expectedIds);
+    expect(new Set(ids).size).toBe(80);
+    expect(ids).not.toContain(fixture.foreignId);
+    // 换成另一真实设备身份后只可读取其自己的同名资料。
+    const foreign = (await actions.read(
+      { ...context, actor: other },
+      'list_todos',
+      input,
+    )) as unknown as Page;
+    expect(foreign.items.map((item) => item.id)).toEqual([fixture.foreignId]);
+    // 外部连接沿用完整详情，新增过滤参数不会改变旧结果字段。
+    const connection = await prisma.mcpConnection.create({
+      data: {
+        id: randomUUID(),
+        userId: actor.sub,
+        name: '隔离待办协议兼容连接',
+        tokenHash: randomUUID().replaceAll('-', '').padEnd(64, '0'),
+        sessionId: actor.sid,
+        readModules: ['todos'],
+        writeModules: [],
+        timeZone: 'Asia/Shanghai',
+      },
+    });
+    // 不带新增参数的旧请求仍返回原始正文和全部步骤。
+    const legacy = (await actions.read(connection.id, 'list_todos', {
+      query: fixture.query,
+      completed: false,
+      limit: 200,
+    })) as unknown as {
+      items: Array<{ id: string; description: string; progressSteps: unknown[] }>;
+    };
+    expect(legacy.items).toHaveLength(83);
+    expect(legacy.items.find((item) => item.id === fixture.heavyId)).toMatchObject({
+      description: '原始详情'.repeat(25000),
+      progressSteps: expect.any(Array),
+    });
+    expect(
+      legacy.items.find((item) => item.id === fixture.heavyId)?.progressSteps,
+    ).toHaveLength(1000);
+    expect(JSON.stringify(legacy).length).toBeGreaterThan(80000);
+    // 象限零值必须进入数据库条件，不能误当成省略参数。
+    const quadrantZero = (await actions.read(context, 'list_todos', {
+      query: fixture.query,
+      priorityQuadrant: 0,
+      limit: 1,
+    })) as unknown as Page;
+    expect(quadrantZero.items).toHaveLength(1);
+    expect(quadrantZero.items[0]!.priorityQuadrant).toBe(0);
+    await expect(
+      actions.read(context, 'list_todos', { priorityQuadrant: 4 }),
+    ).rejects.toThrow();
+  }, 30000);
+
+  it('真实查询循环在8次只读上限后回答已读范围，保留分页事实且不产生业务写入', async () => {
+    // 大结果真实经过业务读取，模拟供应商只负责复现重复缩页的决策序列。
+    const fixture = await createTodoQueryFixture();
+    // 记录实际进入供应商的快照，避免后续 state 修改影响证据。
+    const requests: Array<{
+      toolChoice: AssistantModelRequest['toolChoice'];
+      input: Record<string, unknown>[];
+    }> = [];
+    // 使用截图中的递减页大小和反复第一页模式。
+    const limits = [200, 50, 20, 5, 5, 5, 5, 5];
+    // 后半段真实读取后续范围，使持久状态包含可核对的 nextOffset。
+    const offsets = [0, 0, 0, 0, 5, 10, 15, 20];
+    // 仅模型网络模拟，业务执行、任务租约和 checkpoint 都使用实际实现。
+    model.complete.mockImplementation(async (_user, _profile, request) => {
+      // 序号在加入快照前固定，避免复用变动的调用身份。
+      const index = requests.length;
+      requests.push({
+        toolChoice: request.toolChoice,
+        input: structuredClone(request.input),
+      });
+      if (index >= 8) {
+        expect(request.toolChoice).toBe('none');
+        expect(JSON.stringify(request.input)).toContain(fixture.heavyId);
+        await request.onDelta?.('根据已读取范围，存在重要紧急待办。');
+        return reply([], '根据已读取范围，存在重要紧急待办。');
+      }
+      // 供应商完整 function_call 项与 call_id 成对回传，避免测试隐藏协议错误。
+      const call = {
+        id: randomUUID(),
+        callId: randomUUID(),
+        name: 'list_todos',
+        arguments: {
+          query: fixture.query,
+          priorityQuadrant: 3,
+          completed: false,
+          limit: limits[index],
+          offset: offsets[index],
+        },
+      };
+      return {
+        ...reply(),
+        text: '',
+        functionCalls: [call],
+        output: [
+          {
+            type: 'function_call',
+            id: call.id,
+            call_id: call.callId,
+            name: call.name,
+            arguments: JSON.stringify(call.arguments),
+          },
+        ],
+      };
+    });
+    // 前后业务事实完全相同，查询恢复不能偷偷修改记录或步骤。
+    const before = {
+      todos: await prisma.todoItem.count(),
+      steps: await prisma.todoProgressStep.count(),
+      quotes: await prisma.quote.count(),
+      memories: await prisma.assistantMemory.count(),
+    };
+    // 任务只要求查询，不能借预算收尾进入写计划。
+    const { conversation, run } = await send('帮我看一下重要紧急的任务有哪些');
+    await runner.tick();
+    expect(await store.run(actor, run.id)).toMatchObject({ status: 'succeeded' });
+    expect(model.complete).toHaveBeenCalledTimes(9);
+    expect(requests.at(-1)?.toolChoice).toBe('none');
+    // 数据库状态保留八个已读范围，压缩后的模型资料仍可知道实际查询进度。
+    const saved = await prisma.assistantRun.findUniqueOrThrow({
+      where: { id: run.id },
+    });
+    // 这里只断言对外行为所依赖的持久事实，不复制生产查询记录生成逻辑。
+    const state = saved.state as unknown as {
+      toolCount: number;
+      readLimit: string;
+      readProgress: Array<{
+        filters: { query: string; priorityQuadrant: number; completed: boolean };
+        requested: { offset: number; limit: number };
+        returnedCount: number;
+        nextOffset: number | null;
+        items: Array<{ id: string }>;
+        itemsOmitted?: boolean;
+      }>;
+      executionSteps: Array<{ kind: string; status: string; detail?: string }>;
+    };
+    expect(state.toolCount).toBe(8);
+    expect(state.readLimit).toBe('ASSISTANT_TOOL_LIMIT');
+    expect(state.readProgress).toHaveLength(8);
+    expect(state.readProgress[7]).toMatchObject({
+      filters: { query: fixture.query, priorityQuadrant: 3, completed: false },
+      requested: { offset: 20, limit: 5 },
+      returnedCount: 5,
+      nextOffset: 25,
+    });
+    expect(
+      state.readProgress.some((page) =>
+        page.items.some((item) => item.id === fixture.heavyId),
+      ),
+    ).toBe(true);
+    expect(state.readProgress.some((page) => page.itemsOmitted)).toBe(true);
+    expect(
+      state.executionSteps.filter((step) => step.kind === 'tool'),
+    ).toHaveLength(8);
+    expect(
+      state.executionSteps
+        .filter((step) => step.kind === 'tool')
+        .every(
+          (step) =>
+            step.status === 'succeeded' &&
+            /^已读取\d+条，进度步骤已摘要(?:，仍有后续记录)?$/.test(
+              step.detail ?? '',
+            ),
+        ),
+    ).toBe(true);
+    // 回答明确已读覆盖，不再把预算用尽显示成业务冲突。
+    const messages = (await store.messages(actor, conversation.id)) as {
+      items: Array<{ role: string; content: string }>;
+    };
+    expect(
+      messages.items.find((message) => message.role === 'assistant')?.content,
+    ).toContain('已读取');
+    expect(JSON.stringify(messages)).not.toContain('数据已发生变化');
+    expect(await prisma.mcpAction.count({ where: { sourceId: run.taskId } })).toBe(
+      0,
+    );
+    expect({
+      todos: await prisma.todoItem.count(),
+      steps: await prisma.todoProgressStep.count(),
+      quotes: await prisma.quote.count(),
+      memories: await prisma.assistantMemory.count(),
+    }).toEqual(before);
+  }, 30000);
+
+  it('隐藏的六项待办草稿不会当作已交付回答，最终流与持久消息完整一致', async () => {
+    // 独立前缀避免受本套测试已有待办影响，日期仅是计划日期。
+    const query = `最终交付-${randomUUID()}`;
+    // 六条合成记录通过真实SQL查询，查询过程不登记业务动作。
+    const items = Array.from({ length: 6 }, (_value, index) => ({ id: randomUUID(), userId: actor.sub, title: `${query}-任务${index + 1}`, priorityQuadrant: 3, scheduledDate: new Date('2026-10-05T00:00:00Z'), dueAt: null, isCompleted: false }));
+    await prisma.todoItem.createMany({ data: items });
+    // 查询草稿与真正交付文本刻意不同，避免误拼接也能通过测试。
+    const draft = `内部草稿：\n${items.map((item) => item.title).join('\n')}`;
+    // 最终可见答案由模拟网络返回，真实模型表达效果需另行验收。
+    const answer = `找到 6 项重要且紧急的未完成待办：\n${items.map((item) => `- ${item.title}`).join('\n')}`;
+    // 记录三次真实调度请求，第一轮工具、第二轮草稿、第三轮最终流式回答。
+    const requests: AssistantModelRequest[] = [];
+    model.complete.mockImplementation(async (_user, _profile, request) => {
+      requests.push({ ...request, input: structuredClone(request.input) });
+      await request.onReasoning?.({ text: `公开思考第${requests.length}轮：核对任务并组织回答。` });
+      if (requests.length === 1) {
+        // 调用身份由供应商完整输出产生，工具结果仍走现有协议配对。
+        const call = { id: randomUUID(), callId: randomUUID(), name: 'list_todos', arguments: { query, priorityQuadrant: 3, completed: false } };
+        return { ...reply(), text: '', functionCalls: [call], output: [{ type: 'function_call', id: call.id, call_id: call.callId, name: call.name, arguments: JSON.stringify(call.arguments) }] };
+      }
+      if (requests.length === 2) {
+        expect(request.toolChoice).toBe('auto');
+        expect(request.onDelta).toBeUndefined();
+        for (const item of items) expect(JSON.stringify(request.input)).toContain(item.id);
+        return reply([], draft);
+      }
+      expect(requests).toHaveLength(3);
+      expect(request.toolChoice).toBe('none');
+      expect(request.instructions).toContain('当前任务查询阶段生成的模型正文尚未向用户展示');
+      expect(request.instructions).toContain('必须重新给出用户所问的具体结果');
+      expect(request.instructions).not.toContain('明确覆盖范围及推测');
+      expect(request.input).toContainEqual({ role: 'assistant', content: draft });
+      for (const part of [answer.slice(0, 15), answer.slice(15)]) await request.onDelta?.(part);
+      return reply([], answer);
+    });
+    // 新运行与消息固定身份，后台执行和事件落库都由生产实现完成。
+    const { conversation, run } = await send('帮我看一下重要紧急的任务有哪些');
+    await runner.tick();
+    expect(await store.run(actor, run.id)).toMatchObject({ status: 'succeeded' });
+    expect(model.complete).toHaveBeenCalledTimes(3);
+    // 终态只有一条助手回答，原始隐藏草稿仍可在付费回执中审计。
+    const messages = await prisma.assistantMessage.findMany({ where: { taskId: run.taskId, role: 'assistant' } });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.conversationId).toBe(conversation.id);
+    expect(messages[0]!.content).toBe(answer);
+    expect(messages[0]!.cards).toEqual([expect.objectContaining({ type: 'references', referencesTruncated: false, entityRefs: expect.any(Array) })]);
+    // SSE持久事件与数据库正文完全一致，不能把内部草稿算作已交付。
+    const events = await prisma.assistantEvent.findMany({ where: { runId: run.id, type: 'message.delta' }, orderBy: { seq: 'asc' } });
+    expect(events.map((event) => (event.data as { text: string }).text).join('')).toBe(answer);
+    expect(events.map((event) => JSON.stringify(event.data)).join('')).not.toContain('内部草稿');
+    expect(await prisma.assistantAttempt.findUnique({ where: { runId_ordinal: { runId: run.id, ordinal: 2 } } })).toMatchObject({ response: { text: draft } });
+    // 真正持久事件、历史消息和工具执行链都包含同一公开思考，而正文仍只有答案。
+    const history = await store.messages(actor, conversation.id) as { items: Array<{ role: string; content: string; executionSteps: unknown[] }> };
+    expect(JSON.stringify(history.items.find((item) => item.role === 'assistant')?.executionSteps)).toContain('公开思考第1轮');
+    expect(JSON.stringify(history.items.find((item) => item.role === 'assistant')?.executionSteps)).toContain('公开思考第3轮');
+    expect(JSON.stringify(await store.events(actor, run.id, 0))).toContain('公开思考第1轮');
+    expect(history.items.find((item) => item.role === 'assistant')?.content).toBe(answer);
+    expect(await prisma.mcpAction.count({ where: { sourceId: run.taskId } })).toBe(0);
+    expect(await prisma.todoItem.count({ where: { id: { in: items.map((item) => item.id) } } })).toBe(6);
+  }, 30000);
 
   it('迁移仅从合法旧状态回填稳定回答身份，已遗忘或损坏关联保持未知', async () => {
     // 回填用例运行在本套独占隔离空库，使用实际迁移中的 UPDATE。
@@ -1373,6 +1853,50 @@ integration('应用内助手 / 真实 PostgreSQL 和 LangGraph checkpoint', () =
       expect.arrayContaining([expect.objectContaining({ response: null })]),
     );
   });
+
+
+  (process.env.OMNI_ASSISTANT_TEST_MINIO_ENDPOINT ? it : it.skip)('真实文件经上传、解析、消息绑定及模型工具读取生成带来源回答', async () => {
+    // 仅这一个用例开启独立测试MinIO，不改变其余纯文本回归的配置。
+    const config = module.get(ConfigService);
+    config.set('ASSISTANT_ATTACHMENTS_ENABLED', true);
+    const attachments = module.get(AssistantAttachmentsService);
+    const conversation = await store.createConversation(actor, {}) as { id: string };
+    try {
+      const fileId = randomUUID();
+      const form = new FormData();
+      form.append('file', new Blob(['附件中记录：本周完成三项任务。']), 'weekly.txt');
+      const uploaded = await fetch(`${baseUrl}/conversations/${conversation.id}/attachments/${fileId}`, { method: 'PUT', headers: { Authorization: `Bearer ${await token(actor)}` }, body: form });
+      expect(uploaded.status).toBe(200);
+      await attachments.tick();
+      expect(await attachments.metadata(actor, fileId)).toMatchObject({ status: 'ready' });
+      const callId = randomUUID();
+      model.complete.mockImplementationOnce((_user, _profile, request) => {
+        expect(JSON.stringify(request.input)).toContain(fileId);
+        return Promise.resolve({ ...reply(), functionCalls: [{ id: callId, callId, name: 'read_attachment', arguments: { attachmentId: fileId } }], output: [{ type: 'function_call', call_id: callId, id: callId, name: 'read_attachment', arguments: JSON.stringify({ attachmentId: fileId }) }] });
+      }).mockImplementationOnce((_user, _profile, request) => {
+        expect(JSON.stringify(request.input)).toContain('本周完成三项任务');
+        return Promise.resolve(reply([], '文档资料已读'));
+      }).mockImplementationOnce(async (_user, _profile, request) => {
+        await request.onDelta?.('根据 weekly.txt 第1段，本周完成三项任务。');
+        return reply([], '根据 weekly.txt 第1段，本周完成三项任务。');
+      });
+      const sent = await fetch(`${baseUrl}/conversations/${conversation.id}/messages`, { method: 'POST', headers: { Authorization: `Bearer ${await token(actor)}`, 'content-type': 'application/json' }, body: JSON.stringify({ clientMessageId: randomUUID(), content: '概括附件', attachmentIds: [fileId] }) });
+      expect(sent.status).toBe(201);
+      const run = await sent.json() as { id: string };
+      await runner.tick();
+      expect(await store.run(actor, run.id)).toMatchObject({ status: 'succeeded', executionSteps: expect.arrayContaining([expect.objectContaining({ label: '读取文件', detail: 'weekly.txt' })]) });
+      expect(await store.messages(actor, conversation.id)).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ role: 'user', attachments: [expect.objectContaining({ id: fileId })] }), expect.objectContaining({ content: '根据 weekly.txt 第1段，本周完成三项任务。' })]) });
+      // 请求账本只保留文字/引用，无图片编码与真实凭据。
+      const ledger = await prisma.assistantAttemptRequest.findMany({ where: { attempt: { runId: run.id } } });
+      expect(ledger).toHaveLength(3);
+      expect(JSON.stringify(ledger)).not.toContain('encryptedApiKey');
+    } finally {
+      await store.removeConversation(actor, conversation.id);
+      await prisma.assistantAttachmentGc.updateMany({ where: { userId: actor.sub }, data: { availableAt: new Date(0) } });
+      await attachments.collect();
+      config.set('ASSISTANT_ATTACHMENTS_ENABLED', false);
+    }
+  }, 60000);
 
   it('完整灾备脚本保留业务和聊天，但关闭助手、旧设备及未执行授权并清空图指针', async () => {
     const { run } = await send('新增一条待恢复后重新确认的名言');

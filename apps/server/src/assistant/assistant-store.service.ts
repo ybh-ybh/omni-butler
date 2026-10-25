@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -26,8 +27,17 @@ import {
   assistantMemoryInput,
   assistantMessageInput,
   assistantSettingsInput,
+  type AssistantExecutionStep,
   type AssistantState,
 } from './assistant.types';
+import {
+  assistantExecutionSteps,
+  assistantLiveElapsedMs,
+} from './assistant-execution';
+
+import type { AttachmentMetadata } from './attachments/attachment.types';
+import { AssistantAttachmentsService } from './attachments/assistant-attachments.service';
+import { AssistantMessageNotes } from './assistant-message-notes.service';
 
 /// 会话、确认和记忆的权威存储，图checkpoint不授予写入权限。
 @Injectable()
@@ -37,6 +47,8 @@ export class AssistantStore {
     readonly prisma: PrismaService,
     private readonly ai: AiService,
     private readonly actions: ActionExecutor,
+    @Optional() private readonly attachments?: AssistantAttachmentsService,
+    @Optional() private readonly messageNotes?: AssistantMessageNotes,
   ) {}
 
   /// 任意入口都重验设备会话，避免缓存JWT越过撤权。
@@ -69,14 +81,21 @@ export class AssistantStore {
           provider: true,
           baseUrl: true,
           model: true,
+          multimodal: true,
+          thinkingEnabled: true,
           encryptedApiKey: true,
           revision: true,
+          assistantCapabilities: true,
         },
       });
       return {
         ...settings,
-        profiles: profiles.map(({ encryptedApiKey, ...profile }) => ({
+        profiles: profiles.map(({ encryptedApiKey, assistantCapabilities, ...profile }) => ({
           ...profile,
+          capabilities: {
+            ...(assistantCapabilities && typeof assistantCapabilities === 'object' && 'revision' in assistantCapabilities && assistantCapabilities.revision === profile.revision && 'compatibility' in assistantCapabilities && assistantCapabilities.compatibility && typeof assistantCapabilities.compatibility === 'object' ? assistantCapabilities.compatibility : {}),
+            imageInput: profile.multimodal === true ? 'supported' : 'unsupported',
+          },
           hasApiKey: !!encryptedApiKey,
           keyConfigured: !!encryptedApiKey,
         })),
@@ -238,6 +257,7 @@ export class AssistantStore {
         select: { id: true },
       });
       await this.cancelAll(transaction, actor.sub, id);
+      await this.attachments?.queueConversationDeletion(transaction, actor, id);
       await this.deleteCheckpoints(
         transaction,
         runs.map((run) => run.id),
@@ -320,7 +340,7 @@ export class AssistantStore {
       const oldestPersisted = [...page]
         .reverse()
         .find((message) => rows.some((row) => row.id === message.id));
-      // 只读取本页回答的计时列，不读取可清理状态或模型密钥。
+      // 只查询本页回答的计时和步骤状态，不读取模型密钥快照。
       const durations = await transaction.assistantRun.findMany({
         where: {
           userId: actor.sub,
@@ -332,18 +352,29 @@ export class AssistantStore {
           },
         },
         select: {
+          id: true,
+          status: true,
+          state: true,
+          updatedAt: true,
           answerMessageId: true,
           elapsedMs: true,
           leaseOwner: true,
           leaseUntil: true,
         },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       });
       // 每个持久运行只累加一次；同一任务的不同回答不会相互借用时长。
       const elapsedByMessage = new Map<string, number>();
       // 正文先落库的回答不展示临时零值或上一执行段的旧时长。
       const pendingMessages = new Set<string>();
+      // 重试复用回答身份时合并各运行摘要，运行前缀保证步骤不互相覆盖。
+      const stepsByMessage = new Map<string, AssistantExecutionStep[]>();
       for (const duration of durations) {
         if (duration.answerMessageId) {
+          stepsByMessage.set(duration.answerMessageId, [
+            ...(stepsByMessage.get(duration.answerMessageId) ?? []),
+            ...assistantExecutionSteps(duration),
+          ]);
           if (this.timingPending(duration))
             pendingMessages.add(duration.answerMessageId);
           elapsedByMessage.set(
@@ -353,9 +384,20 @@ export class AssistantStore {
           );
         }
       }
+      // 以本页有序引用读取元数据，不向客户端暴露对象键或解析正文。
+      const attachmentMap = new Map<string, unknown[]>();
+      if (this.attachments) for (const message of page) {
+        const ids = (message.cards as Array<{ type?: string; attachmentIds?: string[] }>).find((card) => card.type === 'userInput')?.attachmentIds ?? [];
+        if (ids.length) attachmentMap.set(message.id, await this.attachments.attachmentMetadata(transaction, actor, id, ids));
+      }
+      // 保存事实按整页批量读取，历史刷新不会再次创建笔记。
+      const savedNotes = await this.messageNotes?.savedForMessages(transaction, actor.sub, page.filter((message) => message.role === 'assistant').map((message) => message.id));
       return {
         items: page.reverse().map((message) => ({
           ...message,
+          ...(savedNotes?.has(message.id) ? { savedNote: savedNotes.get(message.id) } : {}),
+          executionSteps: stepsByMessage.get(message.id) ?? [],
+          attachments: attachmentMap.get(message.id) ?? [],
           elapsedMs:
             message.role === 'assistant' && !pendingMessages.has(message.id)
               ? (elapsedByMessage.get(message.id) ?? null)
@@ -534,6 +576,7 @@ export class AssistantStore {
   async send(actor: AuthUser, id: string, raw: unknown): Promise<unknown> {
     // 参数及选择身份先通过严格契约校验。
     const input = assistantMessageInput.parse(raw);
+    if (!input.content && input.attachmentIds.length) input.content = '请概括附件内容';
     if (input.timeZone) timeZoneInput(input.timeZone);
     return this.authorized(actor, async (transaction) => {
       await this.conversation(transaction, actor.sub, id);
@@ -543,6 +586,7 @@ export class AssistantStore {
         timeZone: input.timeZone ?? null,
         selection: input.selection ?? null,
         reference: input.reference ?? null,
+        attachmentIds: input.attachmentIds,
       };
       // 原消息重放优先返回任务当前真实运行。
       const existing = await transaction.assistantMessage.findUnique({
@@ -561,6 +605,7 @@ export class AssistantStore {
         if (
           existing.conversationId !== id ||
           existing.content !== input.content ||
+          JSON.stringify(recorded?.attachmentIds ?? []) !== JSON.stringify(input.attachmentIds) ||
           recorded?.timeZone !== metadata.timeZone ||
           (recorded?.selection as { id?: string; module?: string } | null)
             ?.id !== input.selection?.id ||
@@ -716,6 +761,18 @@ export class AssistantStore {
         actor.sub,
         settings.profileId,
       );
+      // 只接受本会话就绪附件；图像能力在任何模型出站前明确校验。
+      let attached: AttachmentMetadata[] = [];
+      if (input.attachmentIds.length) {
+        if (!this.attachments) throw new BadRequestException({ code: 'ATTACHMENT_UNAVAILABLE', message: '服务器尚未支持附件' });
+        try { attached = await this.attachments.attachmentMetadata(transaction, actor, id, input.attachmentIds); }
+        catch (error: unknown) {
+          if (error instanceof NotFoundException) throw new BadRequestException({ code: 'ATTACHMENT_UNAVAILABLE', message: '附件已过期或被删除，请移除后重新选择' });
+          throw error;
+        }
+        if (attached.some((file) => file.status !== 'ready')) throw new BadRequestException({ code: 'ATTACHMENT_NOT_READY', message: '附件尚未就绪，请等待解析或重新选择' });
+      }
+      if (attached.some((file) => file.requiresVision) && profile.compatibility?.imageInput !== 'supported') throw new BadRequestException({ code: 'AI_IMAGE_INPUT_UNSUPPORTED', message: '当前模型未开启多模态，请在 AI 设置中编辑模型配置并开启' });
       // 重复网络请求由消息身份重放，不会重新生成这些身份。
       const taskId = active?.id ?? randomUUID(),
         runId = randomUUID();
@@ -739,6 +796,7 @@ export class AssistantStore {
         messageId: randomUUID(),
         request,
         userMessageId,
+        attachmentIds: input.attachmentIds,
         originalRequest:
           previousState?.originalRequest ??
           previousState?.request ??
@@ -796,6 +854,7 @@ export class AssistantStore {
           cards: assistantJson([metadata]),
         },
       });
+      if (input.attachmentIds.length) await this.attachments!.bindMessage(transaction, actor, id, userMessageId, input.attachmentIds);
       await transaction.assistantConversation.update({
         where: { id },
         data: {
@@ -1036,6 +1095,9 @@ export class AssistantStore {
               messageId: randomUUID(),
               text: '',
             };
+      // 新运行独立计时和记录步骤，历史摘要仍由旧运行按回答身份聚合。
+      delete resumed.executionSteps;
+      delete resumed.segmentStartedAt;
       // 等待用户状态接管后仍等待，不能隐式启动模型。
       const status = ['waitingInput', 'waitingConfirmation'].includes(
         previous.status,
@@ -1168,11 +1230,14 @@ export class AssistantStore {
     id?: string,
     sourceMessageId?: string,
     preserveRunId?: string,
+    /// 工具观察与记忆修改在同一个owner事务提交。
+    onSaved?: (transaction: Prisma.TransactionClient, output: unknown) => Promise<void>,
   ): Promise<unknown> {
     // 显式过期时间不能被默认解释为永久删除。
     const input = assistantMemoryInput.parse(raw);
     assertAssistantMemoryContent(input.content);
-    return this.authorized(actor, async (transaction) => {
+    // 管理页和工具共用校验，工具另附同事务检查点。
+    const save = async (transaction: Prisma.TransactionClient): Promise<unknown> => {
       // 开关控制工具写入，管理页仍可人工编辑。
       const settings = await transaction.assistantSettings.findUnique({
         where: { userId: actor.sub },
@@ -1287,6 +1352,12 @@ export class AssistantStore {
         preserveRunId,
       );
       return memory;
+    };
+    return this.authorized(actor, async (transaction) => {
+      // 保存成功后的回调失败会连同记忆一起回滚。
+      const output = await save(transaction);
+      await onSaved?.(transaction, output);
+      return output;
     });
   }
 
@@ -1343,6 +1414,8 @@ export class AssistantStore {
     const task = await transaction.assistantTask.findUnique({
       where: { id: run.taskId },
     });
+    // 按同一真实动作只查询一次资格与期限，客户端不必推测运行更新时间。
+    const undoExpiresAt = await this.undoDeadline(transaction, run, task);
     return {
       id: run.id,
       taskId: run.taskId,
@@ -1350,9 +1423,12 @@ export class AssistantStore {
       status: run.status,
       answerMessageId: run.answerMessageId ?? null,
       elapsedMs: run.elapsedMs,
+      liveElapsedMs: assistantLiveElapsedMs(run),
+      executionSteps: assistantExecutionSteps(run),
       // 回答可能先于 finally 保存；租约释放前客户端仍应等待计时结算。
       timingPending: this.timingPending(run),
       errorCode: run.errorCode,
+      recovery: (run.state as unknown as AssistantState).recovery ?? null,
       errorMessage: run.errorMessage,
       plan:
         task?.runId === run.id &&
@@ -1360,7 +1436,8 @@ export class AssistantStore {
         !(run.state as Record<string, unknown>).memoryInvalidated
           ? (task.plan ?? null)
           : null,
-      canUndo: await this.canUndo(transaction, run, task),
+      canUndo: undoExpiresAt !== null,
+      ...(undoExpiresAt ? { undoExpiresAt: undoExpiresAt.toISOString() } : {}),
       requiresTakeover: viewerSessionId
         ? run.sessionId !== viewerSessionId
         : false,
@@ -1471,21 +1548,30 @@ export class AssistantStore {
     run: AssistantRun,
     task: AssistantTask | null,
   ): Promise<boolean> {
+    return (await this.undoDeadline(transaction, run, task)) !== null;
+  }
+
+  /// 撤销窗口仅来自实际成功动作，已失效资格不公开可操作期限。
+  private async undoDeadline(
+    transaction: Prisma.TransactionClient,
+    run: AssistantRun,
+    task: AssistantTask | null,
+  ): Promise<Date | null> {
     // 已创建补偿、已遗忘或没有实际回执的运行均不再提供按钮。
     const state = run.state as unknown as Partial<AssistantState>;
     if (!state.result || state.undoRunId || state.memoryInvalidated || !task)
-      return false;
+      return null;
     // 多批任务的最后一批即使只有单条，也不能伪装成整个任务可撤销。
     const result = state.result as Record<string, unknown>;
     if (
       (task.plan as Record<string, unknown> | null)?.kind === 'batch' ||
       Number(result.totalBatches ?? 0) > 1
     )
-      return false;
+      return null;
     // task当前动作只能在run仍是当前运行时作为兼容回退。
     const actionId =
       state.actionId ?? (task.runId === run.id ? task.actionId : null);
-    if (!actionId) return false;
+    if (!actionId) return null;
     // 查询始终限定来源、归属和稳定任务身份。
     const action = await transaction.mcpAction.findFirst({
       where: {
@@ -1496,8 +1582,10 @@ export class AssistantStore {
         status: 'succeeded',
       },
     });
-    if (!action?.result || Date.now() >= action.updatedAt.getTime() + 600000)
-      return false;
+    if (!action?.result) return null;
+    // 必须与提交撤销时使用相同的十分钟边界，等于期限即不可撤销。
+    const deadline = new Date(action.updatedAt.getTime() + 600000);
+    if (Date.now() >= deadline.getTime()) return null;
     // 真实步骤不能从公开卡片反向信任。
     const steps = action.steps as Array<{ name: string }>;
     return (
@@ -1505,7 +1593,7 @@ export class AssistantStore {
       this.actions.catalog.tools.some(
         (tool) => tool.name === steps[0]!.name && tool.undoCreate,
       )
-    );
+    ) ? deadline : null;
   }
 
   /// 开关关闭与删除会话共用持久取消，不依赖进程内Abort。
@@ -1655,6 +1743,9 @@ export class AssistantStore {
         planRequestId: null,
       },
     });
+    // 新请求账本同样可能包含旧记忆；保留摘要和安全失败事实，清除全部原文。
+    const attempts = await transaction.assistantAttempt.findMany({ where: { userId, ...(preserveRunId ? { runId: { not: preserveRunId } } : {}) }, select: { id: true } });
+    if (attempts.length) await transaction.assistantAttemptRequest.updateMany({ where: { attemptId: { in: attempts.map((attempt) => attempt.id) } }, data: { request: { invalidated: true }, nextRequest: Prisma.DbNull } });
     await transaction.assistantAttempt.updateMany({
       where: {
         userId,

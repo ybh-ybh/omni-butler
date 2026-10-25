@@ -390,7 +390,11 @@ export class ActionExecutor {
     // 运行时严格 Schema 再校验一次，不能只依靠模型遵守 Schema。
     const tool = this.tool(connection, name, false);
     // 编辑凭据必须来自同一次详情查询，不在生成凭据时再读最新事实。
-    const result = await tool.run(
+    const result = await (
+      connection.source === 'assistant' && tool.runForAssistant
+        ? tool.runForAssistant
+        : tool.run
+    )(
       connectionActor(connection),
       tool.schema.parse(this.defaultZone(connection, tool, value)),
     );
@@ -664,7 +668,10 @@ export class ActionExecutor {
             select: { id: true, name: true },
           });
           if (mcpHash(current) !== baseline.structureHash)
-            throw new ConflictException('进度结构已变化，请停止并核对变更');
+            throw new ConflictException({
+              code: 'TODO_STRUCTURE_CONFLICT',
+              message: '进度结构已变化，请停止并核对变更',
+            });
           input.baseline = current;
         }
         delete input.editToken;
@@ -699,6 +706,15 @@ export class ActionExecutor {
             (Number(offset[2]) * 60 + Number(offset[3]))
           : 0;
         delete input.recordedAt;
+      }
+      if (name === 'create_todo') {
+        // 默认日期与类型在准备阶段落入动作快照，跨日提交或重试不重算。
+        if (input.scheduledDate === undefined)
+          input.scheduledDate = localParts(now, timeZoneInput(input.timeZone)).day;
+        if (input.taskType === undefined) input.taskType = 'normal';
+        if (input.priorityQuadrant === undefined) input.priorityQuadrant = 2;
+        // 日期已固定，领域待办接口不接收工具层的时区元数据。
+        delete input.timeZone;
       }
       if (step.name === 'start_time_entry' && input.startedAt === undefined)
         input.startedAt = now.toISOString();

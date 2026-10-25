@@ -46,6 +46,8 @@ dependencies:
   collection: ^1.19.1
   ffi: ^2.2.0
   file_picker: ^12.2.0
+  # Windows 对话区域接收系统文件拖放，固定兼容当前 Flutter SDK 的版本。
+  desktop_drop: 0.8.4
   # 安卓笔记使用系统相机与相册，并恢复进程回收后的选择结果。
   image_picker: ^1.2.4
   crypto: ^3.0.7
@@ -63,6 +65,10 @@ dependencies:
   image: ^4.9.2
   # Windows 笔记使用真实富文本选区，持久正文仍为受限 Markdown。
   flutter_quill: 11.6.0
+  # 助手回答渲染完整 Markdown，表格和代码保留独立横向滚动。
+  flutter_markdown_plus: 1.0.11
+  # 复用当前已锁定版本，只在用户点击 Markdown 网页链接时打开。
+  url_launcher: 6.3.3
   # Windows 采集 PCM 流；Android 使用本应用原生前台录音服务。
   record: ^7.1.2
   # 两端播放私有目录中保存的原始录音。

@@ -69,8 +69,10 @@ Stream<AssistantEvent> decodeAssistantEvents(Stream<List<int>> bytes) async* {
   final List<String> data = <String>[];
   // SSE 断点身份。
   String? eventId;
+  // Dio 实际返回 Uint8List 流，先规范泛型，避免解码器被运行时协变检查拒绝。
+  final Stream<List<int>> normalized = bytes.cast<List<int>>();
   await for (final String line
-      in bytes.transform(utf8.decoder).transform(const LineSplitter())) {
+      in normalized.transform(utf8.decoder).transform(const LineSplitter())) {
     if (line.isEmpty) {
       if (data.isNotEmpty) {
         // 只有完整帧才进入持久事件处理。

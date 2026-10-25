@@ -51,3 +51,13 @@ add_executable(windows_floating_resize_anchor_test EXCLUDE_FROM_ALL
 )
 apply_standard_settings(windows_floating_resize_anchor_test)
 target_link_libraries(windows_floating_resize_anchor_test PRIVATE "user32.lib")
+
+# 拖放路径边界回归只由验证显式构建，不随应用发布。
+add_executable(windows_dropped_file_path_test EXCLUDE_FROM_ALL
+  "../../test/support/windows_dropped_file_path_test.cpp"
+)
+apply_standard_settings(windows_dropped_file_path_test)
+target_link_libraries(windows_dropped_file_path_test PRIVATE "shell32.lib")
+set_target_properties(windows_dropped_file_path_test PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
+)

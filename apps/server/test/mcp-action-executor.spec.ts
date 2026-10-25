@@ -11,6 +11,7 @@ import { TimeEntriesService } from '../src/business/time-entries.service';
 import { TodosService } from '../src/business/todos.service';
 import { ActionExecutor } from '../src/mcp/action-executor';
 import type { AssistantActionContext } from '../src/mcp/action-context';
+import type { Prisma } from '../src/generated/prisma/client';
 import { McpCatalog } from '../src/mcp/mcp-catalog';
 import { McpEditTokenService } from '../src/mcp/mcp-edit-token.service';
 import { PrismaService } from '../src/prisma/prisma.service';
@@ -73,6 +74,7 @@ describe('共享动作来源身份与助手函数目录', () => {
       tools.find((tool) => tool.name === 'get_review_context'),
     ).toBeDefined();
     expect(tools.find((tool) => tool.name === 'restore_record')).toBeDefined();
+    expect(tools.find((tool) => tool.name === 'create_todo')?.inputSchema.required).toEqual(['title']);
     expect(
       tools.some((tool) =>
         [
@@ -117,6 +119,76 @@ describe('共享动作来源身份与助手函数目录', () => {
       ]),
     ).rejects.toThrow('设备会话已失效');
     expect(store.mcpConnection.findUnique).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Asia/Shanghai', '2026-10-25'],
+    ['America/Los_Angeles', '2026-10-24'],
+  ])('仅名称新增按业务时区%s固定默认值，跨日重放仍使用%s', async (timeZone, day) => {
+    // 直接覆盖真实输入冻结阶段，不模拟工具Schema或默认值实现。
+    const scope = { ...(await executor.scope(context)), timeZone };
+    // 新增无需数据库读取，错误访问事务将直接使测试失败。
+    const transaction = {} as Prisma.TransactionClient;
+    // 同一时刻在上海已是次日，在洛杉矶仍是当天。
+    const prepared = await executor['fixedSteps'](transaction, scope, [
+      { name: 'create_todo', input: { title: '完成个人网站开发' } },
+    ], new Date('2026-10-24T18:00:00Z'));
+    expect(prepared).toEqual([{ name: 'create_todo', input: {
+      title: '完成个人网站开发', scheduledDate: day, taskType: 'normal', priorityQuadrant: 2,
+    } }]);
+    // 固定后的动作即使跨日再次进入处理也不能被新默认覆盖。
+    expect(await executor['fixedSteps'](transaction, scope, prepared, new Date('2026-10-27T18:00:00Z'))).toEqual(prepared);
+  });
+
+  it('MCP未配置时区时不猜设备日期，允许显式时区或日期', async () => {
+    // 保留已有MCP时区边界，无配置不能静默使用UTC或宿主本地时区。
+    const scope = { ...(await executor.scope(context)), timeZone: null };
+    // 冻结默认值不需访问数据库。
+    const transaction = {} as Prisma.TransactionClient;
+    // 上海次日与UTC当日的边界时刻。
+    const now = new Date('2026-10-24T18:00:00Z');
+    await expect(executor['fixedSteps'](transaction, scope, [
+      { name: 'create_todo', input: { title: '网站' } },
+    ], now)).rejects.toThrow('需要有效业务时区');
+    expect(await executor['fixedSteps'](transaction, scope, [
+      { name: 'create_todo', input: { title: '网站', timeZone: 'Asia/Shanghai' } },
+    ], now)).toEqual([{ name: 'create_todo', input: {
+      title: '网站', scheduledDate: '2026-10-25', taskType: 'normal', priorityQuadrant: 2,
+    } }]);
+    expect(await executor['fixedSteps'](transaction, scope, [
+      { name: 'create_todo', input: { title: '网站', scheduledDate: '2026-11-01' } },
+    ], now)).toEqual([{ name: 'create_todo', input: {
+      title: '网站', scheduledDate: '2026-11-01', taskType: 'normal', priorityQuadrant: 2,
+    } }]);
+  });
+
+  it('明确日期、进度类型及象限0优先，更新不补新增默认值', async () => {
+    // 合法助手范围使用任务固定时区。
+    const scope = await executor.scope(context);
+    // 固定输入无需数据库查询。
+    const transaction = {} as Prisma.TransactionClient;
+    // 用户明确指定的合法值不能被缺省逻辑覆盖。
+    const input = { title: '阅读', scheduledDate: '2026-11-01', taskType: 'progress', priorityQuadrant: 0, steps: [{ name: '第一章' }] };
+    // 编辑只包含明确修改项。
+    const update = { name: 'update_todo', input: { id: randomUUID(), title: '新标题' } };
+    expect(await executor['fixedSteps'](transaction, scope, [
+      { name: 'create_todo', input }, update,
+    ], new Date('2026-10-24T18:00:00Z'))).toEqual([
+      { name: 'create_todo', input },
+      { ...update, input: { ...update.input, timeZone: context.timeZone } },
+    ]);
+  });
+
+  it.each([
+    {}, { title: '' }, { title: '   ' }, { title: '任务', scheduledDate: null },
+    { title: '任务', scheduledDate: '不确定' }, { title: '任务', taskType: null },
+    { title: '任务', priorityQuadrant: 4 }, { title: '任务', owner: '伪造归属' },
+  ])('默认规则不掩盖缺失名称、非法参数或越权字段：%j', async (input) => {
+    // 严格校验在服务端补默认值之前运行。
+    const scope = await executor.scope(context);
+    await expect(executor['fixedSteps']({} as Prisma.TransactionClient, scope, [
+      { name: 'create_todo', input },
+    ], new Date('2026-10-24T18:00:00Z'))).rejects.toThrow();
   });
 
   it('助手即使有设备身份也不能跳过服务端提交门禁', async () => {

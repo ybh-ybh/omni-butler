@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_entity_details.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/features/assistant/data/assistant_models.dart';
+import 'package:omni_butler/features/assistant/data/assistant_repository.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_result_card.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 助手卡片采用业务语义标签，不直接显示协议字段。
@@ -292,15 +294,31 @@ class AssistantMessageCard extends StatelessWidget {
   /// 选择对象通过明确的新消息继续任务。
   final void Function(String content, Map<String, dynamic> selection) onChoice;
 
-  /// 编辑只把受控引用交给输入框，不直接执行修改。
-  final ValueChanged<Map<String, dynamic>>? onEditReference;
+  /// 无对象选项时以普通文字消息补充信息，不伪造对象身份。
+  final ValueChanged<String>? onClarification;
+
+  /// 结果编辑固定来源仓储，普通历史查看可不提供。
+  final AssistantRepository? repository;
+
+  /// 写前沿用页面同步检查点，避免未上传数据覆盖服务器快照。
+  final Future<void> Function()? beforeEdit;
+
+  /// 仅对应回答的结果卡可以承载明确任务的撤销。
+  final VoidCallback? onUndo;
+
+  /// 实际业务动作的撤销到期事实。
+  final String? undoExpiresAt;
 
   /// 创建只执行受控行为的卡片。
   const AssistantMessageCard({
     required this.card,
     required this.enabled,
     required this.onChoice,
-    this.onEditReference,
+    this.onClarification,
+    this.repository,
+    this.beforeEdit,
+    this.onUndo,
+    this.undoExpiresAt,
     super.key,
   });
 
@@ -329,14 +347,42 @@ class AssistantMessageCard extends StatelessWidget {
     }.contains(type)) {
       return const SizedBox.shrink();
     }
+    if (type == 'result') {
+      return AssistantResultCard(
+        card: card,
+        enabled: enabled,
+        repository: repository,
+        beforeEdit: beforeEdit,
+        onUndo: onUndo,
+        undoExpiresAt: undoExpiresAt,
+      );
+    }
     // 重名候选的真实对象。
     final List<Map<String, dynamic>> choices = assistantItems(
       card['choices'] ?? card['options'],
     );
+    // ask_user 允许开放式提问；旧消息没有 choices 时也不能画空对象卡。
+    if (type == 'choice' && choices.isEmpty) {
+      return onClarification == null
+          ? const SizedBox.shrink()
+          : _AssistantClarificationCard(
+              enabled: enabled,
+              onSubmit: onClarification!,
+            );
+    }
     // 受控结果引用包含可直接定位的真实对象。
     final List<Map<String, dynamic>> references = assistantItems(
       card['entityRefs'] ?? assistantMap(card['result'])['entityRefs'],
     );
+    if (type == 'references') {
+      return _AssistantReferencesCard(
+        references: references.take(20).toList(),
+        truncated:
+            card['referencesTruncated'] == true || references.length > 20,
+        enabled: enabled,
+        onOpen: (reference) => _open(context, reference),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(top: OmniSpacing.sm),
       child: OmniPanel(
@@ -350,7 +396,6 @@ class AssistantMessageCard extends StatelessWidget {
                     'choice' => '请选择对象',
                     'error' => '操作未完成',
                     'memory' => '记忆已更新',
-                    'references' => '参考记录',
                     _ => '执行结果',
                   },
               style: Theme.of(context).textTheme.titleSmall,
@@ -360,9 +405,6 @@ class AssistantMessageCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: OmniSpacing.xs),
                 child: SelectableText(card['message'] as String),
               ),
-            if (type == 'references')
-              const Text('部分来源 · 最多展示20条参考记录，统计覆盖范围见正文'),
-            if (type == 'result') const Text('服务器已保存；其他设备将在同步后显示。'),
             AssistantChangeCard(
               value: assistantMap(card['result'] ?? card['preview'] ?? card),
             ),
@@ -387,9 +429,7 @@ class AssistantMessageCard extends StatelessWidget {
                     ),
                 ],
               ),
-            for (final Map<String, dynamic> reference in references.take(
-              type == 'references' ? 20 : references.length,
-            ))
+            for (final Map<String, dynamic> reference in references)
               Wrap(
                 spacing: OmniSpacing.sm,
                 children: <Widget>[
@@ -398,14 +438,6 @@ class AssistantMessageCard extends StatelessWidget {
                     variant: OmniButtonVariant.text,
                     onPressed: enabled ? () => _open(context, reference) : null,
                   ),
-                  if (onEditReference != null && type == 'result')
-                    OmniButton(
-                      label: '编辑',
-                      variant: OmniButtonVariant.text,
-                      onPressed: enabled
-                          ? () => onEditReference!(reference)
-                          : null,
-                    ),
                 ],
               ),
             if (card['reference'] is Map)
@@ -424,4 +456,168 @@ class AssistantMessageCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 开放式澄清复用消息发送链路，日期等内容由用户明确填写。
+class _AssistantClarificationCard extends StatefulWidget {
+  /// 原消息操作权限和提交中状态。
+  final bool enabled;
+
+  /// 交给现有控制器发送，保留幂等与失败恢复能力。
+  final ValueChanged<String> onSubmit;
+
+  /// 创建当前等待中的补充信息表单。
+  const _AssistantClarificationCard({
+    required this.enabled,
+    required this.onSubmit,
+  });
+
+  /// 输入内容在流式状态重建时保持。
+  @override
+  State<_AssistantClarificationCard> createState() =>
+      _AssistantClarificationCardState();
+}
+
+/// 空白禁止提交；提交失败不主动丢弃用户的补充内容。
+class _AssistantClarificationCardState
+    extends State<_AssistantClarificationCard> {
+  /// 独立输入避免尚未提交时覆盖底部草稿。
+  final TextEditingController _input = TextEditingController();
+
+  /// 发送明确填写的文字，不附加 selection。
+  void _submit() {
+    // 两端共用一致的去空白规则。
+    final String content = _input.text.trim();
+    if (widget.enabled && content.isNotEmpty) widget.onSubmit(content);
+  }
+
+  /// 随卡片卸载释放编辑资源。
+  @override
+  void dispose() {
+    _input.dispose();
+    super.dispose();
+  }
+
+  /// 垂直布局允许窄屏及大字号下完整编辑。
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: OmniSpacing.sm),
+    child: OmniPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Text('补充信息', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: OmniSpacing.sm),
+          OmniTextField(
+            key: const ValueKey<String>('assistant-clarification-input'),
+            controller: _input,
+            enabled: widget.enabled,
+            minLines: 1,
+            maxLines: 4,
+            decoration: const InputDecoration(hintText: '输入你的补充信息'),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: OmniSpacing.sm),
+          Align(
+            alignment: Alignment.centerRight,
+            child: OmniButton(
+              label: '继续',
+              onPressed: widget.enabled && _input.text.trim().isNotEmpty
+                  ? _submit
+                  : null,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// 相关记录只维护当前卡片的展开偏好，默认不占用回答正文空间。
+class _AssistantReferencesCard extends StatefulWidget {
+  /// 已由调用方限制数量的真实来源。
+  final List<Map<String, dynamic>> references;
+
+  /// 引用列表实际存在截断，不代表查询覆盖范围。
+  final bool truncated;
+
+  /// 缓存仍可展开阅读，但打开记录需保持原有权限门禁。
+  final bool enabled;
+
+  /// 打开来源沿用原生受控详情，不从模型正文执行导航。
+  final ValueChanged<Map<String, dynamic>> onOpen;
+
+  /// 创建归属于父级稳定消息键的折叠卡。
+  const _AssistantReferencesCard({
+    required this.references,
+    required this.truncated,
+    required this.enabled,
+    required this.onOpen,
+  });
+
+  /// 每张卡片独立管理展开状态。
+  @override
+  State<_AssistantReferencesCard> createState() =>
+      _AssistantReferencesCardState();
+}
+
+/// 普通重建和流式更新不重置用户已经展开的卡片。
+class _AssistantReferencesCardState extends State<_AssistantReferencesCard> {
+  /// 首次展示与切换到其他消息时均收起。
+  bool _expanded = false;
+
+  /// 展开只影响本地显示，不发起查询或写入。
+  void _toggle() => setState(() => _expanded = !_expanded);
+
+  /// 按需构建引用按钮，折叠时不保留隐藏的可聚焦操作。
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: OmniSpacing.sm),
+    child: OmniPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Semantics(
+            expanded: _expanded,
+            child: OmniTextButton(
+              key: const ValueKey<String>('assistant-references-toggle'),
+              style: const ButtonStyle(
+                padding: WidgetStatePropertyAll<EdgeInsetsGeometry>(
+                  EdgeInsets.zero,
+                ),
+                alignment: Alignment.centerLeft,
+              ),
+              onPressed: _toggle,
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      '相关记录',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                  Icon(_expanded ? Icons.expand_less : Icons.expand_more),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded) ...<Widget>[
+            if (widget.truncated) const Text('仅展示前 20 条相关记录'),
+            for (final Map<String, dynamic> reference in widget.references)
+              Wrap(
+                children: <Widget>[
+                  OmniButton(
+                    label: '查看${reference['label'] ?? '记录'}',
+                    variant: OmniButtonVariant.text,
+                    onPressed: widget.enabled
+                        ? () => widget.onOpen(reference)
+                        : null,
+                  ),
+                ],
+              ),
+          ],
+        ],
+      ),
+    ),
+  );
 }

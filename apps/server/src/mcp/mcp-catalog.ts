@@ -10,6 +10,7 @@ import { EventsService } from '../business/events.service';
 import { TodosService } from '../business/todos.service';
 import { NotesBusinessService } from '../business/notes-business.service';
 import { BusinessRecycleService } from '../business/business-recycle.service';
+import { assistantTodoOutput } from '../assistant/assistant-todo-output';
 
 /// 连接授权使用稳定业务模块名，不能传入任意表名。
 export const mcpModules = [
@@ -38,6 +39,9 @@ export const mcpAutoTaxonomyPolicy =
 /// 象限数字直接沿用客户端存储值，不能按常见的一至四编号猜测。
 export const mcpTodoQuadrantPolicy =
   '待办priorityQuadrant使用固定0至3：0=不紧急不重要（有空再做），1=紧急不重要（快速处理），2=重要不紧急（安排时间），3=重要且紧急（立即处理）。不接受4，不猜测已有非法象限的用户意图。';
+/// 助手与外部 MCP 共用新增待办的最小输入及默认行为。
+export const mcpTodoCreatePolicy =
+  '新增待办遵循最小必要原则：用户给出任务名称即可创建。未指定计划日期时取本次操作准备时的业务时区当天，未指定类型时用normal普通任务，未指定优先级时用priorityQuadrant=2重要不紧急；这些默认字段可省略，由服务器补齐。业务时区沿用助手任务或MCP连接，连接未配置时区且未指定日期时才需明确timeZone，不猜测设备时区。不要为这些已有默认值的可选项追问，也不要主动追问截止日期、提醒或是否拆分步骤；未指定时不设置截止/提醒、不拆分、不重复。用户明确指定的值优先；明确创建子任务仍继承父任务日期和象限，明确要求进度任务才使用progress并收集必要步骤。更新时省略字段保留原值，不套用新增默认值。';
 /// 单条写入口明确实际保存与重试语义，避免宿主再寻找准备工具。
 export function mcpDirectDescription(tool: McpToolDefinition): string {
   return `${tool.description} 单条直接保存；requestId固定且重试复用。多对象任务改用prepare_batch，确认后commit_action；结果以实际回执为准。`;
@@ -59,6 +63,8 @@ export interface McpToolDefinition {
     actor: AuthUser,
     input: Record<string, unknown>,
   ) => Promise<Prisma.JsonValue>;
+  /// 助手可复用相同参数契约读取有界摘要，不改变外部 MCP 返回。
+  runForAssistant?: McpToolDefinition['run'];
   /// 新增补偿可转成同模块软删除，其他动作不假定可撤销。
   undoCreate?: boolean;
   /// 独立业务主对象字段；账单、历史和步骤统一归属于主对象计数。
@@ -326,11 +332,11 @@ const todoFields = {
   taskType: z
     .enum(['normal', 'progress'])
     .optional()
-    .describe('normal普通待办，progress进度任务；创建后不可互转'),
+    .describe('normal普通待办（新增省略默认），progress进度任务；创建后不可互转'),
   description: optionalText.describe('待办详细说明；null清空'),
   scheduledDate: day
     .optional()
-    .describe('计划执行日期，YYYY-MM-DD；新增时必填'),
+    .describe('计划执行日期，YYYY-MM-DD；新增省略取业务时区当天，更新省略保留'),
   dueAt: instant
     .nullable()
     .optional()
@@ -339,7 +345,7 @@ const todoFields = {
     .nullable()
     .optional()
     .describe('提醒时刻，须带时区偏移；null清空'),
-  priorityQuadrant: todoQuadrant.optional(),
+  priorityQuadrant: todoQuadrant.optional().describe(`${mcpTodoQuadrantPolicy}新增省略默认2重要不紧急，更新省略保留。`),
   parentId: mcpId
     .nullable()
     .optional()
@@ -1036,9 +1042,16 @@ export class McpCatalog {
           .boolean()
           .optional()
           .describe('按是否完成筛选；省略同时包含完成与未完成项'),
+        priorityQuadrant: todoQuadrant
+          .optional()
+          .describe(
+            `在分页前按象限筛选；省略包含所有象限。${mcpTodoQuadrantPolicy}`,
+          ),
         ...page,
       },
       (a, p) => todos.list(a, p),
+      false,
+      async (a, p) => assistantTodoOutput(await todos.list(a, p, true), p),
     );
     this.add(
       'todos',
@@ -1060,11 +1073,11 @@ export class McpCatalog {
       'todos',
       'create_todo',
       true,
-      '新增普通或进度待办。进度任务独立且不重复，满进度仍须明确确认。',
+      `新增普通或进度待办。进度任务独立且不重复，满进度仍须明确确认。${mcpTodoCreatePolicy}`,
       {
         ...todoFields,
-        title: text.describe('待办标题，最多200字'),
-        scheduledDate: day.describe('计划执行日期，格式YYYY-MM-DD'),
+        title: text.trim().min(1).describe('待办标题，1至200字；新增唯一必填业务字段'),
+        timeZone: z.string().optional().describe('默认计划日期使用的IANA业务时区；省略沿用助手任务或MCP连接时区，明确计划日期时无需提供'),
         steps: z
           .array(step)
           .max(1000)
@@ -1331,6 +1344,7 @@ export class McpCatalog {
     shape: z.ZodRawShape,
     run: McpToolDefinition['run'],
     undoCreate = false,
+    runForAssistant?: McpToolDefinition['run'],
   ): void {
     this.tools.push({
       module,
@@ -1339,6 +1353,7 @@ export class McpCatalog {
       description,
       schema: z.strictObject(shape),
       run,
+      ...(runForAssistant ? { runForAssistant } : {}),
       undoCreate,
       targetField: ['todoId', 'membershipId', 'eventId', 'itemId', 'id'].find(
         (field) => Object.hasOwn(shape, field),

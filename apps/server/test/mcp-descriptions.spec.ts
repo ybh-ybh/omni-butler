@@ -17,6 +17,7 @@ import type { McpConnection } from '../src/generated/prisma/client';
 import {
   McpCatalog,
   mcpAutoTaxonomyPolicy,
+  mcpTodoCreatePolicy,
   mcpModules,
   mcpRequestId,
   type McpModule,
@@ -190,7 +191,7 @@ describe('MCP 工具与参数说明的真实协议契约', () => {
     return fields;
   }
 
-  it('65 个工具与 328 个顶层参数均有简短说明，嵌套步骤和批量分支不遗漏', () => {
+  it('65 个工具与 330 个顶层参数均有简短说明，嵌套步骤和批量分支不遗漏', () => {
     expect(publishedTools).toHaveLength(65);
     expect(
       publishedTools.reduce(
@@ -198,7 +199,7 @@ describe('MCP 工具与参数说明的真实协议契约', () => {
           total + Object.keys(tool.inputSchema.properties ?? {}).length,
         0,
       ),
-    ).toBe(328);
+    ).toBe(330);
     for (const tool of publishedTools) {
       expect(tool.description?.trim()).toBeTruthy();
       // 带完整路径报告缺失、占位或过长说明，避免只检查顶层数量。
@@ -228,6 +229,7 @@ describe('MCP 工具与参数说明的真实协议契约', () => {
   it('初始化与精简能力发现发布相同自动分类规则，工具目录只由tools/list提供', async () => {
     expect(client.getServerVersion()?.version).toBe('3.0.0');
     expect(client.getInstructions()).toContain(mcpAutoTaxonomyPolicy);
+    expect(client.getInstructions()).toContain(mcpTodoCreatePolicy);
     // 能力结果经过真实 JSON-RPC，而不是直接测试常量字符串。
     const result = await client.callTool({
       name: 'get_capabilities',
@@ -243,7 +245,7 @@ describe('MCP 工具与参数说明的真实协议契约', () => {
         reason: null,
         checkedAt: null,
       },
-      workflow: { autoTaxonomy: mcpAutoTaxonomyPolicy },
+      workflow: { autoTaxonomy: mcpAutoTaxonomyPolicy, todoDefaults: mcpTodoCreatePolicy },
     });
     expect(result.structuredContent).not.toHaveProperty('tools');
     expect(result.structuredContent).not.toHaveProperty('examples');
@@ -398,6 +400,10 @@ describe('MCP 工具与参数说明的真实协议契约', () => {
       publishedTools.find((tool) => tool.name === 'create_todo')?.inputSchema
         .properties,
     ).toHaveProperty('taskType');
+    // 真实外部MCP只要求任务名称和协议请求身份，不再迫使宿主追问日期。
+    const createTodo = publishedTools.find((tool) => tool.name === 'create_todo');
+    expect(createTodo?.inputSchema.required).toEqual(['title', 'requestId']);
+    expect(createTodo?.description).toContain(mcpTodoCreatePolicy);
   });
 
   it('单模块连接的统一入口、分类和批量分支均不枚举未授权模块', async () => {

@@ -52,6 +52,7 @@ interface EnvironmentVariables {
   TENCENT_ASR_SECRET_KEY: string;
   /// 图片同步开关，默认关闭。
   IMAGE_SYNC_ENABLED: boolean;
+  ASSISTANT_ATTACHMENTS_ENABLED: boolean;
   /// PostgreSQL 连接地址。
   DATABASE_URL: string;
   /// 运行环境。
@@ -148,6 +149,9 @@ export function validateEnvironment(
       ? source.JWT_KEYS_DIR
       : '.local/keys';
   // 严格接受布尔开关，避免拼写错误导致意外启用。
+  // 助手附件独立于业务图片同步，关闭时不连接私有存储。
+  const assistantAttachmentsEnabled = source.ASSISTANT_ATTACHMENTS_ENABLED ?? 'false';
+  if (!['true', 'false', true, false].includes(assistantAttachmentsEnabled as string)) throw new Error('ASSISTANT_ATTACHMENTS_ENABLED 必须为 true 或 false');
   const imageSyncEnabled = source.IMAGE_SYNC_ENABLED ?? 'false';
   if (!['true', 'false', true, false].includes(imageSyncEnabled as string)) {
     throw new Error('IMAGE_SYNC_ENABLED 必须为 true 或 false');
@@ -199,6 +203,7 @@ export function validateEnvironment(
     TENCENT_ASR_APP_ID: typeof source.TENCENT_ASR_APP_ID === 'string' ? source.TENCENT_ASR_APP_ID : '',
     TENCENT_ASR_SECRET_ID: typeof source.TENCENT_ASR_SECRET_ID === 'string' ? source.TENCENT_ASR_SECRET_ID : '',
     TENCENT_ASR_SECRET_KEY: typeof source.TENCENT_ASR_SECRET_KEY === 'string' ? source.TENCENT_ASR_SECRET_KEY : '',
+    ASSISTANT_ATTACHMENTS_ENABLED: assistantAttachmentsEnabled === true || assistantAttachmentsEnabled === 'true',
     IMAGE_SYNC_ENABLED:
       imageSyncEnabled === true || imageSyncEnabled === 'true',
     DATABASE_URL: String(source.DATABASE_URL),

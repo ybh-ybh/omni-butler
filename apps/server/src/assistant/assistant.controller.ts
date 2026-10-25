@@ -23,6 +23,8 @@ import { AssistantModelProvider } from '../ai/assistant-model.provider';
 import { AssistantStore } from './assistant-store.service';
 import { AssistantErrorFilter } from './assistant-error.filter';
 import { AssistantPresentation } from './assistant-presentation.service';
+import { AssistantEntityEditor } from './assistant-entity-editor.service';
+import { AssistantMessageNotes, type SavedAssistantNote } from './assistant-message-notes.service';
 
 /// 仅设备JWT入口能确认助手计划，不复用外部MCP Bearer授权。
 @Controller('assistant')
@@ -35,6 +37,8 @@ export class AssistantController {
     private readonly ai: AiService,
     private readonly model: AssistantModelProvider,
     private readonly presentation: AssistantPresentation,
+    private readonly entityEditor: AssistantEntityEditor,
+    private readonly messageNotes: AssistantMessageNotes,
   ) {}
   /// 两端共享助手设置。
   @Get('settings') settings(@CurrentUser() actor: AuthUser): Promise<unknown> {
@@ -53,12 +57,11 @@ export class AssistantController {
     @Body() body: unknown,
   ): Promise<unknown> {
     // 这里只接受同owner保存配置的身份。
-    const input = z.strictObject({ profileId: z.uuid() }).parse(body);
+    const input = z.strictObject({ profileId: z.uuid(), vision: z.boolean().optional() }).parse(body);
     await this.store.authorized(actor, () => Promise.resolve(undefined));
-    return this.model.testCapability(
-      actor.sub,
-      await this.ai.captureAssistantProfile(actor.sub, input.profileId),
-    );
+    // 兼容旧客户端的vision字段，但不再发送图片探测或修改多模态声明。
+    const profile = await this.ai.captureAssistantProfile(actor.sub, input.profileId);
+    return this.model.testCapability(actor.sub, profile);
   }
   /// 获取最近会话。
   @Get('conversations') conversations(
@@ -106,6 +109,14 @@ export class AssistantController {
     @Body() body: unknown,
   ): Promise<unknown> {
     return this.store.send(actor, id, body);
+  }
+  /// 人工保存已完成回答，直接复用笔记业务服务。
+  @Post('messages/:id/note') saveMessageNote(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: unknown,
+  ): Promise<SavedAssistantNote> {
+    return this.messageNotes.save(actor, id, body);
   }
   /// 查询真实执行状态。
   @Get('runs/:id') run(
@@ -171,6 +182,15 @@ export class AssistantController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<unknown> {
     return this.presentation.entity(actor, module, id);
+  }
+  /// 人工编辑基于当前版本直接保存，重复请求复用原回执。
+  @Patch('entities/:module/:id') updateEntity(
+    @CurrentUser() actor: AuthUser,
+    @Param('module') module: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: unknown,
+  ): Promise<unknown> {
+    return this.entityEditor.update(actor, module, id, body);
   }
   /// 人工新增不依赖模型理解授权。
   @Post('memories') createMemory(

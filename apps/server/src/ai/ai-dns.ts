@@ -13,6 +13,10 @@ export interface AiDnsAddress {
 const DOH_ENDPOINT = 'https://cloudflare-dns.com/dns-query';
 /// 官方解析器的公网 IPv4，TLS 仍按端点域名验证证书。
 const DOH_BOOTSTRAP_IP = '1.1.1.1';
+/// 智谱国内官方域名用国内解析器，避免海外调度节点在当前网络握手失败。
+const ZHIPU_DOH_ENDPOINT = 'https://dns.alidns.com/resolve';
+/// 国内解析器同样固定官方引导 IP，保留域名的 TLS 证书验证。
+const ZHIPU_DOH_BOOTSTRAP_IP = '223.5.5.5';
 /// A 与 AAAA 查询共用的总时限。
 const DNS_TIMEOUT_MS = 5000;
 /// DNS 响应只允许有限大小，防止无界缓冲。
@@ -29,14 +33,16 @@ function parseAddresses(body: string, hostname: string, type: number): AiDnsAddr
   const result = JSON.parse(body) as {
     Status?: unknown;
     TC?: unknown;
-    Question?: { name?: unknown; type?: unknown }[];
+    Question?: { name?: unknown; type?: unknown }[] | { name?: unknown; type?: unknown };
     Answer?: { name?: unknown; type?: unknown; data?: unknown }[];
   } | null;
+  // Cloudflare 返回问题数组，AliDNS 返回单对象；两者均须恰有一个匹配问题。
+  const questions = Array.isArray(result?.Question) ? result.Question : result?.Question ? [result.Question] : [];
   if (!result || result.Status !== 0 || result.TC !== false ||
-      !Array.isArray(result.Question) || result.Question.length !== 1 ||
-      typeof result.Question[0]?.name !== 'string' ||
-      dnsName(result.Question[0].name) !== dnsName(hostname) ||
-      result.Question[0].type !== type ||
+      questions.length !== 1 ||
+      typeof questions[0]?.name !== 'string' ||
+      dnsName(questions[0].name) !== dnsName(hostname) ||
+      questions[0].type !== type ||
       (result.Answer !== undefined && !Array.isArray(result.Answer))) {
     throw new Error('AI_DNS_FAILED');
   }
@@ -83,8 +89,12 @@ function parseAddresses(body: string, hostname: string, type: number): AiDnsAddr
 
 /// 单次只读 DoH 查询不携带模型凭据、路径或正文，也不跟随重定向。
 function queryAddresses(hostname: string, type: number, signal: AbortSignal): Promise<AiDnsAddress[]> {
+  // 仅匹配智谱官方域名，不按供应商名称信任用户填写的任意域名。
+  const zhipu = dnsName(hostname) === 'open.bigmodel.cn';
   // DNS 查询参数由 URL API 编码，不能注入其他查询。
-  const url = new URL(DOH_ENDPOINT);
+  const url = new URL(zhipu ? ZHIPU_DOH_ENDPOINT : DOH_ENDPOINT);
+  // 解析器引导地址由服务端固定，不接受外部输入。
+  const bootstrapIp = zhipu ? ZHIPU_DOH_BOOTSTRAP_IP : DOH_BOOTSTRAP_IP;
   url.searchParams.set('name', hostname);
   url.searchParams.set('type', String(type));
   return new Promise((resolve, reject) => {
@@ -96,8 +106,8 @@ function queryAddresses(hostname: string, type: number, signal: AbortSignal): Pr
       signal,
       family: 4,
       lookup: (_name, options, callback) => options.all
-        ? callback(null, [{ address: DOH_BOOTSTRAP_IP, family: 4 }])
-        : callback(null, DOH_BOOTSTRAP_IP, 4),
+        ? callback(null, [{ address: bootstrapIp, family: 4 }])
+        : callback(null, bootstrapIp, 4),
     }, (response) => {
       if (response.statusCode !== 200) {
         response.resume();

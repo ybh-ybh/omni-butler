@@ -7,6 +7,7 @@ import type { AssistantActionContext, ActionToolDescription } from '../mcp/actio
 import { ActionExecutor } from '../mcp/action-executor';
 import { mcpModules, type McpModule } from '../mcp/mcp-catalog';
 import { AssistantStore } from './assistant-store.service';
+import { assistantEntityVersion } from './assistant-entity-editor.service';
 
 /// 分类关系沿用已有模块名称，不与公开业务模块名称混淆。
 const taxonomyModules: Partial<Record<McpModule, string>> = { time: 'timeline', inventory: 'inventory', memberships: 'membership', notes: 'notes' };
@@ -31,7 +32,7 @@ export class AssistantPresentation {
     // 认证事务先完成主项读取，不在持有 owner 锁时占用第二条池连接装饰名称。
     const record = await this.store.authorized(actor, (transaction) => this.readRecord(transaction, actor.sub, target, id));
     if (!record) throw new NotFoundException('该业务记录尚不可用或已永久删除');
-    return { module: target, id, label: this.label(record), record: await this.decorate(actor.sub, record, target), serverSaved: true };
+    return { module: target, id, label: this.label(record), record: await this.decorate(actor.sub, record, target), editVersion: assistantEntityVersion(record), serverSaved: true };
   }
 
   /// 正文中的分类 ID 与真实关系同时补显示名称，绝不把 UUID 当名称。
@@ -119,7 +120,7 @@ export class AssistantPresentation {
       if (!module || !record || typeof record.id !== 'string' || !z.uuid().safeParse(record.id).success) continue;
       // 正式主项的分类由真实关系补充，名称绝不回退到 UUID。
       const decorated = await this.decorate(context.actor.sub, record, module);
-      references.set(`${module}:${record.id}`, { module, id: record.id, label: this.label(record), record: decorated });
+      references.set(`${module}:${record.id}`, { module, id: record.id, label: this.label(record), record: decorated, operation: resultOperation(step) });
     }
     return { ...original, values: decoratedValues, entityRefs: [...references.values()] };
   }
@@ -195,6 +196,18 @@ export class AssistantPresentation {
     const value = [record.name, record.title, record.activity, record.content, record.body].find((item): item is string => typeof item === 'string' && !!item.trim() && !z.uuid().safeParse(item.trim()).success);
     return value?.trim().slice(0, 80) ?? '记录';
   }
+}
+
+/// 操作摘要只从真实冻结工具步骤推导，旧卡片不据此猜测动作。
+function resultOperation(step: McpStep | undefined): string | undefined {
+  if (!step) return undefined;
+  if (step.name.startsWith('create_') || step.name === 'start_time_entry') return 'create';
+  if (step.name.startsWith('trash_') || ['delete_quote', 'delete_time_entry', 'delete_todo', 'delete_item', 'delete_membership', 'delete_event', 'delete_note'].includes(step.name)) return 'delete';
+  if (step.name.startsWith('restore_')) return 'restore';
+  if (step.name === 'set_todo_completed') return step.input.completed === true ? 'complete' : 'revoke';
+  if (step.name === 'complete_event' || step.name === 'finish_time_entry') return 'complete';
+  if (step.name === 'undo_event_completion') return 'revoke';
+  return 'update';
 }
 
 /// 未知返回值只作为普通对象读取。

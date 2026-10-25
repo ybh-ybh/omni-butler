@@ -644,10 +644,12 @@ class _MediumNavigation extends ConsumerWidget {
           fontSize: 14,
           fontWeight: FontWeight.w600,
           height: 1.5,
+          // 行高留白在字形上下均分，避免按字体升降部比例产生视觉偏移。
+          leadingDistribution: TextLeadingDistribution.even,
         ),
         decoration: BoxDecoration(
           color: OmniColors.of(context).ink,
-          borderRadius: BorderRadius.circular(OmniRadius.control),
+          borderRadius: BorderRadius.circular(OmniRadius.panel),
         ),
       ),
       child: navigation,

@@ -94,6 +94,36 @@ describe('AI DoH解析与网络边界', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it.each(['open.bigmodel.cn', 'OPEN.BIGMODEL.CN.'])('智谱官方域名%s使用国内DoH节点并接受单对象问题', async (name) => {
+    answer = (type: number): unknown => ({
+      Status: 0, TC: false, Question: { name, type },
+      Answer: type === 1 ? [
+        { name, type: 5, data: 'cdn.example.test.' },
+        { name: 'cdn.example.test.', type: 1, data: '39.108.102.11' },
+      ] : [],
+    });
+    expect(await resolveAiAddresses(name)).toEqual([{ address: '39.108.102.11', family: 4 }]);
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.url.origin).toBe('https://dns.alidns.com');
+      expect(call.url.pathname).toBe('/resolve');
+      expect(call.options.headers).toEqual({ accept: 'application/dns-json' });
+      expect(call.options).toMatchObject({ agent: false, family: 4 });
+      expect(call.options).not.toHaveProperty('rejectUnauthorized', false);
+      // 国内解析器也必须固定引导地址，不能退回系统Fake-IP。
+      const callback = jest.fn();
+      call.options.lookup!('dns.alidns.com', { all: true }, callback);
+      expect(callback).toHaveBeenCalledWith(null, [{ address: '223.5.5.5', family: 4 }]);
+    }
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it.each([null, {}, { name: 'other.example.test', type: 1 }, { name: hostname, type: '1' }])('单对象问题仍严格验证名称和地址族 %#', async (question) => {
+    answer = (): unknown => ({ Status: 0, TC: false, Question: question, Answer: [] });
+    await expect(resolveAiAddresses('open.bigmodel.cn')).rejects.toThrow('AI_DNS_FAILED');
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
   it('接受合法CNAME链及空AAAA结果，保留A记录的全部地址', async () => {
     answer = (type: number): unknown => ({
       Status: 0, TC: false, Question: [{ name: hostname, type }],

@@ -24,6 +24,8 @@ export class AiTestDto {
   @IsString() @MinLength(1) @MaxLength(128) model!: string;
   /// 空 Key 表示保留或使用已存密钥。
   @IsOptional() @IsString() @MaxLength(4096) apiKey?: string;
+  /// 保存及草稿连接测试共用思考开关，拒绝字符串或null隐式转换。
+  @ValidateIf((_object: unknown, value: unknown) => value !== undefined) @IsBoolean() thinkingEnabled?: boolean;
 }
 /// 配置新建和更新字段共享校验，密钥更新为显式行为。
 export class AiProfileDto extends AiTestDto {
@@ -31,6 +33,8 @@ export class AiProfileDto extends AiTestDto {
   @IsInt() @Min(0) revision!: number;
   /// 用户识别多套配置的名称。
   @IsString() @MinLength(1) @MaxLength(80) name!: string;
+  /// 显式声明图片输入能力；旧客户端省略时保留已有配置值。
+  @ValidateIf((_object: unknown, value: unknown) => value !== undefined) @IsBoolean() multimodal?: boolean;
   /// 显式删除密钥，不能与替换同时提交。
   @IsOptional() @IsBoolean() removeApiKey?: boolean;
 }

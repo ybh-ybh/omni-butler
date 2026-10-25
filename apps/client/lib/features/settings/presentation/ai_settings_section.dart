@@ -138,18 +138,43 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
     );
   }
 
-  /// 每套配置独占一行，宽屏操作靠右，窄屏与大字号时在行内下方靠右换行。
+  /// 从本次服务器快照解析供应商展示名称，自定义配置保留稳定后备值。
+  String _providerName(AiSettingsSnapshot snapshot, AiModelProfile profile) {
+    for (final AiProviderPreset preset in snapshot.presets) {
+      if (preset.provider == profile.provider) return preset.name;
+    }
+    return profile.provider;
+  }
+
+  /// 每套配置仅展示厂商与模型，宽屏操作靠右，窄屏与大字号时在行内下方靠右换行。
   Widget _profileRow(AiSettingsSnapshot snapshot, AiModelProfile profile) {
     // 当前配置只展示无边框的禁用状态。
     final bool current = snapshot.activeProfileId == profile.id;
-    // 模型详情保留完整地址和密钥掩码，不压成省略文字。
-    final Widget details = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    // 列表不公开地址和密钥状态，只显示用户识别模型所需的两个字段。
+    final Widget details = Row(
       children: <Widget>[
-        Text(profile.name, style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: OmniSpacing.xs),
-        Text(
-          '${profile.model}\n${profile.baseUrl}\n${profile.hasApiKey ? 'API Key 已配置 ${profile.maskedApiKey}' : 'API Key 未配置'}',
+        Flexible(
+          child: Text(
+            _providerName(snapshot, profile),
+            key: ValueKey<String>('ai-profile-provider-${profile.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+        ),
+        const SizedBox(width: OmniSpacing.sm),
+        Text('·', style: TextStyle(color: OmniColors.of(context).muted)),
+        const SizedBox(width: OmniSpacing.sm),
+        Flexible(
+          flex: 2,
+          child: Text(
+            profile.model,
+            key: ValueKey<String>('ai-profile-model-${profile.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodyMedium
+                ?.copyWith(color: OmniColors.of(context).muted),
+          ),
         ),
       ],
     );
@@ -259,36 +284,59 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                 ),
               ),
             OmniPanel(
+              key: const ValueKey<String>('ai-model-profiles-panel'),
+              padding: EdgeInsets.zero,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: Text(
-                          '模型服务',
-                          style: Theme.of(context).textTheme.titleMedium,
+                  Padding(
+                    padding: const EdgeInsets.all(OmniSpacing.md),
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            '模型服务',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: OmniSpacing.sm),
-                      OmniButton(
-                        label: '新增模型配置',
-                        icon: Icons.add,
-                        onPressed: _busy ? null : () => _edit(snapshot),
-                      ),
-                    ],
+                        const SizedBox(width: OmniSpacing.sm),
+                        OmniButton(
+                          label: '新增模型配置',
+                          icon: Icons.add,
+                          onPressed: _busy ? null : () => _edit(snapshot),
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: OmniSpacing.md),
                   if (snapshot.profiles.isEmpty)
                     const Padding(
-                      padding: EdgeInsets.symmetric(vertical: OmniSpacing.md),
+                      padding: EdgeInsets.fromLTRB(
+                        OmniSpacing.md,
+                        0,
+                        OmniSpacing.md,
+                        OmniSpacing.md,
+                      ),
                       child: Text('尚未添加模型配置'),
                     ),
-                  for (final AiModelProfile profile in snapshot.profiles)
+                  for (
+                    int index = 0;
+                    index < snapshot.profiles.length;
+                    index += 1
+                  ) ...<Widget>[
+                    if (index > 0)
+                      Divider(
+                        key: ValueKey<String>('ai-profile-divider-$index'),
+                        height: 1,
+                        color: OmniColors.of(context).line,
+                      ),
                     Padding(
-                      padding: const EdgeInsets.only(bottom: OmniSpacing.md),
-                      child: _profileRow(snapshot, profile),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: OmniSpacing.md,
+                        vertical: OmniSpacing.sm,
+                      ),
+                      child: _profileRow(snapshot, snapshot.profiles[index]),
                     ),
+                  ],
                 ],
               ),
             ),
@@ -377,8 +425,11 @@ class _AiProfileEditorState extends ConsumerState<_AiProfileEditor> {
   /// 当前供应商标识。
   late String _provider;
 
-  /// 显式移除已有密钥。
-  bool _removeKey = false;
+  /// 多模态只由用户显式设置，不通过连接测试推断。
+  late bool _multimodal;
+
+  /// 草稿思考开关同时用于连接测试和保存，测试不自动保存。
+  late bool _thinkingEnabled;
 
   /// 当前请求是否正在进行。
   bool _busy = false;
@@ -389,8 +440,11 @@ class _AiProfileEditorState extends ConsumerState<_AiProfileEditor> {
   /// 持续显示的表单失败信息。
   String? _error;
 
-  /// 持续显示的连接测试结果。
-  String? _testResult;
+  /// 连接测试完成后的简短状态。
+  String? _testStatus;
+
+  /// 连接测试失败时保留的具体原因。
+  String? _testError;
 
   /// 从已有配置或默认智谱预设初始化草稿。
   @override
@@ -399,6 +453,8 @@ class _AiProfileEditorState extends ConsumerState<_AiProfileEditor> {
     _repository = ref.read(aiSettingsRepositoryProvider);
     _revision = widget.snapshot.revision;
     _provider = widget.profile?.provider ?? 'zhipu';
+    _multimodal = widget.profile?.multimodal ?? false;
+    _thinkingEnabled = widget.profile?.thinkingEnabled ?? false;
     _name = TextEditingController(text: widget.profile?.name ?? '智谱');
     _url = TextEditingController(
       text: widget.profile?.baseUrl ?? aiProviderPresets.first.baseUrl,
@@ -439,7 +495,8 @@ class _AiProfileEditorState extends ConsumerState<_AiProfileEditor> {
         _model.text = next.model;
       }
       _provider = value;
-      _testResult = null;
+      _testStatus = null;
+      _testError = null;
     });
   }
 
@@ -461,15 +518,14 @@ class _AiProfileEditorState extends ConsumerState<_AiProfileEditor> {
         : null;
   }
 
-  /// 测试和保存共用草稿校验，保存时允许明确移除已有密钥。
-  bool _validate({required bool testing}) {
+  /// 测试和保存共用草稿校验，已有配置留空时保留原密钥。
+  bool _validate() {
     if (_repository.generation != _repository.auth.sessionGeneration) {
       setState(() => _error = '服务器连接已变更，请关闭后重新打开配置');
       return false;
     }
     if (_formKey.currentState?.validate() != true) return false;
-    if (_key.text.trim().isEmpty &&
-        (widget.profile?.hasApiKey != true || (testing && _removeKey))) {
+    if (_key.text.trim().isEmpty && widget.profile?.hasApiKey != true) {
       setState(() => _error = '请填写 API Key');
       return false;
     }
@@ -478,7 +534,7 @@ class _AiProfileEditorState extends ConsumerState<_AiProfileEditor> {
 
   /// 提交草稿，成功才关闭，失败保留所有输入。
   Future<void> _save() async {
-    if (_busy || !_validate(testing: false)) return;
+    if (_busy || !_validate()) return;
     setState(() {
       _busy = true;
       _testing = false;
@@ -496,7 +552,8 @@ class _AiProfileEditorState extends ConsumerState<_AiProfileEditor> {
               baseUrl: _url.text,
               model: _model.text,
               apiKey: _key.text,
-              removeApiKey: _removeKey,
+              multimodal: _multimodal,
+              thinkingEnabled: _thinkingEnabled,
             ),
           );
       if (mounted) Navigator.of(context).pop();
@@ -517,35 +574,71 @@ class _AiProfileEditorState extends ConsumerState<_AiProfileEditor> {
 
   /// 使用固定测试文本验证当前草稿，不自动保存。
   Future<void> _test() async {
-    if (_busy || !_validate(testing: true)) return;
+    if (_busy || !_validate()) return;
     setState(() {
       _busy = true;
       _testing = true;
       _error = null;
-      _testResult = null;
+      _testStatus = null;
+      _testError = null;
     });
     try {
       // 仓储与测试请求均绑定开始时的服务器。
-      final String message = await _repository.testConnection(
+      await _repository.testConnection(
         profileId: widget.profile?.id,
         provider: _provider,
         baseUrl: _url.text,
         model: _model.text,
         apiKey: _key.text,
+        thinkingEnabled: _thinkingEnabled,
       );
-      if (mounted) setState(() => _testResult = message);
+      if (mounted) setState(() => _testStatus = '连接成功');
     } catch (error) {
       if (mounted) {
-        setState(
-          () => _error = error is ApiFailure ? error.message : '连接测试失败，请检查配置',
-        );
+        setState(() {
+          _testStatus = '连接失败';
+          _testError = error is ApiFailure ? error.message : '请检查配置后重试';
+        });
       }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  /// 构建可滚动表单，长地址和大字号不会挤压操作区。
+  /// 构建简洁的表单分组标题。
+  Widget _sectionTitle(String title) =>
+      Text(title, style: Theme.of(context).textTheme.titleSmall);
+
+  /// 宽屏并排供应商与配置名称，窄屏和大字号恢复纵向排列。
+  Widget _responsivePair({required Widget first, required Widget second}) =>
+      LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          // 阈值随实际字号放大，避免Android大字号把两个输入框挤成窄列。
+          final bool inline =
+              constraints.maxWidth >=
+              420 * MediaQuery.textScalerOf(context).scale(14) / 14;
+          if (!inline) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                first,
+                const SizedBox(height: OmniSpacing.md),
+                second,
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Expanded(child: first),
+              const SizedBox(width: OmniSpacing.md),
+              Expanded(child: second),
+            ],
+          );
+        },
+      );
+
+  /// 构建分组后的可滚动表单，长地址和大字号不会挤压操作区。
   Widget _buildFields() => Form(
     key: _formKey,
     child: Column(
@@ -559,32 +652,27 @@ class _AiProfileEditorState extends ConsumerState<_AiProfileEditor> {
               style: TextStyle(color: OmniColors.of(context).danger),
             ),
           ),
-        if (_testResult != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: OmniSpacing.md),
-            child: Text(
-              _testResult!,
-              style: TextStyle(color: OmniColors.of(context).success),
-            ),
-          ),
-        OmniDropdownButtonFormField<String>(
-          initialValue: _provider,
-          decoration: const InputDecoration(labelText: '供应商'),
-          items: <DropdownMenuItem<String>>[
-            for (final AiProviderPreset preset in aiProviderPresets)
-              DropdownMenuItem<String>(
-                value: preset.provider,
-                child: Text(preset.name, overflow: TextOverflow.ellipsis),
-              ),
-          ],
-          onChanged: _busy ? null : _selectProvider,
-        ),
+        _sectionTitle('模型信息'),
         const SizedBox(height: OmniSpacing.md),
-        OmniTextFormField(
-          controller: _name,
-          enabled: !_busy,
-          decoration: const InputDecoration(labelText: '配置名称'),
-          validator: _required,
+        _responsivePair(
+          first: OmniDropdownButtonFormField<String>(
+            initialValue: _provider,
+            decoration: const InputDecoration(labelText: '供应商'),
+            items: <DropdownMenuItem<String>>[
+              for (final AiProviderPreset preset in aiProviderPresets)
+                DropdownMenuItem<String>(
+                  value: preset.provider,
+                  child: Text(preset.name, overflow: TextOverflow.ellipsis),
+                ),
+            ],
+            onChanged: _busy ? null : _selectProvider,
+          ),
+          second: OmniTextFormField(
+            controller: _name,
+            enabled: !_busy,
+            decoration: const InputDecoration(labelText: '配置名称'),
+            validator: _required,
+          ),
         ),
         const SizedBox(height: OmniSpacing.md),
         OmniTextFormField(
@@ -605,43 +693,88 @@ class _AiProfileEditorState extends ConsumerState<_AiProfileEditor> {
           decoration: const InputDecoration(labelText: '模型名称'),
           validator: _required,
         ),
+        const SizedBox(height: OmniSpacing.xl),
+        Divider(height: 1, color: OmniColors.of(context).line),
+        const SizedBox(height: OmniSpacing.xl),
+        _sectionTitle('访问凭据'),
         const SizedBox(height: OmniSpacing.md),
         OmniTextFormField(
           controller: _key,
-          enabled: !_busy && !_removeKey,
+          enabled: !_busy,
           obscureText: true,
           autocorrect: false,
           enableSuggestions: false,
           decoration: InputDecoration(
             labelText: 'API Key',
             helperText: widget.profile?.hasApiKey == true
-                ? '已配置 ${widget.profile!.maskedApiKey}；留空保留，填写后替换'
+                ? '留空保留现有密钥，填写后替换'
                 : '仅向当前服务器提交并加密保存',
           ),
         ),
-        if (widget.profile?.hasApiKey == true)
-          OmniListRow(
-            padding: EdgeInsets.zero,
-            title: const Text('移除已保存的 API Key'),
-            trailing: OmniSwitch(
-              value: _removeKey,
-              onChanged: _busy
-                  ? null
-                  : (bool value) => setState(() {
-                      _removeKey = value;
-                      if (value) _key.clear();
-                    }),
-            ),
+        const SizedBox(height: OmniSpacing.sm),
+        OmniListRow(
+          padding: EdgeInsets.zero,
+          title: Wrap(
+            spacing: OmniSpacing.xs,
+            runSpacing: OmniSpacing.xxs,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[
+              const Text('连接测试'),
+              if (_busy && _testing)
+                const SizedBox.square(
+                  key: ValueKey<String>('ai-connection-test-loading'),
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else if (_testStatus != null)
+                OmniTag(
+                  key: const ValueKey<String>('ai-connection-test-status'),
+                  label: _testStatus!,
+                  color: _testStatus == '连接成功'
+                      ? OmniColors.of(context).success
+                      : OmniColors.of(context).danger,
+                  compact: true,
+                ),
+            ],
           ),
-        const SizedBox(height: OmniSpacing.md),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: OmniButton(
+          subtitle: _testError == null ? null : Text(_testError!),
+          trailing: OmniButton(
             label: '测试连接',
             variant: OmniButtonVariant.secondary,
-            loading: _busy && _testing,
+            compact: true,
             onPressed: _busy ? null : _test,
           ),
+        ),
+        const SizedBox(height: OmniSpacing.xl),
+        Divider(height: 1, color: OmniColors.of(context).line),
+        const SizedBox(height: OmniSpacing.xl),
+        _sectionTitle('模型能力'),
+        const SizedBox(height: OmniSpacing.sm),
+        OmniListPanel(
+          children: <Widget>[
+            OmniListRow(
+              title: const Text('多模态'),
+              subtitle: const Text('允许此模型读取图片和扫描版 PDF'),
+              trailing: OmniSwitch(
+                key: const ValueKey<String>('ai-profile-multimodal-switch'),
+                value: _multimodal,
+                onChanged: _busy
+                    ? null
+                    : (bool value) => setState(() => _multimodal = value),
+              ),
+            ),
+            OmniListRow(
+              title: const Text('思考模式'),
+              subtitle: const Text('允许模型先思考再回答'),
+              trailing: OmniSwitch(
+                key: const ValueKey<String>('ai-profile-thinking-switch'),
+                value: _thinkingEnabled,
+                onChanged: _busy
+                    ? null
+                    : (bool value) => setState(() => _thinkingEnabled = value),
+              ),
+            ),
+          ],
         ),
       ],
     ),

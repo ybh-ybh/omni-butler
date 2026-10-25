@@ -14,7 +14,12 @@ import 'package:omni_butler/features/assistant/data/assistant_chat_controller.da
 import 'package:omni_butler/features/assistant/data/assistant_models.dart';
 import 'package:omni_butler/features/assistant/data/assistant_repository.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_cards.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_markdown.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_attachment_widgets.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_windows_view.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_execution_progress.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_windows_tokens.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_answer_actions.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 两端共用助手入口，认证变化时销毁旧服务器页面。
@@ -86,6 +91,9 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
   /// 加载后只同步一次草稿，避免流事件打断输入法。
   bool _draftLoaded = false;
 
+  /// 发送展示切换时同步输入控件，失败后恢复底层草稿。
+  bool _composerWasHidden = false;
+
   /// 当前输入框所属的会话，切换时恢复各自草稿。
   String? _draftConversation;
 
@@ -118,8 +126,11 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
   void _changed() {
     if (!mounted) return;
     if (!_chat.loading &&
-        (!_draftLoaded || _draftConversation != _chat.conversationId)) {
-      _input.text = _chat.draft;
+        (!_draftLoaded ||
+            _draftConversation != _chat.conversationId ||
+            _composerWasHidden != _chat.hideComposerDraft)) {
+      _input.text = _chat.hideComposerDraft ? '' : _chat.draft;
+      _composerWasHidden = _chat.hideComposerDraft;
       _draftLoaded = true;
       _draftConversation = _chat.conversationId;
     }
@@ -149,7 +160,23 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
     _chat.setDraft(_input.text);
     await _chat.send();
     if (!mounted) return;
+    // 发送前能力校验读取服务器最新配置，失败后同步设置入口的操作提示。
+    if (_chat.error != null && _chat.attachments.hasDrafts) {
+      ref.invalidate(assistantSettingsProvider);
+    }
     if (_chat.pending == null && _chat.draft.isEmpty) _input.clear();
+  }
+
+  /// 开始沿用同一聊天发送可见的继续消息，结果未知时保留正文与身份。
+  Future<void> _continueConversation() async {
+    if (!_chat.canContinue || _input.text.trim().isNotEmpty) return;
+    // 切换聊天后不让迟到响应修改新输入框。
+    final String? target = _chat.conversationId;
+    _input.text = '继续';
+    await _chat.continueConversation();
+    if (!mounted || _chat.conversationId != target) return;
+    _input.text = _chat.draft;
+    _focus.requestFocus();
   }
 
   /// 输入控制器由弹窗状态管理，退出动画完成后再释放。
@@ -310,6 +337,22 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
+        if (!_chat.hideComposerDraft)
+          AssistantAttachmentDrafts(
+            attachments: _chat.attachments,
+            settings: ref.watch(assistantSettingsProvider).value,
+          ),
+        if (_chat.recoveryReason != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
+            child: Text(
+              _chat.recoveryReason!,
+              style: TextStyle(
+                color: OmniColors.of(context).muted,
+                fontSize: 13,
+              ),
+            ),
+          ),
         if (_chat.draftReference != null)
           Padding(
             padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
@@ -334,7 +377,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
               style: TextStyle(color: OmniColors.of(context).danger),
             ),
           ),
-        if (_chat.run != null)
+        if (_chat.run != null && _chat.run?['status'] != 'succeeded')
           Padding(
             padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
             child: Wrap(
@@ -346,20 +389,6 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                       ? '任务由其他设备处理，请先接管'
                       : assistantStatusLabel(_chat.run!['status'] as String?),
                 ),
-                if (_chat.run?['canUndo'] == true)
-                  OmniButton(
-                    label: '撤销新增',
-                    variant: OmniButtonVariant.text,
-                    onPressed: !_chat.busy && enabled ? _chat.undo : null,
-                  ),
-                if (_chat.active)
-                  OmniButton(
-                    label: '停止',
-                    variant: OmniButtonVariant.text,
-                    onPressed: !_chat.busy && _chat.connected && !_chat.offline
-                        ? _chat.stop
-                        : null,
-                  ),
                 if (_chat.run?['requiresTakeover'] == true &&
                     _chat.run?['status'] != 'succeeded' &&
                     _chat.run?['status'] != 'cancelled')
@@ -394,6 +423,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                 maxLines: 5,
                 maxLength: 20000,
                 enabled: enabled && !_chat.loading,
+                readOnly: _chat.busy || _chat.pending != null,
                 onChanged: _chat.setDraft,
                 decoration: const InputDecoration(
                   hintText: '记录想法、查询数据，或整理这一周…',
@@ -402,26 +432,62 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
               ),
             ),
             const SizedBox(width: OmniSpacing.sm),
-            OmniButton(
-              label: _chat.pending == null ? '发送' : '恢复发送',
-              icon: Icons.arrow_upward,
-              loading: _chat.busy,
-              onPressed:
-                  enabled &&
-                      !_chat.busy &&
-                      (!_chat.active ||
-                          _chat.run?['requiresTakeover'] != true) &&
-                      (_chat.pending != null ||
-                          !_chat.active ||
-                          <String>{
-                            'waitingInput',
-                            'waitingConfirmation',
-                          }.contains(_chat.run?['status']))
-                  ? _send
-                  : null,
+            Flexible(
+              child: OmniButton(
+                key: ValueKey<String>(
+                  _chat.processing
+                      ? 'assistant-stop-button'
+                      : _chat.canContinue && _input.text.trim().isEmpty
+                      ? 'assistant-continue-button'
+                      : 'assistant-send-button',
+                ),
+                label: _chat.processing
+                    ? '停止'
+                    : _chat.canContinue && _input.text.trim().isEmpty
+                    ? '开始'
+                    : _chat.pending == null
+                    ? '发送'
+                    : '恢复发送',
+                icon: _chat.processing
+                    ? Icons.stop_rounded
+                    : _chat.canContinue && _input.text.trim().isEmpty
+                    ? Icons.play_arrow_rounded
+                    : Icons.arrow_upward,
+                loading: _chat.busy && !_chat.processing,
+                onPressed: _chat.processing
+                    ? (_chat.canStop ? _chat.stop : null)
+                    : _chat.canContinue && _input.text.trim().isEmpty
+                    ? (enabled ? _continueConversation : null)
+                    : enabled &&
+                          !_chat.busy &&
+                          (_chat.pending != null ||
+                              _chat.attachments.blockReason(
+                                    ref.watch(assistantSettingsProvider).value,
+                                    includeVision: false,
+                                  ) ==
+                                  null) &&
+                          (!_chat.active ||
+                              _chat.run?['requiresTakeover'] != true) &&
+                          (_chat.pending != null ||
+                              !_chat.active ||
+                              <String>{
+                                'waitingInput',
+                                'waitingConfirmation',
+                              }.contains(_chat.run?['status']))
+                    ? _send
+                    : null,
+              ),
             ),
           ],
         ),
+        if (_chat.attachments.enabled)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: AssistantAttachmentButton(
+              attachments: _chat.attachments,
+              enabled: enabled,
+            ),
+          ),
         const SizedBox(height: OmniSpacing.xs),
         Text(
           _chat.offline
@@ -433,10 +499,58 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
     ),
   );
 
-  /// 消息正文采用可选择纯文字，操作只由受控卡片提供。
+  /// 助手正文渲染 Markdown，用户消息沿用原有展示。
   Widget _message(Map<String, dynamic> message, bool enabled) {
     // 用户消息与助手消息使用位置和留白区别。
     final bool user = message['role'] == 'user';
+    // 业务保存与撤销始终使用本条持久回答身份。
+    final String id = message['id'] as String;
+    // 只将撤销能力交给当前回答的首张结果卡。
+    final String? undoRunId =
+        _chat.run?['answerMessageId'] == id && _chat.run?['canUndo'] == true
+        ? _chat.run!['id'] as String
+        : null;
+    // 排除附件卡后保持一致的结果索引。
+    final List<Map<String, dynamic>> cards = assistantItems(message['cards'])
+        .where((item) => item['type'] != 'attachment')
+        .toList();
+    if (user) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: OmniSpacing.lg),
+        child: FractionallySizedBox(
+          widthFactor: .85,
+          alignment: Alignment.centerRight,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: <Widget>[
+              AssistantHistoryAttachments(
+                items: assistantMessageAttachments(message),
+                repository: _chat.repository,
+                enabled: _chat.connected && !_chat.offline,
+                localPreview: message['_localOutgoing'] == true,
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(OmniRadius.control),
+                ),
+                child: SelectableText.rich(
+                  NoteMarkdownText.span(
+                    message['content'] as String? ?? '',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  textWidthBasis: TextWidthBasis.longestLine,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: OmniSpacing.lg),
       child: Align(
@@ -450,64 +564,112 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                   borderRadius: BorderRadius.circular(OmniRadius.control),
                 )
               : null,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                user ? '你' : '知序',
-                style: Theme.of(context).textTheme.labelMedium,
-              ),
-              const SizedBox(height: OmniSpacing.xs),
-              SelectableText.rich(
-                NoteMarkdownText.span(
-                  message['content'] as String? ?? '',
-                  style: Theme.of(context).textTheme.bodyMedium,
+          child: AssistantAnswerActions(
+            key: ValueKey<String>('assistant-answer-actions-row-$id'),
+            messageId: id,
+            createdAt: message['createdAt'] as String?,
+            colors: AssistantWindowsPalette.of(context),
+            alwaysVisible: true,
+            saved: _chat.savedNote(id) != null,
+            saving: _chat.savingNote(id),
+            error: _chat.noteSaveError(id),
+            showSave:
+                message['_streaming'] != true &&
+                (message['content'] as String? ?? '').trim().isNotEmpty,
+            onSave: _chat.connected && !_chat.offline
+                ? () => unawaited(_chat.saveNote(id))
+                : null,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  user ? '你' : '知序',
+                  style: Theme.of(context).textTheme.labelMedium,
                 ),
-              ),
-              if (!user &&
-                  message['_streaming'] != true &&
-                  (message['content'] as String? ?? '').trim().isNotEmpty)
-                OmniButton(
-                  label: '保存为笔记',
-                  variant: OmniButtonVariant.text,
-                  onPressed:
-                      enabled &&
-                          !_chat.busy &&
-                          !_chat.active &&
-                          _chat.pending == null &&
-                          (message['content'] as String).length <= 19000
-                      ? () {
-                          _input.text =
-                              '请把以下内容完整保存为一篇笔记：\n\n${message['content']}';
-                          _chat.setDraft(_input.text, clearReference: true);
-                          unawaited(_send());
-                        }
-                      : null,
+                const SizedBox(height: OmniSpacing.xs),
+                if (!user)
+                  AssistantExecutionProgress(
+                    key: ValueKey<String>(
+                      'assistant-progress-${message['id']}',
+                    ),
+                    elapsedMs:
+                        _chat.run?['answerMessageId'] == message['id'] &&
+                            _chat.processing
+                        ? _chat.liveElapsedMs
+                        : message['_timingPending'] == true
+                        ? null
+                        : message['elapsedMs'] as num?,
+                    running:
+                        _chat.run?['answerMessageId'] == message['id'] &&
+                        _chat.processing,
+                    steps: assistantItems(message['executionSteps']),
+                    colors: AssistantWindowsPalette.of(context),
+                  ),
+                if (!user)
+                  AssistantMarkdown(
+                    source: message['content'] as String? ?? '',
+                    style: Theme.of(context).textTheme.bodyMedium
+                        ?.copyWith(height: 1.35),
+                  )
+                else
+                  SelectableText.rich(
+                    NoteMarkdownText.span(
+                      message['content'] as String? ?? '',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                AssistantHistoryAttachments(
+                  items: assistantMessageAttachments(message),
+                  repository: _chat.repository,
+                  enabled: _chat.connected && !_chat.offline,
                 ),
-              for (final Map<String, dynamic> card in assistantItems(
-                message['cards'],
-              ))
-                AssistantMessageCard(
-                  card: card,
-                  enabled: enabled && !_chat.busy && _chat.pending == null,
-                  onEditReference: (_chat.active || _chat.pending != null)
-                      ? null
-                      : (Map<String, dynamic> reference) {
-                          _input.text = '请修改「${reference['label'] ?? '这条记录'}」：';
-                          _chat.setDraft(_input.text, reference: reference);
-                          _focus.requestFocus();
-                        },
-                  onChoice: (String value, Map<String, dynamic> selection) {
-                    _input.text = value;
-                    _chat.setDraft(value);
-                    unawaited(
-                      _chat.send(selection: selection).then((_) {
-                        if (mounted && _chat.pending == null) _input.clear();
-                      }),
-                    );
-                  },
-                ),
-            ],
+                for (final (int cardIndex, Map<String, dynamic> card)
+                    in cards.indexed)
+                  AssistantMessageCard(
+                    key: ValueKey<String>(
+                      'assistant-card-${message['id']}-$cardIndex',
+                    ),
+                    card: card,
+                    enabled:
+                        enabled &&
+                        !_chat.busy &&
+                        _chat.pending == null &&
+                        (card['type'] != 'result' || !_chat.active),
+                    repository: _chat.repository,
+                    beforeEdit: _chat.catchUp,
+                    undoExpiresAt: _chat.run?['undoExpiresAt'] as String?,
+                    onUndo:
+                        undoRunId != null &&
+                            enabled &&
+                            !_chat.busy &&
+                            !_chat.active &&
+                            cardIndex ==
+                                cards.indexWhere(
+                                  (item) => item['type'] == 'result',
+                                )
+                        ? () => unawaited(_chat.undo(runId: undoRunId))
+                        : null,
+                    onClarification:
+                        _chat.run?['status'] == 'waitingInput' &&
+                            _chat.run?['answerMessageId'] == message['id']
+                        ? (String value) {
+                            _input.text = value;
+                            _chat.setDraft(value);
+                            unawaited(_chat.send());
+                          }
+                        : null,
+                    onChoice: (String value, Map<String, dynamic> selection) {
+                      _input.text = value;
+                      _chat.setDraft(value);
+                      unawaited(
+                        _chat.send(selection: selection).then((_) {
+                          if (mounted && _chat.pending == null) _input.clear();
+                        }),
+                      );
+                    },
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -620,6 +782,18 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                                   color: OmniColors.of(context).danger,
                                 ),
                               ),
+                              if (_chat.attachments.imageInputBlockReason(
+                                    settings.value,
+                                  ) !=
+                                  null)
+                                OmniButton(
+                                  label: 'AI 设置',
+                                  variant: OmniButtonVariant.text,
+                                  onPressed: _chat.busy
+                                      ? null
+                                      : () =>
+                                            context.go('/settings?section=ai'),
+                                ),
                               OmniButton(
                                 label: '刷新状态',
                                 variant: OmniButtonVariant.text,
@@ -635,7 +809,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                   Expanded(
                     child: _chat.loading
                         ? const Center(child: CircularProgressIndicator())
-                        : _chat.messages.isEmpty && _chat.plan == null
+                        : _chat.displayMessages.isEmpty && _chat.plan == null
                         ? SingleChildScrollView(
                             child: Center(
                               child: Padding(
@@ -697,8 +871,26 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                             ),
                             children: <Widget>[
                               for (final Map<String, dynamic> message
-                                  in _chat.messages)
+                                  in _chat.displayMessages)
                                 _message(message, enabled),
+                              if (_chat.run != null &&
+                                  !_chat.messages.any(
+                                    (message) =>
+                                        message['role'] == 'assistant' &&
+                                        message['id'] ==
+                                            _chat.run?['answerMessageId'],
+                                  ))
+                                AssistantExecutionProgress(
+                                  key: ValueKey<String>(
+                                    'assistant-progress-${_chat.run?['answerMessageId'] ?? _chat.run?['id']}',
+                                  ),
+                                  elapsedMs: _chat.liveElapsedMs,
+                                  running: _chat.processing,
+                                  steps: assistantItems(
+                                    _chat.run?['executionSteps'],
+                                  ),
+                                  colors: AssistantWindowsPalette.of(context),
+                                ),
                               if (_chat.plan != null &&
                                   _chat.run?['status'] == 'waitingConfirmation')
                                 AssistantPlanCard(

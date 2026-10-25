@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -97,6 +101,8 @@ Map<String, dynamic> _snapshot({
   bool enabled = false,
   bool profile = true,
   bool secondProfile = false,
+  bool multimodal = false,
+  bool thinkingEnabled = false,
 }) => <String, dynamic>{
   'revision': revision,
   'activeProfileId': profile ? 'profile-1' : null,
@@ -109,6 +115,8 @@ Map<String, dynamic> _snapshot({
         'provider': 'zhipu',
         'baseUrl': 'https://open.bigmodel.cn/api/v1',
         'model': 'glm-5.3',
+        'multimodal': multimodal,
+        'thinkingEnabled': thinkingEnabled,
         'hasApiKey': true,
         'maskedApiKey': '••••test',
       },
@@ -152,7 +160,10 @@ Future<void> _pump(
         builder: (BuildContext context, Widget? child) => MediaQuery(
           data: MediaQuery.of(context)
               .copyWith(textScaler: TextScaler.linear(scale)),
-          child: child!,
+          child: RepaintBoundary(
+            key: const ValueKey<String>('ai-settings-preview'),
+            child: child!,
+          ),
         ),
         home: const Scaffold(
           body: SingleChildScrollView(child: AiSettingsSection()),
@@ -163,27 +174,99 @@ Future<void> _pump(
   await tester.pumpAndSettle();
 }
 
+/// 显式导出中文表单供人工核对，不改写既有视觉基线。
+Future<void> _captureMultimodal(WidgetTester tester, String name) async {
+  if (!const bool.fromEnvironment('ASSISTANT_PREVIEW')) return;
+  await tester.pumpAndSettle();
+  // 捕获真正表单弹层和操作区，而不是静态示意组件。
+  final RenderRepaintBoundary boundary = tester.renderObject(
+    find.byKey(const ValueKey<String>('ai-settings-preview')),
+  );
+  await tester.runAsync(() async {
+    // PNG编码完成后释放图像。
+    final ui.Image image = await boundary.toImage();
+    try {
+      // 仅生成合成设置的本地预览。
+      final ByteData bytes = (await image.toByteData(
+        format: ui.ImageByteFormat.png,
+      ))!;
+      await Directory('build/assistant_previews').create(recursive: true);
+      await File('build/assistant_previews/$name.png').writeAsBytes(
+        bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
+      );
+    } finally {
+      image.dispose();
+    }
+  });
+}
+
 /// 验证后端配置边界、错误恢复和两端表单行为。
 void main() {
-  testWidgets('模型配置逐行排列，新增在右上、操作靠右且当前状态无边框', (WidgetTester tester) async {
+  if (const bool.fromEnvironment('ASSISTANT_PREVIEW')) {
+    setUpAll(() async {
+      // 显式预览时用系统中文字体覆盖测试占位字体。
+      final ByteData font = ByteData.sublistView(
+        await File('C:/Windows/Fonts/msyh.ttc').readAsBytes(),
+      );
+      // 主题在两端可能使用的字体族均加载同一份真实字形。
+      for (final String family in <String>[
+        'Microsoft YaHei UI',
+        'Microsoft YaHei',
+        'Roboto',
+        'Noto Sans CJK SC',
+        'Ahem',
+      ]) {
+        await (FontLoader(
+          family,
+        )..addFont(Future<ByteData>.value(font))).load();
+      }
+      // 图标沿用当前Flutter SDK资源，不请求外部字体。
+      final ByteData icons = ByteData.sublistView(
+        await File(
+          'D:/program/code/flutter/bin/cache/artifacts/material_fonts/materialicons-regular.otf',
+        ).readAsBytes(),
+      );
+      await (FontLoader(
+        'MaterialIcons',
+      )..addFont(Future<ByteData>.value(icons))).load();
+    });
+  }
+  testWidgets('模型配置仅显示同行厂商和模型，配置之间有分割线且操作靠右', (WidgetTester tester) async {
     // 两套配置验证行间隔和各操作所属对象，不读取真实配置。
     final _AiAuth auth = _AiAuth()
       ..handler = (_Request request) async => _snapshot(secondProfile: true);
     await _pump(tester, auth);
     // 新增按钮与分组标题同处顶部，右边缘与各配置操作对齐。
     final Rect add = tester.getRect(find.widgetWithText(OmniButton, '新增模型配置'));
-    // 第一套配置的完整详情区域。
-    final Rect first = tester.getRect(find.textContaining('glm-5.3\n'));
-    // 第二套配置的完整详情区域。
-    final Rect second = tester.getRect(find.textContaining('deepseek-flash\n'));
+    // 第一套配置的厂商和模型必须保持同一行。
+    final Rect firstProvider = tester.getRect(
+      find.byKey(const ValueKey<String>('ai-profile-provider-profile-1')),
+    );
+    // 第一套配置的模型文字。
+    final Rect firstModel = tester.getRect(
+      find.byKey(const ValueKey<String>('ai-profile-model-profile-1')),
+    );
+    // 第二套配置的厂商和模型必须保持同一行。
+    final Rect secondProvider = tester.getRect(
+      find.byKey(const ValueKey<String>('ai-profile-provider-profile-2')),
+    );
+    // 两项之间的真实灰色分割线。
+    final Rect divider = tester.getRect(
+      find.byKey(const ValueKey<String>('ai-profile-divider-1')),
+    );
     // 每项右侧的编辑按钮位置。
     final Rect edit = tester.getRect(
       find.widgetWithText(OmniButton, '编辑').first,
     );
-    expect(add.bottom, lessThan(tester.getTopLeft(find.text('测试智谱')).dy));
-    expect(edit.left, greaterThan(first.right));
-    expect(edit.center.dy, inInclusiveRange(first.top - 30, first.bottom));
-    expect(second.top, greaterThan(first.bottom));
+    expect(add.bottom, lessThan(firstProvider.top));
+    expect(firstProvider.center.dy, closeTo(firstModel.center.dy, 0.1));
+    expect(edit.left, greaterThan(firstModel.right));
+    expect(
+      edit.center.dy,
+      inInclusiveRange(firstProvider.top - 30, firstProvider.bottom + 30),
+    );
+    expect(divider.top, greaterThan(firstProvider.bottom));
+    expect(secondProvider.top, greaterThan(divider.bottom));
     expect(
       tester.getRect(find.widgetWithText(OmniButton, '删除').first).right,
       closeTo(add.right, 0.1),
@@ -193,6 +276,12 @@ void main() {
       closeTo(add.right, 0.1),
     );
     expect(find.textContaining('保存多套服务配置'), findsNothing);
+    expect(find.text('测试智谱'), findsNothing);
+    expect(find.text('测试 DeepSeek'), findsNothing);
+    expect(find.text('https://open.bigmodel.cn/api/v1'), findsNothing);
+    expect(find.text('https://api.deepseek.com'), findsNothing);
+    expect(find.textContaining('API Key 已配置'), findsNothing);
+    expect(find.textContaining('API Key 未配置'), findsNothing);
     // 当前配置保留禁用语义，实际按钮样式无可见边框。
     final OmniButton current = tester.widget<OmniButton>(
       find.widgetWithText(OmniButton, '当前使用'),
@@ -212,6 +301,7 @@ void main() {
           .a,
       0,
     );
+    await _captureMultimodal(tester, 'ai_settings_model_list');
     await tester.tap(find.text('设为当前'));
     expect(
       auth.requests
@@ -242,6 +332,12 @@ void main() {
     expect(find.textContaining('保存多套服务配置'), findsNothing);
     expect(find.text('编辑'), findsNWidgets(2));
     expect(find.text('删除'), findsNWidgets(2));
+    expect(find.text('智谱'), findsOneWidget);
+    expect(find.text('glm-5.3'), findsOneWidget);
+    expect(find.text('DeepSeek'), findsOneWidget);
+    expect(find.text('deepseek-flash'), findsOneWidget);
+    expect(find.textContaining('API Key'), findsNothing);
+    expect(find.textContaining('https://'), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.ensureVisible(find.text('编辑').last);
     await tester.tap(find.text('编辑').last);
@@ -250,7 +346,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  test('更新空密钥保留原值，移除和测试均使用明确请求', () async {
+  test('更新空密钥保留原值，客户端不再发送移除密钥参数', () async {
     // 固定网络边界与正式仓储。
     final _AiAuth auth = _AiAuth();
     // 当前服务器的配置仓储。
@@ -270,18 +366,13 @@ void main() {
       'provider': 'zhipu',
       'baseUrl': 'https://model.example.com/v1',
       'model': 'model',
+      'multimodal': false,
+      'thinkingEnabled': false,
     });
-    await repository.saveProfile(
-      revision: 4,
-      id: 'profile-1',
-      name: '配置',
-      provider: 'zhipu',
-      baseUrl: 'https://model.example.com/v1',
-      model: 'model',
-      apiKey: '',
-      removeApiKey: true,
+    expect(
+      (auth.requests.single.data! as Map).containsKey('removeApiKey'),
+      isFalse,
     );
-    expect((auth.requests.last.data! as Map)['removeApiKey'], isTrue);
     await repository.testConnection(
       profileId: 'profile-1',
       provider: 'zhipu',
@@ -296,6 +387,192 @@ void main() {
     auth.generation++;
     await expectLater(repository.load(), throwsA(isA<ApiFailure>()));
   });
+
+  // 两端使用正式表单、仓储和设置控制器，只模拟已鉴权HTTP回执。
+  for (final TargetPlatform platform in <TargetPlatform>[
+    TargetPlatform.windows,
+    TargetPlatform.android,
+  ]) {
+    testWidgets('${platform.name} 模型多模态默认关闭、编辑回填且保存后重新打开一致', (
+      WidgetTester tester,
+    ) async {
+      // 受控持久状态随保存回执更新，不调用任何模型接口。
+      bool multimodal = true;
+      // 保存修订与配置开关同一次请求提交。
+      int revision = 1;
+      // 正式仓储发出的多模态值必须是布尔数而不是字符串。
+      final _AiAuth auth = _AiAuth()
+        ..handler = (_Request request) async {
+          if (request.method == 'PUT' || request.method == 'POST') {
+            multimodal = (request.data! as Map)['multimodal'] as bool;
+            revision++;
+          }
+          return _snapshot(revision: revision, multimodal: multimodal);
+        };
+      await _pump(
+        tester,
+        auth,
+        platform: platform,
+        width: platform == TargetPlatform.android ? 320 : 960,
+        scale: platform == TargetPlatform.android ? 2 : 1,
+      );
+      await tester.tap(find.text('编辑'));
+      await tester.pumpAndSettle();
+      // 当前配置的真实回填值。
+      final Finder toggle = find.byKey(
+        const ValueKey<String>('ai-profile-multimodal-switch'),
+      );
+      expect(tester.widget<OmniSwitch>(toggle).value, isTrue);
+      await tester.ensureVisible(toggle);
+      await _captureMultimodal(tester, 'ai_multimodal_edit_${platform.name}');
+      await tester.tap(toggle);
+      await tester.tap(find.text('取消').first);
+      await tester.pumpAndSettle();
+      expect(
+        auth.requests.where((request) => request.method != 'GET'),
+        isEmpty,
+      );
+      await tester.tap(find.text('编辑'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<OmniSwitch>(toggle).value, isTrue);
+      await tester.ensureVisible(toggle);
+      await tester.tap(toggle);
+      await tester.tap(find.text('保存').last);
+      await tester.pumpAndSettle();
+      expect(multimodal, isFalse);
+      await tester.tap(find.text('编辑'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<OmniSwitch>(toggle).value, isFalse);
+      await tester.tap(find.text('取消').first);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.widgetWithText(OmniButton, '新增模型配置'));
+      await tester.tap(find.widgetWithText(OmniButton, '新增模型配置'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<OmniSwitch>(toggle).value, isFalse);
+      await tester.enterText(find.byType(TextFormField).last, 'test-only-key');
+      await tester.ensureVisible(toggle);
+      await _captureMultimodal(tester, 'ai_multimodal_new_${platform.name}');
+      await tester.tap(toggle);
+      await tester.tap(find.text('保存').last);
+      await tester.pumpAndSettle();
+      expect(multimodal, isTrue);
+      expect(
+        auth.requests.where((request) => request.path == '/ai/test'),
+        isEmpty,
+      );
+      expect(
+        auth.requests.where(
+          (request) =>
+              request.path.startsWith('/ai/profiles') &&
+              request.method != 'GET',
+        ),
+        hasLength(2),
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  // 思考开关和多模态独立，真实草稿测试及保存必须使用各自的布尔值。
+  for (final TargetPlatform platform in <TargetPlatform>[
+    TargetPlatform.windows,
+    TargetPlatform.android,
+  ]) {
+    testWidgets('${platform.name} 思考模式回填、草稿测试与保存独立于多模态，新增默认关闭', (
+      WidgetTester tester,
+    ) async {
+      // 模拟持久配置，只有明确保存才改变它。
+      bool thinkingEnabled = true;
+      // 保存使用同一设置修订，不能靠UI预更新冒充成功。
+      int revision = 1;
+      // 网络仅为替身，表单和仓储使用正式实现。
+      final _AiAuth auth = _AiAuth()
+        ..handler = (_Request request) async {
+          if (request.path == '/ai/test') {
+            return <String, dynamic>{'message': '连接成功'};
+          }
+          if (request.path.startsWith('/ai/profiles') &&
+              request.method != 'GET') {
+            thinkingEnabled = (request.data! as Map)['thinkingEnabled'] as bool;
+            revision++;
+          }
+          return _snapshot(
+            revision: revision,
+            thinkingEnabled: thinkingEnabled,
+            multimodal: true,
+          );
+        };
+      await _pump(
+        tester,
+        auth,
+        platform: platform,
+        width: platform == TargetPlatform.android ? 320 : 960,
+        scale: platform == TargetPlatform.android ? 2 : 1,
+      );
+      await tester.tap(find.text('编辑'));
+      await tester.pumpAndSettle();
+      // 思考控制具有独立身份，不能误点击多模态开关。
+      final Finder thinking = find.byKey(
+        const ValueKey<String>('ai-profile-thinking-switch'),
+      );
+      expect(tester.widget<OmniSwitch>(thinking).value, isTrue);
+      expect(
+        tester
+            .widget<OmniSwitch>(
+              find.byKey(
+                const ValueKey<String>('ai-profile-multimodal-switch'),
+              ),
+            )
+            .value,
+        isTrue,
+      );
+      await tester.ensureVisible(thinking);
+      await _captureMultimodal(tester, 'ai_thinking_edit_${platform.name}');
+      await tester.tap(thinking);
+      await tester.ensureVisible(find.text('测试连接'));
+      await tester.tap(find.text('测试连接'));
+      await tester.pumpAndSettle();
+      expect(
+        (auth.requests.lastWhere((request) => request.path == '/ai/test').data!
+            as Map)['thinkingEnabled'],
+        isFalse,
+      );
+      expect(thinkingEnabled, isTrue);
+      await tester.tap(find.text('保存').last);
+      await tester.pumpAndSettle();
+      expect(thinkingEnabled, isFalse);
+      expect(
+        (auth.requests
+                .lastWhere((request) => request.path.startsWith('/ai/profiles'))
+                .data!
+            as Map)['multimodal'],
+        isTrue,
+      );
+      await tester.tap(find.text('编辑'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<OmniSwitch>(thinking).value, isFalse);
+      await tester.tap(find.text('取消').first);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.widgetWithText(OmniButton, '新增模型配置'));
+      await tester.tap(find.widgetWithText(OmniButton, '新增模型配置'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<OmniSwitch>(thinking).value, isFalse);
+      await tester.enterText(find.byType(TextFormField).last, 'test-only-key');
+      await tester.ensureVisible(thinking);
+      await tester.tap(thinking);
+      await _captureMultimodal(tester, 'ai_thinking_new_${platform.name}');
+      await tester.tap(find.text('保存').last);
+      await tester.pumpAndSettle();
+      expect(thinkingEnabled, isTrue);
+      expect(
+        (auth.requests
+                .lastWhere((request) => request.path == '/ai/profiles')
+                .data!
+            as Map)['multimodal'],
+        isFalse,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   test('修订冲突刷新快照但不会自动重放写入', () async {
     // 固定认证边界。
@@ -385,6 +662,11 @@ void main() {
       );
       expect(field.controller!.text, isEmpty);
       expect(find.textContaining('留空保留'), findsOneWidget);
+      expect(find.text('模型信息'), findsOneWidget);
+      expect(find.text('访问凭据'), findsOneWidget);
+      expect(find.text('模型能力'), findsOneWidget);
+      expect(find.text('移除已保存的 API Key'), findsNothing);
+      await _captureMultimodal(tester, 'ai_profile_editor_${platform.name}');
       expect(tester.takeException(), isNull);
       await tester.tap(find.text('取消').first);
       await tester.pumpAndSettle();
@@ -438,17 +720,30 @@ void main() {
           'baseUrl': 'https://open.bigmodel.cn/api/v1',
           'model': 'glm-5.3',
           'apiKey': 'test-only-key',
+          'thinkingEnabled': false,
         },
       );
-      // 原按钮进入加载及禁用状态，防止双击重复请求。
+      // 状态位置显示加载，按钮保持禁用以防止双击重复请求。
       final OmniButton testingButton = tester.widget<OmniButton>(
         find.widgetWithText(OmniButton, '测试连接'),
       );
-      expect(testingButton.loading, isTrue);
+      expect(testingButton.loading, isFalse);
       expect(testingButton.onPressed, isNull);
+      expect(
+        find.byKey(const ValueKey<String>('ai-connection-test-loading')),
+        findsOneWidget,
+      );
       gate.complete(<String, dynamic>{'message': '连接成功'});
       await tester.pumpAndSettle();
       expect(find.text('连接成功'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('ai-connection-test-status')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('ai-connection-test-loading')),
+        findsNothing,
+      );
       expect(find.byType(TextFormField), findsNWidgets(4));
       // 失败重试也直接执行，草稿和错误反馈留在原表单内。
       auth.handler = (_Request request) async => throw DioException(
@@ -469,6 +764,7 @@ void main() {
         find.text('该模型始终开启思考，不支持关闭思考（reasoning.effort=none）。'),
         findsOneWidget,
       );
+      expect(find.text('连接失败'), findsOneWidget);
       expect(find.text('开始测试'), findsNothing);
       expect(
         auth.requests.where((_Request request) => request.path == '/ai/test'),

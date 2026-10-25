@@ -55,6 +55,7 @@ class StoreDatabase {
       'assistantRun',
       'assistantEvent',
       'assistantAttempt',
+      'assistantAttemptRequest',
       'assistantMemory',
       'mcpAction',
     ]) {
@@ -316,6 +317,15 @@ describe('应用内助手持久任务与上下文授权', () => {
     })) as { id: string; taskId: string };
   }
 
+  it.each([false, true])('助手配置投影的图片能力只由多模态%s决定，旧测试不能覆盖', async (multimodal) => {
+    // 旧回执故意与当前开关相反，且不能泄露密文。
+    database.tables.aiProfile!.push({ id: randomUUID(), userId: database.actor.sub, revision: 1, multimodal, encryptedApiKey: 'synthetic-private-key', assistantCapabilities: { revision: 1, compatibility: { imageInput: multimodal ? 'unsupported' : 'supported' } } });
+    // 执行正式归属校验与设置序列化。
+    const result = await store.settings(database.actor) as { profiles: Array<{ multimodal: boolean; capabilities: { imageInput: string } }> };
+    expect(result.profiles[0]).toMatchObject({ multimodal, capabilities: { imageInput: multimodal ? 'supported' : 'unsupported' } });
+    expect(JSON.stringify(result)).not.toContain('synthetic-private-key');
+  });
+
   it('稳定消息身份覆盖正文和对象选择，重复请求返回同一个任务', async () => {
     // 客户端生成身份在网络重试中不变。
     const input = {
@@ -399,6 +409,34 @@ describe('应用内助手持久任务与上下文授权', () => {
       selection: selected,
       request: expect.stringContaining('修改我的学习记录') as string,
     });
+  });
+
+  it.each([undefined, []])('开放式补充信息无候选时可用文字继续原任务（%j）', async (choices) => {
+    // 空候选不是对象选择，补充消息仍沿用原任务及授权边界。
+    const first = await initial('帮我新增一个任务，完成个人网站开发');
+    // 当前等待中的任务。
+    const task = database.tables.assistantTask![0]!;
+    // 当前等待中的运行。
+    const run = database.tables.assistantRun![0]!;
+    task.status = run.status = 'waitingInput';
+    database.tables.assistantMessage!.push({
+      id: randomUUID(), userId: database.actor.sub, taskId: task.id,
+      conversationId, role: 'assistant', content: '计划哪天开始？',
+      cards: [{ type: 'choice', question: '计划哪天开始？', ...(choices ? { choices } : {}) }],
+      createdAt: new Date(Date.now() + 1),
+    });
+    // 不携带 selection，不能把日期等文本解释为对象身份。
+    const next = (await store.send(database.actor, conversationId, {
+      clientMessageId: randomUUID(), content: '明天开始，不设置截止日期',
+    })) as { id: string; taskId: string };
+    expect(next.taskId).toBe(first.taskId);
+    expect(next.id).not.toBe(first.id);
+    expect(database.tables.assistantTask).toHaveLength(1);
+    // 新运行同时保留原要求和用户明确补充的资料。
+    const state = database.tables.assistantRun!.find((item) => item.id === next.id)!.state as Row;
+    expect(state.request).toContain('完成个人网站开发');
+    expect(state.request).toContain('明天开始，不设置截止日期');
+    expect(state.selection).toBeUndefined();
   });
 
   it('等待确认时修改取消旧动作，保留版本并清空旧批准与请求身份', async () => {
@@ -708,19 +746,25 @@ describe('应用内助手持久任务与上下文授权', () => {
         result: { values: [{ id: randomUUID() }] },
       },
     });
+    // 期限来自实际动作提交时间，不取运行更新时间。
+    const actionSavedAt = new Date(Date.now() - 5000);
     database.tables.mcpAction!.push({
       id: actionId,
       userId: database.actor.sub,
       source: 'assistant',
       sourceId: first.taskId,
       status: 'succeeded',
-      updatedAt: new Date(),
+      updatedAt: actionSavedAt,
       steps: [{ name: 'create_quote' }],
       result: { values: [] },
     });
     expect(await store.run(database.actor, first.id)).toMatchObject({
       canUndo: true,
+      undoExpiresAt: new Date(actionSavedAt.getTime() + 600000).toISOString(),
     });
+    // 公开布尔资格与到期事实必须共用一次动作查询。
+    const actionReads = (database.database.mcpAction as { findFirst: jest.Mock }).findFirst;
+    expect(actionReads).toHaveBeenCalledTimes(1);
     const compensation = (await store.undo(database.actor, first.id)) as {
       id: string;
       taskId: string;
@@ -743,9 +787,38 @@ describe('应用内助手持久任务与上下文授权', () => {
       calls: [],
       intents: [],
     });
-    expect(await store.run(database.actor, first.id)).toMatchObject({
+    // 补偿已建立后不再公开旧窗口，避免按钮短暂重新出现。
+    const original = await store.run(database.actor, first.id);
+    expect(original).toMatchObject({
       canUndo: false,
     });
+    expect(original).not.toHaveProperty('undoExpiresAt');
+  });
+
+  it('撤销期限取动作保存时刻，到达边界后移除期限且拒绝撤销', async () => {
+    // 改变 run.updatedAt 不应延长或缩短业务补偿窗口。
+    const first = await initial('新增一句话');
+    // 原任务与运行保留单条真实创建回执。
+    const task = database.tables.assistantTask![0]!, run = database.tables.assistantRun![0]!;
+    // 固定动作时间便于精确验证十分钟边界。
+    const savedAt = new Date('2026-10-25T12:00:00.000Z');
+    // 同一成功动作身份用于所有查询和正式撤销校验。
+    const actionId = randomUUID();
+    Object.assign(task, { status: 'succeeded', actionId, committed: true });
+    Object.assign(run, { status: 'succeeded', updatedAt: new Date('2026-10-26T12:00:00.000Z'), state: { ...(run.state as Row), actionId, result: { values: [] } } });
+    database.tables.mcpAction!.push({ id: actionId, userId: database.actor.sub, source: 'assistant', sourceId: first.taskId, status: 'succeeded', updatedAt: savedAt, steps: [{ name: 'create_quote' }], result: { values: [] } });
+    // 只控制资格判定时钟，不让数据库模拟时间影响本例。
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(savedAt.getTime() + 599999);
+    try {
+      expect(await store.run(database.actor, first.id)).toMatchObject({ canUndo: true, undoExpiresAt: '2026-10-25T12:10:00.000Z' });
+      clock.mockReturnValue(savedAt.getTime() + 600000);
+      // 到期时字段缺失，与不可撤销布尔事实一致。
+      const expired = await store.run(database.actor, first.id);
+      expect(expired).toMatchObject({ canUndo: false });
+      expect(expired).not.toHaveProperty('undoExpiresAt');
+      await expect(store.undo(database.actor, first.id)).rejects.toThrow('此操作不可撤销或已超过十分钟窗口');
+      expect(database.tables.assistantRun).toHaveLength(1);
+    } finally { clock.mockRestore(); }
   });
 
   it('同毫秒会话及记忆稳定分页，不截断后续记录或接受其他归属游标', async () => {
@@ -925,6 +998,210 @@ describe('应用内助手持久任务与上下文授权', () => {
     });
   });
 
+  it('执行链仅输出固定摘要并按回答聚合，旧状态和其他运行不泄漏', async () => {
+    // 真实创建路径提供归属、任务和回答身份。
+    const first = await initial();
+    // 当前运行包含摘要和不允许公开的额外字段。
+    const run = database.tables.assistantRun![0]!;
+    // 第二运行复用同一回答，摘要身份仍各自独立。
+    const nextRunId = randomUUID();
+    // 固定时间避免验证依赖本机时钟精度。
+    const startedAt = '2026-10-23T12:00:00.000Z';
+    Object.assign(run, {
+      status: 'failed',
+      updatedAt: new Date('2026-10-23T12:00:05.000Z'),
+      state: {
+        ...(run.state as Row),
+        executionSteps: [
+          {
+            id: `${run.id as string}:model:1`,
+            kind: 'model',
+            label: '分析任务',
+            status: 'running',
+            startedAt,
+            input: 'private-input',
+            reasoning: 'private-reasoning',
+          },
+          {
+            id: `${run.id as string}:tool:1`,
+            kind: 'tool',
+            label: '登记修改计划',
+            status: 'planned',
+            startedAt,
+          },
+          {
+            id: 'foreign:tool:1',
+            kind: 'tool',
+            label: '查询资料',
+            status: 'succeeded',
+            startedAt,
+          },
+          {
+            id: `${run.id as string}:tool:2`,
+            kind: 'tool',
+            label: 'private-label',
+            status: 'succeeded',
+            startedAt,
+          },
+        ],
+      },
+    });
+    database.tables.assistantRun!.push({
+      ...run,
+      id: nextRunId,
+      status: 'succeeded',
+      state: {
+        executionSteps: [
+          {
+            id: `${nextRunId}:model:1`,
+            kind: 'model',
+            label: '生成回答',
+            status: 'succeeded',
+            startedAt,
+            finishedAt: startedAt,
+          },
+        ],
+      },
+    });
+    database.tables.assistantMessage!.push({
+      id: run.answerMessageId,
+      userId: database.actor.sub,
+      conversationId,
+      taskId: first.taskId,
+      role: 'assistant',
+      content: '回答',
+      cards: [],
+      createdAt: new Date(),
+    });
+    // 公开运行与历史消息共用白名单，不能直接展开私有state。
+    const view = (await store.run(database.actor, first.id)) as Row;
+    expect(view.executionSteps).toEqual([
+      {
+        id: `${run.id as string}:model:1`,
+        kind: 'model',
+        label: '分析任务',
+        status: 'failed',
+        startedAt,
+        finishedAt: '2026-10-23T12:00:05.000Z',
+      },
+      {
+        id: `${run.id as string}:tool:1`,
+        kind: 'tool',
+        label: '登记修改计划',
+        status: 'planned',
+        startedAt,
+      },
+    ]);
+    // 同一回答的重试步骤可恢复，但不混入其他回答。
+    const response = (await store.messages(database.actor, conversationId)) as {
+      items: Row[];
+    };
+    expect(
+      response.items.find((item) => item.id === run.answerMessageId)!
+        .executionSteps as Row[],
+    ).toHaveLength(3);
+    expect(JSON.stringify(response)).not.toContain('private-');
+    expect(JSON.stringify(response)).not.toContain('foreign:');
+    Object.assign(run, { status: 'cancelled' });
+    expect(
+      (
+        ((await store.run(database.actor, first.id)) as Row)
+          .executionSteps as Row[]
+      ).map((step) => step.status),
+    ).toEqual(['cancelled', 'cancelled']);
+    run.state = { memoryInvalidated: true };
+    expect(
+      ((await store.run(database.actor, first.id)) as Row).executionSteps,
+    ).toEqual([]);
+  });
+
+  it('执行段快照只累加运行时间，等待冻结且最终结算不重复累加', async () => {
+    // 用实际Store路径验证新增公开字段，替换时钟仅用于当前断言。
+    const first = await initial();
+    // 当前运行已结算上一次执行段的一秒。
+    const run = database.tables.assistantRun![0]!;
+    // 固定五秒执行段，租约仍有效。
+    const now = Date.now();
+    Object.assign(run, {
+      status: 'running',
+      elapsedMs: 1000,
+      leaseOwner: 'worker',
+      leaseUntil: new Date(now + 150000),
+      updatedAt: new Date(now),
+      state: {
+        ...(run.state as Row),
+        segmentStartedAt: new Date(now - 5000).toISOString(),
+      },
+    });
+    // 使用spy避免改变Store授权需要的真实时间函数行为。
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      expect(await store.run(database.actor, first.id)).toMatchObject({
+        elapsedMs: 1000,
+        liveElapsedMs: 6000,
+      });
+      Object.assign(run, {
+        status: 'waitingConfirmation',
+        updatedAt: new Date(now - 2000),
+      });
+      clock.mockReturnValue(now + 10000);
+      expect(await store.run(database.actor, first.id)).toMatchObject({
+        liveElapsedMs: 4000,
+      });
+      Object.assign(run, {
+        status: 'succeeded',
+        elapsedMs: 4000,
+        leaseOwner: null,
+      });
+      expect(await store.run(database.actor, first.id)).toMatchObject({
+        elapsedMs: 4000,
+        liveElapsedMs: 4000,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('重试保留旧运行执行摘要，新运行不复用旧步骤或执行段开始时间', async () => {
+    // 固定动作存在时重试仍沿用回答身份。
+    const first = await initial();
+    // 原运行失败后保留真实计划与摘要。
+    const run = database.tables.assistantRun![0]!;
+    // 任务固定准备身份，重试不会丢弃既有计划。
+    const task = database.tables.assistantTask![0]!;
+    Object.assign(task, { status: 'failed', planRequestId: randomUUID() });
+    Object.assign(run, {
+      status: 'failed',
+      state: {
+        ...(run.state as Row),
+        segmentStartedAt: new Date().toISOString(),
+        executionSteps: [
+          {
+            id: `${run.id as string}:tool:1`,
+            kind: 'tool',
+            label: '登记修改计划',
+            status: 'planned',
+            startedAt: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+    // 新运行只继承业务恢复资料，不携带旧run身份的执行项。
+    const retried = (await store.retry(database.actor, first.id)) as Row;
+    expect(retried).toMatchObject({
+      answerMessageId: run.answerMessageId,
+      executionSteps: [],
+      liveElapsedMs: 0,
+    });
+    expect(
+      (
+        database.tables.assistantRun!.find((item) => item.id === retried.id)!
+          .state as Row
+      ).segmentStartedAt,
+    ).toBeUndefined();
+    expect((run.state as Row).executionSteps).toHaveLength(1);
+  });
+
   it('多批任务最后一批的单条新增不能冒充整个任务可撤销', async () => {
     // 最后一批成功动作本身可补偿，但整项任务需要按批次报告。
     const first = await initial('多批新增');
@@ -955,14 +1232,20 @@ describe('应用内助手持久任务与上下文授权', () => {
       steps: [{ name: 'create_quote' }],
       result: { values: [] },
     });
-    expect(await store.run(database.actor, first.id)).toMatchObject({
+    // 批量资格拒绝时不公开看似有效的单条动作期限。
+    const batchView = await store.run(database.actor, first.id);
+    expect(batchView).toMatchObject({
       canUndo: false,
     });
+    expect(batchView).not.toHaveProperty('undoExpiresAt');
     // 即使当前任务计划被清空，原结果批次数也独立禁止通用撤销。
     task.plan = null;
-    expect(await store.run(database.actor, first.id)).toMatchObject({
+    // 总批次数事实独立于当前计划，仍不允许出现撤销入口。
+    const clearedPlanView = await store.run(database.actor, first.id);
+    expect(clearedPlanView).toMatchObject({
       canUndo: false,
     });
+    expect(clearedPlanView).not.toHaveProperty('undoExpiresAt');
   });
 
   it('提交后 state 保存失败仍以真实回执合成稳定结果，读取不写业务或新增消息', async () => {
@@ -1347,4 +1630,51 @@ describe('应用内助手持久任务与上下文授权', () => {
       )!.excluded,
     ).toBe(true);
   });
+  it('记忆工具检查点失败会回滚记忆修订及版本，恢复可使用原revision', async () => {
+    // 先保存真实管理页记忆，再注入工具检查点落库失败。
+    const old = await store.saveMemory(database.actor, { content: '简短回答' }) as { id: string; revision: number };
+    // 内存驱动补齐数据库默认revision，保留独立基线而非可变行引用。
+    const revision = old.revision ?? 0;
+    database.tables.assistantMemory![0]!.revision = revision;
+    const version = database.tables.assistantSettings![0]!.memoryVersion;
+    await expect(store.saveMemory(database.actor, { content: '更简短回答', revision }, old.id, undefined, undefined, () => Promise.reject(new Error('checkpoint failed')))).rejects.toThrow('checkpoint failed');
+    expect(database.tables.assistantMemory![0]).toMatchObject({ content: '简短回答', revision });
+    expect(database.tables.assistantSettings![0]!.memoryVersion).toBe(version);
+    await expect(store.saveMemory(database.actor, { content: '更简短回答', revision }, old.id)).resolves.toMatchObject({ content: '更简短回答' });
+  });
+
+  it('纯附件发送使用可见默认请求，重复消息不得替换附件清单', async () => {
+    // 文件服务只模拟已校验元数据，发送幂等仍使用真实Store。
+    const attachmentId = randomUUID();
+    Object.assign(store, { attachments: { attachmentMetadata: () => Promise.resolve([{ id: attachmentId, status: 'ready', requiresVision: false }]), bindMessage: jest.fn() } });
+    const input = { clientMessageId: randomUUID(), content: '', attachmentIds: [attachmentId] };
+    const first = await store.send(database.actor, conversationId, input);
+    expect(database.tables.assistantMessage![0]!.content).toBe('请概括附件内容');
+    expect(await store.send(database.actor, conversationId, input)).toEqual(first);
+    await expect(store.send(database.actor, conversationId, { ...input, attachmentIds: [randomUUID()] })).rejects.toThrow('同一消息身份');
+  });
+
+  it('未知图像能力会在创建任务和绑定文件之前拒绝图片', async () => {
+    // 文件已验证可读，也不代表当前模型支持图像。
+    const bind = jest.fn();
+    Object.assign(store, { attachments: { attachmentMetadata: () => Promise.resolve([{ status: 'ready', requiresVision: true }]), bindMessage: bind } });
+    await expect(store.send(database.actor, conversationId, { clientMessageId: randomUUID(), content: '看图', attachmentIds: [randomUUID()] })).rejects.toThrow('未开启多模态');
+    expect(bind).not.toHaveBeenCalled();
+    expect(database.tables.assistantTask).toHaveLength(0);
+  });
+
+  it('遗忘同时清除新增付费请求账本原文，仍保留请求hash和安全失败事实', async () => {
+    // 新账本不能成为删除长期记忆后的隐蔽上下文副本。
+    const first = await initial('记住测试偏好');
+    const memory = await store.saveMemory(database.actor, { content: 'private-preference' }) as { id: string };
+    const attemptId = randomUUID();
+    database.tables.assistantAttempt!.push({ id: attemptId, userId: database.actor.sub, runId: first.id, response: { text: 'private-preference' } });
+    database.tables.assistantAttemptRequest!.push({ id: randomUUID(), attemptId, requestHash: 'a'.repeat(64), request: { instructions: 'private-preference' }, nextRequest: { instructions: 'private-preference' }, failure: { code: 'AI_RATE_LIMITED' } });
+    await store.deleteMemory(database.actor, memory.id);
+    const ledger = database.tables.assistantAttemptRequest![0]!;
+    expect(JSON.stringify(ledger)).not.toContain('private-preference');
+    expect(ledger.requestHash).toBe('a'.repeat(64));
+    expect(ledger.failure).toEqual({ code: 'AI_RATE_LIMITED' });
+  });
+
 });

@@ -79,6 +79,12 @@ class AiModelProfile {
   /// 后端是否保存了密钥。
   final bool hasApiKey;
 
+  /// 用户对当前配置声明的图片输入能力，缺失时保持关闭。
+  final bool multimodal;
+
+  /// 模型请求是否明确开启思考，缺失字段按关闭兼容。
+  final bool thinkingEnabled;
+
   /// 后端提供的密钥掩码。
   final String maskedApiKey;
 
@@ -91,6 +97,8 @@ class AiModelProfile {
     required this.model,
     required this.hasApiKey,
     required this.maskedApiKey,
+    this.multimodal = false,
+    this.thinkingEnabled = false,
   });
 
   /// 判断当前配置是否可用于笔记整理。
@@ -104,6 +112,8 @@ class AiModelProfile {
     baseUrl: json['baseUrl'] as String,
     model: json['model'] as String,
     hasApiKey: json['hasApiKey'] == true,
+    multimodal: json['multimodal'] == true,
+    thinkingEnabled: json['thinkingEnabled'] == true,
     maskedApiKey: json['maskedApiKey'] as String? ?? '',
   );
 }
@@ -248,7 +258,8 @@ class AiSettingsRepository {
     required String baseUrl,
     required String model,
     required String apiKey,
-    bool removeApiKey = false,
+    bool multimodal = false,
+    bool thinkingEnabled = false,
   }) async => AiSettingsSnapshot.fromJson(
     await request(
       id == null ? 'POST' : 'PUT',
@@ -259,8 +270,9 @@ class AiSettingsRepository {
         'provider': provider,
         'baseUrl': baseUrl.trim(),
         'model': model.trim(),
+        'multimodal': multimodal,
+        'thinkingEnabled': thinkingEnabled,
         if (apiKey.trim().isNotEmpty) 'apiKey': apiKey.trim(),
-        if (removeApiKey) 'removeApiKey': true,
       },
     ),
   );
@@ -284,6 +296,7 @@ class AiSettingsRepository {
     required String baseUrl,
     required String model,
     required String apiKey,
+    bool thinkingEnabled = false,
   }) async {
     // 成功响应不包含任何供应商凭证。
     final Map<String, dynamic> response = await request(
@@ -294,6 +307,7 @@ class AiSettingsRepository {
         'provider': provider,
         'baseUrl': baseUrl.trim(),
         'model': model.trim(),
+        'thinkingEnabled': thinkingEnabled,
         if (apiKey.trim().isNotEmpty) 'apiKey': apiKey.trim(),
       },
     );

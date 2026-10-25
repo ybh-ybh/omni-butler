@@ -21,7 +21,8 @@ export const assistantSettingsInput = z.strictObject({
 /// 客户端身份固定重试，不由模型产生。
 export const assistantMessageInput = z.strictObject({
   clientMessageId: z.uuid(),
-  content: z.string().trim().min(1).max(20000),
+  content: z.string().trim().max(20000),
+  attachmentIds: z.array(z.uuid()).max(5).refine((ids) => new Set(ids).size === ids.length, { message: '附件不可重复' }).default([]),
   timeZone: z.string().max(128).optional(),
   reference: z
     .strictObject({
@@ -51,7 +52,7 @@ export const assistantMessageInput = z.strictObject({
       ]),
     })
     .optional(),
-});
+}).refine((input) => input.content.length > 0 || input.attachmentIds.length > 0, { message: '请输入内容或添加附件' });
 /// 确认绑定不可更改的预览及计划版本。
 export const assistantDecisionInput = z.strictObject({
   version: z.number().int().positive(),
@@ -68,6 +69,10 @@ export const assistantMemoryInput = z.strictObject({
 });
 /// 图循环的供应商输入，不在公开事件中返回。
 export interface AssistantState {
+  /// 固定公开摘要，不包含模型输入、工具参数或内部推理。
+  executionSteps?: AssistantExecutionStep[];
+  /// 当前工作进程执行段开始时间，等待用户时清除。
+  segmentStartedAt?: string;
   /// 完整且已校验的供应商消息项。
   input: Record<string, unknown>[];
   /// 本任务累计的业务写意图。
@@ -76,6 +81,22 @@ export interface AssistantState {
   calls: { callId: string; name: string; arguments: Record<string, unknown> }[];
   /// 累计工具调用预算。
   toolCount: number;
+  /// 已知只读错误仅允许一次模型修正。
+  readCorrectionUsed?: boolean;
+  /// 已完成只读查询的有界事实索引，供压缩和最终有限回答使用。
+  readProgress?: AssistantReadProgress[];
+  /// 查询预算终止后只生成最终回答，不再发起业务工具。
+  answerOnly?: boolean;
+  /// 查询或模型预算终止原因，不与真实业务冲突混淆。
+  readLimit?: 'ASSISTANT_TOOL_LIMIT' | 'ASSISTANT_MODEL_LIMIT';
+  /// 来源入口因单次或累计二十条上限被截断，不代表业务查询是否完整。
+  referencesTruncated?: boolean;
+  /// 有序文件身份固定到任务，不包含原文件内容。
+  attachmentIds?: string[];
+  /// 受控图像引用出站时临时展开，不保存base64。
+  attachmentImages?: { attachmentId: string; page?: number }[];
+  /// 有界重试的公开摘要。
+  recovery?: { attempt: number; retryAt: string; reason: string };
   /// 单独模型调用预算，避免无工具的空循环。
   modelCount: number;
   /// 流式回答稳定消息身份。
@@ -128,6 +149,103 @@ export interface AssistantState {
   memoryInvalidated?: boolean;
   /// 候选已保存时不能将正文冲突描述为正式采用成功。
   conflict?: boolean;
+}
+/// 当前任务实际交付的待办页，只记录资料，不授予后续业务写权限。
+export interface AssistantReadProgress {
+  /// 首版仅记录已经完成的待办列表查询。
+  tool: 'list_todos';
+  /// 固定顺序的筛选条件，省略条件不猜测为任何默认过滤。
+  filters: {
+    /// 真实标题查询词，最多二百字。
+    query?: string;
+    /// 查询计划日期起点，包含当天。
+    fromDay?: string;
+    /// 查询计划日期终点，不包含当天。
+    toDay?: string;
+    /// 实际完成状态过滤。
+    completed?: boolean;
+    /// 固定零至三的重要紧急象限。
+    priorityQuadrant?: number;
+  };
+  /// 工具实际接受的原始分页要求。
+  requested: {
+    /// 请求起始偏移。
+    offset: number;
+    /// 请求最多条数。
+    limit: number;
+  };
+  /// 实际交付范围采用左闭右开区间。
+  delivered: {
+    /// 真实交付起点。
+    offset: number;
+    /// 真实交付末尾后一条位置。
+    endOffset: number;
+  };
+  /// 实际返回条数，不从压缩后显示数量推断。
+  returnedCount: number;
+  /// 工具确认仍有后续页，不代表此任务覆盖所有待办。
+  hasMore: boolean;
+  /// 服务端原始分页游标，无后续页时为空。
+  nextOffset: number | null;
+  /// 真实待办身份与有限摘要，不含描述、步骤正文和同步字段。
+  items: {
+    /// 只接受合法真实 UUID，不接受名称充当身份。
+    id: string;
+    /// 引用只属于待办模块。
+    module: 'todos';
+    /// 标题保留有限完整 Unicode 字符，省略有单独标记。
+    title: string;
+    /// 标题被截短或凭据类内容被移除时明确标记。
+    titleOmitted?: true;
+    /// 实际重要紧急象限。
+    priorityQuadrant?: number;
+    /// 真实计划日期。
+    scheduledDate?: string;
+    /// 真实完成状态。
+    isCompleted?: boolean;
+    /// 真实直属父待办身份。
+    parentId?: string | null;
+    /// 实际步骤总数，不携带步骤正文。
+    progressCount?: number;
+    /// 实际已完成步骤数。
+    progressCompletedCount?: number;
+  }[];
+  /// 摘要或引用因预算省略，不能按当前数组长度误认整页结果。
+  itemsOmitted?: true;
+}
+/// 执行摘要只能描述服务器已观察到的阶段和结果。
+export interface AssistantExecutionStep {
+  /// 运行身份加模型轮次或工具调用身份，供重放去重。
+  id: string;
+  /// 模型、工具和真实提交分开记录。
+  kind: 'model' | 'tool' | 'commit';
+  /// 由服务器固定词表生成，不接受模型自由文本。
+  label: string;
+  /// 仅真实附件名和已读取范围，不接受模型自由说明。
+  detail?: string;
+  /// 模型明确公开的可读思考，与工具参数和答案正文独立保存。
+  reasoning?: { text: string; truncated?: boolean };
+  /// 仅向所属用户展示的实际工具输入，敏感字段与超长内容由服务端裁剪。
+  tool?: {
+    /// 已开始执行的函数名称。
+    name: string;
+    /// JSON参数不包含模型推理或工具输出。
+    arguments: Record<string, unknown>;
+    /// 超出展示上限时明确提示存在省略。
+    truncated?: boolean;
+  };
+  /// 登记写意图使用 planned，不能冒充实际提交成功。
+  status:
+    | 'running'
+    | 'succeeded'
+    | 'failed'
+    | 'planned'
+    | 'waiting'
+    | 'cancelled';
+  /// 首次开始的服务器时间。
+  startedAt: string;
+  /// 当前阶段结束时间，等待状态同样停止本阶段计时。
+  finishedAt?: string;
 }
 /// JSON序列化保证数据库回放与首次结果形状相同。
 export function assistantJson(value: unknown): Prisma.InputJsonValue {

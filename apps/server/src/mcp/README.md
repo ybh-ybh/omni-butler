@@ -4,6 +4,8 @@
 
 ## 创建连接
 
+新增待办只需任务名称：未提供计划日期时按连接业务时区取准备操作时的当天，类型默认普通任务，象限默认重要不紧急；不自动添加截止日期、提醒、重复或进度步骤，也不为这些可选项追问。未配置连接时区时，可通过 `timeZone` 明确指定；已有明确计划日期则无需时区。默认值在动作准备时固定，重试或跨日提交不重新计算。更新省略字段仍保留原值，明确子任务仍继承父项日期和象限。
+
 升级服务端及客户端后，在知序“设置 → AI 设置 → MCP 连接”创建连接：
 
 - 默认七模块只读；按实际需要勾选写权限，写权限必须同时有读权限。
@@ -69,9 +71,12 @@ tool_timeout_sec = 75
 | `list_recycle_bin(module, …)` | 统一七模块回收站，分页与模块读权限继续生效 |
 | `restore_record(module, id, requestId)` | 直接恢复一条记录，保留各领域同批关联恢复规则 |
 | `list_time_entries(status, from?, to?, …)` | `ongoing/finished/all`，默认 `all`；范围成对可选，查询进行中记录可不设窗口 |
+| `list_todos(priorityQuadrant?, completed?, …)` | 可在分页前按固定 0 至 3 象限筛选；重要且紧急为 `3`，省略保持全部象限 |
 | `get_capabilities()` | 返回权限、连接时区、服务器时间、版本和限制；有待办读权限时附带 `todoRecurrence` 调度状态；工具名称、描述和参数以 `tools/list` 为准 |
 
 `from/to` 必须是带偏移的 ISO 时间点，采用左闭右开区间，正范围最长十年。时间列表不再接收 `timeZone/asOf`。统计的 `asOf` 仅用于 time/todos/memberships/events；quotes/notes/inventory 不接收或回显无效截止点。日签、笔记及有购买窗口的物品统计仍使用 `timeZone` 确定自然日边界。全量库存不要求时区。
+
+`list_todos` 的外部 MCP 列表继续保留完整记录与有效进度步骤。应用内助手通过同一授权和参数契约读取标量摘要及进度计数，完整 JSON 最大 16KiB；缩减页长时 `hasMore/nextOffset` 按实际交付条数计算，`stepsSummarized` 说明步骤已摘要，`truncated` 仅表示本页条数因预算减少。该限制不影响 MCP 原有返回结构。
 
 笔记记录时间统一为 `recordedAt`，例如 `2026-10-22T20:15:30+08:00`；偏移决定记录的日期和日内时钟，后端转换为原存储字段。新增省略取当前时刻，编辑省略保留；不再让模型分别填写 `dayKey/recordTimeSeconds/recordUtcOffsetMinutes`。创建事实仍不可编辑，主动选择沿用 1970 年至当前时刻的限制。
 

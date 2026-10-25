@@ -38,6 +38,7 @@ services:
       JWT_KEYS_DIR: /app/keys
       SYNC_SECRET: ${SYNC_SECRET}
       IMAGE_SYNC_ENABLED: ${IMAGE_SYNC_ENABLED:-false}
+      ASSISTANT_ATTACHMENTS_ENABLED: ${ASSISTANT_ATTACHMENTS_ENABLED:-false}
       MINIO_ENDPOINT: http://minio:9000
       MINIO_CREDENTIALS_FILE: /app/image-storage/credentials.json
       NOTE_ASR_PROVIDER: ${NOTE_ASR_PROVIDER:-none}
