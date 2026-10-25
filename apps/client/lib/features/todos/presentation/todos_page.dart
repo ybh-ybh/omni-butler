@@ -17,6 +17,7 @@ import 'package:omni_butler/features/todos/presentation/todo_priority_quadrant_s
 import 'package:omni_butler/features/todos/presentation/todo_progress_panel.dart';
 import 'package:omni_butler/features/todos/presentation/todo_progress_widgets.dart';
 import 'package:omni_butler/features/todos/presentation/todo_task_actions.dart';
+import 'package:omni_butler/features/todos/presentation/windows_todo_completion_history.dart';
 import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
@@ -213,10 +214,11 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     final AsyncValue<List<TodoTreeNode>> activeAsync = ref.watch(
       activeTodoTreesProvider(today),
     );
-    // 当前日期的完成历史。
-    final AsyncValue<List<TodoHistoryEntry>> historyAsync = ref.watch(
-      completedTodosForDayProvider(_selectedDay),
-    );
+    // Windows 使用独立全量完成流，其他平台继续按原日期读取历史。
+    final AsyncValue<List<TodoHistoryEntry>> historyAsync =
+        Theme.of(context).platform == TargetPlatform.windows
+        ? const AsyncData<List<TodoHistoryEntry>>(<TodoHistoryEntry>[])
+        : ref.watch(completedTodosForDayProvider(_selectedDay));
     // 当前是否运行在桌面平台。
     final bool desktopPlatform = OmniBreakpoint.isDesktopPlatform(
       Theme.of(context).platform,
@@ -443,6 +445,8 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     required bool mobile,
     required TodoPriorityQuadrant? priorityQuadrantFilter,
   }) {
+    // Windows 使用历史入口与退出操作，不再占用一行分段切换。
+    final bool windows = Theme.of(context).platform == TargetPlatform.windows;
     // 当前进行中任务树。
     final List<TodoTreeNode> trees =
         activeAsync.asData?.value ?? <TodoTreeNode>[];
@@ -479,55 +483,64 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     // 页面头部与控制区。
     final List<Widget> header = <Widget>[
       if (!mobile) ...<Widget>[
-        OmniPageHeader(
-          title: '每日待办',
-          description: _pageView == _TodoPageView.active
-              ? '${trees.length} 个主任务 · $pendingCount 项未完成'
-              : '${DateFormat('yyyy 年 M 月 d 日').format(_selectedDay)}完成的任务',
-          actions: _pageView == _TodoPageView.history
-              ? const <Widget>[]
-              : <Widget>[
-                  OmniButton(
-                    key: const ValueKey<String>('todo-primary-create'),
-                    label: '新增待办',
-                    icon: Icons.add_rounded,
-                    variant: OmniButtonVariant.pagePrimary,
-                    onPressed: () => TodoEditorDialog.show(
-                      context,
-                      initialDate: DateUtils.dateOnly(now),
+        if (windows)
+          _buildWindowsPageHeader(
+            activeRootCount: trees.length,
+            pendingCount: pendingCount,
+            today: DateUtils.dateOnly(now),
+          )
+        else
+          OmniPageHeader(
+            title: '每日待办',
+            description: _pageView == _TodoPageView.active
+                ? '${trees.length} 个主任务 · $pendingCount 项未完成'
+                : '${DateFormat('yyyy 年 M 月 d 日').format(_selectedDay)}完成的任务',
+            actions: _pageView == _TodoPageView.history
+                ? const <Widget>[]
+                : <Widget>[
+                    OmniButton(
+                      key: const ValueKey<String>('todo-primary-create'),
+                      label: '新增待办',
+                      icon: Icons.add_rounded,
+                      variant: OmniButtonVariant.pagePrimary,
+                      onPressed: () => TodoEditorDialog.show(
+                        context,
+                        initialDate: DateUtils.dateOnly(now),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+          ),
+        const SizedBox(height: OmniSpacing.sm),
+      ],
+      if (!windows) ...<Widget>[
+        _TodoViewBar(
+          view: _pageView,
+          mobile: mobile,
+          selectedDay: _selectedDay,
+          today: DateUtils.dateOnly(now),
+          activeCount: pendingCount,
+          selectedQuadrant: priorityQuadrantFilter,
+          quadrantCounts: quadrantCounts,
+          quadrantIndicatorIndex: null,
+          onViewChanged: (_TodoPageView value) {
+            _dismissUndo();
+            setState(() {
+              _pageView = value;
+            });
+          },
+          onDaySelected: (DateTime value) {
+            setState(() => _selectedDay = DateUtils.dateOnly(value));
+          },
+          onQuadrantSelected: _setPriorityQuadrantFilter,
+          onReturnToQuadrants:
+              !mobile &&
+                  _pageView == _TodoPageView.active &&
+                  priorityQuadrantFilter != null
+              ? () => _setPriorityQuadrantFilter(null)
+              : null,
         ),
         const SizedBox(height: OmniSpacing.sm),
       ],
-      _TodoViewBar(
-        view: _pageView,
-        mobile: mobile,
-        selectedDay: _selectedDay,
-        today: DateUtils.dateOnly(now),
-        activeCount: pendingCount,
-        selectedQuadrant: priorityQuadrantFilter,
-        quadrantCounts: quadrantCounts,
-        quadrantIndicatorIndex: null,
-        onViewChanged: (_TodoPageView value) {
-          _dismissUndo();
-          setState(() {
-            _pageView = value;
-          });
-        },
-        onDaySelected: (DateTime value) {
-          setState(() => _selectedDay = DateUtils.dateOnly(value));
-        },
-        onQuadrantSelected: _setPriorityQuadrantFilter,
-        onReturnToQuadrants:
-            !mobile &&
-                _pageView == _TodoPageView.active &&
-                priorityQuadrantFilter != null
-            ? () => _setPriorityQuadrantFilter(null)
-            : null,
-      ),
-      const SizedBox(height: OmniSpacing.sm),
     ];
     if (mobile) {
       return Column(
@@ -541,6 +554,92 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         ...header,
         Expanded(child: body),
       ],
+    );
+  }
+
+  /// 标题右侧提供完成历史入口，历史页面通过退出返回原看板。
+  Widget _buildWindowsPageHeader({
+    required int activeRootCount,
+    required int pendingCount,
+    required DateTime today,
+  }) {
+    // 历史页只展示退出，避免出现重复或含糊的状态切换。
+    final bool showingHistory = _pageView == _TodoPageView.history;
+    // 页面标题明确表示当前查看的是完成历史。
+    final String title = showingHistory ? '完成历史' : '每日待办';
+    // 进行中的任务数量继续保留在原有标题说明里。
+    final String description = showingHistory
+        ? '按完成日期回顾任务与章节进度'
+        : '$activeRootCount 个主任务 · $pendingCount 项未完成';
+    // 页头操作保持可访问；聚焦象限的返回操作仍保留原有语义。
+    final List<Widget> actions = <Widget>[
+      if (showingHistory)
+        OmniButton(
+          key: const ValueKey<String>('todo-history-exit'),
+          label: '退出',
+          icon: Icons.arrow_back_rounded,
+          variant: OmniButtonVariant.secondary,
+          large: true,
+          onPressed: () {
+            _dismissUndo();
+            setState(() => _pageView = _TodoPageView.active);
+          },
+        )
+      else ...<Widget>[
+        OmniButton(
+          key: const ValueKey<String>('todo-history-open'),
+          label: '完成历史',
+          icon: Icons.history_rounded,
+          variant: OmniButtonVariant.secondary,
+          large: true,
+          onPressed: () {
+            _dismissUndo();
+            setState(() => _pageView = _TodoPageView.history);
+          },
+        ),
+        if (_priorityQuadrantFilter != null)
+          OmniTextButton.icon(
+            key: const ValueKey<String>('todo-return-quadrants'),
+            onPressed: () => _setPriorityQuadrantFilter(null),
+            icon: const Icon(Icons.arrow_back_rounded, size: 17),
+            label: const Text('返回'),
+          ),
+        OmniButton(
+          key: const ValueKey<String>('todo-primary-create'),
+          label: '新增待办',
+          icon: Icons.add_rounded,
+          variant: OmniButtonVariant.pagePrimary,
+          onPressed: () => TodoEditorDialog.show(context, initialDate: today),
+        ),
+      ],
+    ];
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // 窄窗和大字号换行显示操作，避免公共页头自动隐藏历史或退出入口。
+        final bool stacked =
+            constraints.maxWidth < 760 ||
+            MediaQuery.textScalerOf(context).scale(14) > 21;
+        if (!stacked) {
+          return OmniPageHeader(
+            title: title,
+            description: description,
+            actions: actions,
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            OmniPageHeader(title: title, description: description),
+            const SizedBox(height: OmniSpacing.xs),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: OmniSpacing.xs,
+              runSpacing: OmniSpacing.xs,
+              children: actions,
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -568,6 +667,13 @@ class _TodosPageState extends ConsumerState<TodosPage> {
         loading: _buildLoading,
         error: (Object error, StackTrace stackTrace) =>
             _ErrorCard(message: '待办读取失败：$error'),
+      );
+    }
+    if (Theme.of(context).platform == TargetPlatform.windows) {
+      return WindowsTodoCompletionHistory(
+        onReopen: (TodoRecord todo) => _setTodoCompleted(todo, false),
+        onEdit: (TodoRecord todo) =>
+            TodoEditorDialog.show(context, record: todo),
       );
     }
     return historyAsync.when(
@@ -1278,7 +1384,8 @@ class _TodoViewBar extends StatelessWidget {
         ],
       ],
     );
-    if (view == _TodoPageView.active) {
+    if (view == _TodoPageView.active ||
+        Theme.of(context).platform == TargetPlatform.windows) {
       return Align(alignment: Alignment.centerLeft, child: selectorActions);
     }
     // 完成历史日期巡航。

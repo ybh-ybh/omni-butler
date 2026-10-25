@@ -22,6 +22,7 @@ import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
 import 'package:omni_butler/features/notes/presentation/notes_page.dart';
 import 'package:omni_butler/features/notes/presentation/note_rich_editor.dart';
+import 'package:omni_butler/features/todos/presentation/todos_page.dart';
 import 'package:omni_butler/features/notes/data/note_editor_controller.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:omni_butler/shared/ui/omni_note_composer_button.dart';
@@ -161,6 +162,33 @@ class ProbeTooltipAnchors extends StatelessWidget {
     );
     return guarded ? OmniWindowsSemanticsBoundary(child: tooltip) : tooltip;
   }
+}
+
+/// 在生产完成历史页反复悬停统计并退出、重新进入，验证真实原生桥。
+Future<void> runTodoStatisticsProbeRound(int round, int viewId) async {
+  stdout.writeln('PROBE_TODO_STATISTICS:$round');
+  for (final int days in <int>[7, 30, 365]) {
+    await hoverTagProbe(
+      tagProbePoint(ValueKey<String>('todo-completion-stat-tip-$days')),
+      viewId,
+    );
+    // 悬停延迟和提示淡入均实际完成，不只构造静态语义树。
+    await pauseProbe(450);
+  }
+  if (round % 5 == 0) {
+    await clickTagProbe(
+      tagProbePoint(const ValueKey<String>('todo-history-exit')),
+      viewId,
+    );
+    await pauseProbe(180);
+    await clickTagProbe(
+      tagProbePoint(const ValueKey<String>('todo-history-open')),
+      viewId,
+    );
+    await pauseProbe(300);
+  }
+  Tooltip.dismissAllToolTips();
+  await pauseProbe(100);
 }
 
 /// 真实显示某个Tooltip，不用静态树代替浮层更新。
@@ -637,6 +665,10 @@ Future<void> main(List<String> arguments) async {
   final bool anchorsOnly = arguments.contains('--anchors-only');
   // 统计专项只循环新浮层，默认完整场景也包含本轮新增交互。
   final bool statisticsOnly = arguments.contains('--statistics-only');
+  // 待办专项沿用同一原生桥，只访问隔离内存库中的生产页面。
+  final bool todoStatisticsOnly = arguments.contains(
+    '--todo-history-statistics',
+  );
   // 编辑专项只操作隔离的生产正文，避免旧统计流程稀释验收证据。
   final bool editorOnly = arguments.contains('--editor-only');
   // 历史专项使用四种附件／标签组合和真正的鼠标双击。
@@ -749,10 +781,16 @@ Future<void> main(List<String> arguments) async {
       noteRecorderProvider.overrideWithValue(ProbeRecorder()),
     ],
   );
-  await container.read(noteEditorProvider).openComposer();
+  if (!todoStatisticsOnly) {
+    await container.read(noteEditorProvider).openComposer();
+  }
   // 单窗口开启真实原生辅助功能桥。
   final RegularWindowController window = RegularWindowController(
-    size: narrow ? const Size(780, 900) : const Size(1280, 720),
+    size: todoStatisticsOnly && narrow
+        ? const Size(640, 900)
+        : narrow
+        ? const Size(780, 900)
+        : const Size(1280, 720),
     title: 'Notes accessibility isolated probe',
   );
   runWidget(
@@ -764,7 +802,9 @@ Future<void> main(List<String> arguments) async {
           theme: AppTheme.build(
             brightness: dark ? Brightness.dark : Brightness.light,
           ),
-          home: anchorsOnly
+          home: todoStatisticsOnly
+              ? const TodosPage()
+              : anchorsOnly
               ? ProbeTooltipAnchors(guarded: !unguarded)
               : const NotesPage(),
         ),
@@ -815,7 +855,7 @@ Future<void> main(List<String> arguments) async {
   // 回归失败必须返回非零状态，不能只凭窗口退出认定通过。
   int resultCode = 0;
   try {
-    if (tagsOnly) {
+    if (tagsOnly || todoStatisticsOnly) {
       GestureBinding.instance.handlePointerEvent(
         PointerAddedEvent(
           viewId: window.rootView.viewId,
@@ -825,7 +865,18 @@ Future<void> main(List<String> arguments) async {
         ),
       );
     }
+    if (todoStatisticsOnly) {
+      await clickTagProbe(
+        tagProbePoint(const ValueKey<String>('todo-history-open')),
+        window.rootView.viewId,
+      );
+      await pauseProbe(400);
+    }
     for (int round = 0; round < 20; round++) {
+      if (todoStatisticsOnly) {
+        await runTodoStatisticsProbeRound(round, window.rootView.viewId);
+        continue;
+      }
       if (tagsOnly) {
         await runTagsProbeRound(database, round, window.rootView.viewId);
         continue;

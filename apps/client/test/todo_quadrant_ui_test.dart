@@ -427,7 +427,22 @@ void main() {
     );
     expect(find.text('返回四象限'), findsNothing);
     expect(find.text('返回'), findsOneWidget);
-    // 完成历史分段标签的位置。
+    await tester.tap(find.byKey(const ValueKey<String>('todo-history-open')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(
+      find.byKey(const ValueKey<String>('todo-history-exit')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey<String>('todo-history-exit')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    // 退出历史保留进入前的聚焦象限。
+    expect(
+      find.byKey(const ValueKey<String>('todo-quadrant-focus-1')),
+      findsOneWidget,
+    );
+    // 完成历史页头入口的位置。
     final Rect historyLabelRect = tester.getRect(find.text('完成历史'));
     // 返回按钮的位置。
     final Rect returnButtonRect = tester.getRect(
@@ -1369,7 +1384,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('每日待办完成历史按父任务聚类并默认展开', (WidgetTester tester) async {
+  testWidgets('Windows完成历史按完成日聚类父任务并默认收起', (WidgetTester tester) async {
     // 桌面测试视口。
     const Size viewport = Size(1440, 900);
     tester.view.physicalSize = viewport;
@@ -1430,26 +1445,26 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
+    // 同一任务在不同完成日期保持独立分组身份。
+    final String groupId = '${businessDayKey(today)}-${root.id}';
     expect(
-      find.byKey(ValueKey<String>('todo-history-group-${root.id}')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(ValueKey<String>('todo-history-children-${root.id}')),
+      find.byKey(ValueKey<String>('todo-completion-group-$groupId')),
       findsOneWidget,
     );
     expect(find.text('发布父任务'), findsOneWidget);
-    expect(find.text('准备说明'), findsOneWidget);
-    expect(find.text('检查构建'), findsOneWidget);
+    expect(find.text('准备说明'), findsNothing);
+    expect(find.text('检查构建'), findsNothing);
 
     await tester.tap(
-      find.byKey(ValueKey<String>('todo-history-toggle-${root.id}')),
+      find.byKey(ValueKey<String>('todo-completion-toggle-$groupId')),
     );
     await tester.pump();
-    expect(
-      find.byKey(ValueKey<String>('todo-history-children-${root.id}')),
-      findsNothing,
+    expect(find.text('准备说明'), findsOneWidget);
+    expect(find.text('检查构建'), findsOneWidget);
+    await tester.tap(
+      find.byKey(ValueKey<String>('todo-completion-toggle-$groupId')),
     );
+    await tester.pump();
     expect(find.text('发布父任务'), findsOneWidget);
     expect(find.text('准备说明'), findsNothing);
     expect(find.text('检查构建'), findsNothing);

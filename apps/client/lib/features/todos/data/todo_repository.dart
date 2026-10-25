@@ -1,8 +1,11 @@
 import 'package:omni_butler/core/sync/business_edit_baseline.dart';
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
+import 'package:omni_butler/features/todos/data/todo_completion_entry.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:uuid/uuid.dart';
+
+export 'package:omni_butler/features/todos/data/todo_completion_entry.dart';
 
 /// 待办完成方式。
 enum TodoTaskType {
@@ -280,6 +283,100 @@ class TodoRepository {
       });
       return history;
     });
+  }
+
+  /// 监听全部有效完成单元，双表变化后从同一事务快照批量读取。
+  Stream<List<TodoCompletionEntry>> watchCompletionEntries() {
+    return _database
+        .customSelect(
+          'SELECT COUNT(*) FROM todo_items UNION ALL '
+          'SELECT COUNT(*) FROM todo_progress_steps',
+          readsFrom: {_database.todoItems, _database.todoProgressSteps},
+        )
+        .watch()
+        .asyncMap((_) => _database.transaction(_loadCompletionEntries));
+  }
+
+  /// 组装普通叶任务和进度步骤，避免父项重复计数与逐行查询。
+  Future<List<TodoCompletionEntry>> _loadCompletionEntries() async {
+    // 所有有效任务同时提供完成记录和父任务上下文。
+    final List<TodoRecord> todos = await (_database.select(
+      _database.todoItems,
+    )..where((TodoItems table) => table.deletedAt.isNull())).get();
+    // 有效步骤包含未完成项，以保留空名称步骤的真实展示序号。
+    final List<TodoProgressStepRecord> steps =
+        await (_database.select(_database.todoProgressSteps)
+              ..where((TodoProgressSteps table) => table.deletedAt.isNull())
+              ..orderBy(<OrderingTerm Function(TodoProgressSteps)>[
+                (TodoProgressSteps table) => OrderingTerm.asc(table.todoId),
+                (TodoProgressSteps table) => OrderingTerm.asc(table.sortOrder),
+                (TodoProgressSteps table) => OrderingTerm.asc(table.id),
+              ]))
+            .get();
+    // 按身份查找有效任务，已删除或尚未同步到达的父项不会泄漏历史。
+    final Map<String, TodoRecord> todosById = <String, TodoRecord>{
+      for (final TodoRecord todo in todos) todo.id: todo,
+    };
+    // 有有效子项的普通父任务只提供分组上下文。
+    final Set<String> parentIds = <String>{
+      for (final TodoRecord todo in todos)
+        if (todo.parentId != null) todo.parentId!,
+    };
+    // 所有界面统计共用的完成单元。
+    final List<TodoCompletionEntry> entries = <TodoCompletionEntry>[];
+    for (final TodoRecord todo in todos) {
+      // 普通任务使用自己的实际完成时间。
+      final DateTime? completedAt = todo.completedAt;
+      if (todo.taskType != TodoTaskType.normal.name ||
+          !todo.isCompleted ||
+          completedAt == null ||
+          parentIds.contains(todo.id)) {
+        continue;
+      }
+      // 子任务须等待其有效父任务到达，删除父项后不单独残留。
+      final TodoRecord? parent = todosById[todo.parentId];
+      if (todo.parentId != null && parent == null) continue;
+      entries.add(
+        TodoCompletionEntry(
+          id: 'todo:${todo.id}',
+          todo: todo,
+          parent: parent,
+          completedAt: completedAt.toLocal(),
+          kind: parent == null
+              ? TodoCompletionKind.normal
+              : TodoCompletionKind.subtask,
+        ),
+      );
+    }
+    // 每个任务独立累计全部有效步骤的原始序号。
+    final Map<String, int> stepOrdinals = <String, int>{};
+    for (final TodoProgressStepRecord step in steps) {
+      // 已删除的所属任务会隐藏其全部步骤。
+      final TodoRecord? todo = todosById[step.todoId];
+      if (todo == null || todo.taskType != TodoTaskType.progress.name) continue;
+      // 先累计未完成项，确保跳序完成仍显示原来的步骤编号。
+      final int ordinal = (stepOrdinals[step.todoId] ?? 0) + 1;
+      stepOrdinals[step.todoId] = ordinal;
+      // 每个步骤按自身完成时间计入，与父任务确认状态无关。
+      final DateTime? completedAt = step.completedAt;
+      if (!step.isCompleted || completedAt == null) continue;
+      entries.add(
+        TodoCompletionEntry(
+          id: 'step:${step.id}',
+          todo: todo,
+          step: step,
+          stepOrdinal: ordinal,
+          completedAt: completedAt.toLocal(),
+          kind: TodoCompletionKind.progress,
+        ),
+      );
+    }
+    entries.sort((TodoCompletionEntry left, TodoCompletionEntry right) {
+      // 同一时刻完成的记录按稳定身份排序，防止刷新时跳动。
+      final int byTime = right.completedAt.compareTo(left.completedAt);
+      return byTime != 0 ? byTime : left.id.compareTo(right.id);
+    });
+    return List<TodoCompletionEntry>.unmodifiable(entries);
   }
 
   /// 监听回收站中的待办。

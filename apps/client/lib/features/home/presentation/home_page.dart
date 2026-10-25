@@ -76,9 +76,9 @@ class HomePage extends ConsumerWidget {
     final AsyncValue<List<TodoTreeNode>> todoTreesAsync = ref.watch(
       activeTodoTreesProvider(today),
     );
-    // 与每日待办共用跨日期活动集合及仓储排序，首页仅限制重点象限。
+    // 后台重读期间保留已有任务，避免整块列表和进度订阅被卸载。
     final List<TodoTreeNode> pendingTodoTrees =
-        todoTreesAsync.asData?.value ?? <TodoTreeNode>[];
+        todoTreesAsync.value ?? <TodoTreeNode>[];
     // 捕获页面生命周期之外仍可用的仓储，完成动画中切页也能提交。
     final TodoRepository todoRepository = ref.watch(todoRepositoryProvider);
     // 当前设备首页卡片偏好。
@@ -1396,7 +1396,7 @@ class _TodayTodoCardState extends State<_TodayTodoCard> {
 
   /// 构建待办列表、加载状态或空状态。
   Widget _buildTodoContent(BuildContext context, OmniColors colors) {
-    if (widget.todoTreesAsync.isLoading) {
+    if (widget.todoTreesAsync.isLoading && !widget.todoTreesAsync.hasValue) {
       return const Padding(
         padding: EdgeInsets.all(24),
         child: Center(child: CircularProgressIndicator()),

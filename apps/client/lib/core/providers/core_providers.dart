@@ -155,6 +155,14 @@ final activeTodoTreesProvider =
       return repository.watchActiveTrees(today);
     });
 
+/// Windows 完成历史共用的全量完成单元，离开页面后释放订阅。
+final todoCompletionEntriesProvider =
+    StreamProvider.autoDispose<List<TodoCompletionEntry>>((Ref ref) {
+      // 当前数据源的待办仓储。
+      final TodoRepository repository = ref.watch(todoRepositoryProvider);
+      return repository.watchCompletionEntries();
+    });
+
 /// 指定完成日期的待办历史流提供者。
 final completedTodosForDayProvider =
     StreamProvider.family<List<TodoHistoryEntry>, DateTime>((
