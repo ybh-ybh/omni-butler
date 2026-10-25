@@ -54,6 +54,9 @@ class OmniPanel extends StatelessWidget {
   /// 面板内边距。
   final EdgeInsetsGeometry padding;
 
+  /// 可选局部底色，省略时沿用主题面板色。
+  final Color? backgroundColor;
+
   /// 可选外边距。
   final EdgeInsetsGeometry? margin;
 
@@ -80,6 +83,7 @@ class OmniPanel extends StatelessWidget {
     required this.child,
     this.header,
     this.padding = const EdgeInsets.all(OmniSpacing.md),
+    this.backgroundColor,
     this.margin,
     this.onTap,
     this.onDoubleTap,
@@ -172,7 +176,7 @@ class OmniPanel extends StatelessWidget {
                     ));
     // 面板主体。
     final Widget panel = Material(
-      color: flat ? Colors.transparent : colors.paper,
+      color: flat ? Colors.transparent : backgroundColor ?? colors.paper,
       clipBehavior: clipBehavior,
       shape: flat
           ? null

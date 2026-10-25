@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_entity_details.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/features/assistant/data/assistant_models.dart';
@@ -572,8 +573,12 @@ class _AssistantReferencesCardState extends State<_AssistantReferencesCard> {
   /// 按需构建引用按钮，折叠时不保留隐藏的可聚焦操作。
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: OmniSpacing.sm),
+    padding: const EdgeInsets.only(top: OmniSpacing.xs),
     child: OmniPanel(
+      // 与聊天背景保持轻微色差，折叠和展开共用柔和底色。
+      backgroundColor: OmniColors.of(context).canvas,
+      // 折叠栏仅保留紧凑外沿，标题内边距由按钮承载。
+      padding: const EdgeInsets.all(OmniSpacing.xxs),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -583,7 +588,10 @@ class _AssistantReferencesCardState extends State<_AssistantReferencesCard> {
               key: const ValueKey<String>('assistant-references-toggle'),
               style: const ButtonStyle(
                 padding: WidgetStatePropertyAll<EdgeInsetsGeometry>(
-                  EdgeInsets.zero,
+                  EdgeInsets.symmetric(
+                    horizontal: OmniSpacing.sm,
+                    vertical: OmniSpacing.xxs,
+                  ),
                 ),
                 alignment: Alignment.centerLeft,
               ),

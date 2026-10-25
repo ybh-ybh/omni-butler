@@ -18,6 +18,7 @@ import {
   McpCatalog,
   mcpAutoTaxonomyPolicy,
   mcpTodoCreatePolicy,
+  mcpTodoDatePolicy,
   mcpModules,
   mcpRequestId,
   type McpModule,
@@ -282,6 +283,24 @@ describe('MCP 工具与参数说明的真实协议契约', () => {
     expect(mcpAutoTaxonomyPolicy).toContain('明确留空时不推断');
     expect(mcpAutoTaxonomyPolicy).toContain('更新不自动重分类');
     expect(mcpAutoTaxonomyPolicy).toContain('查询失败须说明');
+  });
+
+  it('初始化与待办查询工具共用日期规则，只读连接也能获得说明', async () => {
+    // 单模块只读宿主仍应收到日期含义与默认回答约束。
+    const readonlyClient = await connect([], ['todos']);
+    try {
+      expect(readonlyClient.getInstructions()).toContain(mcpTodoDatePolicy);
+      // 核对真实协议发布内容，避免只改常量却遗漏注册入口。
+      const tools = (await readonlyClient.listTools()).tools;
+      for (const name of ['list_todos', 'get_todo']) {
+        expect(tools.find((tool) => tool.name === name)?.description).toContain(mcpTodoDatePolicy);
+      }
+      expect(tools.find((tool) => tool.name === 'list_todos')?.inputSchema.properties?.fromDay).toMatchObject({
+        description: expect.stringContaining('按计划日期筛选'),
+      });
+    } finally {
+      await readonlyClient.close();
+    }
   });
 
   it('每个直接写入、批量准备和撤销工具的 requestId 保留 UUID 必填约束', () => {

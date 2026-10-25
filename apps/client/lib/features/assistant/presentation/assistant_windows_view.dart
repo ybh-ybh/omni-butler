@@ -113,12 +113,15 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
     if (mounted) setState(() {});
   }
 
-  /// 只有真实设置和连接均有效时可提交聊天。
-  bool _enabled(AsyncValue<Map<String, dynamic>?> settings) =>
+  /// 默认要求设置读取完成；附件选择可在刷新时沿用已确认设置。
+  bool _enabled(
+    AsyncValue<Map<String, dynamic>?> settings, {
+    bool allowSettingsRefresh = false,
+  }) =>
       widget.chat.connected &&
       !widget.chat.offline &&
       !widget.chat.loading &&
-      !settings.isLoading &&
+      (!settings.isLoading || allowSettingsRefresh && settings.hasValue) &&
       !settings.hasError &&
       settings.value?['enabled'] == true;
 
@@ -786,7 +789,10 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                     in cards.indexed)
                   Padding(
                     key: ValueKey<String>('assistant-card-$id-$cardIndex'),
-                    padding: const EdgeInsets.only(top: 12),
+                    // 相关记录自身已有顶部间距，避免两层留白叠加。
+                    padding: EdgeInsets.only(
+                      top: card['type'] == 'references' ? 0 : 12,
+                    ),
                     child: AssistantMessageCard(
                       card: card,
                       enabled:
@@ -964,8 +970,6 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
           '当前仅显示本机缓存；恢复连接后核实服务器状态。',
           style: TextStyle(color: colors.muted, fontSize: 13),
         ),
-      if (widget.chat.connected && settings.isLoading)
-        const LinearProgressIndicator(minHeight: 2),
       if (widget.chat.connected &&
           !settings.isLoading &&
           (settings.hasError || settings.value?['enabled'] != true))
@@ -1188,7 +1192,8 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                     if (widget.chat.attachments.enabled) ...<Widget>[
                       AssistantAttachmentButton(
                         attachments: widget.chat.attachments,
-                        enabled: _enabled(settings) && !_savingModel,
+                        // 选择附件不依赖当前模型，设置刷新沿用已确认状态。
+                        enabled: _enabled(settings, allowSettingsRefresh: true),
                       ),
                       const SizedBox(width: 8),
                     ],
@@ -1209,16 +1214,26 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                                     widget.chat.pending == null
                                 ? () => _models(settings.value)
                                 : null,
-                            style: TextButton.styleFrom(
-                              foregroundColor: colors.ink,
-                              backgroundColor: colors.soft,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              minimumSize: const Size(0, 34),
-                              shape: const StadiumBorder(),
-                            ),
+                            style:
+                                TextButton.styleFrom(
+                                  foregroundColor: colors.ink,
+                                  overlayColor: Colors.transparent,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  minimumSize: const Size(0, 34),
+                                  shape: const StadiumBorder(),
+                                ).copyWith(
+                                  // 模型入口仅在悬停时显示中性底色。
+                                  backgroundColor:
+                                      WidgetStateProperty.resolveWith<Color>(
+                                        (Set<WidgetState> states) =>
+                                            states.contains(WidgetState.hovered)
+                                            ? colors.soft
+                                            : Colors.transparent,
+                                      ),
+                                ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: <Widget>[
@@ -1764,8 +1779,8 @@ class _AssistantModelPicker extends StatelessWidget {
           AssistantWindowsMetrics.modelWidth,
           math.max(0, constraints.maxWidth - safe.horizontal - 24),
         );
-        // 优先把菜单右侧与模型按钮对齐。
-        final double left = (anchor.right - width).clamp(
+        // 菜单与模型按钮水平居中，靠近窗口边缘时仍保留安全留白。
+        final double left = (anchor.center.dx - width / 2).clamp(
           safe.left + 12,
           math.max(
             safe.left + 12,
@@ -1832,9 +1847,8 @@ class _AssistantModelPicker extends StatelessWidget {
                             ),
                           for (final Map<String, dynamic> profile in profiles)
                             Material(
-                              color: profile['id'] == selectedId
-                                  ? colors.soft
-                                  : colors.canvas,
+                              // 选中状态由勾号表达，底色只响应悬停。
+                              color: Colors.transparent,
                               borderRadius: BorderRadius.circular(
                                 AssistantWindowsMetrics.rowRadius,
                               ),
@@ -1842,6 +1856,7 @@ class _AssistantModelPicker extends StatelessWidget {
                                 key: ValueKey<String>(
                                   'assistant-model-${profile['id']}',
                                 ),
+                                hoverColor: colors.soft,
                                 onTap: profile['hasApiKey'] == true
                                     ? () =>
                                           Navigator.of(context)

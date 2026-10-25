@@ -39,6 +39,9 @@ export const mcpAutoTaxonomyPolicy =
 /// 象限数字直接沿用客户端存储值，不能按常见的一至四编号猜测。
 export const mcpTodoQuadrantPolicy =
   '待办priorityQuadrant使用固定0至3：0=不紧急不重要（有空再做），1=紧急不重要（快速处理），2=重要不紧急（安排时间），3=重要且紧急（立即处理）。不接受4，不猜测已有非法象限的用户意图。';
+/// 助手和外部 MCP 共用日期解释，避免把记录日期当成执行承诺。
+export const mcpTodoDatePolicy =
+  '待办日期：计划日期通常只是用户把任务记入应用的日期，不代表承诺执行日或截止日期。除非用户明确提及计划日期、要求按日期筛选或安排，或该日期直接影响当前问题，否则不主动展示、比较或评论计划日期。尤其未设置截止日期时，不因计划日期已过而强调拖延、紧迫或风险，也不主动补充“计划日期已过但未逾期”之类说明。查询未完成的紧急重要任务时按完成状态和priorityQuadrant筛选，不额外按计划日期限制范围或推断优先级。仅计划日期已过不能称为“逾期”；只有实际截止日期已过且未完成时才能判断逾期，按业务时区解释日期。';
 /// 助手与外部 MCP 共用新增待办的最小输入及默认行为。
 export const mcpTodoCreatePolicy =
   '新增待办遵循最小必要原则：用户给出任务名称即可创建。未指定计划日期时取本次操作准备时的业务时区当天，未指定类型时用normal普通任务，未指定优先级时用priorityQuadrant=2重要不紧急；这些默认字段可省略，由服务器补齐。业务时区沿用助手任务或MCP连接，连接未配置时区且未指定日期时才需明确timeZone，不猜测设备时区。不要为这些已有默认值的可选项追问，也不要主动追问截止日期、提醒或是否拆分步骤；未指定时不设置截止/提醒、不拆分、不重复。用户明确指定的值优先；明确创建子任务仍继承父任务日期和象限，明确要求进度任务才使用progress并收集必要步骤。更新时省略字段保留原值，不套用新增默认值。';
@@ -336,7 +339,7 @@ const todoFields = {
   description: optionalText.describe('待办详细说明；null清空'),
   scheduledDate: day
     .optional()
-    .describe('计划执行日期，YYYY-MM-DD；新增省略取业务时区当天，更新省略保留'),
+    .describe('计划日期，通常为任务记入应用的日期，不代表截止日期；YYYY-MM-DD，新增省略取业务时区当天，更新省略保留'),
   dueAt: instant
     .nullable()
     .optional()
@@ -1033,11 +1036,11 @@ export class McpCatalog {
       'todos',
       'list_todos',
       false,
-      '纯读取已保存待办，不隐式生成重复实例。',
+      `纯读取已保存待办，不隐式生成重复实例。${mcpTodoDatePolicy}`,
       {
         query: text.optional().describe('按待办标题搜索；最多200字'),
-        fromDay: day.optional().describe('筛选日期起点，包含；格式YYYY-MM-DD'),
-        toDay: day.optional().describe('筛选日期终点，不包含；格式YYYY-MM-DD'),
+        fromDay: day.optional().describe('按计划日期筛选的起点，包含；仅在用户要求日期范围时设置，格式YYYY-MM-DD'),
+        toDay: day.optional().describe('按计划日期筛选的终点，不包含；仅在用户要求日期范围时设置，格式YYYY-MM-DD'),
         completed: z
           .boolean()
           .optional()
@@ -1057,7 +1060,7 @@ export class McpCatalog {
       'todos',
       'get_todo',
       false,
-      '读取待办、有效直属孩子和进度步骤。',
+      `读取待办、有效直属孩子和进度步骤。${mcpTodoDatePolicy}`,
       { id: mcpId.describe('已查询到的待办真实UUID，不填名称') },
       (a, p) => todos.get(a, mcpId.parse(p.id)),
     );

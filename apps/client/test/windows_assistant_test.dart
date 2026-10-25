@@ -125,6 +125,12 @@ class _DesktopRepository extends AssistantRepository {
   /// 模拟设置保存失败。
   bool failSettings = false;
 
+  /// 延迟模型保存，用于核对整个在途过程的输入区状态。
+  Completer<void>? delayedSettingsSave;
+
+  /// 延迟保存后的设置读取，覆盖后台刷新阶段。
+  Completer<void>? delayedSettingsRead;
+
   /// 可控制搜索响应顺序。
   final Map<String, Completer<Map<String, dynamic>>> delayedSearches = {};
 
@@ -200,12 +206,15 @@ class _DesktopRepository extends AssistantRepository {
     }
     if (uri.path == '/settings') {
       if (method == 'PUT') {
+        await delayedSettingsSave?.future;
         if (failSettings) throw const ApiFailure('模型设置保存失败，请重试');
         settings = {
           ...settings,
           ...data as Map<String, dynamic>,
           'revision': 8,
         };
+      } else {
+        await delayedSettingsRead?.future;
       }
       return Map<String, dynamic>.from(settings);
     }
@@ -1076,19 +1085,20 @@ void main() {
     // 必须检查整个面板，标题在上方不能证明菜单未盖住入口。
     final Rect menu = tester.getRect(_key('assistant-model-menu'));
     expect(menu.bottom, closeTo(button.top - 8, 1));
-    expect(menu.right, closeTo(button.right, 1));
+    expect(menu.center.dx, closeTo(button.center.dx, 1));
     expect(tester.getSize(_key('assistant-model-profile-1')).height, 32);
     expect(tester.widget<Text>(find.text('GPT-6 Astra')).style!.fontSize, 14);
     expect(find.byIcon(Icons.bolt), findsNothing);
-    // 原生按钮接收到的背景不能被共享按钮样式吞掉。
+    // 默认透明、悬停显色必须透传到原生按钮。
     final TextButton modelButton = tester.widget(
       find.descendant(
         of: _key('assistant-model-button'),
         matching: find.byType(TextButton),
       ),
     );
+    expect(modelButton.style!.backgroundColor!.resolve({}), Colors.transparent);
     expect(
-      modelButton.style!.backgroundColor!.resolve({}),
+      modelButton.style!.backgroundColor!.resolve({WidgetState.hovered}),
       isNot(Colors.transparent),
     );
     await _capture(tester, 'models');
@@ -1138,6 +1148,95 @@ void main() {
     expect(find.textContaining('模型设置保存失败'), findsWidgets);
     expect(tester.takeException(), isNull);
   });
+
+  for (final bool failSave in <bool>[false, true]) {
+    testWidgets('模型切换${failSave ? '失败' : '成功'}时不显示进度条且附件入口保持稳定', (
+      WidgetTester tester,
+    ) async {
+      // 附件能力独立于模型；请求延迟只在初次页面加载完成后启用。
+      final _DesktopRepository repository = _DesktopRepository()
+        ..attachmentsEnabled = true;
+      await _pumpDesktop(tester, repository: repository);
+      await tester.enterText(_key('assistant-input'), '切换完成后再发送');
+      await tester.pump();
+      repository
+        ..failSettings = failSave
+        ..delayedSettingsSave = Completer<void>()
+        ..delayedSettingsRead = Completer<void>();
+      // 同一个元素、可用状态和位置共同保证入口没有消失或禁用闪动。
+      final Element attachment = tester.element(
+        _key('assistant-attach-button'),
+      );
+      // 输入框完整边界用于检查顶部进度条造成的布局跳动。
+      final Rect composer = tester.getRect(_key('assistant-windows-composer'));
+
+      // 保存中和刷新中均保留原入口，发送仍由模型切换门禁控制。
+      void expectStableComposer() {
+        expect(find.byType(LinearProgressIndicator), findsNothing);
+        expect(
+          tester.element(_key('assistant-attach-button')),
+          same(attachment),
+        );
+        expect(
+          tester
+              .widget<OmniIconButton>(_key('assistant-attach-button'))
+              .onPressed,
+          isNotNull,
+        );
+        expect(tester.getRect(_key('assistant-windows-composer')), composer);
+      }
+
+      await tester.tap(_key('assistant-model-button'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('GPT-6 Astra').last);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expectStableComposer();
+      expect(
+        tester.widget<OmniInkWell>(_key('assistant-send-button')).onTap,
+        isNull,
+      );
+      if (const bool.fromEnvironment('ASSISTANT_PREVIEW')) {
+        await _capture(
+          tester,
+          'model_switch_${failSave ? 'failure' : 'success'}_saving',
+        );
+      }
+      repository.delayedSettingsSave!.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        repository.calls.where(
+          (call) => call.method == 'GET' && call.path == '/settings',
+        ),
+        hasLength(2),
+      );
+      // 错误提示会占据状态区，但不应改变输入框自身或附件状态。
+      expectStableComposer();
+      if (const bool.fromEnvironment('ASSISTANT_PREVIEW')) {
+        await _capture(
+          tester,
+          'model_switch_${failSave ? 'failure' : 'success'}_refreshing',
+        );
+      }
+      expect(
+        tester.widget<OmniInkWell>(_key('assistant-send-button')).onTap,
+        isNull,
+      );
+      repository.delayedSettingsRead!.complete();
+      await tester.pumpAndSettle();
+      expectStableComposer();
+      expect(
+        tester.widget<OmniInkWell>(_key('assistant-send-button')).onTap,
+        isNotNull,
+      );
+      expect(
+        repository.settings['profileId'],
+        failSave ? 'profile-1' : 'profile-2',
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('输入法组词和 Shift Enter 不发送，普通 Enter 只发送一次', (
     WidgetTester tester,

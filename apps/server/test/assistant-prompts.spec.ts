@@ -1,5 +1,5 @@
 import { assistantInstructions, assistantPromptPolicy, assistantStageInstructions } from '../src/assistant/assistant-prompts';
-import { mcpTodoCreatePolicy } from '../src/mcp/mcp-catalog';
+import { mcpTodoCreatePolicy, mcpTodoDatePolicy } from '../src/mcp/mcp-catalog';
 
 describe('知序提示词的阶段与交付约束', () => {
   it('新增任务复用工具默认规则，只追问无法确定的必要信息', () => {
@@ -30,6 +30,10 @@ describe('知序提示词的阶段与交付约束', () => {
     expect(assistantPromptPolicy).not.toContain('2026-10');
     expect(first).toContain('业务时区Asia/Shanghai');
     expect(second).toContain('业务时区UTC');
+    expect(assistantPromptPolicy).toContain(mcpTodoDatePolicy);
+    expect(assistantPromptPolicy).toContain('不主动展示、比较或评论计划日期');
+    expect(assistantPromptPolicy).toContain('除非用户明确提及计划日期、要求按日期筛选或安排');
+    expect(assistantPromptPolicy).toContain('只有实际截止日期已过且未完成时才能判断逾期');
     expect(assistantPromptPolicy).toContain('仅计划日期已过不能称为“逾期”');
     expect(assistantPromptPolicy).toContain('来源卡仅提供打开记录的入口，不能代替答案');
     expect(assistantPromptPolicy).toContain('普通查询不展示内部字段');

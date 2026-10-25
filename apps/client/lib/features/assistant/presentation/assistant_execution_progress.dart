@@ -151,6 +151,12 @@ class _AssistantExecutionProgressState
     final Color color = step['status'] == 'failed'
         ? OmniColors.of(context).danger
         : widget.colors.muted;
+    // 可展开行继承按钮的悬停前景色，普通状态行保留原色。
+    final Color? contentColor = inspectable ? null : color;
+    // 浅色悬停使用黑字，深色继续使用可读的主文字色。
+    final Color hoverColor = Theme.of(context).brightness == Brightness.light
+        ? Colors.black
+        : widget.colors.ink;
     // 图标区分模型、工具和真实保存。
     final IconData icon = switch (step['status']) {
       'failed' => Icons.error_outline,
@@ -167,7 +173,7 @@ class _AssistantExecutionProgressState
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
-          Icon(icon, size: 15, color: color),
+          Icon(icon, size: 15, color: contentColor),
           const SizedBox(width: 8),
           Expanded(
             child: LayoutBuilder(
@@ -183,24 +189,25 @@ class _AssistantExecutionProgressState
                       key: ValueKey<String>('assistant-step-label-$id'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 13, height: 1.5, color: color),
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.5,
+                        color: contentColor,
+                      ),
                     ),
                   ),
                   if (detail.isNotEmpty) ...<Widget>[
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Tooltip(
-                        message: detail,
-                        child: Text(
-                          detail,
-                          key: ValueKey<String>('assistant-step-detail-$id'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            height: 1.5,
-                            color: color,
-                          ),
+                      child: Text(
+                        detail,
+                        key: ValueKey<String>('assistant-step-detail-$id'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          height: 1.5,
+                          color: contentColor,
                         ),
                       ),
                     ),
@@ -215,14 +222,14 @@ class _AssistantExecutionProgressState
               expanded ? Icons.expand_less : Icons.expand_more,
               key: ValueKey<String>('assistant-step-arrow-$id'),
               size: 16,
-              color: color,
+              color: contentColor,
             ),
             const SizedBox(width: 4),
           ],
           Text(
             _status(step['status'] as String?),
             key: ValueKey<String>('assistant-step-status-$id'),
-            style: TextStyle(fontSize: 12, height: 1.6, color: color),
+            style: TextStyle(fontSize: 12, height: 1.6, color: contentColor),
           ),
         ],
       ),
@@ -240,9 +247,25 @@ class _AssistantExecutionProgressState
                     ? 'assistant-reasoning-toggle-$id'
                     : 'assistant-tool-toggle-$id',
               ),
-              style: TextButton.styleFrom(
-                padding: EdgeInsets.zero,
-                minimumSize: const Size(0, 28),
+              style: ButtonStyle(
+                padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+                  EdgeInsets.zero,
+                ),
+                minimumSize: const WidgetStatePropertyAll<Size>(Size(0, 28)),
+                overlayColor: const WidgetStatePropertyAll<Color>(
+                  Colors.transparent,
+                ),
+                backgroundColor: const WidgetStatePropertyAll<Color>(
+                  Colors.transparent,
+                ),
+                foregroundColor: WidgetStateProperty.resolveWith<Color>(
+                  (Set<WidgetState> states) => step['status'] == 'failed'
+                      ? color
+                      : states.contains(WidgetState.hovered) ||
+                            states.contains(WidgetState.focused)
+                      ? hoverColor
+                      : color,
+                ),
                 alignment: Alignment.centerLeft,
               ),
               onPressed: () => _toggleTool(id),
