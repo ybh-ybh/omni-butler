@@ -17706,10 +17706,11 @@ class $$QuotesTableTableManager
               getPrefetchedDataCallback: (items) async {
                 return [
                   if (dailyQuoteSelectionsRefs)
-                    await $_getPrefetchedData<
+                    await $_getPrefetchedDataByColumns<
                       QuoteRecord,
                       $QuotesTable,
-                      DailyQuoteSelectionRecord
+                      DailyQuoteSelectionRecord,
+                      $DailyQuoteSelectionsTable
                     >(
                       currentTable: table,
                       referencedTable: $$QuotesTableReferences
@@ -17719,8 +17720,8 @@ class $$QuotesTableTableManager
                         table,
                         p0,
                       ).dailyQuoteSelectionsRefs,
-                      referencedItemsForCurrentItem: (item, referencedItems) =>
-                          referencedItems.where((e) => e.quoteId == item.id),
+                      currentColumn: 'id',
+                      referencedColumn: 'quote_id',
                       typedResults: items,
                     ),
                 ];
@@ -19095,10 +19096,11 @@ class $$TaxonomyEntriesTableTableManager
               getPrefetchedDataCallback: (items) async {
                 return [
                   if (recordTaxonomyLinksRefs)
-                    await $_getPrefetchedData<
+                    await $_getPrefetchedDataByColumns<
                       TaxonomyEntry,
                       $TaxonomyEntriesTable,
-                      RecordTaxonomyLink
+                      RecordTaxonomyLink,
+                      $RecordTaxonomyLinksTable
                     >(
                       currentTable: table,
                       referencedTable: $$TaxonomyEntriesTableReferences
@@ -19109,8 +19111,8 @@ class $$TaxonomyEntriesTableTableManager
                             table,
                             p0,
                           ).recordTaxonomyLinksRefs,
-                      referencedItemsForCurrentItem: (item, referencedItems) =>
-                          referencedItems.where((e) => e.taxonomyId == item.id),
+                      currentColumn: 'id',
+                      referencedColumn: 'taxonomy_id',
                       typedResults: items,
                     ),
                 ];
@@ -19980,10 +19982,11 @@ class $$EventsTableTableManager
               getPrefetchedDataCallback: (items) async {
                 return [
                   if (eventCompletionsRefs)
-                    await $_getPrefetchedData<
+                    await $_getPrefetchedDataByColumns<
                       EventRecord,
                       $EventsTable,
-                      EventCompletionRecord
+                      EventCompletionRecord,
+                      $EventCompletionsTable
                     >(
                       currentTable: table,
                       referencedTable: $$EventsTableReferences
@@ -19993,8 +19996,8 @@ class $$EventsTableTableManager
                         table,
                         p0,
                       ).eventCompletionsRefs,
-                      referencedItemsForCurrentItem: (item, referencedItems) =>
-                          referencedItems.where((e) => e.eventId == item.id),
+                      currentColumn: 'id',
+                      referencedColumn: 'event_id',
                       typedResults: items,
                     ),
                 ];
@@ -22049,10 +22052,11 @@ class $$MembershipsTableTableManager
               getPrefetchedDataCallback: (items) async {
                 return [
                   if (membershipPaymentsRefs)
-                    await $_getPrefetchedData<
+                    await $_getPrefetchedDataByColumns<
                       MembershipRecord,
                       $MembershipsTable,
-                      MembershipPaymentRecord
+                      MembershipPaymentRecord,
+                      $MembershipPaymentsTable
                     >(
                       currentTable: table,
                       referencedTable: $$MembershipsTableReferences
@@ -22063,10 +22067,8 @@ class $$MembershipsTableTableManager
                             table,
                             p0,
                           ).membershipPaymentsRefs,
-                      referencedItemsForCurrentItem: (item, referencedItems) =>
-                          referencedItems.where(
-                            (e) => e.membershipId == item.id,
-                          ),
+                      currentColumn: 'id',
+                      referencedColumn: 'membership_id',
                       typedResults: items,
                     ),
                 ];
