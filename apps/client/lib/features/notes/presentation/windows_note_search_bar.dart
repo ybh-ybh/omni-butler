@@ -397,6 +397,8 @@ class _WindowsNoteSearchBarState extends ConsumerState<WindowsNoteSearchBar> {
                                     filled: false,
                                     isDense: true,
                                     isCollapsed: true,
+                                    // 外层已控制高度，避免桌面紧凑密度再次下移文字基线。
+                                    visualDensity: VisualDensity.standard,
                                     contentPadding: EdgeInsets.zero,
                                     constraints: const BoxConstraints(),
                                     border: InputBorder.none,

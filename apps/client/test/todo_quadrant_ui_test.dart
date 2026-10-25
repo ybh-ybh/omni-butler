@@ -1190,10 +1190,10 @@ void main() {
       ),
     );
     await tester.tap(mobileToggleAll);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('移动端展开子任务'), findsNothing);
     await tester.tap(mobileToggleAll);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('移动端展开子任务'), findsOneWidget);
     // 页面新增入口仍可使用，并且不改变任务树展开状态。
     final Finder mobileCreate = find.byKey(
@@ -1215,11 +1215,11 @@ void main() {
       ValueKey<String>('todo-title-${mobileRoot.id}'),
     );
     await tester.tap(mobileRootTitle);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('移动端展开子任务'), findsNothing);
     expect(find.text('编辑待办'), findsNothing);
     await tester.tap(mobileRootTitle);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('移动端展开子任务'), findsOneWidget);
 
     // Android 正文使用自己的分页器，分类切换不再产生卡片动效。
@@ -1641,11 +1641,11 @@ void main() {
       lessThan(tester.getTopLeft(quadrantCreate).dx),
     );
     await tester.tap(quadrantToggleAll);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('发布子任务'), findsNothing);
     expect(tester.widget<OmniIconButton>(quadrantToggleAll).tooltip, '展开全部子任务');
     await tester.tap(quadrantToggleAll);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('发布子任务'), findsOneWidget);
     expect(tester.widget<OmniIconButton>(quadrantToggleAll).tooltip, '收起全部子任务');
     // 同行展示的任务名称与描述。
@@ -1673,7 +1673,7 @@ void main() {
     expect(treeToggle, findsOneWidget);
     expect(find.byTooltip('收起子任务'), findsOneWidget);
     await tester.tap(treeToggle);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('发布子任务'), findsNothing);
     expect(
       find.byKey(ValueKey<String>('todo-tree-branch-${pendingChild.id}')),
@@ -1682,7 +1682,7 @@ void main() {
     expect(find.byTooltip('展开子任务'), findsOneWidget);
     expect(tester.widget<OmniIconButton>(quadrantToggleAll).tooltip, '展开全部子任务');
     await tester.tap(treeToggle);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('发布子任务'), findsOneWidget);
     expect(
       find.byKey(ValueKey<String>('todo-tree-branch-${pendingChild.id}')),

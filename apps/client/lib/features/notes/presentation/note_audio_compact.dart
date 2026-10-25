@@ -54,7 +54,7 @@ extension _CompactNoteAudioCard on _NoteAudioCardState {
         ? '继续回听'
         : '播放录音';
     // 更多始终可点击，展开状态通过语义传递给键盘和读屏。
-    final Widget more = Semantics(
+    final Widget more = OmniDisclosureToggle(
       expanded: _detailsExpanded,
       child: OmniNoteAudioLink(
         key: ValueKey('note-audio-expand-${widget.segment.id}'),

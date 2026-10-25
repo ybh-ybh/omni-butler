@@ -1437,18 +1437,21 @@ extension _WindowsNotesView on _NotesPageState {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    OmniNoteComposerButton(
-                      key: const ValueKey('note-composer-tag'),
-                      tooltip: '选择标签',
-                      icon: const Icon(Icons.tag),
-                      foreground: toolColor,
-                      hoverForeground: colors.ink,
-                      hoverBackground: colors.ink.withValues(alpha: 0.05),
-                      onPressed: editable
-                          ? () => _updateWindows(
-                              () => _showTagEditor = !_showTagEditor,
-                            )
-                          : null,
+                    OmniDisclosureToggle(
+                      expanded: _showTagEditor,
+                      child: OmniNoteComposerButton(
+                        key: const ValueKey('note-composer-tag'),
+                        tooltip: '选择标签',
+                        icon: const Icon(Icons.tag),
+                        foreground: toolColor,
+                        hoverForeground: colors.ink,
+                        hoverBackground: colors.ink.withValues(alpha: 0.05),
+                        onPressed: editable
+                            ? () => _updateWindows(
+                                () => _showTagEditor = !_showTagEditor,
+                              )
+                            : null,
+                      ),
                     ),
                     OmniNoteComposerButton(
                       key: const ValueKey('note-composer-image'),

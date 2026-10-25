@@ -91,7 +91,7 @@ extension _WindowsNoteBody on _NotesPageState {
             ),
             Align(
               alignment: Alignment.centerLeft,
-              child: Semantics(
+              child: OmniDisclosureToggle(
                 expanded: expanded,
                 child: OmniNoteAudioLink(
                   key: ValueKey('note-body-toggle-${note.id}'),

@@ -1726,6 +1726,7 @@ void main() {
     expect(find.text('查询待办 · 执行中'), findsOneWidget);
     await tester.tap(_key('assistant-execution-toggle'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('查询待办'), findsOneWidget);
     expect(find.text('执行中'), findsOneWidget);
     expect(find.text('模型服务暂时不可用，正在安全重试'), findsOneWidget);
@@ -1776,6 +1777,7 @@ void main() {
     // 用户主动收起后，首个正文出现不能擅自恢复展开。
     await tester.tap(_key('assistant-execution-toggle'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('查询待办'), findsNothing);
     repository.eventStream!.add(
       const AssistantEvent(
@@ -1790,6 +1792,7 @@ void main() {
     expect(find.text('查询待办'), findsNothing);
     await tester.tap(_key('assistant-execution-toggle'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('查询待办'), findsOneWidget);
     expect(
       find.descendant(
@@ -1946,6 +1949,7 @@ void main() {
     expect(find.text('保存待办'), findsNothing);
     await tester.tap(_key('assistant-execution-toggle'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('保存待办'), findsOneWidget);
     expect(find.text('失败'), findsOneWidget);
     expect(find.text('用时 46秒'), findsOneWidget);
@@ -1955,6 +1959,7 @@ void main() {
     }
     await tester.tap(_key('assistant-execution-toggle'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('保存待办'), findsNothing);
   });
 
@@ -1988,6 +1993,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(_key('assistant-execution-toggle'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('查询紧急且重要的待办以及对应分类详情'), findsOneWidget);
     expect(find.text('已完成'), findsOneWidget);
     // 文本保留原文以供提示查看，实际渲染限制为单行并显示省略号。

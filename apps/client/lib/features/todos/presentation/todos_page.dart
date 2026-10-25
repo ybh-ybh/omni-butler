@@ -1649,19 +1649,22 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                         child: Divider(color: accent.withValues(alpha: 0.55)),
                       ),
                       if (expandableTreeIds.isNotEmpty)
-                        OmniIconButton(
-                          key: ValueKey<String>(
-                            'todo-quadrant-toggle-all-${quadrant.value}',
-                          ),
-                          tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
-                          onPressed: () => onAllTreeExpansionChanged(
-                            expandableTreeIds,
-                            allTreesCollapsed,
-                          ),
-                          icon: Icon(
-                            allTreesCollapsed
-                                ? Icons.unfold_more_rounded
-                                : Icons.unfold_less_rounded,
+                        OmniDisclosureToggle(
+                          expanded: !allTreesCollapsed,
+                          child: OmniIconButton(
+                            key: ValueKey<String>(
+                              'todo-quadrant-toggle-all-${quadrant.value}',
+                            ),
+                            tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
+                            onPressed: () => onAllTreeExpansionChanged(
+                              expandableTreeIds,
+                              allTreesCollapsed,
+                            ),
+                            icon: Icon(
+                              allTreesCollapsed
+                                  ? Icons.unfold_more_rounded
+                                  : Icons.unfold_less_rounded,
+                            ),
                           ),
                         ),
                       if (showHeadingCreate)
@@ -1798,24 +1801,27 @@ class _TodoQuadrantDropZone extends StatelessWidget {
                                 ],
                               ),
                             ),
-                            OmniIconButton(
-                              key: ValueKey<String>(
-                                'todo-quadrant-toggle-all-${quadrant.value}',
-                              ),
-                              tooltip: allTreesCollapsed
-                                  ? '展开全部子任务'
-                                  : '收起全部子任务',
-                              style: mobileHeadingActionStyle,
-                              onPressed: expandableTreeIds.isEmpty
-                                  ? null
-                                  : () => onAllTreeExpansionChanged(
-                                      expandableTreeIds,
-                                      allTreesCollapsed,
-                                    ),
-                              icon: Icon(
-                                allTreesCollapsed
-                                    ? Icons.unfold_more_rounded
-                                    : Icons.unfold_less_rounded,
+                            OmniDisclosureToggle(
+                              expanded: !allTreesCollapsed,
+                              child: OmniIconButton(
+                                key: ValueKey<String>(
+                                  'todo-quadrant-toggle-all-${quadrant.value}',
+                                ),
+                                tooltip: allTreesCollapsed
+                                    ? '展开全部子任务'
+                                    : '收起全部子任务',
+                                style: mobileHeadingActionStyle,
+                                onPressed: expandableTreeIds.isEmpty
+                                    ? null
+                                    : () => onAllTreeExpansionChanged(
+                                        expandableTreeIds,
+                                        allTreesCollapsed,
+                                      ),
+                                icon: Icon(
+                                  allTreesCollapsed
+                                      ? Icons.unfold_more_rounded
+                                      : Icons.unfold_less_rounded,
+                                ),
                               ),
                             ),
                             if (showHeadingCreate)
@@ -2082,26 +2088,29 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
           ? ValueKey<String>('todo-tree-toggle-${tree.root.id}')
           : null,
       dimension: _treeControlSize,
-      child: OmniIconButton(
-        tooltip: hasChildren
-            ? widget.expanded
-                  ? '收起子任务'
-                  : '展开子任务'
-            : '拖动任务',
-        onPressed: hasChildren ? _toggleChildren : null,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints.tightFor(
-          width: _treeControlSize,
-          height: _treeControlSize,
-        ),
-        icon: Icon(
-          key: ValueKey<String>('todo-drag-handle-${tree.root.id}'),
-          hasChildren
+      child: OmniDisclosureToggle(
+        expanded: hasChildren ? widget.expanded : null,
+        child: OmniIconButton(
+          tooltip: hasChildren
               ? widget.expanded
-                    ? Icons.expand_more_rounded
-                    : Icons.chevron_right_rounded
-              : Icons.drag_indicator_rounded,
-          size: 18,
+                    ? '收起子任务'
+                    : '展开子任务'
+              : '拖动任务',
+          onPressed: hasChildren ? _toggleChildren : null,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints.tightFor(
+            width: _treeControlSize,
+            height: _treeControlSize,
+          ),
+          icon: Icon(
+            key: ValueKey<String>('todo-drag-handle-${tree.root.id}'),
+            hasChildren
+                ? widget.expanded
+                      ? Icons.expand_more_rounded
+                      : Icons.chevron_right_rounded
+                : Icons.drag_indicator_rounded,
+            size: 18,
+          ),
         ),
       ),
     );
@@ -2199,6 +2208,7 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
       onCompletedChanged: (bool value) =>
           widget.onCompletedChanged(tree.root, value),
       onTap: tree.children.isEmpty ? null : _toggleChildren,
+      childrenExpanded: tree.children.isEmpty ? null : widget.expanded,
       onEdit: () => widget.onEdit(tree.root),
       onAddChild: () => widget.onAddChild(tree.root),
       onMove: () => widget.onMove(tree.root),
@@ -2208,40 +2218,45 @@ class _TodoTreeCardState extends State<_TodoTreeCard> {
       key: ValueKey<String>('todo-row-${tree.root.id}'),
       children: <Widget>[
         rootRow,
-        for (
-          int index = 0;
-          widget.expanded && index < pendingChildren.length;
-          index += 1
-        )
-          CustomPaint(
-            key: ValueKey<String>(
-              'todo-tree-branch-${pendingChildren[index].id}',
-            ),
-            painter: _TodoTreeBranchPainter(
-              lineColor: treeLineColor,
-              trunkX: treeTrunkX,
-              branchEndX: branchEndX,
-              isLast: index == pendingChildren.length - 1,
-            ),
-            child: Padding(
-              key: ValueKey<String>('todo-child-${pendingChildren[index].id}'),
-              padding: EdgeInsets.only(left: childIndent),
-              child: _TodoTaskRow(
-                todo: pendingChildren[index],
-                now: widget.now,
-                completing: widget.completingTodoIds.contains(
-                  pendingChildren[index].id,
+        OmniDisclosure(
+          expanded: widget.expanded,
+          child: Column(
+            children: <Widget>[
+              for (int index = 0; index < pendingChildren.length; index += 1)
+                CustomPaint(
+                  key: ValueKey<String>(
+                    'todo-tree-branch-${pendingChildren[index].id}',
+                  ),
+                  painter: _TodoTreeBranchPainter(
+                    lineColor: treeLineColor,
+                    trunkX: treeTrunkX,
+                    branchEndX: branchEndX,
+                    isLast: index == pendingChildren.length - 1,
+                  ),
+                  child: Padding(
+                    key: ValueKey<String>(
+                      'todo-child-${pendingChildren[index].id}',
+                    ),
+                    padding: EdgeInsets.only(left: childIndent),
+                    child: _TodoTaskRow(
+                      todo: pendingChildren[index],
+                      now: widget.now,
+                      completing: widget.completingTodoIds.contains(
+                        pendingChildren[index].id,
+                      ),
+                      mobile: widget.mobile,
+                      onCompletedChanged: (bool value) => widget
+                          .onCompletedChanged(pendingChildren[index], value),
+                      onTap: null,
+                      onEdit: () => widget.onEdit(pendingChildren[index]),
+                      onMove: null,
+                      onDelete: () => widget.onDelete(pendingChildren[index]),
+                    ),
+                  ),
                 ),
-                mobile: widget.mobile,
-                onCompletedChanged: (bool value) =>
-                    widget.onCompletedChanged(pendingChildren[index], value),
-                onTap: null,
-                onEdit: () => widget.onEdit(pendingChildren[index]),
-                onMove: null,
-                onDelete: () => widget.onDelete(pendingChildren[index]),
-              ),
-            ),
+            ],
           ),
+        ),
       ],
     );
   }
@@ -2316,6 +2331,9 @@ class _TodoTreeBranchPainter extends CustomPainter {
 
 /// 单条主任务或子任务行。
 class _TodoTaskRow extends StatelessWidget {
+  /// 当前父任务的真实展开状态，叶项为空。
+  final bool? childrenExpanded;
+
   /// 当前任务。
   final TodoRecord todo;
 
@@ -2363,6 +2381,7 @@ class _TodoTaskRow extends StatelessWidget {
     required this.onEdit,
     required this.onDelete,
     this.treeControl,
+    this.childrenExpanded,
     this.progressLabel,
     this.onAddChild,
     this.onMove,
@@ -2420,61 +2439,68 @@ class _TodoTaskRow extends StatelessWidget {
         absorbing: completing,
         child: TodoTaskContextMenu(
           enabled: !completing,
+          scaleOnPress: onTap == null,
           onEdit: onEdit,
           onMove: onMove,
           onDelete: onDelete,
-          child: OmniListRow(
-            highlightColor: Theme.of(context).platform == TargetPlatform.android
-                ? Colors.transparent
-                : null,
-            // 无子任务时保持整行悬停和焦点能力，单击不执行业务操作。
-            onTap: onTap ?? () {},
-            borderRadius: BorderRadius.circular(OmniRadius.control),
-            padding: rowPadding,
-            leadingGap: 0,
-            leading: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                if (treeControl != null) ...<Widget>[
-                  treeControl!,
-                  const SizedBox(width: OmniSpacing.xxs),
-                ],
-                TodoCompletionCheckbox(
-                  key: ValueKey<String>('todo-completion-checkbox-${todo.id}'),
-                  value: todo.isCompleted || completing,
-                  onChanged: completing ? null : onCompletedChanged,
-                ),
-              ],
-            ),
-            title: Row(
-              children: <Widget>[
-                Expanded(
-                  child: _TodoInlineTitle(
-                    todo: todo,
-                    completed: todo.isCompleted,
+          child: OmniDisclosureToggle(
+            expanded: childrenExpanded,
+            child: OmniListRow(
+              highlightColor:
+                  Theme.of(context).platform == TargetPlatform.android
+                  ? Colors.transparent
+                  : null,
+              // 无子任务时保持整行悬停和焦点能力，单击不执行业务操作。
+              onTap: onTap ?? () {},
+              borderRadius: BorderRadius.circular(OmniRadius.control),
+              padding: rowPadding,
+              leadingGap: 0,
+              leading: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  if (treeControl != null) ...<Widget>[
+                    treeControl!,
+                    const SizedBox(width: OmniSpacing.xxs),
+                  ],
+                  TodoCompletionCheckbox(
+                    key: ValueKey<String>(
+                      'todo-completion-checkbox-${todo.id}',
+                    ),
+                    value: todo.isCompleted || completing,
+                    onChanged: completing ? null : onCompletedChanged,
                   ),
-                ),
-                if (progressLabel != null)
-                  Padding(
-                    padding: const EdgeInsets.only(left: OmniSpacing.xs),
-                    child: OmniTag(
-                      key: ValueKey<String>('todo-tree-progress-${todo.id}'),
-                      label: progressLabel!,
-                      color: colors.todo,
+                ],
+              ),
+              title: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: _TodoInlineTitle(
+                      todo: todo,
+                      completed: todo.isCompleted,
                     ),
                   ),
-              ],
+                  if (progressLabel != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: OmniSpacing.xs),
+                      child: OmniTag(
+                        key: ValueKey<String>('todo-tree-progress-${todo.id}'),
+                        label: progressLabel!,
+                        color: colors.todo,
+                      ),
+                    ),
+                ],
+              ),
+              subtitle: hasDetails ? _TodoDetails(todo: todo, now: now) : null,
+              trailing: onAddChild == null
+                  ? null
+                  : OmniIconButton(
+                      key: ValueKey<String>('todo-add-child-${todo.id}'),
+                      tooltip: '添加子任务',
+                      onPressed: onAddChild,
+                      style: addChildButtonStyle,
+                      icon: const Icon(Icons.playlist_add_rounded, size: 20),
+                    ),
             ),
-            subtitle: hasDetails ? _TodoDetails(todo: todo, now: now) : null,
-            trailing: onAddChild == null
-                ? null
-                : OmniIconButton(
-                    key: ValueKey<String>('todo-add-child-${todo.id}'),
-                    tooltip: '添加子任务',
-                    onPressed: onAddChild,
-                    style: addChildButtonStyle,
-                    icon: const Icon(Icons.playlist_add_rounded, size: 20),
-                  ),
           ),
         ),
       ),
@@ -2666,8 +2692,9 @@ class _CompletedTodoHistoryState extends State<_CompletedTodoHistory> {
                   onToggle: onToggle!,
                   onEdit: widget.onEdit,
                 ),
-              if (expanded && group.children.isNotEmpty)
-                Column(
+              OmniDisclosure(
+                expanded: expanded && group.children.isNotEmpty,
+                child: Column(
                   key: ValueKey<String>('todo-history-children-${group.id}'),
                   children: <Widget>[
                     const Divider(indent: 36),
@@ -2705,6 +2732,7 @@ class _CompletedTodoHistoryState extends State<_CompletedTodoHistory> {
                       ),
                   ],
                 ),
+              ),
             ],
           ),
         );
@@ -2897,14 +2925,17 @@ class _CompletedTodoHistoryRow extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           if (onToggle != null)
-            OmniIconButton(
-              key: ValueKey<String>('todo-history-toggle-${entry.todo.id}'),
-              tooltip: expanded ? '收起子任务' : '展开子任务',
-              onPressed: onToggle,
-              icon: Icon(
-                expanded
-                    ? Icons.expand_less_rounded
-                    : Icons.expand_more_rounded,
+            OmniDisclosureToggle(
+              expanded: expanded,
+              child: OmniIconButton(
+                key: ValueKey<String>('todo-history-toggle-${entry.todo.id}'),
+                tooltip: expanded ? '收起子任务' : '展开子任务',
+                onPressed: onToggle,
+                icon: Icon(
+                  expanded
+                      ? Icons.expand_less_rounded
+                      : Icons.expand_more_rounded,
+                ),
               ),
             ),
           OmniIconButton(
@@ -2990,14 +3021,19 @@ class _TodoHistoryParentContextRow extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          OmniIconButton(
-            key: ValueKey<String>(
-              'todo-history-toggle-${parent?.id ?? 'missing'}',
-            ),
-            tooltip: expanded ? '收起子任务' : '展开子任务',
-            onPressed: onToggle,
-            icon: Icon(
-              expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+          OmniDisclosureToggle(
+            expanded: expanded,
+            child: OmniIconButton(
+              key: ValueKey<String>(
+                'todo-history-toggle-${parent?.id ?? 'missing'}',
+              ),
+              tooltip: expanded ? '收起子任务' : '展开子任务',
+              onPressed: onToggle,
+              icon: Icon(
+                expanded
+                    ? Icons.expand_less_rounded
+                    : Icons.expand_more_rounded,
+              ),
             ),
           ),
           if (parent != null)

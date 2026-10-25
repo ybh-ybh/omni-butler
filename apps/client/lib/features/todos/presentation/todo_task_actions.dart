@@ -22,6 +22,9 @@ class TodoTaskContextMenu extends StatefulWidget {
   /// 当前任务行。
   final Widget child;
 
+  /// 展开子项的任务行关闭安卓整体缩放，菜单手势不变。
+  final bool scaleOnPress;
+
   /// 编辑当前任务。
   final VoidCallback onEdit;
 
@@ -37,6 +40,7 @@ class TodoTaskContextMenu extends StatefulWidget {
   /// 创建没有可见更多按钮的任务菜单容器。
   const TodoTaskContextMenu({
     required this.child,
+    this.scaleOnPress = true,
     required this.onEdit,
     required this.onDelete,
     this.onMove,
@@ -141,6 +145,7 @@ class _TodoTaskContextMenuState extends State<TodoTaskContextMenu> {
         },
         child: OmniPressSurface(
           enabled: widget.enabled,
+          scaleOnPress: widget.scaleOnPress,
           borderRadius: BorderRadius.circular(OmniRadius.control),
           onSecondaryTapUp: widget.enabled
               ? (details) => unawaited(_showContextMenu(details.globalPosition))

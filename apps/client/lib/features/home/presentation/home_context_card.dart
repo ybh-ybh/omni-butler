@@ -488,8 +488,6 @@ class _ExpandableContextSection extends StatelessWidget {
     final OmniColors colors = OmniColors.of(context);
     // 当前是否存在可展开明细。
     final bool expandable = detailRows.isNotEmpty;
-    // 尊重系统减少动画偏好。
-    final bool reduceMotion = OmniMotion.reduce(context);
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -497,7 +495,7 @@ class _ExpandableContextSection extends StatelessWidget {
         Row(
           children: <Widget>[
             Expanded(
-              child: Semantics(
+              child: OmniDisclosureToggle(
                 expanded: expandable ? expanded : null,
                 child: OmniListRow(
                   onTap: expandable ? onToggle : null,
@@ -573,17 +571,13 @@ class _ExpandableContextSection extends StatelessWidget {
             ),
           )
         else
-          AnimatedSize(
-            alignment: Alignment.topCenter,
-            duration: reduceMotion ? Duration.zero : OmniMotion.normal,
-            curve: OmniMotion.standardCurve,
-            child: expanded
-                ? Column(
-                    key: ValueKey<String>('context-details-expanded-$title'),
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: detailRows,
-                  )
-                : const SizedBox.shrink(),
+          OmniDisclosure(
+            expanded: expanded,
+            child: Column(
+              key: ValueKey<String>('context-details-expanded-$title'),
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: detailRows,
+            ),
           ),
         if (note != null) ...<Widget>[
           const SizedBox(height: OmniSpacing.xs),

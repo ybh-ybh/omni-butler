@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -18,15 +19,33 @@ import 'package:omni_butler/features/notes/presentation/windows_note_search_filt
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../support/search_text_alignment.dart';
+
 /// 使用真实生产搜索组件验证键鼠交互、独立过滤草稿和尺寸边界。
 void main() {
   filterRefinementTests();
   setUpAll(() async {
-    if (Platform.environment['OMNI_NOTES_SEARCH_PREVIEW'] == null) return;
-    // 可选预览采用本机中文字体，不让普通回归依赖 Windows 字体文件。
-    final ByteData font = ByteData.sublistView(
-      await File('C:/Windows/Fonts/msyh.ttc').readAsBytes(),
-    );
+    // 普通回归使用 SDK 真实字体，避免 Ahem 占位字形影响基线测量。
+    final File configFile = File('.dart_tool/package_config.json').absolute;
+    // 包配置用于定位当前机器的 Flutter，不依赖固定安装目录。
+    final Map<String, dynamic> config =
+        jsonDecode(await configFile.readAsString()) as Map<String, dynamic>;
+    // 当前 Flutter 包的实际根目录。
+    final Map<String, dynamic> flutterPackage =
+        (config['packages'] as List<dynamic>)
+            .cast<Map<String, dynamic>>()
+            .singleWhere((entry) => entry['name'] == 'flutter');
+    // SDK 自带文本与图标字体目录。
+    final Uri fonts = Directory.fromUri(
+      configFile.uri.resolve(flutterPackage['rootUri'] as String),
+    ).parent.parent.uri.resolve('bin/cache/artifacts/material_fonts/');
+    // 仅显式中文预览依赖 Windows 字体文件。
+    final File fontFile =
+        Platform.environment['OMNI_NOTES_SEARCH_PREVIEW'] == null
+        ? File.fromUri(fonts.resolve('roboto-regular.ttf'))
+        : File('C:/Windows/Fonts/msyh.ttc');
+    // 所有候选字体家族共用同一真实字体以保证基线断言可重复。
+    final ByteData font = ByteData.sublistView(await fontFile.readAsBytes());
     // 覆盖生产与测试框架可能使用的字体别名。
     for (final String family in <String>[
       'Roboto',
@@ -43,12 +62,43 @@ void main() {
     // 图标与生产应用使用相同的 Material 字形。
     final FontLoader icons = FontLoader('MaterialIcons')
       ..addFont(
-        File(
-          'D:/program/code/flutter/bin/cache/artifacts/material_fonts/materialicons-regular.otf',
-        ).readAsBytes().then(ByteData.sublistView),
+        File.fromUri(fonts.resolve('materialicons-regular.otf'))
+            .readAsBytes()
+            .then(ByteData.sublistView),
       );
     await icons.load();
   });
+
+  for (final double scale in <double>[1, 1.5, 2]) {
+    testWidgets('搜索提示和输入文字保持垂直居中 $scale', (tester) async {
+      // 使用真实生产控件与系统文字缩放，覆盖未聚焦和聚焦状态。
+      final _SearchFixture fixture = await _mount(tester, scale: scale);
+      expectSearchTextCentered(
+        tester,
+        field: _key('notes-search'),
+        surface: _key('notes-search-surface'),
+        hint: '搜索笔记 · Ctrl+F',
+      );
+      await tester.tap(_key('notes-search'));
+      await tester.pumpAndSettle();
+      expectSearchTextCentered(
+        tester,
+        field: _key('notes-search'),
+        surface: _key('notes-search-surface'),
+        hint: '搜索笔记 · Ctrl+F',
+      );
+      await tester.enterText(_key('notes-search'), '搜索居中 Flutter');
+      await tester.pumpAndSettle();
+      expectSearchTextCentered(
+        tester,
+        field: _key('notes-search'),
+        surface: _key('notes-search-surface'),
+        hint: '搜索笔记 · Ctrl+F',
+      );
+      await _capture(tester, fixture, 'alignment-$scale');
+      await _dispose(tester, fixture);
+    });
+  }
 
   testWidgets('搜索框鼠标悬停边框、焦点展开及最近五条历史支持鼠标和键盘', (tester) async {
     // 六条历史用于验证实际展示上限及最新顺序。

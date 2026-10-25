@@ -175,6 +175,7 @@ Future<void> _verifyPages(
         boundary,
         parent,
         '$prefix-${route.substring(1)}-root',
+        scales: false,
       );
       // 两页共享树展开状态；先收起已展开项，再验证短按只展开子任务。
       if (find.text('收纳桌面线缆').hitTestable().evaluate().isNotEmpty) {
@@ -269,8 +270,10 @@ Future<void> _checkPress(
   WidgetTester tester,
   GlobalKey boundary,
   Finder title,
-  String name,
-) async {
+  String name, {
+  // 父任务整行只展开子任务，保留触点高亮而不缩放。
+  bool scales = true,
+}) async {
   expect(title, findsOneWidget);
   // 可见标题所在的共享交互表面。
   final Finder surface = find
@@ -286,10 +289,13 @@ Future<void> _checkPress(
   final TestGesture gesture = await tester.startGesture(touch);
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 60));
-  expect(_scale(tester, surface), allOf(lessThan(1), greaterThan(0.98)));
+  expect(
+    _scale(tester, surface),
+    scales ? allOf(lessThan(1), greaterThan(0.98)) : 1,
+  );
   await _capture(tester, boundary, '$name-060ms', bounds, touch);
   await tester.pump(const Duration(milliseconds: 60));
-  expect(_scale(tester, surface), closeTo(0.98, 0.00001));
+  expect(_scale(tester, surface), closeTo(scales ? 0.98 : 1, 0.00001));
   await tester.pump(const Duration(milliseconds: 160));
   expect(tester.getRect(surface), bounds);
   await _capture(tester, boundary, '$name-280ms', bounds, touch);

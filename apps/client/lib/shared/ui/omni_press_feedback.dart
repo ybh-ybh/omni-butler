@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 
+import 'omni_disclosure.dart';
+
 /// 将原上下文手势的右键反馈交给行内容，避免缩放外层背景。
 class OmniSecondaryPressScope extends InheritedWidget {
   /// 当前上下文手势控制器；空值表示反馈已由上层内容消费。
@@ -312,13 +314,15 @@ class _OmniPressBindingState extends State<OmniPressBinding>
   void _configure() => _feedback.configure(
     enabled:
         widget.enabled &&
+        !OmniDisclosureToggle.suppressesPress(context) &&
         Theme.of(context).platform == TargetPlatform.windows &&
         !OmniMotion.reduce(context),
   );
 
   /// 构建原生交互树。
   @override
-  Widget build(BuildContext context) => widget.builder(context, _feedback);
+  Widget build(BuildContext context) =>
+      OmniDisclosureToggle.consume(child: widget.builder(context, _feedback));
 
   /// 移除所有在途动画，不留下延迟业务回调。
   @override

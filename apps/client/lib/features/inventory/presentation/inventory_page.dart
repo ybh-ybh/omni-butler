@@ -1131,33 +1131,38 @@ class _InventoryFilterButton extends StatelessWidget {
     return SizedBox.square(
       key: const ValueKey<String>('inventory-filter-toggle'),
       dimension: size,
-      child: OmniIconButton(
-        tooltip: expanded ? '收起筛选' : '展开筛选',
-        onPressed: onPressed,
-        isSelected: expanded,
-        icon: Badge(
-          isLabelVisible: activeCount > 0,
-          label: Text('$activeCount'),
-          backgroundColor: colors.item,
-          child: const Icon(Icons.filter_list_rounded),
-        ),
-        selectedIcon: Badge(
-          isLabelVisible: activeCount > 0,
-          label: Text('$activeCount'),
-          backgroundColor: colors.item,
-          child: const Icon(Icons.filter_list_off_rounded),
-        ),
-        color: colors.muted,
-        style: IconButton.styleFrom(
-          backgroundColor: expanded
-              ? colors.item.withValues(alpha: 0.12)
-              : colors.paper,
-          foregroundColor: expanded ? colors.item : colors.muted,
-          side: BorderSide(
-            color: expanded ? colors.item.withValues(alpha: 0.42) : colors.line,
+      child: OmniDisclosureToggle(
+        expanded: expanded,
+        child: OmniIconButton(
+          tooltip: expanded ? '收起筛选' : '展开筛选',
+          onPressed: onPressed,
+          isSelected: expanded,
+          icon: Badge(
+            isLabelVisible: activeCount > 0,
+            label: Text('$activeCount'),
+            backgroundColor: colors.item,
+            child: const Icon(Icons.filter_list_rounded),
           ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(OmniRadius.panel),
+          selectedIcon: Badge(
+            isLabelVisible: activeCount > 0,
+            label: Text('$activeCount'),
+            backgroundColor: colors.item,
+            child: const Icon(Icons.filter_list_off_rounded),
+          ),
+          color: colors.muted,
+          style: IconButton.styleFrom(
+            backgroundColor: expanded
+                ? colors.item.withValues(alpha: 0.12)
+                : colors.paper,
+            foregroundColor: expanded ? colors.item : colors.muted,
+            side: BorderSide(
+              color: expanded
+                  ? colors.item.withValues(alpha: 0.42)
+                  : colors.line,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(OmniRadius.panel),
+            ),
           ),
         ),
       ),

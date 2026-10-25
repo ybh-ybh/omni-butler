@@ -506,7 +506,7 @@ class _ResultEntityPanelState extends State<_ResultEntityPanel> {
             Row(
               children: <Widget>[
                 Expanded(
-                  child: Semantics(
+                  child: OmniDisclosureToggle(
                     expanded: _expanded,
                     child: OmniTextButton(
                       key: ValueKey<String>(
@@ -550,100 +550,106 @@ class _ResultEntityPanelState extends State<_ResultEntityPanel> {
                   ),
               ],
             ),
-            if (_expanded) ...<Widget>[
-              const SizedBox(height: OmniSpacing.md),
-              if (_loading) const LinearProgressIndicator(),
-              if (_moduleNames.containsKey(widget.reference['module']))
-                AssistantResultForm(
-                  key: ValueKey<String>('result-form-$_formVersion'),
-                  module: widget.reference['module'] as String,
-                  record: _record,
-                  timeZone: _timeZone,
-                  editing: _editing,
-                  enabled:
-                      _canEdit &&
-                      !_saving &&
-                      !_loading &&
-                      _pending == null &&
-                      !_conflict,
-                  onChanged: (changes) {
-                    if (mounted) setState(() => _changes = changes);
-                  },
-                )
-              else
-                SelectableText(
-                  '${_record['body'] ?? _record['content'] ?? _record['title'] ?? _record['name'] ?? label}',
-                ),
-              if (_notice != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: OmniSpacing.sm),
-                  child: Text(_notice!),
-                ),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: OmniSpacing.sm),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
+            OmniDisclosure(
+              expanded: _expanded,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  const SizedBox(height: OmniSpacing.md),
+                  if (_loading) const LinearProgressIndicator(),
+                  if (_moduleNames.containsKey(widget.reference['module']))
+                    AssistantResultForm(
+                      key: ValueKey<String>('result-form-$_formVersion'),
+                      module: widget.reference['module'] as String,
+                      record: _record,
+                      timeZone: _timeZone,
+                      editing: _editing,
+                      enabled:
+                          _canEdit &&
+                          !_saving &&
+                          !_loading &&
+                          _pending == null &&
+                          !_conflict,
+                      onChanged: (changes) {
+                        if (mounted) setState(() => _changes = changes);
+                      },
+                    )
+                  else
+                    SelectableText(
+                      '${_record['body'] ?? _record['content'] ?? _record['title'] ?? _record['name'] ?? label}',
                     ),
-                  ),
-                ),
-              if (_hasIdentity)
-                Padding(
-                  padding: const EdgeInsets.only(top: OmniSpacing.md),
-                  child: Wrap(
-                    alignment: WrapAlignment.end,
-                    spacing: OmniSpacing.sm,
-                    runSpacing: OmniSpacing.sm,
-                    children: <Widget>[
-                      if (_conflict)
-                        OmniButton(
-                          label: '重新载入',
-                          variant: OmniButtonVariant.secondary,
-                          onPressed: _available && !_loading
-                              ? () => _load(edit: true)
-                              : null,
+                  if (_notice != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: OmniSpacing.sm),
+                      child: Text(_notice!),
+                    ),
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: OmniSpacing.sm),
+                      child: Text(
+                        _error!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
                         ),
-                      if (_editing) ...<Widget>[
-                        OmniButton(
-                          label: '取消',
-                          variant: OmniButtonVariant.secondary,
-                          onPressed: !_saving && _pending == null
-                              ? _cancel
-                              : null,
-                        ),
-                        OmniButton(
-                          label: _pending == null ? '保存' : '重试保存',
-                          loading: _saving,
-                          onPressed:
-                              _canEdit &&
-                                  !_saving &&
-                                  !_loading &&
-                                  !_conflict &&
-                                  (_pending != null ||
-                                      (_changes?.isNotEmpty ?? false))
-                              ? _save
-                              : null,
-                        ),
-                      ] else if (_legacyServer)
-                        OmniButton(
-                          label: '重新读取',
-                          variant: OmniButtonVariant.secondary,
-                          onPressed: _available && !_loading ? _load : null,
-                        )
-                      else
-                        OmniButton(
-                          label: '编辑',
-                          variant: OmniButtonVariant.secondary,
-                          onPressed: _canEdit && !_loading
-                              ? () => _load(edit: true)
-                              : null,
-                        ),
-                    ],
-                  ),
-                ),
-            ],
+                      ),
+                    ),
+                  if (_hasIdentity)
+                    Padding(
+                      padding: const EdgeInsets.only(top: OmniSpacing.md),
+                      child: Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: OmniSpacing.sm,
+                        runSpacing: OmniSpacing.sm,
+                        children: <Widget>[
+                          if (_conflict)
+                            OmniButton(
+                              label: '重新载入',
+                              variant: OmniButtonVariant.secondary,
+                              onPressed: _available && !_loading
+                                  ? () => _load(edit: true)
+                                  : null,
+                            ),
+                          if (_editing) ...<Widget>[
+                            OmniButton(
+                              label: '取消',
+                              variant: OmniButtonVariant.secondary,
+                              onPressed: !_saving && _pending == null
+                                  ? _cancel
+                                  : null,
+                            ),
+                            OmniButton(
+                              label: _pending == null ? '保存' : '重试保存',
+                              loading: _saving,
+                              onPressed:
+                                  _canEdit &&
+                                      !_saving &&
+                                      !_loading &&
+                                      !_conflict &&
+                                      (_pending != null ||
+                                          (_changes?.isNotEmpty ?? false))
+                                  ? _save
+                                  : null,
+                            ),
+                          ] else if (_legacyServer)
+                            OmniButton(
+                              label: '重新读取',
+                              variant: OmniButtonVariant.secondary,
+                              onPressed: _available && !_loading ? _load : null,
+                            )
+                          else
+                            OmniButton(
+                              label: '编辑',
+                              variant: OmniButtonVariant.secondary,
+                              onPressed: _canEdit && !_loading
+                                  ? () => _load(edit: true)
+                                  : null,
+                            ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
       ),

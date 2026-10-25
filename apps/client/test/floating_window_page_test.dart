@@ -346,12 +346,12 @@ void main() {
     expect(find.byTooltip('收起全部子任务'), findsOneWidget);
 
     await tester.tap(toggleAll);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('未完成子任务'), findsNothing);
     expect(find.byTooltip('展开全部子任务'), findsOneWidget);
 
     await tester.tap(toggleAll);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('未完成子任务'), findsOneWidget);
     expect(find.byTooltip('收起全部子任务'), findsOneWidget);
 
@@ -359,7 +359,7 @@ void main() {
     await tester.tap(
       find.byKey(ValueKey<String>('floating-todo-expand-${root.id}')),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('未完成子任务'), findsNothing);
     expect(find.byTooltip('展开全部子任务'), findsOneWidget);
   }, variant: TargetPlatformVariant.only(TargetPlatform.windows));

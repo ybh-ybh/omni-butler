@@ -3160,24 +3160,28 @@ class _AbsoluteTimeEntryDialogState
                           const SizedBox(height: OmniSpacing.sm),
                           Align(
                             alignment: Alignment.centerLeft,
-                            child: OmniButton(
-                              key: const ValueKey<String>(
-                                'time-entry-notes-toggle',
+                            child: OmniDisclosureToggle(
+                              expanded: _notesExpanded,
+                              child: OmniButton(
+                                key: const ValueKey<String>(
+                                  'time-entry-notes-toggle',
+                                ),
+                                variant: OmniButtonVariant.text,
+                                onPressed: _saving
+                                    ? null
+                                    : () => setState(
+                                        () => _notesExpanded = !_notesExpanded,
+                                      ),
+                                icon: _notesExpanded
+                                    ? Icons.expand_less_rounded
+                                    : Icons.expand_more_rounded,
+                                label: _notesExpanded ? '收起备注' : '添加备注（可选）',
                               ),
-                              variant: OmniButtonVariant.text,
-                              onPressed: _saving
-                                  ? null
-                                  : () => setState(
-                                      () => _notesExpanded = !_notesExpanded,
-                                    ),
-                              icon: _notesExpanded
-                                  ? Icons.expand_less_rounded
-                                  : Icons.expand_more_rounded,
-                              label: _notesExpanded ? '收起备注' : '添加备注（可选）',
                             ),
                           ),
-                          if (_notesExpanded)
-                            OmniTextField(
+                          OmniDisclosure(
+                            expanded: _notesExpanded,
+                            child: OmniTextField(
                               key: const ValueKey<String>('time-entry-notes'),
                               controller: _notesController,
                               maxLines: 3,
@@ -3185,6 +3189,7 @@ class _AbsoluteTimeEntryDialogState
                                 hintText: '补充地点、结果或其他信息',
                               ),
                             ),
+                          ),
                           if (_saveError != null) ...<Widget>[
                             const SizedBox(height: OmniSpacing.sm),
                             Text(
@@ -3359,7 +3364,7 @@ class _AbsoluteTimeEntryDialogState
             },
           ),
           const Divider(height: 1),
-          Semantics(
+          OmniDisclosureToggle(
             expanded: _notesExpanded,
             child: OmniButton(
               key: const ValueKey<String>('time-entry-notes-toggle'),
@@ -3373,8 +3378,9 @@ class _AbsoluteTimeEntryDialogState
               label: _notesExpanded ? '收起备注' : '添加备注（可选）',
             ),
           ),
-          if (_notesExpanded)
-            OmniTextField(
+          OmniDisclosure(
+            expanded: _notesExpanded,
+            child: OmniTextField(
               key: const ValueKey<String>('time-entry-notes'),
               controller: _notesController,
               maxLines: 3,
@@ -3382,6 +3388,7 @@ class _AbsoluteTimeEntryDialogState
                 hintText: '补充地点、结果或其他信息',
               ),
             ),
+          ),
         ],
       ),
     );

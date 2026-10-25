@@ -577,7 +577,7 @@ class _AssistantReferencesCardState extends State<_AssistantReferencesCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Semantics(
+          OmniDisclosureToggle(
             expanded: _expanded,
             child: OmniTextButton(
               key: const ValueKey<String>('assistant-references-toggle'),
@@ -601,21 +601,27 @@ class _AssistantReferencesCardState extends State<_AssistantReferencesCard> {
               ),
             ),
           ),
-          if (_expanded) ...<Widget>[
-            if (widget.truncated) const Text('仅展示前 20 条相关记录'),
-            for (final Map<String, dynamic> reference in widget.references)
-              Wrap(
-                children: <Widget>[
-                  OmniButton(
-                    label: '查看${reference['label'] ?? '记录'}',
-                    variant: OmniButtonVariant.text,
-                    onPressed: widget.enabled
-                        ? () => widget.onOpen(reference)
-                        : null,
+          OmniDisclosure(
+            expanded: _expanded,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                if (widget.truncated) const Text('仅展示前 20 条相关记录'),
+                for (final Map<String, dynamic> reference in widget.references)
+                  Wrap(
+                    children: <Widget>[
+                      OmniButton(
+                        label: '查看${reference['label'] ?? '记录'}',
+                        variant: OmniButtonVariant.text,
+                        onPressed: widget.enabled
+                            ? () => widget.onOpen(reference)
+                            : null,
+                      ),
+                    ],
                   ),
-                ],
-              ),
-          ],
+              ],
+            ),
+          ),
         ],
       ),
     ),

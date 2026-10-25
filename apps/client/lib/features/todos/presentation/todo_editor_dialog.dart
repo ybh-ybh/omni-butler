@@ -714,7 +714,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
           const Divider(height: 1),
           Align(
             alignment: Alignment.centerLeft,
-            child: Semantics(
+            child: OmniDisclosureToggle(
               expanded: _descriptionExpanded,
               child: OmniButton(
                 key: const ValueKey<String>('todo-description-toggle'),
@@ -731,13 +731,15 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
               ),
             ),
           ),
-          if (_descriptionExpanded)
-            OmniTextFormField(
+          OmniDisclosure(
+            expanded: _descriptionExpanded,
+            child: OmniTextFormField(
               key: const ValueKey<String>('todo-description-input'),
               controller: _descriptionController,
               maxLines: 3,
               decoration: _groupedInputDecoration.copyWith(hintText: '补充任务说明'),
             ),
+          ),
         ],
       ),
     );

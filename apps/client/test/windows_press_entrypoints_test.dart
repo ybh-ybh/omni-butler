@@ -146,7 +146,7 @@ Future<void> _verifyEntrypoints(
           .hitTestable()
           .evaluate()
           .isNotEmpty;
-      await _verifyPressCycle(tester, parentTitle);
+      await _verifyPressCycle(tester, parentTitle, scales: false);
       // 右键取消不打开菜单，右键释放沿用原菜单入口且只缩放一层内容。
       await _verifySecondaryPressCycle(tester, parentTitle, cancel: true);
       await _verifySecondaryPressCycle(tester, parentTitle, cancel: false);
@@ -159,7 +159,12 @@ Future<void> _verifyEntrypoints(
         await tester.tap(parentTitle);
         await tester.pumpAndSettle();
       }
-      await _verifyPressCycle(tester, parentTitle, cancel: false);
+      await _verifyPressCycle(
+        tester,
+        parentTitle,
+        cancel: false,
+        scales: false,
+      );
       expect(find.text(child.title).hitTestable(), findsOneWidget);
 
       if (route == '/todos') {
@@ -389,6 +394,8 @@ Future<void> _verifyPressCycle(
   Finder target, {
   Finder? fixedContainer,
   bool cancel = true,
+  // 展开入口不再使用按压缩放。
+  bool scales = true,
 }) async {
   expect(target, findsOneWidget);
   // 标题从最近的内容祖先定位；按钮、导航等外层入口从后代定位。
@@ -422,11 +429,11 @@ Future<void> _verifyPressCycle(
     await tester.pump(const Duration(milliseconds: 15));
     sampledScale = _contentScale(tester, content);
   }
-  expect(sampledScale, allOf(greaterThan(0.97), lessThan(1)));
+  expect(sampledScale, scales ? allOf(greaterThan(0.97), lessThan(1)) : 1);
   expect(tester.getRect(material), materialBounds);
   expect(tester.getRect(fixed), fixedBounds);
   await tester.pump(const Duration(milliseconds: 90));
-  expect(_contentScale(tester, content), closeTo(0.97, 0.00001));
+  expect(_contentScale(tester, content), closeTo(scales ? 0.97 : 1, 0.00001));
   expect(tester.getRect(material), materialBounds);
   expect(tester.getRect(fixed), fixedBounds);
   // 子按钮按下不应让任何外层内容同时缩小。
@@ -451,7 +458,10 @@ Future<void> _verifyPressCycle(
   }
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 80));
-  expect(_contentScale(tester, content), allOf(greaterThan(0.97), lessThan(1)));
+  expect(
+    _contentScale(tester, content),
+    scales ? allOf(greaterThan(0.97), lessThan(1)) : 1,
+  );
   await tester.pump(const Duration(milliseconds: 80));
   expect(_contentScale(tester, content), 1);
   expect(tester.getRect(material), materialBounds);

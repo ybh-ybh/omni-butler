@@ -248,7 +248,7 @@ class _SearchFilterEntryState extends State<_SearchFilterEntry> {
             ),
           )
         else
-          Semantics(
+          OmniDisclosureToggle(
             expanded: expanded,
             child: OmniTextButton(
               key: ValueKey<String>('notes-filter-section-$id'),
@@ -286,8 +286,9 @@ class _SearchFilterEntryState extends State<_SearchFilterEntry> {
               child: label,
             ),
           ),
-        if (expanded)
-          Padding(
+        OmniDisclosure(
+          expanded: expanded,
+          child: Padding(
             padding: const EdgeInsets.fromLTRB(
               OmniSpacing.xs,
               OmniSpacing.xxs,
@@ -296,6 +297,7 @@ class _SearchFilterEntryState extends State<_SearchFilterEntry> {
             ),
             child: child,
           ),
+        ),
       ],
     );
   }

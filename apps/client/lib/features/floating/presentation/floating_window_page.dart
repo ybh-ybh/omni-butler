@@ -791,50 +791,55 @@ class _FloatingTodosState extends ConsumerState<_FloatingTodos> {
             ),
             SizedBox.square(
               dimension: OmniSize.control,
-              child: OmniIconButton(
-                key: const ValueKey<String>('floating-todo-toggle-all'),
-                tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
-                padding: EdgeInsets.zero,
-                iconSize: 18,
-                style: ButtonStyle(
-                  foregroundColor: WidgetStateProperty.resolveWith<Color?>((
-                    Set<WidgetState> states,
-                  ) {
-                    if (states.contains(WidgetState.disabled)) {
-                      return colors.muted.withValues(alpha: 0.45);
-                    }
-                    if (states.contains(WidgetState.hovered) ||
-                        states.contains(WidgetState.focused)) {
-                      return colors.brand;
-                    }
-                    return colors.muted;
-                  }),
-                  backgroundColor: WidgetStateProperty.resolveWith<Color?>((
-                    Set<WidgetState> states,
-                  ) {
-                    if (states.contains(WidgetState.pressed)) {
-                      return colors.brandSoft.withValues(alpha: 0.78);
-                    }
-                    if (states.contains(WidgetState.hovered)) {
-                      return colors.brandSoft.withValues(alpha: 0.52);
-                    }
-                    return Colors.transparent;
-                  }),
-                  shape: WidgetStatePropertyAll<OutlinedBorder>(
-                    RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(OmniRadius.control),
+              child: OmniDisclosureToggle(
+                expanded: !allTreesCollapsed,
+                child: OmniIconButton(
+                  key: const ValueKey<String>('floating-todo-toggle-all'),
+                  tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
+                  padding: EdgeInsets.zero,
+                  iconSize: 18,
+                  style: ButtonStyle(
+                    foregroundColor: WidgetStateProperty.resolveWith<Color?>((
+                      Set<WidgetState> states,
+                    ) {
+                      if (states.contains(WidgetState.disabled)) {
+                        return colors.muted.withValues(alpha: 0.45);
+                      }
+                      if (states.contains(WidgetState.hovered) ||
+                          states.contains(WidgetState.focused)) {
+                        return colors.brand;
+                      }
+                      return colors.muted;
+                    }),
+                    backgroundColor: WidgetStateProperty.resolveWith<Color?>((
+                      Set<WidgetState> states,
+                    ) {
+                      if (states.contains(WidgetState.pressed)) {
+                        return colors.brandSoft.withValues(alpha: 0.78);
+                      }
+                      if (states.contains(WidgetState.hovered)) {
+                        return colors.brandSoft.withValues(alpha: 0.52);
+                      }
+                      return Colors.transparent;
+                    }),
+                    shape: WidgetStatePropertyAll<OutlinedBorder>(
+                      RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(OmniRadius.control),
+                      ),
                     ),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                onPressed: expandableTreeIds.isEmpty
-                    ? null
-                    : () =>
-                          _toggleAllTrees(expandableTreeIds, allTreesCollapsed),
-                icon: Icon(
-                  allTreesCollapsed
-                      ? Icons.unfold_more_rounded
-                      : Icons.unfold_less_rounded,
+                  onPressed: expandableTreeIds.isEmpty
+                      ? null
+                      : () => _toggleAllTrees(
+                          expandableTreeIds,
+                          allTreesCollapsed,
+                        ),
+                  icon: Icon(
+                    allTreesCollapsed
+                        ? Icons.unfold_more_rounded
+                        : Icons.unfold_less_rounded,
+                  ),
                 ),
               ),
             ),
@@ -1815,17 +1820,23 @@ class _FloatingTodoTree extends StatelessWidget {
           expanded: hasChildren ? expanded : null,
           onToggleExpanded: hasChildren ? onToggleExpanded : null,
         ),
-        if (expanded && hasChildren)
-          for (final TodoRecord child in pendingChildren)
-            Padding(
-              padding: const EdgeInsets.only(left: OmniSpacing.lg),
-              child: _FloatingTodoRow(
-                todo: child,
-                accent: accent,
-                onComplete: onComplete,
-                child: true,
-              ),
-            ),
+        OmniDisclosure(
+          expanded: expanded && hasChildren,
+          child: Column(
+            children: <Widget>[
+              for (final TodoRecord child in pendingChildren)
+                Padding(
+                  padding: const EdgeInsets.only(left: OmniSpacing.lg),
+                  child: _FloatingTodoRow(
+                    todo: child,
+                    accent: accent,
+                    onComplete: onComplete,
+                    child: true,
+                  ),
+                ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -2013,16 +2024,19 @@ class _FloatingTodoRow extends ConsumerWidget {
             SizedBox(
               width: 30,
               height: 30,
-              child: OmniIconButton(
-                key: ValueKey<String>('floating-todo-expand-${todo.id}'),
-                tooltip: expanded! ? '收起子任务' : '展开子任务',
-                padding: EdgeInsets.zero,
-                onPressed: onToggleExpanded,
-                icon: Icon(
-                  expanded!
-                      ? Icons.expand_less_rounded
-                      : Icons.expand_more_rounded,
-                  size: 17,
+              child: OmniDisclosureToggle(
+                expanded: expanded,
+                child: OmniIconButton(
+                  key: ValueKey<String>('floating-todo-expand-${todo.id}'),
+                  tooltip: expanded! ? '收起子任务' : '展开子任务',
+                  padding: EdgeInsets.zero,
+                  onPressed: onToggleExpanded,
+                  icon: Icon(
+                    expanded!
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 17,
+                  ),
                 ),
               ),
             ),

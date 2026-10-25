@@ -22,6 +22,7 @@ import 'package:omni_butler/features/todos/presentation/windows_todo_completion_
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 import 'support/todo_completion_test_data.dart';
+import 'support/search_text_alignment.dart';
 
 /// 验证 Windows 新完成历史的筛选、分组、后台刷新及真实渲染约束。
 void main() {
@@ -110,6 +111,14 @@ void main() {
       );
       // 核对实际渲染边界，避免尾部数量盖住文字或光标。
       void verifyCount(String expected) {
+        expectSearchTextCentered(
+          tester,
+          field: search,
+          surface: find.byKey(
+            const ValueKey<String>('todo-completion-search-surface'),
+          ),
+          hint: '搜索任务、子任务或章节',
+        );
         expect(tester.widget<Text>(count).data, expected);
         expect(count.hitTestable(), findsOneWidget);
         // 搜索框的完整外边界。
@@ -335,7 +344,7 @@ void main() {
         const ValueKey<String>('todo-completion-toggle-2026-10-25-release'),
       ),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('检查构建'), findsOneWidget);
     expect(find.text('整理说明'), findsOneWidget);
     await _capturePreview(tester, 'expanded-release');
@@ -407,7 +416,7 @@ void main() {
         const ValueKey<String>('todo-completion-toggle-2026-10-25-release'),
       ),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('检查构建'), findsOneWidget);
     expect(find.text('整理说明'), findsOneWidget);
     expect(_stat(tester, 7), '6');
@@ -1139,6 +1148,36 @@ void main() {
             ordinal: index,
           ),
       ],
+    );
+    // 点击展开首帧也不得为了填满零高度列表而一次挂载千行。
+    final Finder toggle = find.byKey(
+      const ValueKey<String>('todo-completion-toggle-2026-10-25-large'),
+    );
+    await tester.tap(toggle);
+    await tester.pump();
+    // 展开、半展开与收起三个阶段均按原视口惰性布局。
+    for (int frame = 0; frame < 3; frame++) {
+      expect(
+        find
+            .byWidgetPredicate(
+              (widget) =>
+                  widget.key is ValueKey<String> &&
+                  (widget.key! as ValueKey<String>).value.startsWith(
+                    'todo-completion-entry-',
+                  ),
+            )
+            .evaluate()
+            .length,
+        lessThan(30),
+      );
+      await tester.pump(const Duration(milliseconds: 80));
+    }
+    await tester.pumpAndSettle();
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('todo-completion-entry-large-1')),
+      findsNothing,
     );
     await tester.enterText(
       find.byKey(const ValueKey<String>('todo-completion-search')),

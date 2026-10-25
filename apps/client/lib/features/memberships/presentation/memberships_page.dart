@@ -1597,38 +1597,41 @@ class _MembershipFilterButton extends StatelessWidget {
     return SizedBox.square(
       key: const ValueKey<String>('membership-filter-toggle'),
       dimension: size,
-      child: OmniIconButton(
-        tooltip: expanded ? '收起筛选' : '展开筛选',
-        onPressed: onPressed,
-        isSelected: expanded,
-        icon: Badge(
-          isLabelVisible: activeCount > 0,
-          label: Text('$activeCount'),
-          backgroundColor: colors.member,
-          child: const Icon(Icons.filter_list_rounded),
-        ),
-        selectedIcon: Badge(
-          isLabelVisible: activeCount > 0,
-          label: Text('$activeCount'),
-          backgroundColor: colors.member,
-          child: const Icon(Icons.filter_list_off_rounded),
-        ),
-        color: colors.muted,
-        style: IconButton.styleFrom(
-          backgroundColor: expanded
-              ? colors.member.withValues(alpha: 0.12)
-              : colors.paper,
-          foregroundColor: expanded ? colors.member : colors.muted,
-          side: BorderSide(
-            color: expanded
-                ? colors.member.withValues(alpha: 0.42)
-                : colors.line,
+      child: OmniDisclosureToggle(
+        expanded: expanded,
+        child: OmniIconButton(
+          tooltip: expanded ? '收起筛选' : '展开筛选',
+          onPressed: onPressed,
+          isSelected: expanded,
+          icon: Badge(
+            isLabelVisible: activeCount > 0,
+            label: Text('$activeCount'),
+            backgroundColor: colors.member,
+            child: const Icon(Icons.filter_list_rounded),
           ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(OmniRadius.panel),
+          selectedIcon: Badge(
+            isLabelVisible: activeCount > 0,
+            label: Text('$activeCount'),
+            backgroundColor: colors.member,
+            child: const Icon(Icons.filter_list_off_rounded),
           ),
+          color: colors.muted,
+          style: IconButton.styleFrom(
+            backgroundColor: expanded
+                ? colors.member.withValues(alpha: 0.12)
+                : colors.paper,
+            foregroundColor: expanded ? colors.member : colors.muted,
+            side: BorderSide(
+              color: expanded
+                  ? colors.member.withValues(alpha: 0.42)
+                  : colors.line,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(OmniRadius.panel),
+            ),
+          ),
+          iconSize: OmniSize.icon,
         ),
-        iconSize: OmniSize.icon,
       ),
     );
   }

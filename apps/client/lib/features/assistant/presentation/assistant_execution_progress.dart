@@ -232,24 +232,28 @@ class _AssistantExecutionProgressState
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         if (inspectable)
-          OmniTextButton(
-            key: ValueKey<String>(
-              hasReasoning
-                  ? 'assistant-reasoning-toggle-$id'
-                  : 'assistant-tool-toggle-$id',
+          OmniDisclosureToggle(
+            expanded: expanded,
+            child: OmniTextButton(
+              key: ValueKey<String>(
+                hasReasoning
+                    ? 'assistant-reasoning-toggle-$id'
+                    : 'assistant-tool-toggle-$id',
+              ),
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(0, 28),
+                alignment: Alignment.centerLeft,
+              ),
+              onPressed: () => _toggleTool(id),
+              child: row,
             ),
-            style: TextButton.styleFrom(
-              padding: EdgeInsets.zero,
-              minimumSize: const Size(0, 28),
-              alignment: Alignment.centerLeft,
-            ),
-            onPressed: () => _toggleTool(id),
-            child: row,
           )
         else
           row,
-        if (hasReasoning && expanded)
-          Padding(
+        OmniDisclosure(
+          expanded: hasReasoning && expanded,
+          child: Padding(
             key: ValueKey<String>('assistant-reasoning-content-$id'),
             padding: const EdgeInsets.fromLTRB(23, 6, 0, 12),
             child: Column(
@@ -272,8 +276,10 @@ class _AssistantExecutionProgressState
               ],
             ),
           ),
-        if (step['kind'] == 'tool' && expanded)
-          Padding(
+        ),
+        OmniDisclosure(
+          expanded: step['kind'] == 'tool' && expanded,
+          child: Padding(
             key: ValueKey<String>('assistant-tool-arguments-$id'),
             padding: const EdgeInsets.fromLTRB(23, 6, 0, 12),
             child: Column(
@@ -304,6 +310,7 @@ class _AssistantExecutionProgressState
               ],
             ),
           ),
+        ),
       ],
     );
   }
@@ -346,54 +353,58 @@ class _AssistantExecutionProgressState
               ),
             )
           else
-            OmniTextButton(
-              key: const ValueKey<String>('assistant-execution-toggle'),
-              style: ButtonStyle(
-                padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
-                  EdgeInsets.symmetric(vertical: 3),
+            OmniDisclosureToggle(
+              expanded: _expanded,
+              child: OmniTextButton(
+                key: const ValueKey<String>('assistant-execution-toggle'),
+                style: ButtonStyle(
+                  padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+                    EdgeInsets.symmetric(vertical: 3),
+                  ),
+                  minimumSize: const WidgetStatePropertyAll<Size>(Size(0, 28)),
+                  overlayColor: const WidgetStatePropertyAll<Color>(
+                    Colors.transparent,
+                  ),
+                  backgroundColor: const WidgetStatePropertyAll<Color>(
+                    Colors.transparent,
+                  ),
+                  foregroundColor: WidgetStateProperty.resolveWith<Color>(
+                    (states) =>
+                        states.contains(WidgetState.hovered) ||
+                            states.contains(WidgetState.focused)
+                        ? hoverColor
+                        : widget.colors.muted,
+                  ),
                 ),
-                minimumSize: const WidgetStatePropertyAll<Size>(Size(0, 28)),
-                overlayColor: const WidgetStatePropertyAll<Color>(
-                  Colors.transparent,
-                ),
-                backgroundColor: const WidgetStatePropertyAll<Color>(
-                  Colors.transparent,
-                ),
-                foregroundColor: WidgetStateProperty.resolveWith<Color>(
-                  (states) =>
-                      states.contains(WidgetState.hovered) ||
-                          states.contains(WidgetState.focused)
-                      ? hoverColor
-                      : widget.colors.muted,
-                ),
-              ),
-              onPressed: widget.steps.isEmpty ? null : _toggle,
-              child: Row(
-                children: <Widget>[
-                  Text(label, style: const TextStyle(fontSize: 14)),
-                  const SizedBox(width: 4),
-                  if (widget.steps.isNotEmpty)
-                    Icon(
-                      _expanded ? Icons.expand_less : Icons.expand_more,
-                      size: 16,
-                    ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      _summary,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: widget.colors.muted,
+                onPressed: widget.steps.isEmpty ? null : _toggle,
+                child: Row(
+                  children: <Widget>[
+                    Text(label, style: const TextStyle(fontSize: 14)),
+                    const SizedBox(width: 4),
+                    if (widget.steps.isNotEmpty)
+                      Icon(
+                        _expanded ? Icons.expand_less : Icons.expand_more,
+                        size: 16,
+                      ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _summary,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: widget.colors.muted,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          if (_expanded && widget.steps.isNotEmpty)
-            Padding(
+          OmniDisclosure(
+            expanded: _expanded && widget.steps.isNotEmpty,
+            child: Padding(
               padding: const EdgeInsets.only(top: 9, bottom: 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -403,6 +414,7 @@ class _AssistantExecutionProgressState
                 ],
               ),
             ),
+          ),
           const SizedBox(height: 9),
           Divider(height: 1, color: widget.colors.line),
         ],

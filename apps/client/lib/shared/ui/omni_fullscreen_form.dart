@@ -1,6 +1,9 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
+import 'omni_disclosure.dart';
+
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/shared/ui/omni_button.dart';
@@ -328,7 +331,7 @@ class OmniFormSupplement extends StatelessWidget {
         Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            Semantics(
+            OmniDisclosureToggle(
               expanded: expanded,
               child: OmniButton(
                 label: expanded ? '收起补充信息' : '补充信息（可选）',
@@ -344,8 +347,14 @@ class OmniFormSupplement extends StatelessWidget {
                       },
               ),
             ),
-            if (expanded) const Divider(height: 1),
-            Visibility(visible: expanded, maintainState: true, child: child),
+            OmniDisclosure(
+              expanded: expanded,
+              maintainState: true,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[const Divider(height: 1), child],
+              ),
+            ),
           ],
         ),
       ],
@@ -365,6 +374,6 @@ void omniRevealFirstError(Set<FormFieldState<Object?>> errors) {
   final FormFieldState<Object?> field = errors.first;
   WidgetsBinding.instance.addPostFrameCallback((Duration timestamp) {
     if (!field.mounted) return;
-    Scrollable.ensureVisible(field.context, alignment: 0.1);
+    OmniDisclosure.ensureVisible(field.context);
   });
 }

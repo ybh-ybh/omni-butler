@@ -43,8 +43,11 @@ enum _CompletionResultRowKind {
   /// 可折叠任务的分组标题。
   group,
 
-  /// 普通任务或已展开的独立完成明细。
+  /// 独立完成明细。
   entry,
+
+  /// 保持惰性构建的完整子项分组。
+  details,
 }
 
 /// 仅保存轻量描述，具体行组件进入视口时才创建。
@@ -79,6 +82,8 @@ class _CompletionResultRow {
       'todo-completion-row-day-${businessDayKey(group.day)}',
     _CompletionResultRowKind.group => 'todo-completion-row-group-${group.id}',
     _CompletionResultRowKind.entry => 'todo-completion-row-entry-${entry!.id}',
+    _CompletionResultRowKind.details =>
+      'todo-completion-row-details-${group.id}',
   });
 }
 
@@ -506,11 +511,6 @@ class _WindowsTodoCompletionHistoryState
     }
     // 展开时只创建轻量行描述，避免同一组一次布局全部步骤。
     final List<_CompletionResultRow> rows = _resultRows(groups, dayCounts);
-    // 使用稳定身份定位旧行，展开和筛选不会复用错误的行状态。
-    final Map<Key, int> rowIndices = <Key, int>{
-      for (int index = 0; index < rows.length; index += 1)
-        rows[index].key: index,
-    };
     // 两种高度布局共用相同的检索与计数内容。
     final Widget header = _buildResultsHeader(summary, count, compact: compact);
     // 明细两侧和底部沿用原有面板留白。
@@ -536,11 +536,8 @@ class _WindowsTodoCompletionHistoryState
                 else
                   SliverPadding(
                     padding: listPadding,
-                    sliver: SliverList.builder(
-                      itemCount: rows.length,
-                      findChildIndexCallback: (Key key) => rowIndices[key],
-                      itemBuilder: (BuildContext context, int index) =>
-                          _buildResultRow(rows[index], summary),
+                    sliver: SliverMainAxisGroup(
+                      slivers: _buildResultSlivers(rows, summary),
                     ),
                   ),
               ],
@@ -552,17 +549,20 @@ class _WindowsTodoCompletionHistoryState
                 Expanded(
                   child: rows.isEmpty
                       ? _buildEmptyResults()
-                      : ListView.builder(
+                      : CustomScrollView(
                           key: const PageStorageKey<String>(
                             'todo-completion-results',
                           ),
                           controller: _listController,
                           primary: false,
-                          padding: listPadding,
-                          itemCount: rows.length,
-                          findChildIndexCallback: (Key key) => rowIndices[key],
-                          itemBuilder: (BuildContext context, int index) =>
-                              _buildResultRow(rows[index], summary),
+                          slivers: <Widget>[
+                            SliverPadding(
+                              padding: listPadding,
+                              sliver: SliverMainAxisGroup(
+                                slivers: _buildResultSlivers(rows, summary),
+                              ),
+                            ),
+                          ],
                         ),
                 ),
               ],
@@ -637,7 +637,14 @@ class _WindowsTodoCompletionHistoryState
           ),
         );
       }
-      if (!group.expandable || _isGroupExpanded(group)) {
+      if (group.expandable) {
+        rows.add(
+          _CompletionResultRow(
+            kind: _CompletionResultRowKind.details,
+            group: group,
+          ),
+        );
+      } else {
         for (final TodoCompletionEntry entry in group.entries) {
           rows.add(
             _CompletionResultRow(
@@ -682,6 +689,7 @@ class _WindowsTodoCompletionHistoryState
           ),
         ),
         _CompletionResultRowKind.group => _buildGroup(row.group),
+        _CompletionResultRowKind.details => const SizedBox.shrink(),
         _CompletionResultRowKind.entry => Padding(
           key: row.group.expandable && row.entry == row.group.entries.first
               ? ValueKey<String>('todo-completion-details-${row.group.id}')
@@ -694,6 +702,82 @@ class _WindowsTodoCompletionHistoryState
       },
     ),
   );
+
+  /// 普通行连续惰性构建，子项以整组裁剪展开，避免首帧创建千行零高度内容。
+  List<Widget> _buildResultSlivers(
+    List<_CompletionResultRow> rows,
+    TodoCompletionSummary summary,
+  ) {
+    // 所有 Sliver 只持有轻量描述，具体按钮仍进入视口时才创建。
+    final List<Widget> slivers = <Widget>[];
+    // 相邻的日期、分组标题和独立完成项共用一个惰性列表。
+    List<_CompletionResultRow> chunk = <_CompletionResultRow>[];
+    // 固定当前描述集合，避免闭包捕获后续修改后的列表。
+    void flush() {
+      if (chunk.isEmpty) return;
+      // 本段固定的行集合。
+      final List<_CompletionResultRow> items = chunk;
+      // 稳定行键保证更新时不复用其他记录的状态。
+      final Map<Key, int> indices = <Key, int>{
+        for (int index = 0; index < items.length; index++)
+          items[index].key: index,
+      };
+      slivers.add(
+        SliverList.builder(
+          key: ValueKey<String>('completion-chunk-${items.first.key.value}'),
+          itemCount: items.length,
+          findChildIndexCallback: (key) => indices[key],
+          itemBuilder: (context, index) =>
+              _buildResultRow(items[index], summary),
+        ),
+      );
+      chunk = <_CompletionResultRow>[];
+    }
+
+    for (final _CompletionResultRow row in rows) {
+      if (row.kind != _CompletionResultRowKind.details) {
+        chunk.add(row);
+        continue;
+      }
+      flush();
+      // 分组内仍按真实完成单元跟踪身份，后台刷新不复用其他行的状态。
+      final Map<Key, int> entryIndices = <Key, int>{
+        for (int index = 0; index < row.group.entries.length; index++)
+          ValueKey<String>(
+            'todo-completion-row-entry-${row.group.entries[index].id}',
+          ): index,
+      };
+      slivers.add(
+        OmniDisclosure.sliver(
+          key: row.key,
+          expanded: _isGroupExpanded(row.group),
+          child: SliverPadding(
+            padding: const EdgeInsets.only(left: OmniSpacing.xl),
+            sliver: SliverList.builder(
+              itemCount: row.group.entries.length,
+              findChildIndexCallback: (key) => entryIndices[key],
+              itemBuilder: (context, index) => KeyedSubtree(
+                key: ValueKey<String>(
+                  'todo-completion-row-entry-${row.group.entries[index].id}',
+                ),
+                child: Padding(
+                  key: index == 0
+                      ? ValueKey<String>(
+                          'todo-completion-details-${row.group.id}',
+                        )
+                      : null,
+                  padding: EdgeInsets.zero,
+                  child: _buildEntry(row.group.entries[index]),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    flush();
+    return slivers;
+  }
 
   /// 搜索右侧筛选图标沿用笔记页菜单，日期变化仍即时作用于历史。
   Future<void> _openSearchFilters(
@@ -772,6 +856,8 @@ class _WindowsTodoCompletionHistoryState
                       filled: false,
                       isDense: true,
                       isCollapsed: true,
+                      // 外层已控制高度，避免桌面紧凑密度再次下移文字基线。
+                      visualDensity: VisualDensity.standard,
                       contentPadding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
                       border: InputBorder.none,
@@ -898,29 +984,34 @@ class _WindowsTodoCompletionHistoryState
 
     return KeyedSubtree(
       key: ValueKey<String>('todo-completion-group-${group.id}'),
-      child: OmniListTile(
-        key: ValueKey<String>('todo-completion-toggle-${group.id}'),
-        contentPadding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xxs),
-        leading: Icon(
-          expanded ? Icons.expand_more_rounded : Icons.chevron_right_rounded,
-          size: 20,
+      child: OmniDisclosureToggle(
+        expanded: expanded,
+        child: OmniListTile(
+          key: ValueKey<String>('todo-completion-toggle-${group.id}'),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: OmniSpacing.xxs,
+          ),
+          leading: Icon(
+            expanded ? Icons.expand_more_rounded : Icons.chevron_right_rounded,
+            size: 20,
+          ),
+          horizontalTitleGap: OmniSpacing.xs,
+          minLeadingWidth: 20,
+          title: Text(group.root.title),
+          subtitle: Text(
+            '完成 ${group.entries.length} 项 · '
+            '${DateFormat('HH:mm').format(group.latestCompletedAt.toLocal())}',
+          ),
+          trailing: group.root.taskType == 'progress'
+              ? OmniIconButton(
+                  tooltip: '查看进度',
+                  icon: const Icon(Icons.segment_rounded, size: 18),
+                  onPressed: () =>
+                      TodoProgressPanel.show(context, record: group.root),
+                )
+              : null,
+          onTap: toggle,
         ),
-        horizontalTitleGap: OmniSpacing.xs,
-        minLeadingWidth: 20,
-        title: Text(group.root.title),
-        subtitle: Text(
-          '完成 ${group.entries.length} 项 · '
-          '${DateFormat('HH:mm').format(group.latestCompletedAt.toLocal())}',
-        ),
-        trailing: group.root.taskType == 'progress'
-            ? OmniIconButton(
-                tooltip: '查看进度',
-                icon: const Icon(Icons.segment_rounded, size: 18),
-                onPressed: () =>
-                    TodoProgressPanel.show(context, record: group.root),
-              )
-            : null,
-        onTap: toggle,
       ),
     );
   }

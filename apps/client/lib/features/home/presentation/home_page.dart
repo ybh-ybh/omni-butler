@@ -1523,17 +1523,20 @@ class _HomeTodoQuadrant extends StatelessWidget {
               const SizedBox(width: OmniSpacing.xs),
               Expanded(child: Divider(color: accentColor)),
               if (onToggleAllTrees != null && expandableTreeIds.isNotEmpty)
-                OmniIconButton(
-                  key: ValueKey<String>(
-                    'home-todo-quadrant-toggle-all-${quadrant.value}',
-                  ),
-                  tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
-                  onPressed: () =>
-                      onToggleAllTrees!(expandableTreeIds, allTreesCollapsed),
-                  icon: Icon(
-                    allTreesCollapsed
-                        ? Icons.unfold_more_rounded
-                        : Icons.unfold_less_rounded,
+                OmniDisclosureToggle(
+                  expanded: !allTreesCollapsed,
+                  child: OmniIconButton(
+                    key: ValueKey<String>(
+                      'home-todo-quadrant-toggle-all-${quadrant.value}',
+                    ),
+                    tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
+                    onPressed: () =>
+                        onToggleAllTrees!(expandableTreeIds, allTreesCollapsed),
+                    icon: Icon(
+                      allTreesCollapsed
+                          ? Icons.unfold_more_rounded
+                          : Icons.unfold_less_rounded,
+                    ),
                   ),
                 ),
             ],
@@ -1630,12 +1633,6 @@ class _HomeTodoTree extends StatelessWidget {
         .toList(growable: false);
     // 当前任务树是否存在需要展示的子任务。
     final bool hasChildren = pendingChildren.isNotEmpty;
-    // 当前是否关闭非必要动画。
-    final bool disableAnimations = OmniMotion.reduce(context);
-    // 子任务展开收起动画时长。
-    final Duration duration = disableAnimations
-        ? Duration.zero
-        : OmniMotion.normal;
     // 父任务行；展开控制收纳在行尾，确保勾选框始终位于最左侧。
     final Widget rootRow = _HomeTodoRow(
       key: ValueKey<String>('home-todo-row-${tree.root.id}'),
@@ -1652,49 +1649,39 @@ class _HomeTodoTree extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         rootRow,
-        AnimatedSize(
-          alignment: Alignment.topCenter,
-          duration: duration,
-          curve: OmniMotion.standardCurve,
-          child: childrenExpanded && hasChildren
-              ? Column(
+        OmniDisclosure(
+          expanded: childrenExpanded && hasChildren,
+          child: Column(
+            key: ValueKey<String>('home-todo-tree-children-${tree.root.id}'),
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              for (int index = 0; index < pendingChildren.length; index += 1)
+                CustomPaint(
                   key: ValueKey<String>(
-                    'home-todo-tree-children-${tree.root.id}',
+                    'home-todo-tree-branch-${pendingChildren[index].id}',
                   ),
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    for (
-                      int index = 0;
-                      index < pendingChildren.length;
-                      index += 1
-                    )
-                      CustomPaint(
-                        key: ValueKey<String>(
-                          'home-todo-tree-branch-${pendingChildren[index].id}',
-                        ),
-                        painter: _HomeTodoTreeBranchPainter(
-                          lineColor: OmniColors.of(context).muted
-                              .withValues(alpha: 0.46),
-                          trunkX: _treeTrunkX,
-                          branchEndX: _branchEndX,
-                          isLast: index == pendingChildren.length - 1,
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: _childIndent),
-                          child: _HomeTodoRow(
-                            key: ValueKey<String>(
-                              'home-todo-row-${pendingChildren[index].id}',
-                            ),
-                            todo: pendingChildren[index],
-                            accentColor: accentColor,
-                            onAction: onAction,
-                            onComplete: onComplete,
-                          ),
-                        ),
+                  painter: _HomeTodoTreeBranchPainter(
+                    lineColor: OmniColors.of(context).muted
+                        .withValues(alpha: 0.46),
+                    trunkX: _treeTrunkX,
+                    branchEndX: _branchEndX,
+                    isLast: index == pendingChildren.length - 1,
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: _childIndent),
+                    child: _HomeTodoRow(
+                      key: ValueKey<String>(
+                        'home-todo-row-${pendingChildren[index].id}',
                       ),
-                  ],
-                )
-              : const SizedBox.shrink(),
+                      todo: pendingChildren[index],
+                      accentColor: accentColor,
+                      onAction: onAction,
+                      onComplete: onComplete,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ],
     );
@@ -2036,6 +2023,7 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                   onExit: (_) => _setHovered(false),
                   child: OmniPressSurface(
                     enabled: !_submitting,
+                    scaleOnPress: widget.onToggleChildren == null,
                     borderRadius: BorderRadius.circular(OmniRadius.control),
                     onTap: onTitleTap,
                     onSecondaryTapUp: (TapUpDetails details) =>
@@ -2104,46 +2092,50 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                               Expanded(
                                 child: Material(
                                   color: Colors.transparent,
-                                  child: OmniInkWell(
-                                    key: ValueKey<String>(
-                                      'home-todo-title-action-${widget.todo.id}',
-                                    ),
-                                    onTap: onTitleTap,
-                                    borderRadius: BorderRadius.circular(
-                                      OmniRadius.control,
-                                    ),
-                                    hoverColor: Colors.transparent,
-                                    focusColor: colors.brandSoft,
-                                    highlightColor:
-                                        Theme.of(context).platform ==
-                                            TargetPlatform.android
-                                        ? Colors.transparent
-                                        : null,
-                                    child: SizedBox(
-                                      height: 32,
-                                      child: Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: AnimatedDefaultTextStyle(
-                                          duration: disableAnimations
-                                              ? Duration.zero
-                                              : OmniMotion.fast,
-                                          curve: OmniMotion.standardCurve,
-                                          // 动画样式替换默认文字样式时保留平台字体与排版。
-                                          style: DefaultTextStyle.of(context)
-                                              .style
-                                              .copyWith(
-                                                color: _checked
-                                                    ? colors.muted
-                                                    : colors.ink,
-                                                fontWeight: FontWeight.w400,
-                                                decoration: _checked
-                                                    ? TextDecoration.lineThrough
-                                                    : TextDecoration.none,
-                                              ),
-                                          child: Text(
-                                            widget.todo.title,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
+                                  child: OmniDisclosureToggle(
+                                    expanded: widget.childrenExpanded,
+                                    child: OmniInkWell(
+                                      key: ValueKey<String>(
+                                        'home-todo-title-action-${widget.todo.id}',
+                                      ),
+                                      onTap: onTitleTap,
+                                      borderRadius: BorderRadius.circular(
+                                        OmniRadius.control,
+                                      ),
+                                      hoverColor: Colors.transparent,
+                                      focusColor: colors.brandSoft,
+                                      highlightColor:
+                                          Theme.of(context).platform ==
+                                              TargetPlatform.android
+                                          ? Colors.transparent
+                                          : null,
+                                      child: SizedBox(
+                                        height: 32,
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: AnimatedDefaultTextStyle(
+                                            duration: disableAnimations
+                                                ? Duration.zero
+                                                : OmniMotion.fast,
+                                            curve: OmniMotion.standardCurve,
+                                            // 动画样式替换默认文字样式时保留平台字体与排版。
+                                            style: DefaultTextStyle.of(context)
+                                                .style
+                                                .copyWith(
+                                                  color: _checked
+                                                      ? colors.muted
+                                                      : colors.ink,
+                                                  fontWeight: FontWeight.w400,
+                                                  decoration: _checked
+                                                      ? TextDecoration
+                                                            .lineThrough
+                                                      : TextDecoration.none,
+                                                ),
+                                            child: Text(
+                                              widget.todo.title,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -2167,32 +2159,36 @@ class _HomeTodoRowState extends State<_HomeTodoRow> {
                                 const SizedBox(width: OmniSpacing.xxs),
                                 SizedBox.square(
                                   dimension: 28,
-                                  child: OmniIconButton(
-                                    key: ValueKey<String>(
-                                      'home-todo-tree-toggle-${widget.todo.id}',
-                                    ),
-                                    tooltip: widget.childrenExpanded ?? false
-                                        ? '收起子任务'
-                                        : '展开子任务',
-                                    onPressed: onTitleTap,
-                                    hoverColor: Colors.transparent,
-                                    style: const ButtonStyle(
-                                      backgroundColor:
-                                          WidgetStatePropertyAll<Color>(
-                                            Colors.transparent,
+                                  child: OmniDisclosureToggle(
+                                    expanded: widget.childrenExpanded,
+                                    child: OmniIconButton(
+                                      key: ValueKey<String>(
+                                        'home-todo-tree-toggle-${widget.todo.id}',
+                                      ),
+                                      tooltip: widget.childrenExpanded ?? false
+                                          ? '收起子任务'
+                                          : '展开子任务',
+                                      onPressed: onTitleTap,
+                                      hoverColor: Colors.transparent,
+                                      style: const ButtonStyle(
+                                        backgroundColor:
+                                            WidgetStatePropertyAll<Color>(
+                                              Colors.transparent,
+                                            ),
+                                      ),
+                                      padding: EdgeInsets.zero,
+                                      constraints:
+                                          const BoxConstraints.tightFor(
+                                            width: 28,
+                                            height: 28,
                                           ),
-                                    ),
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints.tightFor(
-                                      width: 28,
-                                      height: 28,
-                                    ),
-                                    icon: Icon(
-                                      widget.childrenExpanded ?? false
-                                          ? Icons.expand_more_rounded
-                                          : Icons.chevron_right_rounded,
-                                      color: colors.muted,
-                                      size: 18,
+                                      icon: Icon(
+                                        widget.childrenExpanded ?? false
+                                            ? Icons.expand_more_rounded
+                                            : Icons.chevron_right_rounded,
+                                        color: colors.muted,
+                                        size: 18,
+                                      ),
                                     ),
                                   ),
                                 ),

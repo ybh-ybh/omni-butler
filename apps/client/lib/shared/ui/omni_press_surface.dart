@@ -17,6 +17,9 @@ class OmniPressSurface extends StatefulWidget {
   /// 是否允许条目交互和按下反馈。
   final bool enabled;
 
+  /// 展开入口关闭缩放，触点高亮和原菜单手势继续保留。
+  final bool scaleOnPress;
+
   /// 原条目的轮廓；为空时按矩形裁剪。
   final BorderRadius? borderRadius;
 
@@ -36,6 +39,7 @@ class OmniPressSurface extends StatefulWidget {
   const OmniPressSurface({
     required this.child,
     this.enabled = true,
+    this.scaleOnPress = true,
     this.borderRadius,
     this.onTap,
     this.onSecondaryTapUp,
@@ -246,7 +250,9 @@ class _OmniPressSurfaceState extends State<OmniPressSurface>
           // 颜色强度线性增加，半径另用连续缓动。
           final Color tint = OmniPressColors.tintOf(context, _spread.value);
           return Transform.scale(
-            scale: 1 - (1 - OmniMotion.pressScale) * _compression.value,
+            scale: widget.scaleOnPress
+                ? 1 - (1 - OmniMotion.pressScale) * _compression.value
+                : 1,
             transformHitTests: false,
             child: CustomPaint(
               foregroundPainter: _OmniPressPainter(

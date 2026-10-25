@@ -391,49 +391,52 @@ class _NoteTagSectionState extends ConsumerState<NoteTagSection> {
   );
 
   /// 标题保留整行点击，指示箭头沿用独立悬停颜色。
-  Widget _headerTitle() => OmniInkWell(
-    key: const ValueKey('notes-tags-toggle'),
-    onTap: () => setState(() => _collapsed = !_collapsed),
-    borderRadius: BorderRadius.circular(OmniRadius.control),
-    hoverColor: Colors.transparent,
-    highlightColor: Colors.transparent,
-    splashColor: Colors.transparent,
-    child: Padding(
-      padding: const EdgeInsets.only(
-        left: OmniSpacing.sm,
-        top: OmniSpacing.xs,
-        bottom: OmniSpacing.xs,
-      ),
-      child: Row(
-        children: [
-          Flexible(
-            child: Text(
-              '全部标签',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: _headerHovered
-                    ? OmniColors.of(context).ink
-                    : OmniColors.of(context).muted,
+  Widget _headerTitle() => OmniDisclosureToggle(
+    expanded: !_collapsed,
+    child: OmniInkWell(
+      key: const ValueKey('notes-tags-toggle'),
+      onTap: () => setState(() => _collapsed = !_collapsed),
+      borderRadius: BorderRadius.circular(OmniRadius.control),
+      hoverColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      splashColor: Colors.transparent,
+      child: Padding(
+        padding: const EdgeInsets.only(
+          left: OmniSpacing.sm,
+          top: OmniSpacing.xs,
+          bottom: OmniSpacing.xs,
+        ),
+        child: Row(
+          children: [
+            Flexible(
+              child: Text(
+                '全部标签',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: _headerHovered
+                      ? OmniColors.of(context).ink
+                      : OmniColors.of(context).muted,
+                ),
               ),
             ),
-          ),
-          OmniHoverReveal(
-            visible: _headerHovered || widget.touchActions,
-            child: MouseRegion(
-              onEnter: (_) => setState(() => _collapseHovered = true),
-              onExit: (_) => setState(() => _collapseHovered = false),
-              child: Icon(
-                _collapsed ? Icons.chevron_right : Icons.expand_more,
-                key: const ValueKey('notes-tags-collapse'),
-                size: OmniSize.icon,
-                color: _collapseHovered
-                    ? OmniColors.of(context).ink
-                    : OmniColors.of(context).muted,
+            OmniHoverReveal(
+              visible: _headerHovered || widget.touchActions,
+              child: MouseRegion(
+                onEnter: (_) => setState(() => _collapseHovered = true),
+                onExit: (_) => setState(() => _collapseHovered = false),
+                child: Icon(
+                  _collapsed ? Icons.chevron_right : Icons.expand_more,
+                  key: const ValueKey('notes-tags-collapse'),
+                  size: OmniSize.icon,
+                  color: _collapseHovered
+                      ? OmniColors.of(context).ink
+                      : OmniColors.of(context).muted,
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     ),
   );

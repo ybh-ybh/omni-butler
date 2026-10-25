@@ -368,24 +368,29 @@ class _AndroidNoteCard extends ConsumerWidget {
                 ),
                 _AndroidNoteEditTarget(
                   onEdit: () => onEdit(),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      NoteMarkdownText(
-                        source: title,
-                        maxLines: expanded ? null : 2,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      if (preview.trim().isNotEmpty) ...[
-                        const SizedBox(height: OmniSpacing.xs),
+                  child: AnimatedSize(
+                    alignment: Alignment.topCenter,
+                    duration: OmniMotion.duration(context, OmniMotion.panel),
+                    curve: OmniMotion.standardCurve,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
                         NoteMarkdownText(
-                          source: preview,
+                          source: title,
                           maxLines: expanded ? null : 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium,
+                          style: Theme.of(context).textTheme.titleMedium,
                         ),
+                        if (preview.trim().isNotEmpty) ...[
+                          const SizedBox(height: OmniSpacing.xs),
+                          NoteMarkdownText(
+                            source: preview,
+                            maxLines: expanded ? null : 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
                 // 使用实际布局测量判断是否需要展开入口，避免短正文多出无效按钮。
@@ -436,10 +441,13 @@ class _AndroidNoteCard extends ConsumerWidget {
                     return overflow
                         ? Align(
                             alignment: Alignment.centerLeft,
-                            child: OmniButton(
-                              label: expanded ? '收起' : '展开',
-                              variant: OmniButtonVariant.text,
-                              onPressed: onExpand,
+                            child: OmniDisclosureToggle(
+                              expanded: expanded,
+                              child: OmniButton(
+                                label: expanded ? '收起' : '展开',
+                                variant: OmniButtonVariant.text,
+                                onPressed: onExpand,
+                              ),
                             ),
                           )
                         : const SizedBox.shrink();
