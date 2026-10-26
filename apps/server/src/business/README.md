@@ -1,6 +1,6 @@
 # 可复用后端业务接口
 
-七模块业务方法由 BusinessModule 注册并导出。Codex MCP 已作为独立适配层注入并调用同一个服务，提供七模块查询、统计及按连接写权限执行的写入（单条直接执行，批量在Codex对话确认）；当前 HTTP、PowerSync 和原音/图片传输继续使用现有入口。接入、权限、跨端基线保护和上线说明见 [MCP README](../mcp/README.md)，应用内对话及 Function Calling 尚未接入。
+七模块业务方法由 BusinessModule 注册并导出。Codex MCP 与应用内助手作为独立适配层调用同一组服务，提供七模块查询、统计及业务写入。MCP 按连接权限执行，单条直接提交、批量在 Codex 对话确认；助手使用设备 JWT 与应用内确认卡。业务同步及原音/图片传输使用各自入口。外部接入、权限和跨端基线保护见 [MCP README](../mcp/README.md)，应用内对话与 Function Calling 见[助手说明](../assistant/README.md)。
 
 ## 调用约定
 
@@ -147,9 +147,9 @@ TodoRecurrenceService 在服务启动及每 30 秒运行，以持久游标补齐
 
 时区来自该 owner 有效待办读写连接的显式设置，经 IANA 别名规范化后必须唯一。无授权、无明确时区或时区冲突时暂停，条件恢复后自动继续。有待办读权限的 MCP 连接可从 get_capabilities.todoRecurrence 读取最近检查的 status/timeZone/reason/checkedAt，包括 not_checked、idle、catching_up、blocked_authorization、blocked_timezone、error；此查询不触发调度。
 
-客户端与后端共用规则段锚点语义：连续同规则实例不改变周期起点，频率改变以变更日重新起算，null 表示单次例外。scope=future 关闭主系列保存 stopped，普通编辑保留既有终止标记。停止规则、永久墓碑和稳定实例身份仍生效，Windows/Android 须同步更新此逻辑。
+客户端与后端共用规则段锚点语义：连续同规则实例不改变周期起点，频率改变以变更日重新起算，null 表示单次例外。scope=future 关闭主系列保存 stopped，普通编辑保留既有终止标记。Windows/Android 使用相同的停止规则、永久墓碑和稳定实例身份。
 
-第 26 份迁移 20261022010000_todo_recurrence_worker 提供私有调度状态及游标；第 27 份 20261022020000_todo_recurrence_protection 提供 todo_recurrence_protections。生成根项和子项时同事务记录保护身份，同步上传复用既有字段前值检查及关联删除冲突检查，避免旧离线 PATCH/DELETE 覆盖后台生成内容。保护不依赖伪 MCP 回执，撤销连接或删除记录后仍保留，仅删除 owner 时级联清理；私有表不发布到 PowerSync 或业务快照。
+迁移 `20261022010000_todo_recurrence_worker` 提供私有调度状态及游标；迁移 `20261022020000_todo_recurrence_protection` 提供 todo_recurrence_protections。生成根项和子项时同事务记录保护身份，同步上传复用既有字段前值检查及关联删除冲突检查，避免旧离线 PATCH/DELETE 覆盖后台生成内容。保护不依赖伪 MCP 回执，撤销连接或删除记录后仍保留，仅删除 owner 时级联清理；私有表不发布到 PowerSync 或业务快照。
 
 priorityQuadrant完全沿用客户端0–3：0不紧急不重要，1紧急不重要，2重要不紧急（缺省），3重要且紧急。新增、编辑及整树移动均接受0并拒绝4；已有非法4不自动重映射，须核对后显式更新，不能经父项继承、未来编辑或重复实例生成继续传播。
 
@@ -172,18 +172,14 @@ priorityQuadrant完全沿用客户端0–3：0不紧急不重要，1紧急不重
 
 上述时间组和 expectedRevision/tagsBase 为内部领域协议。MCP v3 只接收带偏移的 recordedAt 和详情返回的 editToken，适配层拆出记录日期、日内秒、偏移，并使用读取时的正文/标签基线。recordedAt 新增省略取当前时刻，更新省略保留；get_note 返回的 editToken 必须原样回传，不可自造或用提交时最新值替代。令牌沿用上述 24 小时、持久签名和原 requestId 重放规则。正式正文冲突仍保存候选，标签仍保留并发新增。
 
-追加冲突基于真正的历史正文构造候选；历史基线不存在时返回 NOTE_BASE_MISSING。历史正文恢复可读取 versions，再以当前 expectedRevision 调用普通 update 生成新修订。ASR/AI 整理成功仍不等于正式正文已采用；服务器整理采用与跨端去重留待该能力接入时实施。
+追加冲突基于真正的历史正文构造候选；历史基线不存在时返回 NOTE_BASE_MISSING。历史正文恢复可读取 versions，再以当前 expectedRevision 调用普通 update 生成新修订。ASR/AI 整理成功不等于正式正文已采用；结果由客户端依据录音顺序、正文版本和采用范围写回，服务器不会直接覆盖正文。
 
 ## 迁移、验证与发布边界
 
-新增迁移 20261020010000_business_operations：一张内部业务回执表，物品/时间/会员三类永久删除触发器，并清理这三类已有的孤立分类关系。软删除但仍存在的业务记录及其关系保留。PowerSync 发布表和字段、客户端 schema/本地数据库版本未改变。
+迁移 `20261020010000_business_operations` 包含一张内部业务回执表，物品/时间/会员三类永久删除触发器，并清理这三类已有的孤立分类关系。软删除但仍存在的业务记录及其关系保留。这些业务回执为后端私有状态，不进入 PowerSync 发布。
 
 增量同步与快照迁移共用现有多态模块映射。增量事务在最终状态检查关系闭包，允许链接先于业务父行上传；父项的永久墓碑优先于迟到的新链接身份。同步原始负载摘要、回执及批次顺序保持。
 
-发布前按现有流程备份数据库、对象存储及密钥卷，停止旧 API 请求后执行全部 27 份迁移，再启动新版 API 并更新 Windows/Android 客户端。后台保护身份须随数据库备份，不能作为日志清理。当前代码只在专用空测试库执行迁移，运行中的应用数据库未更新。客户端仍通过原同步入口，v3 只调整重复规则逻辑；同步 schema 12、SQLite 26、快照 11、wire snapshot 3 不变。
+发布前备份数据库、对象存储及密钥卷，停止旧 API 请求后执行全部待应用迁移，再启动 API 并更新客户端；详见[部署说明](../../../../deploy/README.md)。后台保护身份须随数据库备份，不能作为日志清理。客户端仍通过同步入口传输业务记录，同步 schema 为 12；本地数据库与备份版本见[客户端说明](../../../client/README.md)。
 
-验证入口：test/business-input.spec.ts、test/business.integration.spec.ts。集成测试只读取显式 OMNI_BUSINESS_TEST_DATABASE_URL，要求 127.0.0.1、库名以 _test 结尾且 public 无既有表；不读取应用 DATABASE_URL，也不清理用户数据库。2026-10-20 的原业务层验证记录保留在 output/business-backend-20261020/，不代表 v3 最终结果。
-
-### MCP v3 验证（2026-10-22）
-
-完整 npm test 使用六套隔离 PostgreSQL 环境，601 项通过、20 项外部存储用例跳过；非修复模式 lint、build、MCP 导出检查通过。Flutter 定向 23 项及相关 analyze、UI 样式检查通过。证据位于 output/mcp-v3-20261022/。未部署、未构建或安装客户端、未进行真实 Codex 宿主和双设备验证。
+验证入口为 `test/business-input.spec.ts`、`test/business.integration.spec.ts`。集成测试只读取显式 `OMNI_BUSINESS_TEST_DATABASE_URL`，要求 `127.0.0.1`、库名以 `_test` 结尾且 public 无既有表；不读取应用 `DATABASE_URL`，也不清理用户数据库。

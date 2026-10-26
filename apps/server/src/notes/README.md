@@ -4,9 +4,9 @@
 
 模型配置位于客户端“设置 → AI 设置”，后端共享且默认关闭。开启后，仅新建的已授权 ASR 任务固定整理配置；原文仍保存到 `transcript`/`canonicalTranscript`，整理状态和结果独立存储。客户端通过 `GET /notes/audio/:segmentId/polish?recognitionId=...` 查询，使用 `POST` 同路径及 `{operationId,recognitionId}` 显式重试；不会重新识别原音。
 
-识别提交与结果查询要求同步版本11请求头；撤回接口保留旧设备兼容并取消关联整理。整理中等待正文写入，成功按录音顺序采用、失败使用原文，未保存草稿或正文版本变化保留候选。密钥、配置、计费未知恢复和部署要求见[服务端说明](../../README.md#大模型设置与笔记-ai-整理)。
+识别提交与结果查询要求 `X-Omni-Sync-Schema: 12` 请求头；撤回接口保留旧设备兼容并取消关联整理。整理中等待正文写入，成功按录音顺序采用、失败使用原文，未保存草稿或正文版本变化保留候选。密钥、配置、计费未知恢复和部署要求见[服务端说明](../../README.md#大模型设置与笔记-ai-整理)。
 
-`NotesService` 只依赖 `SpeechRecognitionProvider` 和 `NoteAudioStore`。新增语音厂商时实现 `submit`、`poll` 并在 `NotesModule` 注册适配器；客户端和笔记存储不依赖腾讯字段。
+语音厂商与原音存储分别通过 `SpeechRecognitionProvider` 和 `NoteAudioStore` 抽象接入 `NotesService`。新增语音厂商时实现 `submit`、`poll` 并在 `NotesModule` 注册适配器；客户端和笔记存储不依赖腾讯字段。
 
 设备接口都使用现有 JWT：
 
@@ -25,7 +25,7 @@
 
 快照迁移使用现有部署密钥：先 `PUT /notes/audio/migration/stage`，multipart `syncKey`、`migrationId`、`segmentId`、`sha256`、`mime`、`file`；随后 `POST /sync/migrations`，`snapshotVersion:3`。每个音频元数据必须有匹配的完整暂存文件。仅当用户明确接受不完整迁移时传 `omittedAudioIds` UUID 数组；缺失文件保留不可用元数据。验证失败不替换服务器现有快照，提交时真实原音归属与数据在同一事务接管。未提交暂存 24 小时后清理。
 
-首次创建先 PUT `note_entries`，再 PUT 初始 `note_versions`，初始 `base_revision` 等于本次新修订 UUID。后续正文编辑先 PUT 不可变 `note_versions`（新修订 UUID、编辑起点 `base_revision`、完整正文），再 PATCH `note_entries` 的 `body` 和 `revision`，放同一客户端事务。服务器发现基线不匹配时保留候选并跳过正文覆盖。版本行只允许 PATCH `deleted_at` 跟随整篇删除和恢复，正文及修订事实不可修改。普通编辑只 PATCH 实际变更列；恢复回收站需显式 PATCH `deleted_at:null`。笔记分类与标签使用 `taxonomy_entries.module='notes'`。
+首次创建先 PUT `note_entries`，再 PUT 初始 `note_versions`，初始 `base_revision` 等于本次新修订 UUID。后续正文编辑先 PUT 不可变 `note_versions`（新修订 UUID、编辑起点 `base_revision`、完整正文），再 PATCH `note_entries` 的 `body` 和 `revision`，放同一客户端事务。服务器发现基线不匹配时保留候选并跳过正文覆盖。版本行只允许 PATCH `deleted_at` 跟随整篇删除和恢复，正文及修订事实不可修改。普通编辑只 PATCH 实际变更列；恢复回收站需显式 PATCH `deleted_at:null`。笔记标签使用 `taxonomy_entries.module='notes'`。
 
 `creation_timezone` 原样保存创建时设备的 `timeZoneName|±HH:mm`，不把设备提供的名称推测成 IANA 地区。独立增量迁移为历史行补 `legacy:unknown`；创建后不随时区切换或编辑改变，同步服务与数据库触发器共同禁止修改。部署必须应用新增迁移并更新 PowerSync 查询；v3 完整迁移快照需包含该字段。
 
@@ -35,4 +35,4 @@
 
 Compose 固定内部 `MINIO_ENDPOINT=http://minio:9000`，凭证路径为 `MINIO_CREDENTIALS_FILE=/app/image-storage/credentials.json`。本机开发可显式指定测试端点与凭证文件，不能提交凭证内容。MinIO 失败不会回退写入服务器磁盘，也不会误报上传成功；恢复后使用原身份重试。下载仍经过后端鉴权，腾讯长音频仍使用上面的任务签名 API 链接，不公开桶或对象地址。
 
-必须将 PostgreSQL、`image-storage-data` 和 `image-storage-credentials` 一起备份，即使关闭图片同步也如此。30 天回收站到期或永久删除会经数据库触发器持久记录对象清理工作，提交后删除 MinIO 原音；识别未配置时仍执行清理，删除失败保留回执重试。当前服务器尚未部署笔记功能，本次不执行历史磁盘原音迁移。
+必须将 PostgreSQL、`image-storage-data` 和 `image-storage-credentials` 一起备份，即使关闭图片同步也如此。30 天回收站到期或永久删除会经数据库触发器持久记录对象清理工作，提交后删除 MinIO 原音；识别未配置时仍执行清理，删除失败保留回执重试。

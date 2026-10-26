@@ -1,12 +1,12 @@
 # 个人多设备同步设计
 
-本文说明当前测试阶段的同步边界、代码取舍和验证要求。目标是让同一个人在多台设备上离线修改结构化数据，再可靠地合并到同一个自托管服务。图片同步可通过单一开关启用内置 MinIO；账号注册、多人权限不属于当前目标。
+本文说明同步边界、冲突语义和验证要求。目标是让同一个人在多台设备上离线修改结构化数据，再可靠地合并到同一个自托管服务。图片同步通过 `IMAGE_SYNC_ENABLED` 开关控制，Compose 中的私有 MinIO 常驻供图片、笔记原音和助手附件使用；账号注册、多人权限不属于当前目标。
 
 ## 从问题确定需要保存的状态
 
 设备离线时，服务器无法阻止本地修改；网络恢复时，请求可能重复、乱序或丢失响应。因此，服务器至少需要区分以下四件事：数据属于哪个部署、哪台设备有权访问、收到的是新事务还是旧事务重试、记录是尚未上传还是已经永久删除。
 
-这分别对应 `SyncOwner`、`DeviceSession`、`SyncReceipt` 和 `SyncTombstone`。它们解决不同的问题，不能用一个“已同步”标记替代。业务表继续使用 `user_id` 作为归属外键，只是其目标已经变为内部 `sync_owners`，不再表示可登录账号。
+这分别对应 `SyncOwner`、`DeviceSession`、`SyncReceipt` 和 `SyncTombstone`。它们解决不同的问题，不能用一个“已同步”标记替代。业务表使用 `user_id` 作为内部 `sync_owners` 的归属外键，不表示可登录账号。
 
 | 保留项 | 为什么需要 | 主要实现 |
 | --- | --- | --- |
@@ -22,9 +22,9 @@ RSA 的保留理由是独立服务验签，不是需要一套账号密码体系�
 
 ## 认证和撤销边界
 
-首次连接提交 `SYNC_SECRET`，服务器生成 256 位随机设备凭证，数据库只保存 SHA-256 摘要。该凭证通过既有接口字段 `refreshToken` 返回；它现在是稳定、不轮换的设备 session 凭证，不是 JWT，也不再指向下一枚刷新令牌。
+首次连接提交 `SYNC_SECRET`，服务器生成 256 位随机设备凭证，数据库只保存 SHA-256 摘要。该凭证通过既有接口字段 `refreshToken` 返回；它是稳定、不轮换的设备 session 凭证，不是 JWT。
 
-设备 session 固定有效 **30 天**，作为程序内部约定，不再提供部署配置。到期时间在连接时确定，刷新访问令牌不会延长；到期后需要重新连接。访问令牌最长 15 分钟，且不会超过 API 设备 session 的剩余期限。
+设备 session 固定有效 **30 天**，作为程序内部约定，不提供部署配置。到期时间在连接时确定，刷新访问令牌不会延长；到期后需要重新连接。访问令牌最长 15 分钟，且不会超过 API 设备 session 的剩余期限。
 
 客户端把并发刷新合并成一次请求，并使用会话代次防止旧请求在断开之后写回凭证。临时网络故障保留本地凭证及缓存身份，明确的认证失效才清除会话。稳定凭证使“刷新已成功但响应丢失”可以安全重试。
 
@@ -36,8 +36,8 @@ RSA 的保留理由是独立服务验签，不是需要一套账号密码体系�
 
 客户端的本机快照是用户明确选择的迁移来源；普通连接仍执行既有首次 PUT 合并规则，显式覆盖服务器使用独立协议：
 
-- `POST /sync/connection-preview` 使用 `syncKey` 返回 `protocolVersion=1`、`snapshotVersion=2`、`syncSchemaVersion=2`、`ownerId`、12 张表的 `counts`、回收站 `deletedCount` 及大小限制，不创建设备会话。步骤独立删除不计入回收站数量。
-- `POST /sync/migrations` 接收 `syncKey`、持久 `migrationId`、预检 `expectedOwnerId`、`snapshotVersion=2` 与完整 `operations`。所有行必须为 PUT，包含白名单全部同步列（可空列显式传 null）；零行快照合法。未知列、重复同表身份和快照外的外键引用均拒绝。客户端先将旧 v1 快照补齐普通任务类型、空单位和空步骤表，再转换为 v2；已经提交的旧迁移仍通过 status 查询原回执，不改写旧摘要。
+- `POST /sync/connection-preview` 使用 `syncKey` 返回 `protocolVersion=1`、`snapshotVersion=3`、`syncSchemaVersion=12`、`ownerId`、同步白名单各表的 `counts`、回收站 `deletedCount` 及大小限制，不创建设备会话。进度步骤和笔记图片不作为独立回收站记录计数。
+- `POST /sync/migrations` 接收 `syncKey`、持久 `migrationId`、预检 `expectedOwnerId`、`snapshotVersion=3` 与完整 `operations`。所有行必须为 PUT，包含白名单全部同步列（可空列显式传 null）；零行快照合法。未知列、重复同表身份和快照外的外键引用均拒绝。无笔记的旧请求仍可使用 v2；含笔记记录时必须使用 v3，并先暂存音频文件，详见[笔记原音说明](../src/notes/README.md)。已经提交的迁移通过 status 查询原回执，不改写旧摘要。
 - 服务端在与初始化和创建连接共用的全局事务锁内先查询迁移回执，再锁定 expected owner，与普通上传串行。删除 owner 级联清理业务数据、设备会话、普通同步回执、墓碑及日签别名；新 owner 下导入快照并执行既有派生协调，关系最终验证通过后提交独立迁移回执。
 - `sync_migration_receipts` 不关联 owner、不进入 PowerSync publication。原请求摘要包含 expected owner、快照版本及按现有 canonicalize 规范化的操作；同迁移 ID 同摘要重试返回原结果，不再覆盖成功后的新编辑。不同内容拒绝。已被后续重建替代的回执返回 `superseded`。
 - `POST /sync/migrations/status` 使用同步密钥和迁移 ID 查询 `committed`、`superseded` 或 `notFound`；notFound 只说明当前不存在回执，不能证明网络中的原请求永远不会提交。
@@ -51,12 +51,14 @@ RSA 的保留理由是独立服务验签，不是需要一套账号密码体系�
 
 - `clientId` 对应一份本地数据库的生命周期，保存于本地同步元数据；清空数据库后重新生成。
 - `transactionId` 使用 PowerSync 原始本地事务编号。同一事务重试时，身份及操作内容保持不变。
-- 上传使用 `getNextCrudTransaction()`，完整保留事务边界，不再按 200 条切断业务操作。
+- 上传使用 `getNextCrudTransaction()`，完整保留事务边界。
 - 当前整事务限制为 100000 条操作及 32 MB。超过限制会明确失败，不通过拆分牺牲原子性。
 
 服务器先校验表和列白名单，再取得当前 owner 的行锁。在同一 PostgreSQL 事务中检查回执、依序写业务数据、协调派生状态并保存回执。外键延迟到事务结束检查，使初始导入中的父子记录顺序不会造成中途失败。
 
 回执键为 `(user_id, client_id, transaction_id)`。同身份、同内容的重试直接返回旧结果；同身份却换成不同操作内容返回冲突，不会第二次写入。回执记录的是提交结果，不承担业务历史展示功能。
+
+下表描述普通同步行的基本语义。MCP、应用内助手及后台重复任务修改的受保护记录还需要字段前值和关联闭包检查；冲突保留整笔事务候选，由用户明确处理，详见[跨端基线保护](../src/mcp/README.md#跨端基线保护)。笔记正文和标签分别使用修订候选与差量合并。
 
 | 操作 | 当前语义 | 不能据此假定的行为 |
 | --- | --- | --- |
@@ -72,7 +74,7 @@ RSA 的保留理由是独立服务验签，不是需要一套账号密码体系�
 
 ## 同一业务实体与派生状态
 
-历史客户端可能已经用不同随机 ID 创建同一天的每日选择。仅为新记录采用 UUIDv5 无法合并这些旧数据：服务端按 `(user_id, day_key)` 保留先存在的槽位，并在 `daily_quote_selection_aliases` 中保存旧 ID 到该槽位的映射。PUT 不覆盖已有选择，后续 PATCH/DELETE 按映射操作；日期不可改变。日签 DELETE 表示清空引用，不删除日历槽位。映射仅服务端使用且由复合外键隔离归属，不进入 PowerSync 发布。第 4 份增量迁移添加该映射，已有新基线部署无需清空数据库。
+为兼容同一天已有不同随机 ID 的每日选择，服务端按 `(user_id, day_key)` 保留先存在的槽位，并在 `daily_quote_selection_aliases` 中保存旧 ID 到该槽位的映射。PUT 不覆盖已有选择，后续 PATCH/DELETE 按映射操作；日期不可改变。日签 DELETE 表示清空引用，不删除日历槽位。映射仅服务端使用且由复合外键隔离归属，不进入 PowerSync 发布。
 
 随机 UUID 适用于真正的新记录，不能解决“两个设备自动生成了同一个业务实体”。客户端为以下记录生成 UUIDv5：每日名言选择、内置名言、同名分类、同日期重复待办及其子任务、同会员同账期的自动续费账单、事件初始完成历史。
 
@@ -89,16 +91,16 @@ RSA 的保留理由是独立服务验签，不是需要一套账号密码体系�
 
 这里保留的是有事实来源的派生字段。它们可以用于现有界面和查询，但最终值必须来自服务器看到的完整记录集合，不能只信任某个设备的局部快照。
 
-## 删除的设计负担及字段依据
+## 认证与图片同步边界
 
-当前没有注册、邮箱登录、账号角色切换。因此删去账号 `email`、`password_hash`、`role`、`token_version`，保留最小数据归属身份。刷新令牌轮换链、后继令牌关系和 Argon2 随之移除：当前凭证是随机高熵设备密钥，不是需要抗字典攻击的人类密码。
+服务不提供注册、邮箱登录或角色切换；`sync_owners` 仅保存内部归属身份。设备凭证使用高熵随机密钥，数据库保存其 SHA-256 摘要。
 
-默认 `IMAGE_SYNC_ENABLED=false` 时，图片仍仅在本机使用。改为 `true` 并重新部署后，Compose 自动启动内置 MinIO 并持久保存内部凭证与对象。用户不配置 endpoint、bucket 或存储密钥；MinIO 仅在 Docker 内网提供服务，客户端通过现有 API 地址传输图片。
+默认 `IMAGE_SYNC_ENABLED=false` 时，物品、会员及笔记图片不上传服务器。设为 `true` 并重建 API 后启用图片接口；开关不控制 MinIO 启停。Compose 始终启动私有 MinIO，并持久保存内部凭证与对象，供图片、笔记原音及助手附件共用。Compose 固定存储连接及桶配置，客户端通过 API 传输文件，不直接访问 MinIO。笔记原音不受图片开关影响，助手附件由 `ASSISTANT_ATTACHMENTS_ENABLED` 独立控制。
 
 ### 可选图片同步协议
 
-- 只同步 `inventoryImage` 和 `membershipImage`。首页背景、缓存路径和本地附件表不进入 PowerSync 的 11 张业务表白名单。
-- 所有图片接口位于 `/omni-butler/api/v1/images`，使用现有设备会话鉴权。`GET /capabilities` 返回 `enabled` 和 `maxBytes=20971520`；关闭时其余图片接口返回 `IMAGE_SYNC_DISABLED`，已有对象和数据库记录继续保留。
+- 共用图片接口支持 `inventoryImage`、`membershipImage` 和 `noteImage`。笔记每张图片以 `note_images` 子记录 ID 作为 `businessId`；该表元数据经 PowerSync 同步，文件仍通过图片接口传输。首页背景和缓存路径不进入同步。
+- 所有图片接口位于 `/omni-butler/api/v1/images`，使用现有设备会话鉴权。`GET /capabilities` 返回 `enabled`、`maxBytes=20971520` 及三种 `supportedBusinessTypes`；关闭时其余图片接口返回 `IMAGE_SYNC_DISABLED`，已有对象和数据库记录继续保留。
 - `GET /images` 返回当前 owner 的完整 `items` 清单。每条含 `businessType/businessId/attachmentId/revision/sha256/mimeType/sizeBytes`。移除后的 `attachmentId` 和文件属性为 null，仍保留新 revision，防止旧设备历史补传复活图片。
 - `PUT /images/:businessType/:businessId` 接收 multipart `file` 与 `operationId/attachmentId/expectedRevision/onlyIfMissing/sha256` 五个字段。空 `expectedRevision` 表示从未设置过图片；历史补传设置 `onlyIfMissing=true`，任何服务端标记均优先。显式修改必须匹配 revision，冲突返回 `409 IMAGE_CONFLICT`。
 - `DELETE` 同一路径接收 `operationId` 和可空 `expectedRevision`，产生持久移除标记。上传与移除均返回 `{status: applied|unchanged, image}`。同 operationId、同内容返回原回执；不同内容返回 `IMAGE_OPERATION_REUSED`。旧回执只返回历史结果，不再写库。
@@ -110,91 +112,36 @@ RSA 的保留理由是独立服务验签，不是需要一套账号密码体系�
 
 图片真实集成测试位于 `test/images.integration.spec.ts`，必须显式设置 `OMNI_IMAGE_TEST=true` 及隔离库 `OMNI_IMAGE_TEST_DATABASE_URL=postgresql://...@127.0.0.1:35539/omni_images_integration`；只接受空测试 schema，并连接 `omni-image-test-minio-1` 的 loopback 测试端口。默认跳过外部测试不代表验收通过。
 
-没有被调用的 seed 命令不再保留。服务启动只初始化随机内部 owner，PowerSync publication 随数据库迁移创建且只发布业务表，不再每次启动检查/创建全表发布。内部 owner 和设备 session 没有被读取的创建时间也已删除；会话仍保留真正用于授权的失效时间。
+服务启动初始化随机内部 owner，PowerSync publication 随数据库迁移创建且只发布业务表。RSA 密钥首次启动自动生成并复用持久化卷；本地开发使用 `.local/keys`。明确需要自备密钥时可成对提供环境变量。
 
-RSA 密钥首次启动自动生成并复用持久化卷；本地开发同样使用 `.local/keys` 自动管理，重复的手工生成脚本已删除。明确需要自备密钥时仍可成对提供环境变量。
+## 验证方式
 
-以下六个业务字段已删除；其中会员支付方式和收藏标记已由产品确认不纳入第一版，其余字段依据当前业务没有读取或展示需求删除，而非仅因为某处搜索命中较少：
-
-| 字段 | 删除依据与替代来源 |
-| --- | --- |
-| `daily_quote_selections.is_manual` | 选择结果由 `quote_id` 表达，当前没有按手动/自动标记分流的行为 |
-| `taxonomy_entries.normalized_name` | 名称规范化可从 `name.trim().toLowerCase()` 推导，稳定业务身份直接使用推导值 |
-| `taxonomy_entries.icon_code_point` | 没有实际图标展示消费者，仅默认写入和编辑透传 |
-| `memberships.payment_method` | 当前没有支付方式的有效录入、展示或计算需求 |
-| `memberships.is_favorite` | 当前没有依赖该标记的收藏展示和排序行为 |
-| `membership_payments.billing_cycle` | 单笔账单的事实由金额、付款时间和有效期表达；自动续费周期来自会员自身 `billing_cycle` |
-
-会员自身 `billing_cycle` 继续决定续费计算。时间记录的 `entry_date`、`start_minute`、`end_minute` 仍参与现有自然日切片、统计及展示；`started_at`、`ended_at` 表达绝对区间和进行中状态，两组字段当前均有消费者，未在本次顺手删除。
-
-## 15 项审查问题与验证映射
-
-下表编号对应 `output/sync-audit/后端多端同步审查.md`。最后一列列出各问题对应的验证场景，实际执行结果见下方“本轮验证结果”。客户端路径以 `apps/client/lib/` 为起点，服务端路径以 `apps/server/` 为起点。
-
-| 编号及原问题 | 现实现文件 | 必须验证的场景 |
-| --- | --- | --- |
-| 1. ARGB 超出 int32 | `prisma/schema.prisma`、`prisma/migrations/20260925000100_sync_invariants/migration.sql` | 从空库执行迁移，上传 `0xFF477087` 等默认不透明颜色，确认持久化和下发值不变 |
-| 2. 每日名言自然键冲突 | 客户端 `core/database/app_database.dart` | 两份独立数据库同日首次打开首页，生成同一选择身份；双端上传后各自队列可清空 |
-| 3. 分类唯一约束漂移及同名冲突 | `prisma/schema.prisma`、新迁移基线；客户端 `core/taxonomy/taxonomy_repository.dart` | 两端生成默认分类、同名分类；删除后重建；重命名后再次使用旧名 |
-| 4. 重试覆盖和永久删除复活 | `src/sync/sync.service.ts`、`src/sync/sync-sql.builder.ts`、墓碑迁移 | 提交后丢响应，再有另一端更新或删除，重放旧事务不能覆盖/复活；级联孩子删除也有墓碑 |
-| 5. 刷新令牌分叉及撤销竞态 | `src/auth/auth.service.ts`、`src/auth/jwt.strategy.ts` | 同凭证并发刷新不创建后继；断开后所有该 session 的 API token 被拒绝，其他设备不受影响 |
-| 6. 旧本地数据没有初始上传、PATCH 假成功 | 客户端 `core/sync/omni_sync_runtime.dart`；`src/sync/sync.service.ts` | 无队列旧库首次接入补 PUT；再次打开不重复导入；不存在记录 PATCH 返回明确冲突 |
-| 7. 物品购买平台漏下发 | `../../../deploy/powersync/sync-config.yaml` | 设备 A 保存购买平台，设备 B 经真实复制读取相同值 |
-| 8. 离线启动不恢复同步 | 客户端 `core/auth/auth_repository.dart`、`core/sync/sync_providers.dart` | 已登录设备离线重启，凭证保留；恢复网络后无需重开页面即可恢复同步 |
-| 9. 200 条上限切断事务 | 客户端 `core/sync/omni_powersync_connector.dart`；`src/sync/dto/sync-batch.dto.ts` | 同一事务 201 条以上只发一个完整请求；后半段错误时整批回滚，队列不提前确认 |
-| 10. 重复待办各端重复生成 | 客户端 `features/todos/data/todo_repository.dart` | 同系列、同日期双端生成相同主子身份，服务器只保留一棵树 |
-| 11. 自动续费重复记账 | 客户端 `features/memberships/data/membership_repository.dart`；`src/sync/sync-consistency.ts` | 双端对同账期续费只产生一笔自动账单；迟到请求不回退日期；人工付款仍可独立记账 |
-| 12. 事件汇总与完成历史矛盾 | 客户端 `features/events/data/event_repository.dart`；`src/sync/sync-consistency.ts` | 两端历史乱序上传后汇总取最大；编辑初始时间、撤销和删除历史后正确重算 |
-| 13. 普通父任务手动确认完成 | `src/sync/sync-consistency.ts` | 双端各完成不同孩子，父任务仍待手动完成；保留确认时间；重开孩子后父重开；空子集合保留手工状态 |
-| 14. 父删除与新增孩子竞争 | `src/sync/sync-consistency.ts`、墓碑迁移 | 软删除父后迟到孩子进入相同删除组；永久删除后迟到孩子不复活；拒绝非法深层树 |
-| 15. 刷新响应丢失及并发误清会话 | `src/auth/auth.service.ts`；客户端 `core/auth/auth_repository.dart` | 刷新响应丢失可重试；并发 401 共用刷新；临时网络错误不清凭证，断开期间旧请求不写回 |
+关键场景包括事务原子性、丢响应重放、永久删除墓碑、跨 owner 隔离、派生状态协调、稳定业务身份合并、凭证刷新及撤销。真实同步链路还应检查离线重启恢复、超过 200 条的完整事务、PowerSync 下行、旧日签 ID 归并和两个独立本地数据库的最终状态。对应入口为 `test/sync.integration.spec.ts`、客户端 `test/sync_upload_protocol_test.dart`、`test/powersync_runtime_test.dart` 和 `test/powersync_server_e2e_test.dart`。
 
 可重复执行的仓库检查：
 
 ```powershell
-# 在 apps/server 执行。
+# 在 apps/server 执行；生成客户端只需占位连接串，不连接数据库。
+$env:DATABASE_URL = "postgresql://omni_generate:placeholder@127.0.0.1:5432/omni_generate?schema=public"
 npm run prisma:generate
 npm test
 npm run build
-npm run lint
+npm run lint -- --no-fix
 ```
 
 ```powershell
 # 在 apps/client 执行。
-flutter analyze
-flutter test test/business_sync_identity_test.dart test/database_migration_test.dart test/business_repositories_test.dart test/todo_repository_test.dart test/taxonomy_repository_test.dart
-flutter test test/auth_repository_test.dart test/powersync_runtime_test.dart test/sync_upload_protocol_test.dart
+flutter analyze --no-pub
+flutter test --no-pub test/business_sync_identity_test.dart test/database_migration_test.dart test/business_repositories_test.dart test/todo_repository_test.dart test/taxonomy_repository_test.dart
+flutter test --no-pub test/auth_repository_test.dart test/powersync_runtime_test.dart test/sync_upload_protocol_test.dart
 ```
 
 SQL 不变量必须在从当前迁移创建的隔离 PostgreSQL 中实际验证，不能只依赖 Prisma 类型检查或 mock。API、PowerSync 复制和两个真实本地数据库的完整链路使用 `test/powersync_server_e2e_test.dart`，显式开启 `OMNI_SYNC_E2E` 并指定隔离 API 地址及测试密钥；默认跳过该测试不算通过。容器健康检查成功也不能替代数据实际下发断言。
 
-## 本轮验证结果（2026-09-25）
+## 数据库迁移兼容边界
 
-- 服务端 `npm test`：33 项单元测试通过；`npm run lint`、`npm run build` 通过。
-- 真实 PostgreSQL 集成：18 项全部通过，使用空隔离库执行全部三份迁移，验证事务原子性、201 条事务、回执重放、墓碑、复合外键隔离、派生状态、自动续费和每日选择删除后重选。
-- 最终 Docker 镜像从空卷启动成功；实际查询 publication 仅含 11 张业务表，daily 复合外键为 `ON DELETE SET NULL (quote_id) DEFERRABLE INITIALLY DEFERRED`。
-- 真实 API 连接、8 个并发刷新、断开后的访问令牌和刷新凭证拒绝均通过。
-- 最终真实双设备 E2E 通过：生产 runtime/connector、独立设备会话、201 条原始事务、提交后丢响应重试、checkpoint 完成、购买平台和 ARGB 下发、离线稳定身份合并。
-- Flutter 全量静态分析通过。全量测试 162 项通过、1 项默认跳过的外部服务 E2E（已另行显式运行通过）、3 项既有界面测试失败：事件布局的“完成历史”断言，以及分类管理器的两个 Golden 像素差。未为通过测试而改写这些既有界面或截图基线。
-- 本次验证仅创建、重置并清理 `omni-sync-fix-test` 隔离 Compose 项目及 `omni_sync_integration` 测试库，未清理其他部署或用户日常客户端数据。
+`20260925000000_sync_baseline` 是服务端空库基线；早于该基线的旧后端没有原地升级路径。已经采用该基线的部署应直接执行后续增量迁移，无需清空数据。数据库升级前备份 PostgreSQL、对象存储和密钥，按[部署说明](../../../deploy/README.md)执行。
 
-## Android 历史日签兼容修复（2026-09-25）
+如需重建专用测试环境，应先核对 Compose 项目名、数据库连接目标、卷名和客户端数据库路径。客户端需同时清理旧上传队列、owner 绑定、`clientId` 和复制检查点；只清业务表不能完成重置。新 owner 会拒绝旧客户端绑定，避免把旧队列发往新服务。不要将这一步骤用于日常部署升级或未经确认的真实个人数据。
 
-真实 Android 队列中的旧随机日签 ID 与桌面端同一天的 ID 不同，触发服务端日期唯一约束，阻塞整个上传事务。新增第四份增量迁移保存旧 ID 到现有槽位的映射，后续 PATCH 和 DELETE 也能正确解析。已有前三份新基线迁移的部署可以直接升级，保留现有数据。
-
-仅修复上传还不够：服务端下发规范 ID 时，本地旧 ID 仍占用同一天，默认 RawTable 按主键写入也会触发 SQLite 唯一约束。客户端每日选择采用专用下行 UPSERT，按主键或日期冲突归并到服务端 ID；保留 inferred schema 和原有上传触发器，旧 ID 的下行删除只按 ID 匹配。
-
-- 服务端真实 PostgreSQL 集成扩展至 22 项，通过旧数据迁移保留、跨事务别名编辑、重放、所有者隔离及回滚验证；33 项单元测试、lint、build 通过。
-- 隔离双设备 E2E 两项全部通过，覆盖原同步链路及同日旧随机 ID、离线 PATCH、下行归并、再次切换、队列清零和 checkpoint 完成。
-- 客户端 SQLite/runtime 5 项测试及修改文件静态分析通过。
-- 实际 `deploy` 保留数据升级成功，模拟器重新安装启动后原 16 条积压操作处理完成，队列为 0，checkpoint 成功。11 张同步表共 155 行的 ID 集合和数量与服务端一致，本机图片元数据逐行不变；备份及核对结果保存在 `output/android-sync-recovery/20260925-131259/`。
-
-## 测试阶段基线和重置范围
-
-旧服务端迁移已折叠为新空库基线及同步不变量迁移。此处重置要求仅针对尚未切换到前三份新基线迁移的旧版后端，不提供该旧版的数据原地升级路径。已经采用新基线的部署应直接执行后续增量迁移，无须清空数据。
-
-测试切换需要停止本项目测试服务，清空**本项目专属**的服务端测试数据库和 PowerSync 测试复制状态，再清理参与验证的客户端测试数据及设备会话，重新初始化并连接。这里的客户端数据包括旧上传队列、旧 owner 绑定和旧 `clientId`，只清业务表不足以完成重置。
-
-用户已经授权本轮测试数据重置，但授权范围不包含其他项目数据库、其他 Docker 项目的卷或未经确认的真实个人数据。重置前必须先核对 Compose 项目名、数据库连接目标、卷名和客户端数据库绝对路径；本说明不提供跨项目批量清理命令。新的随机 owner 会使未清理的旧客户端绑定明确报错，这是防止旧队列发往新服务的预期保护。
-
-客户端本地迁移仍保留已有必要字段，用于正常本地使用和针对迁移行为的测试；这不代表旧后端协议、旧凭证、旧复制检查点可以与新服务混用。
+客户端本地迁移用于恢复历史备份和维护本地库，不代表旧后端协议、旧凭证或旧复制检查点可以与新服务混用。

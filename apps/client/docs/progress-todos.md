@@ -12,7 +12,7 @@
 - 进度面板顶部将下一个步骤与完成按钮同排，批量数量使用外置标签和短输入框；大字号或空间不足时自动分行。长名称可悬停或长按查看，数量错误另占整行，批量预览及确认继续按原流程显示。
 - 每日待办中普通任务单击仅展开/收起子项；进度任务正文单击打开进度面板。Windows右键或Android长按任务项打开编辑/移动象限/回收站菜单，子任务没有移动入口；不再显示更多按钮，键盘可使用菜单键或Shift+F10。完成下一个图标与添加子任务保持相同尺寸。
 - 全满仅表示“待确认完成”。确认才进入历史并取消任务提醒；重新打开保留步骤状态。步骤不独立计入未完成数、不提供提醒。
-- 进度任务只能作为独立根任务，一期不重复、不挂子任务、不提供加权或每日增量统计。
+- 进度任务只能作为独立根任务，不重复、不挂子任务、不提供加权或每日增量统计。
 
 ## Windows 完成历史
 
@@ -40,8 +40,8 @@
 ## 升级
 
 - 使用增量迁移升级本地数据库和PostgreSQL，同时更新PowerSync publication、表定义与下行查询。
-- 同步schema版本为2，现有同步接口携带`X-Omni-Sync-Schema: 2`，预检、会话和token响应包含`syncSchemaVersion`。不兼容时保留数据库、会话与队列，停止同步并提示升级。
-- 新快照写v2；读取本地旧v1时补普通任务类型和空步骤表。已提交旧换服操作仍按原migrationId查询回执，不二次覆盖服务器。
+- 同步接口通过 `X-Omni-Sync-Schema` 声明版本，预检、会话和 token 响应包含 `syncSchemaVersion`；版本常量定义在 `lib/core/auth/auth_repository.dart`。不兼容时保留数据库、会话与队列，停止同步并提示升级。
+- 本机快照格式与换服协议分别由 `lib/core/sync/sync_snapshot.dart` 管理；读取旧 v1 时补普通任务类型和空步骤表。已提交旧换服操作仍按原 migrationId 查询回执，不二次覆盖服务器。
 - 先部署服务器及同步配置，再更新全部客户端。旧客户端已有短期凭证可能短暂继续读，但不能上传或覆盖新数据。
 
 ## 验证入口
@@ -57,16 +57,4 @@
 
 可设置`OMNI_PROGRESS_PREVIEW`为输出目录，运行入口测试生成带中文字体的界面预览。生成预览使用内存数据库与隔离偏好，不访问正式业务数据。
 
-真实运行时验证可执行 `flutter run -d windows -t test/support/todo_progress_runtime_smoke.dart`，或将设备替换为已启动的 Android 模拟器。以日志中的 `PASS: todo_progress_runtime_smoke` 判断业务与渲染验证通过；Windows 可用 `OMNI_PROGRESS_RUNTIME_CAPTURE` 指定绝对目录，保存关键状态截图。
-
-## 本轮验证结果（2026-10-07）
-
-- 客户端全量测试：540通过、5项环境依赖测试跳过、1项既有截图基线差异。进度任务仓储、迁移、同步门禁、回收站、11项专用UI测试及3项入口测试均通过。
-- 真实PowerSync双设备3项、换服迁移1项另行启用并通过，覆盖离线跳序合并、重试、过期确认纠正与队列清空。
-- 服务端64项单元/HTTP测试、42项真实PostgreSQL集成测试通过；Prisma生成、Nest构建与限定ESLint通过。
-- Flutter全量静态检查、UI样式检查、Windows正式入口Debug构建、Android正式入口Debug APK构建通过。
-- Windows原生窗口和Android模拟器通过真实Flutter引擎指针命中验证：第1/3/8步、下一步、满进度待确认、确认、已完成只读、重新打开保留12/12。六配色×明暗像素、键盘Space/Enter和读屏语义通过；实体设备读屏与输入法体验仍需人工验收。
-
-唯一全量失败为`todos_completion_popup_light_1440x900.png`：之前的`8c75ab0`提交已将消息内容改为垂直居中，但该PNG仍是`bfcee74`版本。本轮未修改此消息组件或基线；差异仅为消息内部元素下移4px（1644像素，0.13%），已独立审查并记录。
-
-本机验证日志与截图位于仓库`output/progress-*`，测试服务和模拟器均使用独立数据，完成后已清理。构建目录最后生成的产物均使用正式`lib/main.dart`入口。
+真实运行时验证可执行 `flutter run --no-pub -d windows -t test/support/todo_progress_runtime_smoke.dart`，或将设备替换为已启动的 Android 模拟器。以日志中的 `PASS: todo_progress_runtime_smoke` 判断业务与渲染验证通过；Windows 可用 `OMNI_PROGRESS_RUNTIME_CAPTURE` 指定绝对目录，保存关键状态截图。

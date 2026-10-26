@@ -28,7 +28,7 @@ API 和 PowerSync 的公网路径固定为 `/omni-butler/api/v1/`、`/omni-butle
 
 ## 启动
 
-应用内助手升级需停止旧 API 后部署 `20261023010000_assistant` 迁移，再启动新 API 和更新两端客户端。助手私有表与 `assistant_graph` checkpoint 不加入 PowerSync；已有 MCP v3 工具和同步协议保持兼容。助手在 AI 设置中独立选择已有模型配置，默认关闭。
+API 容器启动时先执行 `prisma migrate deploy`，成功后启动服务。首次部署会按顺序应用仓库中的全部迁移；已有部署的升级顺序和兼容要求见下方“版本升级”。应用内助手默认关闭，在 AI 设置中独立选择模型配置；助手私有表与 `assistant_graph` checkpoint 不加入 PowerSync。
 
 完整数据库灾备恢复时，保持 API 停止，恢复数据库及 `api-keys` 等全部持久卷后，先在恢复库执行 [assistant-restore-safety.sql](assistant-restore-safety.sql)，再启动 API。脚本保留业务记录、聊天、记忆、回执与同步保护，禁用助手并撤销旧设备/MCP身份及未完成操作；设备需重新连接。不能直接启动恢复出来的旧排队任务或沿用备份中的确认授权。助手 API、分批、上下文和验证边界见 [助手 README](../apps/server/src/assistant/README.md)。
 
@@ -50,15 +50,26 @@ POWERSYNC_PUBLIC_URL=http://192.168.1.10:9080
 
 如果之前在终端设置过同名端口变量，请清除它们或打开一个未设置这些变量的新终端；终端环境变量的优先级高于 `.env`。
 
-## 笔记类别退休与Windows草稿升级
+## 版本升级
 
-2026-10-12 起同步结构为4，笔记不再含类别。部署前备份PostgreSQL、MinIO原音/凭证卷以及客户端本机数据和草稿原音。先部署 `20261012000000_remove_note_categories`、对应API与 `powersync/sync-config.yaml`，确认迁移和同步可用后再升级Windows/Android客户端；不要删除数据库或PowerSync卷。迁移仅退休notes/category及其关联和note_entries的类别列，其他模块类别保持完整。
+升级前暂停客户端写入，完整备份 PostgreSQL、MinIO 数据与凭证、API 密钥，以及客户端本机数据和草稿原音。停止旧 API 后，更新代码并执行 `docker compose up -d --build --wait`；确认数据库迁移、API 与仓库配套的 `powersync/sync-config.yaml` 可用，再升级全部参与同步的客户端。不要删除数据库或 PowerSync 卷来绕过版本不兼容。
 
-旧待上传请求保留原事务身份与原始负载摘要，服务端只在执行副本适配退休类别，避免响应丢失后的重试冲突；新版不得重新创建笔记类别。客户端SQLite19新增草稿本机表，本机备份格式4与服务器迁移协议3分离，草稿和原音不上传服务器迁移暂存；采用服务器数据换服时旧草稿留在旧数据源和备份。本轮只验证隔离数据库，不操作正式部署。
+不同版本号的用途独立，不能互换：
 
-## 删除事件说明的升级
+| 用途 | 当前值 | 代码入口 |
+| --- | --- | --- |
+| 客户端 SQLite 结构 | 26 | `apps/client/lib/core/database/app_database.dart` |
+| 客户端/API 同步门禁 | 12 | `apps/server/src/sync/sync-schema.ts` |
+| 本机备份快照 | 11（可读取 1–10） | `apps/client/lib/core/sync/sync_snapshot.dart` |
+| 换服请求协议 | 3 | 同上 `migrationProtocolVersion` |
 
-2026-10-11 起事件仅保留 `notes`（备注），删除 `events.description`（事件说明）及其旧内容。先更新服务端代码和 PowerSync 查询配置，在部署目录执行 `docker compose up -d --build --wait`，应用 `20261011000000_remove_event_description` 增量迁移；再升级所有客户端。本地 SQLite 会自动升级至 v16，保留备注、事件主体及完成历史。新客户端会过滤旧上传队列及旧迁移快照中的事件说明，避免访问已删除列。不要删除数据库或 Docker 卷。
+从旧部署升级时，需了解以下会影响数据的兼容行为：
+
+- `20261011000000_remove_event_description` 删除事件 `description` 及其旧内容，保留 `notes` 备注、事件主体和历史。备份后再执行迁移。
+- `20261012000000_remove_note_categories` 退休笔记类别及关联，其他模块类别不变。服务端适配旧上传请求时保留原事务身份和原始负载摘要；新版不重新创建笔记类别。
+- 笔记图片、记录时间和置顶需要配套的数据库迁移及 PowerSync 下行字段，包括 `note_images`、`record_time_seconds`、`record_utc_offset_minutes` 和 `is_pinned`。笔记正文仍保存在 `note_entries.body`，不批量改写历史 Markdown。
+- 本机草稿和原件属于设备备份，不进入换服的业务请求；选择使用服务器数据时，旧草稿保留在旧数据源和备份中。
+- 同步门禁拒绝旧客户端时，保留离线数据和上传队列，升级客户端与服务端后再连接。
 
 ## 可选图片同步
 
@@ -66,13 +77,13 @@ POWERSYNC_PUBLIC_URL=http://192.168.1.10:9080
 
 MinIO 启动时自动生成随机内部凭证并保存在 `image-storage-credentials` 卷，API 按需初始化独立私有桶：图片为 `omni-butler-images`，笔记原音为 `omni-butler-note-audio`。两类对象都保存在现有 `image-storage-data` 卷。无需填写存储密钥、域名、端口、profile 或额外启动参数；客户端通过原有认证 API 上传下载，MinIO 不映射宿主机端口，浏览器管理界面关闭。
 
-同步范围为物品和会员图片，首页背景仍只保存在各自设备。开启后客户端会补传本机已有图片，服务端已有的图片优先；新设备下载后的缓存离线仍可查看。图片传输失败可重试，不影响业务记录保存。服务器迁移只复制当前设备实际持有的图片，缺失文件会提示，不阻止业务数据迁移。
+同步范围为物品、会员主图和笔记图片，首页背景仍只保存在各自设备。开启后客户端会补传本机已有图片，服务端已有的图片优先；新设备下载后的缓存离线仍可查看。图片传输失败可重试，不影响业务记录保存。服务器迁移只复制当前设备实际持有的图片，缺失文件会提示，不阻止业务数据迁移。
 
 改回 `IMAGE_SYNC_ENABLED=false` 并执行相同启动命令，只停止图片传输；MinIO 和笔记音频继续可用，服务器对象、凭证及客户端本机图片都保留。再次改为 `true` 会复用原凭证和图片。首次从带 `image-credentials` 辅助容器的旧版本升级时，执行 `docker compose up -d --build --wait --remove-orphans` 删除已停用的旧容器；后续无需该参数。不要手动删除凭证卷，否则现有存储身份无法自动恢复。
 
 本项目固定使用 MinIO 官方镜像 `minio/minio:RELEASE.2025-09-07T16-13-09Z`，并同时固定镜像摘要 `sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e`。它只面向容器内的 API，不额外公开 S3 端口或控制台。该版本存在未签名流式请求相关的已知风险；本项目的 API 只使用带签名的 S3 请求，当前使用场景接受该风险。
 
-Docker Hub 当前已无法重新拉取 `minio/minio` 仓库。新服务器部署前，需要从已持有该官方镜像的可信机器导出并导入固定版本；不要改回 `latest`，也不要使用来源不明的同名镜像：
+固定版本若无法从镜像仓库拉取，可从已持有该官方镜像的可信机器导出并导入；不要改回 `latest`，也不要使用来源不明的同名镜像：
 
 ```text
 docker tag minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e minio/minio:RELEASE.2025-09-07T16-13-09Z
@@ -320,13 +331,13 @@ docker compose stop
 
 ## 数据与备份
 
-笔记正文和原音元数据要求客户端、服务器同步结构 v4 配套升级（类别退休，服务器迁移协议仍为3）。服务商密钥只配置在部署 `.env`：设置 `NOTE_ASR_PROVIDER=tencent`、`TENCENT_ASR_SECRET_ID`、`TENCENT_ASR_SECRET_KEY`；普通文本和本地录音不需要这些密钥。腾讯 API 3.0 不使用 APP_ID 参与签名。云端识别在用户授权后才提交。
+笔记正文和原音元数据要求客户端与服务器通过相同的同步门禁，版本定义见“版本升级”。语音服务商密钥只配置在部署 `.env`：设置 `NOTE_ASR_PROVIDER=tencent`、`TENCENT_ASR_SECRET_ID`、`TENCENT_ASR_SECRET_KEY`；普通文本和本地录音不需要这些密钥。腾讯 API 3.0 不使用 APP_ID 参与签名。云端识别在用户授权后才提交。
 
 长录音识别使用 `PUBLIC_BASE_URL=https://自己的域名` 推导的 API 地址，或高级覆盖 `NOTE_ASR_PUBLIC_URL=https://自己的域名/omni-butler/api/v1`，该 HTTPS 地址必须能被腾讯访问。服务器签发绑定任务的短期私有原音链接；腾讯本地文件方式上限为 5MB，超过该大小且未配置公网地址时会明确提示。Nginx 的 API `location` 需设置 `client_max_body_size 128m;` 和 `proxy_read_timeout 120s;`，允许完整原音与迁移暂存上传。
 
 笔记新增原音及迁移暂存音频统一进入 MinIO 私有桶 `omni-butler-note-audio`，不再使用服务器音频目录或 `note-audio-data` 挂载。存储失败保留重试和清理回执，不回退写磁盘。客户端继续保留本机录音及缓存，支持离线使用。完整迁移先以部署同步密钥暂存原音，服务器迁移协议 v3 在同一事务验证并接管正式原音资产；只有用户明确确认缺失文件后才能使用省略清单。回收站保留 30 天，永久删除经持久文件清理队列执行。参见[原音接口与识别说明](../apps/server/src/notes/README.md)。
 
-本次升级针对尚未部署笔记功能的服务器，无历史服务器原音迁移。若其他部署已使用磁盘原音，必须先制定并验证迁移方案，不能直接移除旧文件。
+若旧部署使用磁盘原音，升级前必须制定并验证迁入 MinIO 的方案，不能直接移除旧文件。
 
 客户端更换服务器需先升级目标后端：在目标部署目录执行上面的 `docker compose up -d --build --wait`，启动会应用新增的迁移回执表，不会清空现有数据。PowerSync 至少需要 1.24.0 的检查点请求接口，仓库固定镜像为 1.25.0。再升级客户端，从「设置 → 数据同步 → 更换服务器」预检并选择数据来源。
 
@@ -336,7 +347,7 @@ docker compose stop
 
 业务库和同步状态保存在 `postgres-data` 卷，签名私钥保存在 `api-keys` 卷。实际卷名带 Compose 项目前缀；保持部署目录和项目名不变，不要使用 `docker compose down -v` 删除数据卷。
 
-无论图片同步是否开启，完整备份都必须包含 PostgreSQL、`image-storage-data` 和 `image-storage-credentials`，并保留上面的 `api-keys`。停止 API/PowerSync 写入和 MinIO 后，将这些卷作为同一批备份保存；只备份 PostgreSQL 无法恢复原音或图片，只备份数据卷无法恢复存储凭证。恢复时使用同一批数据库、对象数据、凭证与签名私钥，再启动服务。凭证文件权限为 `0600`，只允许 API 用户和 MinIO 的 root 进程读取；不要把凭证内容放入日志或提交仓库。
+无论图片同步是否开启，完整备份都必须包含 PostgreSQL、`image-storage-data` 和 `image-storage-credentials`，并保留上面的 `api-keys`。停止 API/PowerSync 写入和 MinIO 后，将这些卷作为同一批备份保存；只备份 PostgreSQL 无法恢复原音或图片，只备份数据卷无法恢复存储凭证。恢复时使用同一批数据库、对象数据、凭证与签名私钥，保持 API 停止并执行前述 `assistant-restore-safety.sql` 后再启动服务。凭证文件权限为 `0600`，只允许 API 用户和 MinIO 的 root 进程读取；不要把凭证内容放入日志或提交仓库。
 
 `compose.notes-storage-test.yml` 仅用于 `omni-notes-storage-test` 隔离项目，公开测试配置为 `.env.notes-storage-test.example`。回环端口为 PostgreSQL 55449、MinIO 55490、API 55430、PowerSync 55480；正式配置没有 MinIO 端口映射。从仓库根目录仅启动测试存储：
 
@@ -362,43 +373,28 @@ docker compose cp api:/app/keys ./api-keys-backup
 API 文档：局域网为 `http://<服务器IP>:<API端口>/omni-butler/api/v1/docs`，上述公网部署为 `https://butler.example.com/omni-butler/api/v1/docs`。接口细节见 [服务端说明](../apps/server/README.md)。
 
 
-## 2026-10-15 笔记图片与编辑格式升级（schema 5）
+## 大模型设置与笔记 AI 整理
 
-新增增量迁移 `20261015000000_note_images`、PowerSync 的 note_images 查询、图片类型 noteImage 与 capabilities.supportedBusinessTypes。Markdown 仍存在 note_entries.body，不迁移或重写历史正文。图片最终进入现有私有 MinIO，沿用图片业务开关 `IMAGE_SYNC_ENABLED=true`；关闭开关保留所有对象及元数据，本机图片保持待传。
-
-升级顺序：先备份数据库和 MinIO 卷、停止客户端写入，再应用新增数据库迁移并更新 API，随后更新 PowerSync 查询，最后升级全部参与同步的客户端。不得清空 PostgreSQL／MinIO／PowerSync 数据卷。Android 本轮仅共享数据结构升级，无新增编辑界面。新旧 schema 不兼容时显示既有升级提示；没有 noteImage 能力的旧服务端不会收到必然失败的图片上传请求。
-
-本机数据库升至20、快照升至5（可读取旧1–4），换服 wire snapshotVersion 保持3。正式图片子记录参与业务快照；本机图片原件、草稿及缓存纳入校验备份和候选源独立文件恢复。使用服务器数据时不混入旧本机草稿。正式部署尚未执行。
-
-
-## 2026-10-19 大模型设置与笔记 AI 整理（schema 11）
-
-先完整备份 PostgreSQL、MinIO 原音/图片及存储凭据和 `api-keys` 卷，部署增量迁移 `20261019020000_ai_note_polish` 与 API，再升级 Windows/Android 全部客户端。客户端 SQLite26、本机快照11（兼容1–10），换服 wire3保持。AI配置和持久任务为后端私有表，不向 PowerSync publication 或 bucket 查询加入这些表；沿用既有业务下行配置。
+模型配置和持久任务为后端私有表，不加入 PowerSync publication 或 bucket 查询。部署时应用仓库全部增量迁移，升级顺序见“版本升级”。
 
 首次保存模型 Key 时在 `/app/keys/ai-encryption-key-v1` 生成独立加密密钥，使用现有 `api-keys` 持久卷，不需新增供应商环境变量。启动后从“设置 → AI 设置”填写供应商、Base URL、模型和 Key，测试并保存；首个模型自动设为当前使用，开启整理直接提交。第三方服务必须为公网 HTTPS；不接受 localhost、内网或重定向地址。
 
-### Responses API 协议更新
+### Responses API 配置
 
 模型连接与笔记整理只使用 `POST {baseUrl}/responses`，无Chat Completions回退。智谱预设为 `https://open.bigmodel.cn/api/v1` / `glm-5.3`，DeepSeek预设为 `https://api.deepseek.com` / `deepseek-flash`；自定义服务必须支持Responses。基址可包含自定义路径前缀，也可填写完整 `/responses` 地址；旧 `/chat/completions` 地址不再接受。官方协议说明：[OpenAI](https://developers.openai.com/api/docs/guides/migrate-to-responses)、[智谱](https://docs.bigmodel.cn/cn/guide/develop/responses/introduction)、[DeepSeek](https://api-docs.deepseek.com/guides/responses_api/)。
 
-此协议更新不增加数据库迁移，保留现有卷及其他业务数据。在 `deploy/` 执行 `docker compose up -d --build --no-deps --wait api` 重建API，再重新构建客户端更新供应商预设。测试阶段本机在切换前模型配置为0、整理关闭，无旧配置需要清理；不要添加每次启动清配置的逻辑，也不要删除密钥卷。测试连接使用固定短文本、非流式且 `store:false`，结果在原表单显示；实际调用可能产生供应商费用。
+测试连接使用固定短文本、非流式且 `store:false`，结果在原表单显示；实际调用可能产生供应商费用。升级时保留模型配置和密钥卷，不要通过清空配置来处理协议或连接错误。
 
 完整恢复必须同时恢复数据库和同批 `api-keys`。不要删除加密密钥来处理解密错误；密钥丢失后需重新设置模型 Key。模型配置不随客户端业务快照迁移到另一台服务器；业务原文、候选和已采用正文仍可备份，恢复不会重启旧任务或继承云端执行授权。
 
-旧客户端会被 schema11 门禁阻止同步及提交/查询识别，应保留离线数据和队列并升级。先验证一段录音成功整理、失败回退、重试不重复及双端接收，再开启日常自动整理。本轮不自动部署生产服务，不提供真实模型账单或在线双端验收结论。
+启用日常 AI 整理前，应使用实际供应商验证录音整理、失败回退、原请求重试及双端接收。代码和本地模拟不能证明目标部署的模型兼容性或计费效果。
 
-## 2026-10-19 笔记记录时间与置顶（schema 10）
+## 助手文件附件与恢复
 
-先完整备份PostgreSQL、MinIO图片及原音、存储凭据和API密钥，再依次部署增量迁移 `20261019000000_note_record_time`、`20261019010000_note_pinning`、API及PowerSync下行配置，最后升级Windows与Android全部客户端。SQLite25、本机快照10（兼容1–9），换服wire3不变；旧客户端受schema10门禁限制，保留离线数据及原队列，不通过清库解决版本不兼容。
-
-置顶字段 `note_entries.is_pinned` 为非空布尔且默认false；置顶PATCH不生成正文版本，旧正文PATCH缺失该字段时保留最新状态。下行必须包含置顶、记录秒数和偏移。升级后在独立环境验证两端置顶/取消、旧离线正文回放不重置置顶、备份恢复及记录时间往返，再推广真实客户端。本轮未执行正式备份、迁移、部署或真实联网验收。
-
-### 助手文件附件与恢复
-
-附件新增增量迁移 `20261024030000_assistant_attachments`，请求恢复记录为 `20261024040000_assistant_recovery`。先完整备份数据库、`image-storage-data`、`image-storage-credentials` 和密钥卷，再迁移数据库并更新API及客户端。设置 `ASSISTANT_ATTACHMENTS_ENABLED=true` 才开放上传；旧客户端可继续发送纯文本。此开关不依赖业务图片同步。
+数据库需包含附件和请求恢复迁移 `20261024030000_assistant_attachments`、`20261024040000_assistant_recovery`。设置 `ASSISTANT_ATTACHMENTS_ENABLED=true` 才开放上传；旧客户端可继续发送纯文本。此开关不依赖业务图片同步。
 
 助手使用私有桶 `omni-butler-assistant-attachments`，由认证API代理上传下载。备份必须同时覆盖数据库与整个对象存储卷，单独恢复元数据不能恢复文件。未发送附件24小时后及删除会话后的对象由持久清理队列回收；停止任务不会删除已发送附件。灾备恢复继续执行 `assistant-restore-safety.sql`，旧等待和付费尝试不得重新获得执行授权。
 
-模型配置新增 `multimodal` 开关；部署包含增量迁移 `20261024050000_ai_profile_multimodal`，先备份并迁移数据库、更新API，再更新客户端。已有和新增配置默认关闭，用户在新增/编辑模型配置时手动开启后即可发送图片或扫描页，无需付费图片测试；旧测试结果不能自动开启。附件解析在服务端独立子进程执行，不会调用额外OCR服务，不自动切换供应商。
+模型配置的 `multimodal` 开关由 `20261024050000_ai_profile_multimodal` 迁移提供，默认关闭。用户在新增/编辑模型配置时按供应商实际能力手动开启后，可发送图片或扫描页，无需付费图片测试；旧测试结果不能自动开启。附件解析在服务端独立子进程执行，不调用额外 OCR 服务，不自动切换供应商。
 
-模型配置的“思考模式”使用 `thinkingEnabled`，默认关闭，旧客户端更新省略时保留原值。新增迁移 `20261024060000_ai_thinking` 为模型配置及笔记整理任务增加非空默认false字段；助手沿用现有运行JSON快照。与上述附件、恢复、多模态迁移一同上线时，完整备份后按迁移顺序更新数据库和API，最后更新客户端，不清空现有卷。普通连接测试使用表单当前开关；笔记整理与助手请求使用任务接受时的快照，开为 `reasoning.effort:high`、关为 `none`。两端执行链默认折叠，模型公开返回的思考文本或摘要可逐项展开；加密续接内容不会展示，供应商没有公开文本时不补造。真实模型兼容性和思考输出效果需另行联调，本地模拟与Release构建不能替代真实供应商验收。
+模型配置的“思考模式”使用 `thinkingEnabled`，默认关闭，旧客户端更新省略时保留原值。迁移 `20261024060000_ai_thinking` 为模型配置及笔记整理任务提供非空默认 false 字段；助手使用运行 JSON 快照。普通连接测试使用表单当前开关；笔记整理与助手请求使用任务接受时的快照，开启发送 `reasoning.effort:high`，关闭发送 `none`。两端执行链默认折叠，模型公开返回的思考文本或摘要可逐项展开；加密续接内容不会展示，供应商没有公开文本时不补造。实际模型需支持对应参数，不通过自动切换参数或供应商掩盖不兼容。

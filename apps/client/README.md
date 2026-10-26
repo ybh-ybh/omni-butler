@@ -1,52 +1,28 @@
 # Omni Butler Client
 
-Flutter 客户端，当前支持 Windows 桌面布局和 Android 紧凑布局。应用本地优先：第一期六个业务模块直接写入 SQLite；用户可在设置中显式连接自托管同步服务。
+Flutter 客户端，当前支持 Windows 桌面布局和 Android 紧凑布局。应用本地优先：业务模块直接写入 SQLite；用户可在设置中显式连接自托管同步服务。
 
 ## 依赖与发布验证
 
 `pubspec.lock` 统一使用 `https://pub.dev`，本机验证与 CI 必须使用相同版本和归档摘要。在 PowerShell 中先设置 `$env:PUB_HOSTED_URL = 'https://pub.dev'`，再运行 `flutter pub get --enforce-lockfile`；依赖就绪后，分析、测试及构建均添加 `--no-pub`。包源不匹配或锁文件校验失败时应停止发布，不删除锁文件重新解析依赖。
 
-v0.6.2 的 Android 启动故障来自 CI 重新解析依赖后引入的新插件及 Release JNI 签名不兼容。v0.6.3 恢复锁定的 `shared_preferences_android 2.4.28`，并在两个 CI 工作流中强制锁文件校验。Android 发布验收需包含最终签名 APK 的真机冷启动与再次启动；Widget 测试或构建成功不能替代原生插件启动验证。
+Android 原生插件依赖使用锁定版本；调整依赖或混淆配置后，发布验收需包含最终签名 APK 的真机冷启动与再次启动。Widget 测试或构建成功不能替代原生插件启动验证。
 
 ## 当前能力
 
-- 首页、每日待办、事件管理、物品管理、24 小时时间记录、会员管理、笔记和设置。
+- 首页、每日待办、事件管理、物品管理、24 小时时间记录、会员管理、笔记、AI 助手和设置。
 - Drift 管理本地数据；开启同步后，PowerSync 与 Drift 访问同一 SQLite 文件。
 - 待办支持普通任务和进度任务：可命名步骤、跳序记录、满进度后手动确认，规则与升级说明见 [进度任务](docs/progress-todos.md)。
 - 统一 Omni 组件与克制 Apple 风格；保留六套配色及跟随系统、浅色和深色模式。
 - 物品与会员主图在服务器开启图片同步后自动补传、下载到本机缓存；首页背景始终仅保存在本机。图片通过已认证 API 传输，不进入 PowerSync Schema。
 - 设置中的服务器连接先预检，再选择首次合并、以本机覆盖服务器或使用服务器数据；跨数据源时保留旧库，候选库确认同步检查点后才启用。
-- Windows 与 Android 本地通知框架；发布包与真机验收状态见根目录 `剩余功能与验收清单.md`。
+- Windows 与 Android 本地通知框架；发布时需在目标设备验证权限、触发与后台行为。
 
 ## 笔记
 
-本轮重构规则见[笔记PRD v2.5](../../spec/笔记功能PRD.md)，[交付与验证](docs/notes-redesign.md)记录重构及侧栏调整的回归、静态分析、Release构建、中文预览及保留边界；旧日期记录仅描述当时版本，不作为本轮证据。
+支持本机草稿、显式发布／保存、历史编辑、置顶、标签、记录日期、组合搜索、统计、图片、录音、转写及 AI 整理。Windows 双击卡片原位编辑；Android 历史笔记使用全屏编辑，退出时保存，提交失败保留原页。原音与转写独立保存，迟到结果不覆盖人工正文，未知计费回执沿用原操作身份恢复。
 
-标签区域悬停显示排序、搜索和篇数，标题悬停显示折叠入口；搜索只匹配标签名称，关闭恢复全部。会话内排序提供默认／名称／数量。标签行悬停切换为删除／编辑名称/图标菜单，删除只解除关联并保留笔记。热图提示格式为`YYYY-MM-DD·N 篇笔记`。
-
-Windows 标签名称及图标在更多按钮旁的紧凑浮层中编辑，点击井号或已有emoji展开离线选择器，支持八类表情、中英文关键词搜索、随机及移除。名称和图标点击保存后一起生效，未保存关闭会放弃修改；置顶标签和全部标签同步显示emoji，移除后恢复井号。管理笔记标签弹窗同样支持新增、选择和移除emoji，不再提供颜色编辑。数据库只清空笔记标签颜色并禁止重新写入，共享列保留供其他模块使用。图标随标签跨设备同步：本地数据库v23、同步结构v8、本地快照v8，换服网络协议仍为v3；配套服务端迁移及升级顺序见[服务端说明](../server/README.md)。
-
-Windows悬停入口统一120ms原位淡入淡出；普通图标及图标菜单共享28dp圆角方形背景、36dp布局及热区、18dp居中字形，灰色在图标自身悬停时转主题正文色，Android保留48dp热区。全笔记侧栏内悬停显示隐藏入口，分隔处才显示浅灰线；标签标题无灰底、左边缘对齐回收站图标，标签列表220ms上下展开／收起且可中途反向；标签搜索为浅灰圆角填充且关闭图标位于框内。
-
-侧栏收起／展开向左滑动并淡出／淡入，主区同步扩展；热图使用更小方块和8dp间距，悬停放大。有笔记日期显示主题光晕及日期／篇数提示；空日期点击无效，不改变当前筛选，也没有提示。所有方块均显示手形光标，减少动画时保持即时颜色反馈。
-
-Windows「笔记」使用统计／8–12周热图／标签侧栏、新建输入框和单列历史卡片，双击原地编辑。侧栏默认264dp，可在220–340dp间拖动，分隔线仅分隔热区悬停为浅灰、按下立即为主题色，上下留24dp空白；全侧栏含底部空白悬停显示隐藏按钮，主区标题左侧提供恢复入口。统计分别左／中／右对齐，热图月份使用中文。标题取正文首个非空行，收起摘要最多两行。文字与新增原音暂存在本机草稿，点击发布／保存才提交正式数据，重启或切换可恢复；取消保留原笔记。Android保留既有布局和自动保存。两端删除笔记类别，使用标签、日期和关键词查找；笔记专属30天回收站与设置回收站隔离。
-
-正文并发编辑保留完整候选版本，基线失效时由用户选择恢复或另存。标签更新在持久同步队列中携带修改前值，服务端按实际新增、移除合并；只改正文不会覆盖另一设备整理的日期或标签；Windows的所有未发布草稿均受转写保护。
-
-Windows 使用流式 PCM WAV，Android 使用原生麦克风前台服务及通知操作；同一设备只允许一段录音，暂停不计时，单段最多 30 分钟、单篇累计最多 60 分钟。正文与原始转写独立保存，迟到的转写不覆盖人工编辑。原音回听、暂停和拖动均核验实际文件；异常退出的原件有未确认清单，在笔记入口提示并可恢复。
-
-录音和文字可离线使用。启用自托管同步且服务器支持语音后，可明确授权自动转文字或逐段转写；旧录音不自动纳入新授权。服务端厂商密钥不进入客户端，当前腾讯适配器的部署、长音频 HTTPS 配置和任务故障语义见[笔记原音说明](../server/src/notes/README.md)。提交结果未知时保留原音和原操作身份，不自动重新提交计费任务。
-
-本地结构升级至 SQLite v19，同步结构为4、本机快照为4，服务器迁移请求协议仍为3。两张本机草稿表不参与PowerSync或服务器暂存；采用本机数据换服才携带草稿，采用服务器数据时旧草稿留在旧源及备份。先备份，再升级后端增量迁移、API和PowerSync查询，最后升级两端客户端。完整迁移校验并复制真实原音文件，缺失原音必须明确接受不完整迁移。服务器原音与迁移暂存保存在 MinIO 私有桶，客户端仍保留本地录音和缓存。服务器完整备份须包含 PostgreSQL、MinIO 数据卷及凭证卷，即使图片同步关闭也如此。
-
-2026-10-11 本机已验证 Windows 短录音/暂停/回听、实际 PostgreSQL/JWT HTTP、客户端事务协议及腾讯短音频真实识别。服务端最终 132 项通过（含真实数据库/HTTP 18 项）；客户端全量 947 项通过，3 项因新增导航产生的 Golden 差异经逐张检查并更新基线后，相关文件 5 项全部复验通过，另有 5 项外部测试跳过。全客户端 analyze、UI 样式检查和 Windows/Android Debug 构建均通过。
-
-2026-10-11 MinIO 切换验证：服务端 154 项全量测试通过（16 项旧外部图片测试跳过），补充后的真实 PostgreSQL/JWT/MinIO 笔记 HTTP 回归 19 项通过；客户端笔记、原音、迁移、回收站及维护工具共 101 项回归和全客户端静态分析通过。已验证图片开关切换和 MinIO 重启保留桶、对象及凭证。维护工具在隔离真实 PowerSync 库中验证了混合队列保留、备份、失败回滚及重开不复活。
-
-本机实际维护已完成：两个客户端正常退出后，经活动索引定位业务库，保存一致性数据库及原音备份，再清理 1 篇测试笔记、1 个正文版本、1 段原音、本机转写状态及 3 条笔记待上传操作。重开真实运行时后全部笔记表、笔记队列及恢复清单均为零；独立对比备份确认其他 15 张业务表、设置、安全存储与活动索引未变化。历史备份保留，未部署正式服务器。
-
-用户确认暂不提供手机和公网 HTTPS，Android 真机后台/锁屏/来电、实际 30/60 分钟采集及公网长音频仍待验收；构建和本机测试通过不表示已满足全部 PRD 发布条件。需求及验收见[笔记 PRD](../../spec/笔记功能PRD.md)。
+架构、平台交互、保存冲突、数据升级和回归入口见[笔记模块维护指南](docs/notes-redesign.md)，产品规则见[笔记 PRD](../../spec/笔记功能PRD.md)，服务端音频能力见[笔记原音说明](../server/src/notes/README.md)。数据版本以数据库、认证同步和快照源码中的常量为准，升级先备份并部署数据库／API／PowerSync，再更新客户端。
 
 ### 本机测试笔记维护
 
@@ -57,7 +33,7 @@ Windows 使用流式 PCM WAV，Android 使用原生麦克风前台服务及通�
 ```powershell
 # 本机应用数据目录，不采用测试宿主的Support目录。
 $noteCleanupSupport = Join-Path $env:APPDATA 'com.omnibutler\omni_butler'
-flutter test tool/clear_note_test_data_test.dart --concurrency=1 --reporter expanded "--dart-define=NOTE_TEST_CLEANUP_SUPPORT=$noteCleanupSupport"
+flutter test --no-pub tool/clear_note_test_data_test.dart --concurrency=1 --reporter expanded "--dart-define=NOTE_TEST_CLEANUP_SUPPORT=$noteCleanupSupport"
 ```
 
 预览核对活动库、录音目录及数量后，同一命令加 `--dart-define=NOTE_TEST_CLEANUP_EXECUTE=true` 执行。可用 `NOTE_TEST_CLEANUP_DOCUMENTS` 显式指定 Documents 根目录。
@@ -69,26 +45,26 @@ flutter test tool/clear_note_test_data_test.dart --concurrency=1 --reporter expa
 ## 常用命令
 
 ```powershell
-flutter pub get
-flutter analyze
-flutter test
-flutter run -d windows
-flutter build windows --release
+flutter pub get --enforce-lockfile
+flutter analyze --no-pub
+flutter test --no-pub
+flutter run -d windows --no-pub
+flutter build windows --release --no-pub
 ```
 
-需要真实同步链路的测试依赖根目录 `deploy/` 中的 PostgreSQL、NestJS 与 PowerSync 服务。项目范围、架构和剩余工作分别见根目录 `需求书.md`、`系统架构设计.md` 与 `剩余功能与验收清单.md`。
+需要真实同步链路的测试依赖 PostgreSQL、NestJS 与 PowerSync 服务，配置见[部署指南](../../deploy/README.md)。项目概览见[仓库说明](../../README.md)，架构设计见[系统架构设计](../../spec/系统架构设计.md)。
 
 ## 界面规范与组件预览
 
-新增页面、弹窗和控件遵守根目录 [style.md](../../style.md)，优先从 `shared/ui/omni_ui.dart` 选择公共组件。入口、受控例外与验收范围见 [UI 迁移清单](docs/ui-migration.md)。
+新增页面、弹窗和控件遵守根目录 [style.md](../../style.md)，优先从 `shared/ui/omni_ui.dart` 选择公共组件。入口、受控例外与验收范围见 [UI 入口与回归指南](docs/ui-migration.md)。
 
 ```powershell
-flutter run -t lib/main_ui_catalog.dart -d windows
+flutter run --no-pub -t lib/main_ui_catalog.dart -d windows
 dart tool/check_ui_style.dart
-flutter test test/ui_catalog_test.dart
+flutter test --no-pub test/ui_catalog_test.dart
 ```
 
-组件目录只使用内存状态，不连接业务数据库。`flutter test tool/ui_pages_preview_test.dart` 可生成带真实中文字体的业务预览；字体配置见 `style.md`。CI 会检查新增绕过公共控件的入口及组件契约。
+组件目录只使用内存状态，不连接业务数据库。`flutter test --no-pub tool/ui_pages_preview_test.dart` 可生成带真实中文字体的业务预览；字体配置见 `style.md`。CI 会检查新增绕过公共控件的入口及组件契约。
 
 ## 更换服务器与迁移恢复
 
@@ -114,10 +90,6 @@ flutter test test/ui_catalog_test.dart
 
 图片集成回归需要隔离的 `omni-image-test` Docker 项目，显式运行 `flutter test --no-pub test/image_sync_e2e_test.dart --dart-define=OMNI_IMAGE_E2E=true`；普通测试跳过不代表真实链路已通过。
 
-2026-09-29 图片同步验证：静态分析、图片/认证/数据库/迁移及主窗口与悬浮页定向回归通过；显式开启的三客户端真实 SQLite + PostgreSQL + PowerSync + MinIO 测试通过，包含传输、丢响应幂等重试、任务重启、离线缓存与清图后历史图片不复活。服务端 49 项单元/HTTP 测试、31 项真实 PostgreSQL 回归和16项真实 PostgreSQL + MinIO 图片集成通过。隔离部署验证默认关闭及 true → false → true 的能力切换、图片和凭证保留；未部署正式环境或覆盖用户客户端。Android 真机和 Windows 原生窗口人工验收仍待执行。
-
-2026-09-30 已通过发布流水线生成 v0.3.1 的签名 Android APK/AAB、Windows Inno Setup 安装包和便携包，并发布 SHA-256 清单；这些产物尚未完成用户设备和目标服务器人工验收。
-
 ## 迁移回归
 
 在仓库根目录启动专属隔离环境（不会使用日常部署卷）：
@@ -132,6 +104,4 @@ docker compose -p omni-migration-e2e -f deploy/compose.migration-test.yml up -d 
 flutter test --no-pub test/powersync_migration_e2e_test.dart --dart-define=OMNI_MIGRATION_E2E=true
 ```
 
-测试只允许 `127.0.0.1:35430` 的专属 API，使用测试配置中的公开测试密钥。它会重建该测试数据源，覆盖三客户端、丢响应恢复、真实下行延迟、图片关联及冷启动。普通 `flutter test` 会跳过此外部测试，跳过不代表已验证。清理前核对容器和卷的 Compose 项目标签仅为 `omni-migration-e2e`，禁止清理 `deploy` 或其他项目卷。
-
-2026-09-27 验证：客户端全量静态分析、111 项定向回归、显式开启的真实 PostgreSQL/PowerSync 三客户端迁移测试通过；后者也覆盖采用空服务器后读取首页、分类及冷启动仍不产生业务数据。服务端 42 项单元测试和 31 项真实 PostgreSQL 集成测试通过，包含并发幂等、超限保护和真实事务超时回滚。Windows Debug 与 Android Debug APK 构建通过。三客户端测试使用独立真实 SQLite 文件，不代表三台物理设备验收；Android 真机、Windows 原生主窗口与悬浮窗的人工迁移和进程强杀验收仍待执行。现有全量 Golden 基线差异不在本次修复范围。
+测试只允许 `127.0.0.1:35430` 的专属 API，使用测试配置中的公开测试密钥。它会重建该测试数据源，覆盖三客户端、丢响应恢复、真实下行延迟、图片关联及冷启动。普通 `flutter test --no-pub` 会跳过此外部测试，跳过不代表已验证。清理前核对容器和卷的 Compose 项目标签仅为 `omni-migration-e2e`，禁止清理 `deploy` 或其他项目卷。
