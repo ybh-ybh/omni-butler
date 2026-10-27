@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,8 +11,51 @@ void main() {
   // 生产服务的原生通道名。
   const MethodChannel channel = MethodChannel('omni/windows_title_bar');
   tearDown(() {
+    WindowsTitleBarService().stopObservingVoiceLifecycle();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
+  });
+
+  test('系统最小化在语音和草稿清理完成前不回复原生', () async {
+    // 模拟实际仍在等待的采集关闭及保存。
+    final Completer<void> flushed = Completer<void>();
+    // 主窗口拥有的通道服务。
+    final WindowsTitleBarService service = WindowsTitleBarService();
+    service.observeVoiceLifecycle(() => flushed.future);
+    // 原生发来的系统最小化请求。
+    const StandardMethodCodec codec = StandardMethodCodec();
+    // 收到回包后原生才允许执行最小化。
+    final Completer<ByteData?> response = Completer<ByteData?>();
+    ServicesBinding.instance.channelBuffers.push(
+      channel.name,
+      codec.encodeMethodCall(const MethodCall('beforeMinimize')),
+      response.complete,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(response.isCompleted, isFalse);
+    flushed.complete();
+    expect(codec.decodeEnvelope((await response.future)!), isNull);
+  });
+
+  test('系统隐藏回调的保存失败向原生返回失败以保留窗口', () async {
+    // 主窗口生命周期服务。
+    final WindowsTitleBarService service = WindowsTitleBarService();
+    service.observeVoiceLifecycle(() async => throw StateError('保存失败'));
+    // 原生请求及回包。
+    const StandardMethodCodec codec = StandardMethodCodec();
+    // 捕获通道返回的实际错误 envelope。
+    final Completer<ByteData?> response = Completer<ByteData?>();
+    ServicesBinding.instance.channelBuffers.push(
+      channel.name,
+      codec.encodeMethodCall(const MethodCall('beforeMinimize')),
+      response.complete,
+    );
+    // 平台得到失败时不会继续系统最小化。
+    final ByteData? result = await response.future;
+    expect(
+      () => codec.decodeEnvelope(result!),
+      throwsA(isA<PlatformException>()),
+    );
   });
 
   test('窗口按钮通过异步原生通道提交且保留64位句柄', () async {

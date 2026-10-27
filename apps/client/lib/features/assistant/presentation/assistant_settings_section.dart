@@ -6,6 +6,7 @@ import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
 import 'package:omni_butler/features/assistant/data/assistant_models.dart';
 import 'package:omni_butler/features/assistant/data/assistant_repository.dart';
+import 'package:omni_butler/features/assistant/data/assistant_voice_preferences.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 应用内助手开关与记忆权限设置，模型选择留在助手输入区。
@@ -99,142 +100,213 @@ class _AssistantSettingsSectionState
       assistantSettingsProvider,
     );
     return OmniPanel(
-      child: state.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (Object error, StackTrace stack) => Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(error is ApiFailure ? error.message : '无法读取助手设置'),
-            OmniButton(
-              label: '重试读取助手设置',
-              onPressed: () => ref.invalidate(assistantSettingsProvider),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          state.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (Object error, StackTrace stack) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(error is ApiFailure ? error.message : '无法读取助手设置'),
+                OmniButton(
+                  label: '重试读取助手设置',
+                  onPressed: () => ref.invalidate(assistantSettingsProvider),
+                ),
+              ],
             ),
-          ],
-        ),
-        data: (Map<String, dynamic>? settings) {
-          if (settings == null) return const Text('连接服务器后可配置应用内助手。');
-          // 已保存模型只用于判断助手总开关当前是否具备启用条件。
-          final List<Map<String, dynamic>> profiles = assistantItems(
-            settings['profiles'],
-          );
-          // 已删除配置不能作为助手当前可用模型。
-          final String? profileId =
-              profiles.any(
+            data: (Map<String, dynamic>? settings) {
+              if (settings == null) return const Text('连接服务器后可配置应用内助手。');
+              // 已保存模型只用于判断助手总开关当前是否具备启用条件。
+              final List<Map<String, dynamic>> profiles = assistantItems(
+                settings['profiles'],
+              );
+              // 已删除配置不能作为助手当前可用模型。
+              final String? profileId =
+                  profiles.any(
+                    (Map<String, dynamic> profile) =>
+                        profile['id'] == settings['profileId'],
+                  )
+                  ? settings['profileId'] as String?
+                  : null;
+              // 缺少密钥时不能启用助手。
+              final bool complete = profiles.any(
                 (Map<String, dynamic> profile) =>
-                    profile['id'] == settings['profileId'],
-              )
-              ? settings['profileId'] as String?
-              : null;
-          // 缺少密钥时不能启用助手。
-          final bool complete = profiles.any(
-            (Map<String, dynamic> profile) =>
-                profile['id'] == profileId && profile['hasApiKey'] == true,
-          );
-          // 卡片分段统一使用当前主题的弱文字与分隔线颜色。
-          final OmniColors colors = OmniColors.of(context);
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              MergeSemantics(
-                child: OmniListRow(
-                  key: const ValueKey<String>('assistant-settings-header'),
-                  padding: EdgeInsets.zero,
-                  title: Text(
-                    '应用内助手',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  trailing: OmniSwitch(
-                    key: const ValueKey<String>('assistant-enabled-switch'),
-                    value: settings['enabled'] == true,
-                    onChanged:
-                        _busy || (!complete && settings['enabled'] != true)
-                        ? null
-                        : (bool value) => _update(settings, <String, dynamic>{
-                            'enabled': value,
-                          }),
-                  ),
-                ),
-              ),
-              if (_message != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: OmniSpacing.sm),
-                  child: Text(_message!),
-                ),
-              const SizedBox(height: OmniSpacing.md),
-              Divider(height: 1, color: colors.line),
-              const SizedBox(height: OmniSpacing.md),
-              Column(
-                key: const ValueKey<String>('assistant-memory-section'),
+                    profile['id'] == profileId && profile['hasApiKey'] == true,
+              );
+              // 卡片分段统一使用当前主题的弱文字与分隔线颜色。
+              final OmniColors colors = OmniColors.of(context);
+              return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  OmniListRow(
-                    padding: EdgeInsets.zero,
-                    title: Text(
-                      '记忆',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    trailing: OmniButton(
-                      label: '管理记忆',
-                      variant: OmniButtonVariant.secondary,
-                      compact: true,
-                      onPressed: () => context.push('/assistant/memories'),
-                    ),
-                  ),
                   MergeSemantics(
                     child: OmniListRow(
-                      padding: const EdgeInsets.symmetric(
-                        vertical: OmniSpacing.sm,
+                      key: const ValueKey<String>('assistant-settings-header'),
+                      padding: EdgeInsets.zero,
+                      title: Text(
+                        '应用内助手',
+                        style: Theme.of(context).textTheme.titleMedium,
                       ),
-                      title: const Text('使用已保存记忆'),
-                      subtitle: const Text('只读取启用中的相关记忆'),
                       trailing: OmniSwitch(
-                        key: const ValueKey<String>(
-                          'assistant-memory-read-switch',
-                        ),
-                        value: settings['memoryReadEnabled'] == true,
-                        onChanged: _busy
+                        key: const ValueKey<String>('assistant-enabled-switch'),
+                        value: settings['enabled'] == true,
+                        onChanged:
+                            _busy || (!complete && settings['enabled'] != true)
                             ? null
                             : (bool value) => _update(
                                 settings,
-                                <String, dynamic>{'memoryReadEnabled': value},
+                                <String, dynamic>{'enabled': value},
                               ),
                       ),
                     ),
                   ),
+                  if (_message != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: OmniSpacing.sm),
+                      child: Text(_message!),
+                    ),
+                  const SizedBox(height: OmniSpacing.md),
                   Divider(height: 1, color: colors.line),
-                  MergeSemantics(
-                    child: OmniListRow(
-                      padding: const EdgeInsets.symmetric(
-                        vertical: OmniSpacing.sm,
-                      ),
-                      title: const Text('允许保存显式记忆'),
-                      subtitle: const Text('仅当你明确要求“记住”时保存'),
-                      trailing: OmniSwitch(
-                        key: const ValueKey<String>(
-                          'assistant-memory-write-switch',
+                  const SizedBox(height: OmniSpacing.md),
+                  Column(
+                    key: const ValueKey<String>('assistant-memory-section'),
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      OmniListRow(
+                        padding: EdgeInsets.zero,
+                        title: Text(
+                          '记忆',
+                          style: Theme.of(context).textTheme.titleSmall,
                         ),
-                        value: settings['memoryWriteEnabled'] == true,
-                        onChanged: _busy
-                            ? null
-                            : (bool value) => _update(
-                                settings,
-                                <String, dynamic>{'memoryWriteEnabled': value},
-                              ),
+                        trailing: OmniButton(
+                          label: '管理记忆',
+                          variant: OmniButtonVariant.secondary,
+                          compact: true,
+                          onPressed: () => context.push('/assistant/memories'),
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: OmniSpacing.xs),
-                  Text(
-                    '聊天与记忆保存于服务端数据库备份；本机迁移备份不包含助手历史。',
-                    style: Theme.of(context).textTheme.bodySmall
-                        ?.copyWith(color: colors.muted),
+                      MergeSemantics(
+                        child: OmniListRow(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: OmniSpacing.sm,
+                          ),
+                          title: const Text('使用已保存记忆'),
+                          subtitle: const Text('只读取启用中的相关记忆'),
+                          trailing: OmniSwitch(
+                            key: const ValueKey<String>(
+                              'assistant-memory-read-switch',
+                            ),
+                            value: settings['memoryReadEnabled'] == true,
+                            onChanged: _busy
+                                ? null
+                                : (bool value) =>
+                                      _update(settings, <String, dynamic>{
+                                        'memoryReadEnabled': value,
+                                      }),
+                          ),
+                        ),
+                      ),
+                      Divider(height: 1, color: colors.line),
+                      MergeSemantics(
+                        child: OmniListRow(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: OmniSpacing.sm,
+                          ),
+                          title: const Text('允许保存显式记忆'),
+                          subtitle: const Text('仅当你明确要求“记住”时保存'),
+                          trailing: OmniSwitch(
+                            key: const ValueKey<String>(
+                              'assistant-memory-write-switch',
+                            ),
+                            value: settings['memoryWriteEnabled'] == true,
+                            onChanged: _busy
+                                ? null
+                                : (bool value) =>
+                                      _update(settings, <String, dynamic>{
+                                        'memoryWriteEnabled': value,
+                                      }),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: OmniSpacing.xs),
+                      Text(
+                        '聊天与记忆保存于服务端数据库备份；本机迁移备份不包含助手历史。',
+                        style: Theme.of(context).textTheme.bodySmall
+                            ?.copyWith(color: colors.muted),
+                      ),
+                    ],
                   ),
                 ],
-              ),
-            ],
-          );
-        },
+              );
+            },
+          ),
+          const SizedBox(height: OmniSpacing.md),
+          const Divider(height: 1),
+          const SizedBox(height: OmniSpacing.md),
+          const _AssistantVoiceSettings(),
+        ],
       ),
     );
   }
+}
+
+/// 本机输入偏好独立于服务器可达性，离线仍可修改。
+class _AssistantVoiceSettings extends ConsumerStatefulWidget {
+  /// 创建本机语音设置。
+  const _AssistantVoiceSettings();
+
+  /// 保留本次保存状态和错误。
+  @override
+  ConsumerState<_AssistantVoiceSettings> createState() =>
+      _AssistantVoiceSettingsState();
+}
+
+/// 保存成功后才更新开关，避免持久化失败后界面误报。
+class _AssistantVoiceSettingsState
+    extends ConsumerState<_AssistantVoiceSettings> {
+  /// 防止乱序保存。
+  bool _saving = false;
+
+  /// 本机存储失败提示。
+  String? _error;
+
+  /// 保存本机语音输入偏好。
+  Future<void> _save(bool enabled) async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await ref
+          .read(assistantVoicePreferenceProvider.notifier)
+          .setEnabled(enabled);
+    } catch (_) {
+      if (mounted) setState(() => _error = '设置保存失败，请重试');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// 开关文案明确作用于当前设备。
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: <Widget>[
+      Text('语音输入', style: Theme.of(context).textTheme.titleSmall),
+      MergeSemantics(
+        child: OmniListRow(
+          padding: const EdgeInsets.symmetric(vertical: OmniSpacing.sm),
+          title: const Text('语音输入完成后自动发送'),
+          subtitle: const Text('仅在此设备生效；关闭时可先检查转写文字'),
+          trailing: OmniSwitch(
+            key: const ValueKey<String>('assistant-voice-auto-send-switch'),
+            value: ref.watch(assistantVoicePreferenceProvider),
+            onChanged: _saving ? null : _save,
+          ),
+        ),
+      ),
+      if (_error != null) Text(_error!),
+    ],
+  );
 }

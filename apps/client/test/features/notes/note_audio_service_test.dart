@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
+import 'package:omni_butler/core/audio/microphone_coordinator.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart';
 import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
 import 'package:omni_butler/features/notes/audio/note_wav.dart';
@@ -26,6 +27,9 @@ class _Recorder implements AudioRecorder {
 
   /// 设备启动次数。
   int starts = 0;
+
+  /// 控制设备实际停止回执，验证等待期间仍持有占用。
+  Completer<void>? stopGate;
 
   /// 测试使用的方法以外不走原生插件。
   @override
@@ -57,7 +61,10 @@ class _Recorder implements AudioRecorder {
 
   /// 停止真实设备替身。
   @override
-  Future<String?> stop() async => null;
+  Future<String?> stop() async {
+    await stopGate?.future;
+    return null;
+  }
 
   /// 释放测试流。
   @override
@@ -98,17 +105,117 @@ void main() {
   late _Player player;
   // 长生命周期应用服务。
   late NoteRecorderService service;
+  // 笔记和助手共用的设备协调器。
+  late MicrophoneCoordinator microphone;
 
   setUp(() async {
     directory = await Directory.systemTemp.createTemp('notes-audio-test-');
     device = _Recorder();
     player = _Player();
+    microphone = MicrophoneCoordinator();
     service = NoteRecorderService(
       player: player,
       recorder: device,
       android: false,
+      microphoneCoordinator: microphone,
       directoryResolver: () async => directory,
     );
+  });
+
+  test('助手预占阻止笔记启动，笔记暂停和停止等待期间仍阻止助手', () async {
+    // 模拟助手新采集的唯一身份。
+    final Object voice = Object();
+    expect(microphone.tryAcquire(voice), isTrue);
+    await expectLater(service.start('note-busy'), throwsStateError);
+    expect(device.starts, 0);
+    microphone.release(voice);
+    // start 在首个异步任务前就占用，不能在权限请求期间穿透。
+    final Future<void> starting = service.start('note-owned');
+    expect(microphone.tryAcquire(voice), isFalse);
+    await starting;
+    await service.pause();
+    expect(microphone.tryAcquire(voice), isFalse);
+    await service.resume();
+    device.stopGate = Completer<void>();
+    // 设备确认停止前，其他入口仍不能开始采集。
+    final Future<NoteRecordingResult?> stopping = service.stop();
+    await Future<void>.delayed(Duration.zero);
+    expect(microphone.tryAcquire(voice), isFalse);
+    device.stopGate!.complete();
+    await stopping;
+    expect(microphone.tryAcquire(voice), isTrue);
+    microphone.release(voice);
+  });
+
+  test('笔记权限拒绝释放预占，助手之后可以使用设备', () async {
+    device.permission = false;
+    await expectLater(service.start('note-denied'), throwsStateError);
+    // 权限拒绝不遗留全局占用。
+    final Object voice = Object();
+    expect(microphone.tryAcquire(voice), isTrue);
+    microphone.release(voice);
+  });
+
+  test('Android无事件重放时以权威快照恢复暂停占用并在实际停止后释放', () async {
+    await service.dispose();
+    // 独立方法和事件通道，故意不主动重放任何事件。
+    const MethodChannel commands = MethodChannel('notes-recovery-commands');
+    // 原生事件通道仅接受订阅。
+    const EventChannel events = EventChannel('notes-recovery-events');
+    // 模拟上次页面离开后仍活跃的原生笔记录音。
+    final Map<String, dynamic> snapshot = {
+      'type': 'state',
+      'phase': 'paused',
+      'id': 'restored-native',
+      'noteId': 'restored-note',
+      'path': '${directory.path}/restored.wav',
+      'startedAt': DateTime.now().toUtc().toIso8601String(),
+      'durationMs': 0,
+      'limitMs': 60000,
+    };
+    // 可控制是否仍在原生占用。
+    bool active = true;
+    // 当前测试的原生消息替身。
+    final TestDefaultBinaryMessenger messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      const MethodChannel('notes-recovery-events'),
+      (_) async => null,
+    );
+    messenger.setMockMethodCallHandler(commands, (MethodCall call) async {
+      if (call.method == 'getState') {
+        return active ? snapshot : {'type': 'state', 'phase': 'idle'};
+      }
+      if (call.method == 'stop') {
+        active = false;
+        return {...snapshot, 'type': 'completed'};
+      }
+      return null;
+    });
+    service = NoteRecorderService(
+      player: player,
+      android: true,
+      microphoneCoordinator: microphone,
+      channel: commands,
+      events: events,
+      directoryResolver: () async => directory,
+    );
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(commands, null);
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('notes-recovery-events'),
+        null,
+      );
+    });
+    await service.ensureMicrophoneState();
+    expect(service.state.phase, NoteRecordingPhase.paused);
+    // 助手必须被真实恢复的原生录音阻止。
+    final Object voice = Object();
+    expect(microphone.tryAcquire(voice), isFalse);
+    await service.stop();
+    expect(active, isFalse);
+    expect(microphone.tryAcquire(voice), isTrue);
+    microphone.release(voice);
   });
   tearDown(() async {
     await service.dispose();
@@ -539,6 +646,7 @@ void main() {
       player: player,
       recorder: device,
       android: true,
+      microphoneCoordinator: microphone,
       channel: commands,
       events: events,
       directoryResolver: () async => directory,
@@ -585,9 +693,14 @@ void main() {
     expect(delivered.length, 1);
     await service.start('native-second');
     await send(oldResult);
+    await send({...oldResult, 'type': 'state', 'phase': 'idle'});
+    await send({...oldResult, 'type': 'failed', 'reason': '上一段迟到失败'});
     expect(service.state.phase, NoteRecordingPhase.recording);
     expect(service.state.noteId, 'native-second');
     expect(delivered.length, 1);
+    // 旧录音任何终态事件都不能释放当前采集的全局身份。
+    final Object voice = Object();
+    expect(microphone.tryAcquire(voice), isFalse);
     await service.stop();
     await subscription.cancel();
     await levelSubscription.cancel();

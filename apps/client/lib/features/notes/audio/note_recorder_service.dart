@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/services.dart';
+import 'package:omni_butler/core/audio/microphone_coordinator.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -24,8 +25,10 @@ class NoteRecorderService {
     AudioRecorder? recorder,
     MethodChannel? channel,
     EventChannel? events,
+    MicrophoneCoordinator? microphoneCoordinator,
     bool? android,
   }) : _directoryResolver = directoryResolver ?? _defaultDirectory,
+       _microphone = microphoneCoordinator ?? MicrophoneCoordinator(),
        // 保留公开参数recorder，不将私有字段暴露为参数名。
        // ignore: prefer_initializing_formals
        _recorder = recorder,
@@ -44,6 +47,15 @@ class NoteRecorderService {
 
   /// 共享的原音播放器。
   final NoteAudioPlayerService player;
+
+  /// 与助手共用的应用级设备占用协调器。
+  final MicrophoneCoordinator _microphone;
+
+  /// 当前笔记录音的占用身份，旧事件不能释放后续采集。
+  Object? _microphoneOwner;
+
+  /// 权限及设备启动期间不能用迟到 idle 事件释放预占。
+  bool _startingRequest = false;
 
   /// 私有目录解析器，允许与数据源目录隔离。
   final Future<Directory> Function() _directoryResolver;
@@ -147,18 +159,55 @@ class NoteRecorderService {
   /// 建立事件桥，不申请麦克风权限也不自动录音。
   Future<void> initialize() => _initialization ??= _initialize();
 
+  /// 语音输入前读取原生权威状态，覆盖前台服务仍活动而 Dart 刚重绑的情况。
+  Future<void> ensureMicrophoneState() async {
+    await initialize();
+    if (!_android || _startingRequest) return;
+    // 方法回执明确包含 idle，不能依赖事件流是否及时重放活动录音。
+    final Map<String, dynamic>? snapshot = await _channel
+        .invokeMapMethod<String, dynamic>('getState');
+    if (snapshot == null) throw StateError('无法确认当前麦克风状态，请稍后重试');
+    if (!_startingRequest) _nativeEvent(snapshot, authoritative: true);
+    if (state.isActive && !_claimMicrophone()) {
+      throw StateError('已有录音进行中，请先结束当前录音');
+    }
+  }
+
+  /// 恢复原生活动录音时复用原令牌，或在空闲协调器中登记真实占用。
+  bool _claimMicrophone() {
+    // 每次新占用使用独立身份。
+    final Object owner = _microphoneOwner ?? Object();
+    if (!_microphone.tryAcquire(owner)) return false;
+    _microphoneOwner = owner;
+    return true;
+  }
+
+  /// 实际设备结束后释放当前笔记录音的占用。
+  void _releaseMicrophone() {
+    // 只释放此实例持有的身份，换服时旧实例不能影响新持有者。
+    final Object? owner = _microphoneOwner;
+    if (owner != null) _microphone.release(owner);
+    _microphoneOwner = null;
+  }
+
   /// 初始化平台事件和恢复目录。
   Future<void> _initialize() async {
     await (await _directoryResolver()).create(recursive: true);
     if (_android) {
       _nativeSubscription = _events.receiveBroadcastStream().listen(
         _nativeEvent,
-        onError: (Object error) => _publish(
-          NoteRecordingState(
-            phase: NoteRecordingPhase.failed,
-            error: '录音服务连接异常：$error',
-          ),
-        ),
+        onError: (Object error) {
+          // 通道断开不等于原生设备停止，先实际停止再释放占用。
+          unawaited(
+            _serial(() async {
+              try {
+                await _stop('录音服务连接异常，已保存可用原音');
+              } catch (_) {
+                // 停止结果未知时保留占用，避免助手抢占仍运行的原生服务。
+              }
+            }),
+          );
+        },
       );
     }
   }
@@ -187,7 +236,56 @@ class NoteRecorderService {
     String noteId, {
     Duration remaining = noteLimit,
     String? draftId,
-  }) => _serial(() async {
+  }) {
+    if (_microphoneOwner != null || state.isActive || !_claimMicrophone()) {
+      return Future<void>.error(StateError('已有录音进行中，请先结束当前录音'));
+    }
+    _startingRequest = true;
+    // 新预占尚未生成录音 ID，上一段迟到完成不得释放这一段的令牌。
+    _session = null;
+    return _serial(() async {
+      try {
+        await _start(noteId, remaining: remaining, draftId: draftId);
+      } catch (error, stack) {
+        if (_android) {
+          // 启动被原生活动服务拒绝时恢复其占用，不误停既有笔记录音。
+          try {
+            final Map<String, dynamic>? snapshot = await _channel
+                .invokeMapMethod<String, dynamic>('getState');
+            if (snapshot?['phase'] == 'idle') {
+              _releaseMicrophone();
+            } else if (snapshot != null) {
+              _nativeEvent(snapshot, authoritative: true);
+            }
+          } catch (_) {
+            // 无法确认设备已释放时保留占用，下一次状态核实后恢复。
+          }
+        } else {
+          try {
+            await _recorder?.stop();
+          } catch (_) {
+            await _recorder?.dispose();
+            _recorder = null;
+            await _recordSubscription?.cancel();
+            _recordSubscription = null;
+          }
+          await _audioSubscription?.cancel();
+          _audioSubscription = null;
+          _releaseMicrophone();
+        }
+        Error.throwWithStackTrace(error, stack);
+      } finally {
+        _startingRequest = false;
+      }
+    });
+  }
+
+  /// 已预占麦克风后的原有录音及落盘流程。
+  Future<void> _start(
+    String noteId, {
+    required Duration remaining,
+    String? draftId,
+  }) async {
     await initialize();
     if (state.isActive) throw StateError('已有录音进行中，请先结束当前录音');
     if (noteId.trim().isEmpty) throw ArgumentError('笔记标识不能为空');
@@ -305,7 +403,7 @@ class NoteRecorderService {
       );
       rethrow;
     }
-  });
+  }
 
   /// 暂停采集，原生及插件均停止增加采样字节。
   Future<void> pause() => _serial(() async {
@@ -348,6 +446,7 @@ class NoteRecorderService {
         'reason': reason,
       });
       if (value != null) return _acceptResult(value);
+      _releaseMicrophone();
       _publish(const NoteRecordingState());
       return null;
     }
@@ -356,9 +455,15 @@ class NoteRecorderService {
       await _recorder?.stop();
     } catch (_) {
       reason ??= '麦克风中断，已保存可用原音';
+      // stop 异常时通过设备销毁确认释放，不能提前让助手再次开麦。
+      await _recorder?.dispose();
+      _recorder = null;
+      await _recordSubscription?.cancel();
+      _recordSubscription = null;
     }
     await _audioSubscription?.cancel();
     _audioSubscription = null;
+    _releaseMicrophone();
     await _writes;
     await _file?.flush();
     await _file?.close();
@@ -416,10 +521,19 @@ class NoteRecorderService {
   }
 
   /// 从原生采样线程接收状态，完成和返回请求。
-  void _nativeEvent(dynamic raw) {
+  void _nativeEvent(dynamic raw, {bool authoritative = false}) {
     if (raw is! Map) return;
     // 仅接收本机通道结构。
     final event = Map<String, dynamic>.from(raw);
+    // 原生完成后的迟到状态不能复活旧采集或清空新采集。
+    if (!authoritative && event['type'] != 'completed') {
+      if (event['id'] is String && _finished.containsKey(event['id'])) return;
+      if ((state.isActive || _startingRequest) &&
+          event['id'] is String &&
+          event['id'] != _session?['id']) {
+        return;
+      }
+    }
     // 兼容未携带代次的旧原生事件，仅可补回同一采集的持久身份。
     if (event['id'] == _session?['id'] &&
         event['draftId'] == null &&
@@ -457,6 +571,8 @@ class NoteRecorderService {
       return;
     }
     if (event['type'] == 'failed') {
+      // 原生先 cleanup 后发布失败，故此时才允许另一功能获取麦克风。
+      _releaseMicrophone();
       _publish(
         NoteRecordingState(
           phase: NoteRecordingPhase.failed,
@@ -466,11 +582,19 @@ class NoteRecorderService {
       return;
     }
     if (event['type'] == 'state') {
+      if (event['phase'] == 'idle') {
+        if (_startingRequest && !authoritative) return;
+        if (!authoritative && event['id'] == null && state.isActive) return;
+        _releaseMicrophone();
+      } else {
+        _claimMicrophone();
+      }
       if (event['id'] is String && event['path'] is String) {
         _session = event;
       }
       // 原生服务状态是后台/锁屏采集的权威来源。
       final phase = switch (event['phase']) {
+        'starting' => NoteRecordingPhase.starting,
         'recording' => NoteRecordingPhase.recording,
         'paused' => NoteRecordingPhase.paused,
         'stopping' => NoteRecordingPhase.stopping,
@@ -500,7 +624,9 @@ class NoteRecorderService {
     if (_finished.containsKey(id)) return _finished[id];
     // 非正常服务销毁时可能没有有效采样。
     final durationMs = (value['durationMs'] as num?)?.toInt() ?? 0;
-    if (state.recordingId == id || state.recordingId == null) {
+    if (state.recordingId == id ||
+        (state.recordingId == null && _session?['id'] == id)) {
+      _releaseMicrophone();
       _publish(const NoteRecordingState());
     }
     if (durationMs <= 0) return null;
@@ -876,11 +1002,16 @@ class NoteRecorderService {
 
   /// 正常关闭应用时结束并落盘；容器保持到应用退出。
   Future<void> dispose() async {
+    if (_android && _microphoneOwner != null && !state.isActive) {
+      // 失败状态可能仍有原生设备，占用未核实前不能因页面销毁释放锁。
+      await ensureMicrophoneState();
+    }
     await stop(reason: '应用退出，已保存可用原音');
     await _nativeSubscription?.cancel();
     await _recordSubscription?.cancel();
     await _audioSubscription?.cancel();
     await _recorder?.dispose();
+    _releaseMicrophone();
     await _levels.close();
     await _states.close();
     await _completed.close();

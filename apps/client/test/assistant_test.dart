@@ -3,6 +3,16 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:omni_butler/app/theme/theme_controller.dart';
+import 'package:omni_butler/core/audio/microphone_coordinator.dart';
+import 'package:omni_butler/features/assistant/data/assistant_voice_controller.dart';
+import 'package:omni_butler/features/assistant/data/assistant_voice_preferences.dart';
+import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
+import 'package:omni_butler/features/notes/data/note_providers.dart';
+
+import 'support/assistant_voice_fakes.dart';
+
 import 'package:dio/dio.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -149,6 +159,17 @@ class _ClarificationSync implements OmniSyncRuntime {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+/// 语音页面测试只隔离原生笔记状态查询，仍使用真实共享锁。
+class _VoiceNoteRecorder implements NoteRecorderService {
+  /// 假设备没有后台录音。
+  @override
+  Future<void> ensureMicrophoneState() async {}
+
+  /// 其他笔记能力不属于本测试。
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 /// 等待事件及缓存事务落盘。
 Future<void> _settle() =>
     Future<void>.delayed(const Duration(milliseconds: 60));
@@ -164,6 +185,312 @@ AssistantEvent _event(int seq, String text) => AssistantEvent(
 /// 助手的幂等、恢复和只读卡片关键路径。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  // 各测试使用独立本机偏好，不访问用户设置。
+  late SharedPreferences testPreferences;
+  setUp(() async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    testPreferences = await SharedPreferences.getInstance();
+  });
+
+  for (final TargetPlatform platform in <TargetPlatform>[
+    TargetPlatform.windows,
+    TargetPlatform.android,
+  ]) {
+    for (final bool autoSend in <bool>[false, true]) {
+      testWidgets(
+        '${platform.name} 语音麦克风在发送左侧，实时替换并按本机开关${autoSend ? '自动发送' : '保留草稿'}',
+        (WidgetTester tester) async {
+          tester.view.physicalSize = const Size(1000, 900);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          await testPreferences.setBool(assistantVoiceAutoSendKey, autoSend);
+          // 真实SQLite草稿缓存，不读取用户聊天。
+          final AssistantCache cache = AssistantCache.forTesting(
+            NativeDatabase.memory(),
+          );
+          // 合成助手接口仍经过真实发送控制器。
+          final _Repository repository = _Repository(_Auth());
+          repository.responses['/attachments/capabilities'] = <String, dynamic>{
+            'enabled': true,
+          };
+          if (autoSend) {
+            await cache.save(
+              AssistantCache.scopeFor('https://example.com/api', 'owner'),
+              <String, dynamic>{
+                'conversationId': 'conversation',
+                'attachments': <Object>[
+                  <String, dynamic>{
+                    'id': 'voice-existing-document',
+                    'name': '已有资料.txt',
+                    'kind': 'document',
+                    'status': 'ready',
+                    'uploaded': true,
+                    'requiresVision': false,
+                    'size': 100,
+                  },
+                ],
+              },
+            );
+          }
+          // 假音频设备输出测试PCM。
+          final FakeVoiceRecorder recorder = FakeVoiceRecorder();
+          // 可控制final时序的服务连接。
+          final FakeSpeechConnection connection = FakeSpeechConnection();
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                sharedPreferencesProvider.overrideWithValue(testPreferences),
+                authControllerProvider.overrideWith(_AuthController.new),
+                assistantRepositoryProvider.overrideWithValue(repository),
+                assistantCacheProvider.overrideWithValue(cache),
+                assistantSettingsProvider.overrideWith(
+                  (Ref ref) async => <String, dynamic>{'enabled': true},
+                ),
+                syncRuntimeProvider.overrideWithValue(_ClarificationSync()),
+                noteRecorderProvider.overrideWithValue(_VoiceNoteRecorder()),
+                assistantVoiceRecorderFactoryProvider.overrideWithValue(
+                  () => recorder,
+                ),
+                assistantSpeechConnectorProvider.overrideWithValue(
+                  (_, _) async => connection,
+                ),
+              ],
+              child: MaterialApp(
+                theme: AppTheme.build(brightness: Brightness.light)
+                    .copyWith(platform: platform),
+                home: const Scaffold(body: AssistantPage()),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          // 两端都将麦克风放在发送按钮左侧。
+          final Finder microphone = find.byKey(
+            const ValueKey<String>('assistant-voice-button'),
+          );
+          // 普通文本发送按钮沿用原键。
+          final Finder send = find.byKey(
+            const ValueKey<String>('assistant-send-button'),
+          );
+          expect(
+            tester.getCenter(microphone).dx,
+            lessThan(tester.getCenter(send).dx),
+          );
+          await tester.enterText(
+            find.byKey(const ValueKey<String>('assistant-input')),
+            '前旧后',
+          );
+          // 选区不在末尾，必须从开始时的固定范围替换。
+          final TextEditingController input = tester
+              .widget<OmniTextField>(
+                find.byKey(const ValueKey<String>('assistant-input')),
+              )
+              .controller!;
+          input.selection = const TextSelection(baseOffset: 1, extentOffset: 2);
+          await tester.tap(microphone);
+          await tester.pump();
+          connection.output.add(<String, dynamic>{'type': 'ready'});
+          await tester.pump();
+          await tester.pump();
+          expect(recorder.starts, 1);
+          connection.text('新');
+          connection.text('新文字');
+          await tester.pump();
+          expect(input.text, '前新文字后');
+          expect(
+            tester
+                .widget<OmniTextField>(
+                  find.byKey(const ValueKey<String>('assistant-input')),
+                )
+                .readOnly,
+            isTrue,
+          );
+          if (platform == TargetPlatform.android) {
+            // 示例快捷填入也必须冻结，避免覆盖语音草稿。
+            expect(
+              tester
+                  .widget<OmniButton>(
+                    find.widgetWithText(OmniButton, '帮我做本周总结'),
+                  )
+                  .onPressed,
+              isNull,
+            );
+          }
+          expect(
+            repository.calls.where((call) => call.method == 'POST'),
+            isEmpty,
+          );
+          await tester.tap(microphone);
+          await tester.pump();
+          await tester.runAsync(_settle);
+          await tester.pump();
+          expect(connection.endings, <bool>[true]);
+          expect(find.text('正在完成转写…'), findsOneWidget);
+          expect(
+            repository.calls.where((call) => call.method == 'POST'),
+            isEmpty,
+          );
+          connection.complete('新文字。');
+          await tester.runAsync(_settle);
+          await tester.pump();
+          expect(recorder.disposals, 1);
+          expect(find.text('正在完成转写…'), findsNothing);
+          await tester.pumpAndSettle();
+          // 只检查消息接口，首次创建聊天是原流程的一部分。
+          final List<Object?> messages = repository.calls
+              .where(
+                (call) =>
+                    call.method == 'POST' && call.path.endsWith('/messages'),
+              )
+              .map((call) => call.data)
+              .toList();
+          if (autoSend) {
+            expect(messages, hasLength(1));
+            expect((messages.single as Map)['content'], '前新文字。后');
+            expect((messages.single as Map)['attachmentIds'], <String>[
+              'voice-existing-document',
+            ]);
+          } else {
+            expect(messages, isEmpty);
+            expect(input.text, '前新文字。后');
+          }
+          expect(tester.takeException(), isNull);
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pumpAndSettle();
+          await tester.runAsync(_settle);
+          await cache.close();
+          await recorder.audio.close();
+          await connection.output.close();
+        },
+      );
+    }
+  }
+
+  for (final bool leavePage in <bool>[false, true]) {
+    testWidgets('窗口取消等待停麦与草稿落盘，迟到完成不会自动发送，页面离开=$leavePage', (
+      WidgetTester tester,
+    ) async {
+      // 保持与正式页面相同的服务器缓存作用域。
+      final String scope = AssistantCache.scopeFor(
+        'https://example.com/api',
+        'owner',
+      );
+      // 真实缓存验证取消后的持久文本。
+      final AssistantCache cache = AssistantCache.forTesting(
+        NativeDatabase.memory(),
+      );
+      // 不调用真实模型的消息接口。
+      final _Repository repository = _Repository(_Auth());
+      // 可控的音频设备。
+      final FakeVoiceRecorder recorder = FakeVoiceRecorder();
+      // 可控的网络生命周期。
+      final FakeSpeechConnection connection = FakeSpeechConnection();
+      await testPreferences.setBool(assistantVoiceAutoSendKey, true);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(testPreferences),
+            authControllerProvider.overrideWith(_AuthController.new),
+            assistantRepositoryProvider.overrideWithValue(repository),
+            assistantCacheProvider.overrideWithValue(cache),
+            assistantSettingsProvider.overrideWith(
+              (Ref ref) async => <String, dynamic>{'enabled': true},
+            ),
+            noteRecorderProvider.overrideWithValue(_VoiceNoteRecorder()),
+            assistantVoiceRecorderFactoryProvider.overrideWithValue(
+              () => recorder,
+            ),
+            assistantSpeechConnectorProvider.overrideWithValue(
+              (_, _) async => connection,
+            ),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.build(brightness: Brightness.light)
+                .copyWith(platform: TargetPlatform.android),
+            home: const Scaffold(body: AssistantPage()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey<String>('assistant-input')),
+        '草稿',
+      );
+      await tester.tap(
+        find.byKey(const ValueKey<String>('assistant-voice-button')),
+      );
+      await tester.pump();
+      connection.output.add(<String, dynamic>{'type': 'ready'});
+      await tester.pump();
+      connection.text('保留语音');
+      await tester.pump();
+      // 宿主窗口实际调用同一个根容器入口。
+      final ProviderContainer container = ProviderScope.containerOf(
+        tester.element(find.byType(AssistantPage)),
+      );
+      // 页面销毁后仍持有应用宿主的同一生命周期对象。
+      final VoiceInputLifecycle lifecycle = container.read(
+        voiceInputLifecycleProvider,
+      );
+      // 占用对象独立于当前页面或测试容器的销毁。
+      final MicrophoneCoordinator microphone = container.read(
+        microphoneCoordinatorProvider,
+      );
+      if (leavePage) await tester.pumpWidget(const SizedBox.shrink());
+      // 假时钟和原生异步取消各自排空后再核验宿主回执。
+      final Future<void> cancellation = lifecycle.cancelAll();
+      // 采集订阅与网络订阅依次取消，跨越真实事件循环和测试微任务。
+      for (int turn = 0; turn < 4; turn++) {
+        await tester.pump();
+        await tester.runAsync(_settle);
+      }
+      expect(recorder.disposals, 1);
+      await tester.pumpAndSettle();
+      await cancellation;
+      connection.complete('迟到结果');
+      await tester.pumpAndSettle();
+      expect(recorder.disposals, 1);
+      expect(microphone.isOccupied, isFalse);
+      expect(repository.calls.where((call) => call.method == 'POST'), isEmpty);
+      // 取消回执包含已写入SQLite的草稿。
+      final Map<String, dynamic> saved = await cache.readScope(scope);
+      expect(saved['draft'], '草稿保留语音');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await tester.runAsync(_settle);
+      await cache.close();
+      await recorder.audio.close();
+      await connection.output.close();
+    });
+  }
+
+  testWidgets('语音本机开关在离线设置中仍可保存，不调用服务器', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(testPreferences),
+          assistantSettingsProvider.overrideWith((Ref ref) async => null),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.build(brightness: Brightness.light),
+          home: const Scaffold(
+            body: SingleChildScrollView(child: AssistantSettingsSection()),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 使用稳定语义键定位新增开关。
+    final Finder toggle = find.byKey(
+      const ValueKey<String>('assistant-voice-auto-send-switch'),
+    );
+    expect(tester.widget<OmniSwitch>(toggle).value, isFalse);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(tester.widget<OmniSwitch>(toggle).value, isTrue);
+    expect(testPreferences.getBool(assistantVoiceAutoSendKey), isTrue);
+    expect(tester.takeException(), isNull);
+  });
   if (const bool.fromEnvironment('ASSISTANT_PREVIEW')) {
     setUpAll(() async {
       // 合成预览使用真实中文字体，避免Ahem方框掩盖布局问题。
@@ -670,6 +997,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            sharedPreferencesProvider.overrideWithValue(testPreferences),
             authControllerProvider.overrideWith(_AuthController.new),
             assistantRepositoryProvider.overrideWithValue(repository),
             assistantCacheProvider.overrideWithValue(cache),
@@ -776,6 +1104,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          sharedPreferencesProvider.overrideWithValue(testPreferences),
           authControllerProvider.overrideWith(_AuthController.new),
           assistantRepositoryProvider.overrideWithValue(repository),
           assistantCacheProvider.overrideWithValue(cache),
@@ -914,6 +1243,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            sharedPreferencesProvider.overrideWithValue(testPreferences),
             authControllerProvider.overrideWith(_AuthController.new),
             assistantRepositoryProvider.overrideWithValue(repository),
             assistantCacheProvider.overrideWithValue(cache),
@@ -1057,6 +1387,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          sharedPreferencesProvider.overrideWithValue(testPreferences),
           authControllerProvider.overrideWith(_AuthController.new),
           assistantRepositoryProvider.overrideWithValue(repository),
           assistantCacheProvider.overrideWithValue(cache),
@@ -1126,6 +1457,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          sharedPreferencesProvider.overrideWithValue(testPreferences),
           authControllerProvider.overrideWith(_AuthController.new),
           assistantRepositoryProvider.overrideWithValue(repository),
           assistantCacheProvider.overrideWithValue(cache),
@@ -1236,6 +1568,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            sharedPreferencesProvider.overrideWithValue(testPreferences),
             authControllerProvider.overrideWith(_AuthController.new),
             assistantRepositoryProvider.overrideWithValue(repository),
             assistantCacheProvider.overrideWithValue(cache),
@@ -1307,6 +1640,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          sharedPreferencesProvider.overrideWithValue(testPreferences),
           authControllerProvider.overrideWith(_AuthController.new),
           assistantRepositoryProvider.overrideWithValue(repository),
           assistantCacheProvider.overrideWithValue(cache),
@@ -1397,6 +1731,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          sharedPreferencesProvider.overrideWithValue(testPreferences),
           authControllerProvider.overrideWith(_AuthController.new),
           assistantRepositoryProvider.overrideWithValue(repository),
           assistantCacheProvider.overrideWithValue(cache),
@@ -1468,6 +1803,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            sharedPreferencesProvider.overrideWithValue(testPreferences),
             assistantRepositoryProvider.overrideWithValue(repository),
             assistantSettingsProvider.overrideWith((Ref ref) async => settings),
           ],
@@ -1525,6 +1861,7 @@ void main() {
         ProviderScope(
           key: ValueKey<bool>(enabled),
           overrides: [
+            sharedPreferencesProvider.overrideWithValue(testPreferences),
             authControllerProvider.overrideWith(_AuthController.new),
             assistantRepositoryProvider.overrideWithValue(repository),
           ],
@@ -1547,7 +1884,7 @@ void main() {
     }
   });
 
-  testWidgets('助手设置仅保留启用和记忆分区，管理入口归入记忆区域', (WidgetTester tester) async {
+  testWidgets('助手设置保留启用和记忆分区并新增本机语音输入偏好', (WidgetTester tester) async {
     // 完整配置用于验证模型存在时也不会重复展示模型区域。
     final Map<String, dynamic> settings = <String, dynamic>{
       'revision': 1,
@@ -1568,6 +1905,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          sharedPreferencesProvider.overrideWithValue(testPreferences),
           assistantSettingsProvider.overrideWith((Ref ref) async => settings),
         ],
         child: MaterialApp(
@@ -1602,7 +1940,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('助手设置仅保留启用与记忆控制，双倍字号不溢出', (WidgetTester tester) async {
+  testWidgets('助手启用、记忆与语音设置双倍字号不溢出', (WidgetTester tester) async {
     tester.view.physicalSize = const Size(320, 1000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -1610,6 +1948,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          sharedPreferencesProvider.overrideWithValue(testPreferences),
           assistantSettingsProvider.overrideWith(
             (Ref ref) async => <String, dynamic>{
               'revision': 1,
@@ -1737,6 +2076,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            sharedPreferencesProvider.overrideWithValue(testPreferences),
             authControllerProvider.overrideWith(_AuthController.new),
             assistantRepositoryProvider.overrideWithValue(repository),
             assistantCacheProvider.overrideWithValue(cache),
@@ -2014,6 +2354,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            sharedPreferencesProvider.overrideWithValue(testPreferences),
             authControllerProvider.overrideWith(_AuthController.new),
             assistantRepositoryProvider.overrideWithValue(repository),
             assistantCacheProvider.overrideWithValue(cache),
@@ -2354,7 +2695,10 @@ void main() {
     };
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [assistantRepositoryProvider.overrideWithValue(repository)],
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(testPreferences),
+          assistantRepositoryProvider.overrideWithValue(repository),
+        ],
         child: MaterialApp(
           theme: AppTheme.build(brightness: Brightness.light),
           home: const AssistantMemoriesPage(),
@@ -2393,6 +2737,7 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+              sharedPreferencesProvider.overrideWithValue(testPreferences),
               assistantRepositoryProvider.overrideWithValue(repository),
             ],
             child: MaterialApp(

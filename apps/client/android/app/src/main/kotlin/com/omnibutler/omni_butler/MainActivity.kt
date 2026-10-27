@@ -25,6 +25,12 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "omni_butler/notes_recording")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "getState" -> {
+                        // 权威回执包含空闲和权限等待，避免 Dart 重绑事件流的时间窗口。
+                        result.success(NoteRecordingService.active?.stateSnapshot()
+                            ?: mapOf("type" to "state", "phase" to
+                                if (recordingPermissionResult != null || NoteRecordingService.startResult != null) "starting" else "idle"))
+                    }
                     "start" -> {
                         if (recordingPermissionResult != null || NoteRecordingService.active != null) {
                             result.error("RECORDING_BUSY", "已有录音进行中", null)

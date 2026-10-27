@@ -5,6 +5,18 @@ class WindowsTitleBarService {
   /// 主窗口标题栏的专用平台通道。
   static const MethodChannel _channel = MethodChannel('omni/windows_title_bar');
 
+  /// 注册主窗口隐藏和最小化前的语音清理，返回前原生不会执行最小化。
+  void observeVoiceLifecycle(Future<void> Function() cancelAndFlush) {
+    _channel.setMethodCallHandler((MethodCall call) async {
+      if (call.method == 'beforeMinimize' || call.method == 'hidden') {
+        await cancelAndFlush();
+      }
+    });
+  }
+
+  /// 宿主销毁时解除来自原生窗口的回调。
+  void stopObservingVoiceLifecycle() => _channel.setMethodCallHandler(null);
+
   /// 异步请求最小化，避免在 Dart 绘制线程同步调用 ShowWindow。
   Future<void> minimize(int windowHandle) => _channel.invokeMethod<void>(
     'minimize',

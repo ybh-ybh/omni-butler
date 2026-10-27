@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/app/theme/theme_controller.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
 import 'package:omni_butler/core/auth/auth_providers.dart';
 import 'package:omni_butler/core/auth/auth_repository.dart';
@@ -146,9 +148,13 @@ Future<void> _pump(
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
+  SharedPreferences.setMockInitialValues(<String, Object>{});
+  // 应用入口已注入本机偏好，测试使用隔离存储提供同样依赖。
+  final SharedPreferences preferences = await SharedPreferences.getInstance();
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        sharedPreferencesProvider.overrideWithValue(preferences),
         authRepositoryProvider.overrideWithValue(auth),
         authControllerProvider.overrideWith(
           () => _AiAuthController(connected: connected),

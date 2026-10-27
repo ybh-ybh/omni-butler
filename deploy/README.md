@@ -158,6 +158,14 @@ server {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $omni_connection_upgrade;
 
+    # 助手实时语音：五分钟录音及最终转写等待，保留完整 API 路径。
+    location = /omni-butler/api/v1/assistant/speech/stream {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_buffering off;
+        proxy_read_timeout 360s;
+        proxy_send_timeout 360s;
+    }
+
     # API：保留客户端已经拼接的完整接口路径。
     location ^~ /omni-butler/api/v1/ {
         proxy_pass http://127.0.0.1:3000;
@@ -332,6 +340,10 @@ docker compose stop
 ## 数据与备份
 
 笔记正文和原音元数据要求客户端与服务器通过相同的同步门禁，版本定义见“版本升级”。语音服务商密钥只配置在部署 `.env`：设置 `NOTE_ASR_PROVIDER=tencent`、`TENCENT_ASR_SECRET_ID`、`TENCENT_ASR_SECRET_KEY`；普通文本和本地录音不需要这些密钥。腾讯 API 3.0 不使用 APP_ID 参与签名。云端识别在用户授权后才提交。
+
+AI 助手的麦克风输入使用腾讯云[实时语音识别 WebSocket](https://cloud.tencent.com/document/api/1093/48982)，共用上述凭据，并要求 `TENCENT_ASR_APP_ID` 为同一腾讯云账号的数字 APPID。缺少 APPID 只会禁用实时输入，不影响文件识别与 API 启动；还需在腾讯云开通实时语音识别并具备可用额度。实时输入固定 `16k_zh`、16kHz 单声道 16-bit PCM，不受 `NOTE_ASR_MODEL` 控制，也不需要 `NOTE_ASR_PUBLIC_URL`。服务端桥接 `/omni-butler/api/v1/assistant/speech/stream`，凭据和腾讯签名 URL 始终保留在服务端。反向代理必须透传 WebSocket Upgrade 和 Authorization，并应用上方语音路径的 360 秒超时。
+
+每次录音最多五分钟，同设备最多一路、同 owner 最多两路（单 API 实例计数）；只有收到厂商最终完成回执才结束识别。网络中断或取消会关闭两端连接，不自动新建付费识别；原音只在连接中流转，不落盘、不生成笔记或助手消息。是否自动发送识别文字是客户端本机设置，默认关闭。升级顺序为先更新 API 和代理配置，再更新客户端；首次实际验收分别检查 Windows、Android 麦克风权限、实时文字、手动结束、断网以及自动发送开关。仓库测试只连接本地模拟厂商，不验证真实腾讯云额度或设备录音。
 
 长录音识别使用 `PUBLIC_BASE_URL=https://自己的域名` 推导的 API 地址，或高级覆盖 `NOTE_ASR_PUBLIC_URL=https://自己的域名/omni-butler/api/v1`，该 HTTPS 地址必须能被腾讯访问。服务器签发绑定任务的短期私有原音链接；腾讯本地文件方式上限为 5MB，超过该大小且未配置公网地址时会明确提示。Nginx 的 API `location` 需设置 `client_max_body_size 128m;` 和 `proxy_read_timeout 120s;`，允许完整原音与迁移暂存上传。
 

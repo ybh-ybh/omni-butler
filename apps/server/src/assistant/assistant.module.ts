@@ -14,6 +14,9 @@ import { AssistantAttachmentsModule } from './attachments/assistant-attachments.
 import { BusinessModule } from '../business/business.module';
 import { AssistantEntityEditor } from './assistant-entity-editor.service';
 import { AssistantMessageNotes } from './assistant-message-notes.service';
+import { AssistantSpeechGateway } from './speech/assistant-speech.gateway';
+import { AssistantSpeechAuth } from './speech/assistant-speech-auth.service';
+import { TencentRealtimeSpeechProvider } from './speech/tencent-realtime-speech.provider';
 
 /// 助手私有状态与业务工具共享，不引入第二套领域CRUD。
 @Module({
@@ -28,6 +31,9 @@ import { AssistantMessageNotes } from './assistant-message-notes.service';
     AssistantContextService,
     AssistantBatchService,
     AssistantModelExecutor,
+    AssistantSpeechGateway,
+    AssistantSpeechAuth,
+    TencentRealtimeSpeechProvider,
   ],
   exports: [AssistantStore],
 })

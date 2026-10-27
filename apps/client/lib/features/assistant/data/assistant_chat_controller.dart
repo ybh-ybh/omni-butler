@@ -102,6 +102,12 @@ class AssistantChatController extends ChangeNotifier {
   /// 页面正在执行按钮操作。
   bool busy = false;
 
+  /// 语音输入期间冻结附件和其他发送入口，语音回写草稿仍允许。
+  bool composerLocked = false;
+
+  /// 切换聊天前完成语音取消与旧草稿落盘。
+  Future<void> Function()? beforeConversationChange;
+
   /// 发送专属状态，重命名、置顶等操作不会启动提交计时。
   bool _submitting = false;
 
@@ -169,7 +175,7 @@ class AssistantChatController extends ChangeNotifier {
       repository: repository,
       scope: scope,
       ensureConversation: _ensureAttachmentConversation,
-      frozen: () => pending != null || busy || offline,
+      frozen: () => pending != null || busy || offline || composerLocked,
       persist: _persist,
       changed: () {
         if (_disposed) return;
@@ -462,6 +468,9 @@ class AssistantChatController extends ChangeNotifier {
 
   /// 去掉编辑定位后保持用户已输入文字。
   void clearDraftReference() => setDraft(draft, clearReference: true);
+
+  /// 隐藏窗口或退出前等待最新草稿真正写入缓存。
+  Future<void> flushDraft() => _persist();
 
   /// 结束本页订阅，任务仍在后端运行。
   void _closeEvents() {
@@ -823,6 +832,8 @@ class AssistantChatController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    await beforeConversationChange?.call();
+    if (_disposed) return;
     _rememberHistory();
     _closeEvents();
     _viewGeneration++;
@@ -850,7 +861,8 @@ class AssistantChatController extends ChangeNotifier {
   Future<void> create() => _operate(() async {
     if (attachments.transferring) throw const ApiFailure('请等待附件上传完成');
     if (pending != null) throw const ApiFailure('请先核实上一条消息的提交结果');
-    if (conversationId == null) return;
+    await beforeConversationChange?.call();
+    if (_disposed || conversationId == null) return;
     _rememberHistory();
     _closeEvents();
     _viewGeneration++;
@@ -917,6 +929,8 @@ class AssistantChatController extends ChangeNotifier {
     if (pending?['conversationId'] == targetId) {
       throw const ApiFailure('请先核实此会话上一条消息的提交结果');
     }
+    if (conversationId == targetId) await beforeConversationChange?.call();
+    if (_disposed) return;
     await repository!.request(
       'DELETE',
       '/conversations/${Uri.encodeComponent(targetId)}',
@@ -952,6 +966,7 @@ class AssistantChatController extends ChangeNotifier {
 
   /// 明确提交一条消息；未知响应保留原请求身份供显式重试。
   Future<void> send({Map<String, dynamic>? selection}) => _operate(() async {
+    if (composerLocked) throw const ApiFailure('请先结束语音输入并等待转写完成');
     if (draft.trim().isEmpty && pending == null && !attachments.hasDrafts) {
       return;
     }

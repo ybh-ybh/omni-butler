@@ -1,6 +1,7 @@
 #include "windows_title_bar_controller.h"
 
 #include <flutter/standard_method_codec.h>
+#include <flutter/method_result_functions.h>
 #include <commctrl.h>
 #include <dwmapi.h>
 #include <windowsx.h>
@@ -21,6 +22,9 @@ constexpr DWORD kTextColor = 36;
 
 // 自绘最大化按钮在正常消息回合读取窗口状态，连续点击也按顺序切换。
 constexpr UINT kToggleMaximizeMessage = WM_APP + 0x321;
+
+// 语音停止并落盘后，回到原生消息循环继续最小化。
+constexpr UINT kVoiceMinimizeReadyMessage = WM_APP + 0x322;
 
 // 安全读取 Dart 标准编解码器的两种整数表示。
 bool ReadInteger(const flutter::EncodableMap& arguments, const char* key,
@@ -188,6 +192,7 @@ void WindowsTitleBarController::DetachWindow() {
   DetachContentWindow();
   custom_caption_ = false;
   original_style_ = 0;
+  minimize_pending_ = false;
 }
 
 // 精确颜色失败不回滚已经成功设置的原生明暗属性。
@@ -362,6 +367,39 @@ LRESULT CALLBACK WindowsTitleBarController::WindowSubclassProc(
     UINT_PTR subclass_id, DWORD_PTR reference) {
   // 安装钩子时保存的唯一控制器。
   auto* controller = reinterpret_cast<WindowsTitleBarController*>(reference);
+  if (message == kVoiceMinimizeReadyMessage && controller->window_ == window) {
+    controller->minimize_pending_ = false;
+    if (wparam != 0) {
+      return ::DefSubclassProc(window, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+    }
+    return 0;
+  }
+  if (message == WM_SYSCOMMAND && (wparam & 0xfff0) == SC_MINIMIZE &&
+      controller->window_ == window) {
+    if (controller->minimize_pending_) return 0;
+    controller->minimize_pending_ = true;
+    controller->channel_->InvokeMethod(
+        "beforeMinimize", nullptr,
+        std::make_unique<flutter::MethodResultFunctions<flutter::EncodableValue>>(
+            [window](const flutter::EncodableValue*) {
+              ::PostMessageW(window, kVoiceMinimizeReadyMessage, 1, 0);
+            },
+            [window](const std::string&, const std::string&,
+                     const flutter::EncodableValue*) {
+              ::PostMessageW(window, kVoiceMinimizeReadyMessage, 0, 0);
+            },
+            [window]() {
+              // 无 Dart 语音宿主时仍保留普通系统窗口操作。
+              ::PostMessageW(window, kVoiceMinimizeReadyMessage, 1, 0);
+            }));
+    return 0;
+  }
+  if (controller->window_ == window &&
+      ((message == WM_SHOWWINDOW && wparam == FALSE) ||
+       (message == WM_SIZE && wparam == SIZE_MINIMIZED))) {
+    // 覆盖系统直接隐藏窗口的路径，不能依赖其他浮窗仍可见时的应用状态。
+    controller->channel_->InvokeMethod("hidden", nullptr);
+  }
   if (message == kToggleMaximizeMessage && controller->window_ == window) {
     // 此时 Dart 按钮回调已退出，允许引擎在 WM_SIZE 内处理新尺寸帧。
     return ::DefSubclassProc(window, WM_SYSCOMMAND,

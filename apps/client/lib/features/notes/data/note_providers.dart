@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/foundation.dart';
 import 'package:omni_butler/core/auth/auth_providers.dart';
+import 'package:omni_butler/core/audio/microphone_coordinator.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 
 import 'note_image_acquisition.dart';
@@ -49,6 +50,7 @@ final noteRecorderProvider = Provider<NoteRecorderService>((ref) {
       .toString();
   final NoteRecorderService recorder = NoteRecorderService(
     player: ref.watch(noteAudioPlayerProvider),
+    microphoneCoordinator: ref.watch(microphoneCoordinatorProvider),
     directoryResolver: () async => Directory(
       p.join(
         (await getApplicationSupportDirectory()).path,

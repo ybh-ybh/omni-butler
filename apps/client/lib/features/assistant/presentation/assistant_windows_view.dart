@@ -42,6 +42,15 @@ class AssistantWindowsView extends ConsumerStatefulWidget {
   /// 保留原幂等发送入口。
   final Future<void> Function() onSend;
 
+  /// 录音与最终转写期间冻结输入相关操作。
+  final bool voiceBusy;
+
+  /// 当前语音状态或可检查错误。
+  final String? voiceStatus;
+
+  /// 原页面持有语音状态，桌面只提供模型提交门禁。
+  final Widget Function(bool enabled)? voiceButton;
+
   /// 按明确会话身份重命名。
   final Future<void> Function(String id) onRename;
 
@@ -57,6 +66,9 @@ class AssistantWindowsView extends ConsumerStatefulWidget {
     required this.onSend,
     required this.onRename,
     required this.onDelete,
+    this.voiceBusy = false,
+    this.voiceStatus,
+    this.voiceButton,
     super.key,
   });
 
@@ -127,6 +139,7 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
 
   /// 按钮和键盘共用相同发送门禁，未知结果只能恢复原请求。
   bool _canSend(AsyncValue<Map<String, dynamic>?> settings) =>
+      !widget.voiceBusy &&
       _enabled(settings) &&
       !widget.chat.busy &&
       !_savingModel &&
@@ -148,6 +161,7 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
 
   /// 只有输入框内无组合文字的普通 Enter 才发送。
   KeyEventResult _inputKey(FocusNode node, KeyEvent event) {
+    if (widget.voiceBusy) return KeyEventResult.ignored;
     if (event is KeyDownEvent &&
         node.hasFocus &&
         event.logicalKey == LogicalKeyboardKey.keyV &&
@@ -182,7 +196,7 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
 
   /// 只在输入区读取图片；无图片的 Ctrl+V 完全交给系统文字粘贴。
   Future<void> _pasteImage() async {
-    if (_pasting) return;
+    if (_pasting || widget.voiceBusy) return;
     _pasting = true;
     // 编码结果不能进入用户后来切换到的聊天。
     final int draftToken = widget.chat.attachments.draftToken;
@@ -315,6 +329,7 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
 
   /// 模型面板紧贴按钮上方，并仅展示设置中真实存在的配置。
   Future<void> _models(Map<String, dynamic>? settings) async {
+    if (widget.voiceBusy) return;
     if (_savingModel || settings == null || !widget.chat.connected) return;
     // 当前按钮与窗口的真实坐标，用于向上定位菜单。
     final RenderBox? button =
@@ -1104,11 +1119,13 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
         widget.chat.canContinue &&
         widget.input.text.trim().isEmpty;
     // 停止不依赖模型设置，开始与发送仍需当前设置明确可用。
-    final bool canAct = stopping
-        ? widget.chat.canStop
-        : continuing
-        ? _enabled(settings) && !_savingModel
-        : canSend;
+    final bool canAct =
+        !widget.voiceBusy &&
+        (stopping
+            ? widget.chat.canStop
+            : continuing
+            ? _enabled(settings) && !_savingModel
+            : canSend);
     // 同一位置保留不同语义和稳定定位键。
     final String action = stopping
         ? '停止'
@@ -1121,6 +1138,15 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
+        if (widget.voiceStatus != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
+            child: Text(
+              widget.voiceStatus!,
+              key: const ValueKey<String>('assistant-voice-status'),
+              style: TextStyle(color: colors.muted, fontSize: 13),
+            ),
+          ),
         Container(
           key: const ValueKey<String>('assistant-windows-composer'),
           constraints: const BoxConstraints(
@@ -1161,6 +1187,7 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                   maxLength: 20000,
                   textInputAction: TextInputAction.newline,
                   readOnly:
+                      widget.voiceBusy ||
                       widget.chat.busy ||
                       widget.chat.pending != null ||
                       _savingModel,
@@ -1193,7 +1220,9 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                       AssistantAttachmentButton(
                         attachments: widget.chat.attachments,
                         // 选择附件不依赖当前模型，设置刷新沿用已确认状态。
-                        enabled: _enabled(settings, allowSettingsRefresh: true),
+                        enabled:
+                            !widget.voiceBusy &&
+                            _enabled(settings, allowSettingsRefresh: true),
                       ),
                       const SizedBox(width: 8),
                     ],
@@ -1207,7 +1236,8 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                               'assistant-model-button',
                             ),
                             onPressed:
-                                widget.chat.connected &&
+                                !widget.voiceBusy &&
+                                    widget.chat.connected &&
                                     !widget.chat.busy &&
                                     !_savingModel &&
                                     !settings.isLoading &&
@@ -1267,6 +1297,10 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
                       ),
                     ),
                     const SizedBox(width: 10),
+                    if (widget.voiceButton != null) ...<Widget>[
+                      widget.voiceButton!(!_savingModel && _enabled(settings)),
+                      const SizedBox(width: OmniSpacing.xs),
+                    ],
                     SizedBox.square(
                       dimension: AssistantWindowsMetrics.sendSize,
                       child: Material(
@@ -1343,7 +1377,7 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
     // 本页面的中性表面。
     final AssistantWindowsPalette colors = AssistantWindowsPalette.of(context);
     // 当前业务卡片与输入门禁。
-    final bool enabled = _enabled(settings);
+    final bool enabled = _enabled(settings) && !widget.voiceBusy;
     return CallbackShortcuts(
       bindings: <ShortcutActivator, VoidCallback>{
         const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>

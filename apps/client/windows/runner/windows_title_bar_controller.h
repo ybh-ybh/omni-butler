@@ -88,6 +88,9 @@ class WindowsTitleBarController {
   // 当前是否由 Flutter 绘制标题栏，原生层只保留窗口交互。
   bool custom_caption_ = false;
 
+  // 最小化前等待 Dart 停止语音及落盘，合并重复系统命令。
+  bool minimize_pending_ = false;
+
   // 隐藏前的标题栏样式位；恢复时保留当下可见、最大化和最小化状态。
   LONG_PTR original_style_ = 0;
 

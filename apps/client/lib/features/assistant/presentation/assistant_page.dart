@@ -3,6 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:omni_butler/core/audio/microphone_coordinator.dart';
+import 'package:omni_butler/features/notes/data/note_providers.dart';
+import 'package:omni_butler/features/assistant/data/assistant_voice_controller.dart';
+import 'package:omni_butler/features/assistant/data/assistant_voice_preferences.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_voice_button.dart';
 import 'package:omni_butler/features/notes/presentation/note_markdown_text.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
@@ -75,7 +80,20 @@ class _AssistantChatBody extends ConsumerStatefulWidget {
 }
 
 /// 文字输入和服务器任务可分别恢复。
-class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
+class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
+    with WidgetsBindingObserver {
+  /// 两端共用的语音会话控制器。
+  late final AssistantVoiceController _voice;
+
+  /// 窗口隐藏和退出时等待语音停止与草稿落盘。
+  late final VoiceInputLifecycle _voiceLifecycle;
+
+  /// 子路由覆盖时也结束采集。
+  GoRouter? _router;
+
+  /// 页面销毁标记，异步回调不得再操作输入控件。
+  bool _leaving = false;
+
   /// 输入控制器。
   final TextEditingController _input = TextEditingController();
 
@@ -119,8 +137,167 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
       },
     );
     _chat.addListener(_changed);
+    _voice = AssistantVoiceController(
+      microphone: ref.read(microphoneCoordinatorProvider),
+      beforeAcquire: () =>
+          ref.read(noteRecorderProvider).ensureMicrophoneState(),
+      createRecorder: ref.read(assistantVoiceRecorderFactoryProvider),
+      connect: () async {
+        // 连接前固定完整API地址；认证仓储再次检查来源代次。
+        final SyncSession? session = ref.read(authControllerProvider).value;
+        if (session == null || widget.repository?.isCurrent != true) {
+          throw const ApiFailure('请先连接原服务器');
+        }
+        return ref.read(assistantSpeechConnectorProvider)(
+          widget.repository!,
+          session.apiBaseUrl,
+        );
+      },
+      onText: (TextEditingValue value) {
+        if (_leaving || !mounted) return;
+        _input.value = value;
+        _chat.setDraft(value.text);
+      },
+    );
+    _voice.addListener(_voiceChanged);
+    _chat.beforeConversationChange = _cancelVoiceAndFlush;
+    _voiceLifecycle = ref.read(voiceInputLifecycleProvider);
+    _voiceLifecycle.register(this, _cancelVoiceAndFlush);
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_chat.initialize());
   }
+
+  /// 监听实际路由，不依赖父页面是否销毁。
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 部件测试可不安装GoRouter，此时按当前页面处理。
+    final GoRouter? router = GoRouter.maybeOf(context);
+    if (identical(router, _router)) return;
+    _router?.routeInformationProvider.removeListener(_routeChanged);
+    _router = router;
+    _router?.routeInformationProvider.addListener(_routeChanged);
+  }
+
+  /// 页面及应用必须仍可见，权限弹框的inactive不直接取消。
+  bool get _voiceContextCurrent =>
+      mounted &&
+      !_leaving &&
+      widget.repository?.isCurrent == true &&
+      (_router == null ||
+          _router!.routeInformationProvider.value.uri.path == '/assistant') &&
+      (WidgetsBinding.instance.lifecycleState == null ||
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed ||
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.inactive);
+
+  /// 路由跳转同步作废语音，再异步等待收尾。
+  void _routeChanged() {
+    if (_voice.busy && !_voiceContextCurrent) {
+      unawaited(_cancelVoiceInBackground());
+    }
+  }
+
+  /// Android后台和系统隐藏均中止本次输入，不触发自动发送。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (<AppLifecycleState>{
+      AppLifecycleState.paused,
+      AppLifecycleState.hidden,
+      AppLifecycleState.detached,
+    }.contains(state)) {
+      unawaited(_cancelVoiceInBackground());
+    }
+  }
+
+  /// 共享控制器同时冻结附件及键盘发送。
+  void _voiceChanged() {
+    _chat.composerLocked = _voice.busy;
+    if (mounted && !_leaving) setState(() {});
+  }
+
+  /// 窗口退出及切换会话前保留已显示的最后一份草稿。
+  Future<void> _cancelVoiceAndFlush() async {
+    await _voice.cancel();
+    await _chat.flushDraft();
+  }
+
+  /// 系统后台事件无法等待返回值，缓存失败仍在当前页面明确提示。
+  Future<void> _cancelVoiceInBackground() async {
+    try {
+      await _cancelVoiceAndFlush();
+    } catch (_) {
+      if (!mounted || _leaving) return;
+      _chat.error = '语音已停止，但草稿未能保存到本机，请检查后复制文字';
+      setState(() {});
+    }
+  }
+
+  /// 录音入口与最终自动发送共同使用当前消息门禁。
+  bool get _canVoiceInput {
+    // 读取当前服务端设置，刷新期间不开始新会话。
+    final AsyncValue<Map<String, dynamic>?> settings = ref.read(
+      assistantSettingsProvider,
+    );
+    return _voiceContextCurrent &&
+        _chat.connected &&
+        !_chat.offline &&
+        !_chat.loading &&
+        !_chat.busy &&
+        _chat.pending == null &&
+        !_chat.processing &&
+        !settings.isLoading &&
+        !settings.hasError &&
+        settings.value?['enabled'] == true &&
+        !_chat.attachments.transferring &&
+        !_chat.attachments.adding &&
+        (!_chat.active || _chat.run?['requiresTakeover'] != true) &&
+        (!_chat.active ||
+            <String>{
+              'waitingInput',
+              'waitingConfirmation',
+            }.contains(_chat.run?['status']));
+  }
+
+  /// 一次点击开启，一次点击结束；准备期间不接受重复操作。
+  Future<void> _toggleVoice() async {
+    if (_voice.phase == AssistantVoicePhase.recording) {
+      await _voice.finish();
+      return;
+    }
+    if (_voice.busy || !_canVoiceInput) return;
+    // 语音结果永久绑定开始时的会话。
+    final String? conversation = _chat.conversationId;
+    // 先结束输入法组合，语音不能覆盖正在组词的范围。
+    _input.value = _input.value.copyWith(composing: TextRange.empty);
+    _focus.unfocus();
+    await _voice.start(
+      initial: _input.value,
+      autoSend: ref.read(assistantVoicePreferenceProvider),
+      isCurrent: () =>
+          _voiceContextCurrent && _chat.conversationId == conversation,
+      send: () async {
+        if (!_canVoiceInput ||
+            _voice.busy ||
+            _chat.conversationId != conversation ||
+            _input.text.length > 20000 ||
+            _chat.attachments.blockReason(
+                  ref.read(assistantSettingsProvider).value,
+                  includeVision: false,
+                ) !=
+                null) {
+          return;
+        }
+        await _send();
+      },
+    );
+  }
+
+  /// 两端一致的麦克风语义，桌面额外传入模型提交门禁。
+  Widget _voiceButton(bool enabled) => AssistantVoiceButton(
+    phase: _voice.phase,
+    enabled: enabled && _canVoiceInput,
+    onPressed: () => unawaited(_toggleVoice()),
+  );
 
   /// 只在接近末尾时跟随流式文字，不打断历史阅读。
   void _changed() {
@@ -147,6 +324,22 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
   /// 页面离开不停止后台任务，只结束事件订阅。
   @override
   void dispose() {
+    _leaving = true;
+    WidgetsBinding.instance.removeObserver(this);
+    _router?.routeInformationProvider.removeListener(_routeChanged);
+    _voice.removeListener(_voiceChanged);
+    // 页面已经离开时，宿主退出仍须等待原会话的停麦和草稿快照。
+    final Future<void> cleanup = Future.wait<void>(<Future<void>>[
+      _voice.cancel(),
+      _chat.flushDraft(),
+    ]);
+    _voiceLifecycle.register(this, () => cleanup);
+    unawaited(
+      cleanup
+          .whenComplete(() => _voiceLifecycle.unregister(this))
+          .catchError((Object _) {}),
+    );
+    _voice.dispose();
     _chat.removeListener(_changed);
     _chat.dispose();
     _input.dispose();
@@ -157,6 +350,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
 
   /// 发送后仅在服务器接收成功时清空输入。
   Future<void> _send() async {
+    if (_voice.busy) return;
     _chat.setDraft(_input.text);
     await _chat.send();
     if (!mounted) return;
@@ -337,6 +531,14 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
+        if (_voice.status != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
+            child: Text(
+              _voice.status!,
+              key: const ValueKey<String>('assistant-voice-status'),
+            ),
+          ),
         if (!_chat.hideComposerDraft)
           AssistantAttachmentDrafts(
             attachments: _chat.attachments,
@@ -364,7 +566,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                 OmniButton(
                   label: '取消定位',
                   variant: OmniButtonVariant.text,
-                  onPressed: _chat.clearDraftReference,
+                  onPressed: _voice.busy ? null : _chat.clearDraftReference,
                 ),
               ],
             ),
@@ -423,7 +625,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                 maxLines: 5,
                 maxLength: 20000,
                 enabled: enabled && !_chat.loading,
-                readOnly: _chat.busy || _chat.pending != null,
+                readOnly: _chat.busy || _chat.pending != null || _voice.busy,
                 onChanged: _chat.setDraft,
                 decoration: const InputDecoration(
                   hintText: '记录想法、查询数据，或整理这一周…',
@@ -432,6 +634,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
               ),
             ),
             const SizedBox(width: OmniSpacing.sm),
+            _voiceButton(enabled),
             Flexible(
               child: OmniButton(
                 key: ValueKey<String>(
@@ -454,7 +657,9 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                     ? Icons.play_arrow_rounded
                     : Icons.arrow_upward,
                 loading: _chat.busy && !_chat.processing,
-                onPressed: _chat.processing
+                onPressed: _voice.busy
+                    ? null
+                    : _chat.processing
                     ? (_chat.canStop ? _chat.stop : null)
                     : _chat.canContinue && _input.text.trim().isEmpty
                     ? (enabled ? _continueConversation : null)
@@ -485,7 +690,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
             alignment: Alignment.centerLeft,
             child: AssistantAttachmentButton(
               attachments: _chat.attachments,
-              enabled: enabled,
+              enabled: enabled && !_voice.busy,
             ),
           ),
         const SizedBox(height: OmniSpacing.xs),
@@ -501,6 +706,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
 
   /// 助手正文渲染 Markdown，用户消息沿用原有展示。
   Widget _message(Map<String, dynamic> message, bool enabled) {
+    enabled = enabled && !_voice.busy;
     // 用户消息与助手消息使用位置和留白区别。
     final bool user = message['role'] == 'user';
     // 业务保存与撤销始终使用本条持久回答身份。
@@ -696,6 +902,9 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
         inputFocus: _focus,
         scroll: _scroll,
         onSend: _send,
+        voiceBusy: _voice.busy,
+        voiceStatus: _voice.status,
+        voiceButton: _voiceButton,
         onDelete: (String id) => _deleteConversation(id: id),
         onRename: (String id) async {
           // 重命名固定用户选中的会话，而不是此刻打开的会话。
@@ -846,7 +1055,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                                             label: example,
                                             variant:
                                                 OmniButtonVariant.secondary,
-                                            onPressed: enabled
+                                            onPressed: enabled && !_voice.busy
                                                 ? () {
                                                     _input.text = example;
                                                     _chat.setDraft(example);
@@ -897,6 +1106,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody> {
                                   plan: _chat.plan!,
                                   enabled:
                                       enabled &&
+                                      !_voice.busy &&
                                       !_chat.busy &&
                                       !_chat.offline &&
                                       _chat.pending == null &&

@@ -174,8 +174,8 @@ class NoteRecordingService : Service() {
             val reason = if (error is SecurityException) "请允许麦克风权限后重试" else (error.message ?: "麦克风不可用或被占用")
             startResult?.error("RECORDING_START_FAILED", reason, null)
             startResult = null
-            emit(mapOf("type" to "failed", "reason" to reason))
             cleanup()
+            emit(metadata + mapOf("type" to "failed", "reason" to reason))
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -287,7 +287,7 @@ class NoteRecordingService : Service() {
                 cleanup()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 if (result != null) emit(result)
-                else emit(mapOf("type" to "state", "phase" to "idle"))
+                else emit(metadata + mapOf("type" to "state", "phase" to "idle"))
                 finishCallbacks.toList().forEach { it(result) }
                 finishCallbacks.clear()
                 stopSelf()
@@ -297,9 +297,13 @@ class NoteRecordingService : Service() {
 
     // 与 Dart UI 和录音通知共享的采样字节状态。
     fun publishState() {
-        emit(metadata + mapOf("type" to "state", "phase" to when { ending -> "stopping"; paused -> "paused"; running -> "recording"; else -> "idle" },
-            "durationMs" to audioBytes * 1000 / BYTES_PER_SECOND))
+        emit(stateSnapshot())
     }
+
+    // 同步返回采集真实状态，供 Dart 初始化互斥锁时读取。
+    fun stateSnapshot(): Map<String, Any?> = metadata + mapOf("type" to "state",
+        "phase" to when { ending -> "stopping"; paused -> "paused"; running -> "recording"; else -> "idle" },
+        "durationMs" to audioBytes * 1000 / BYTES_PER_SECOND)
 
     // 保持屏幕关闭时采样，暂停时释放，恢复时重新获取。
     private fun acquireWakeLock() {
@@ -416,12 +420,12 @@ class NoteRecordingService : Service() {
         running = false
         try { recorder?.stop() } catch (_: Exception) { }
         try { synchronized(ioLock) { updateHeader(); output?.fd?.sync() } } catch (_: Exception) { }
+        cleanup()
         if (unexpected) {
             if (audioBytes > 0) emit(metadata + mapOf("type" to "completed",
                 "durationMs" to audioBytes * 1000 / BYTES_PER_SECOND, "reason" to "系统停止了录音服务，已保存可用原音"))
-            else emit(mapOf("type" to "failed", "reason" to "系统停止了录音服务，请检查麦克风权限"))
+            else emit(metadata + mapOf("type" to "failed", "reason" to "系统停止了录音服务，请检查麦克风权限"))
         }
-        cleanup()
         super.onDestroy()
     }
 }

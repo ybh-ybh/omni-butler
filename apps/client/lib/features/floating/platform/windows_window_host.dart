@@ -31,6 +31,7 @@ import 'package:omni_butler/features/floating/presentation/windows_title_bar.dar
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_cleanup_coordinator.dart';
 import 'package:omni_butler/core/sync/sync_maintenance_boundary.dart';
+import 'package:omni_butler/core/audio/microphone_coordinator.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 import 'package:win32/win32.dart' as win32;
 
@@ -233,6 +234,9 @@ class _WindowsWindowCoordinatorState
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _titleBarService.observeVoiceLifecycle(
+      () => ref.read(voiceInputLifecycleProvider).cancelAll(),
+    );
     widget.mainWindowDelegate.onCloseRequested = _handleMainCloseRequested;
     widget.mainWindowDelegate.onDestroyed = _handleMainWindowDestroyed;
     _trayService.onOpen = _showMainWindow;
@@ -250,6 +254,7 @@ class _WindowsWindowCoordinatorState
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _titleBarService.stopObservingVoiceLifecycle();
     screenRetriever.removeListener(this);
     widget.mainWindowDelegate.onCloseRequested = null;
     widget.mainWindowDelegate.onDestroyed = null;
@@ -842,7 +847,7 @@ class _WindowsWindowCoordinatorState
       _queueOperation(() async {
         await _ensureTray(true);
         if (mounted) {
-          _hideMainWindow();
+          await _hideMainWindow();
         }
       });
       return;
@@ -851,7 +856,9 @@ class _WindowsWindowCoordinatorState
   }
 
   /// 隐藏主窗口到托盘。
-  void _hideMainWindow() {
+  Future<void> _hideMainWindow() async {
+    await ref.read(voiceInputLifecycleProvider).cancelAll();
+    if (!mounted || _isExiting) return;
     _mainWindowHidden = true;
     _WindowsWindowVisibility.hide(widget.mainWindowController);
   }
@@ -943,13 +950,14 @@ class _WindowsWindowCoordinatorState
     _isExiting = true;
     // 先结束采集并确认原件落库，不能销毁窗口后才异步保存。
     try {
+      await ref.read(voiceInputLifecycleProvider).cancelAll();
       await ref.read(noteEditorProvider).shutdown();
     } catch (failure) {
       // 保存失败保留窗口和输入，恢复退出入口供用户重试。
       _isExiting = false;
       if (mounted) {
         ScaffoldMessenger.maybeOf(context)
-            ?.showSnackBar(SnackBar(content: Text('退出前保存笔记失败：$failure')));
+            ?.showSnackBar(SnackBar(content: Text('退出前保存内容失败：$failure')));
       }
       return;
     }
