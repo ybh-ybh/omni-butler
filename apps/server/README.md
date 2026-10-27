@@ -85,7 +85,8 @@ API Key 只在后端以 AES-256-GCM 加密保存。首次保存模型 Key 时，
 笔记使用 `note_entries`、`note_versions`、`note_audio_segments`、`note_images` 同步表，正文并发版本保留候选，原始录音通过独立的私有文件接口传输，生产原音及迁移暂存统一保存到 MinIO 私有桶 `omni-butler-note-audio`，图片开关不影响音频。语音厂商密钥只在后端，腾讯文件识别适配器与领域任务解耦。提交响应丢失时保留 `submissionUnknown`，绝不自动重复提交计费任务；只有查询已知任务允许自动网络重试。完整迁移必须先暂存真实原音，再在快照 v3 同一事务验证并接管；回收站绑定正文、原音和结果一起保留、恢复及永久清理。接口、环境变量、备份与故障语义见[笔记原音说明](src/notes/README.md)。
 
 - `npm test`：单元测试，未配置隔离数据库时集成套件跳过。
-- `npm run test:integration`：先将 `OMNI_TEST_DATABASE_URL` 指向独立空库（库名以 `_test` 或 `_integration` 结尾），执行真实 PostgreSQL 回归；测试会创建并清理该库的测试表。
+- 服务端 CI 运行 `npm test`；未配置隔离数据库和对象存储时，相应集成测试会跳过。
+- `npm run test:integration`：先将 `OMNI_TEST_DATABASE_URL` 指向独立空库（库名以 `_test` 或 `_integration` 结尾），执行 `sync.integration.spec.ts` 的真实 PostgreSQL 回归；测试会创建并清理该库的测试表，其他集成套件需按各自的专用环境变量运行。
 - Flutter 真实双设备测试见 `apps/client/test/powersync_server_e2e_test.dart`。
 
 完整 Docker 部署步骤见[部署说明](../../deploy/README.md)；同步边界、冲突语义和验证方式见 [同步设计说明](docs/sync-design.md)。服务器启用 `IMAGE_SYNC_ENABLED=true` 后，物品、会员及笔记图片通过共用的认证图片 API 同步到私有 MinIO；首页横幅仍只保存在客户端本机。Compose 中 MinIO 常驻，图片开关不影响笔记原音或独立的助手附件能力。

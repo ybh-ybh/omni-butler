@@ -52,7 +52,7 @@ flutter run -d windows --no-pub
 flutter build windows --release --no-pub
 ```
 
-需要真实同步链路的测试依赖 PostgreSQL、NestJS 与 PowerSync 服务，配置见[部署指南](../../deploy/README.md)。项目概览见[仓库说明](../../README.md)，架构设计见[系统架构设计](../../spec/系统架构设计.md)。
+CI 在 Windows 上串行运行客户端测试；需要显式开启的隔离数据库或同步服务测试默认跳过。真实同步链路依赖 PostgreSQL、NestJS 与 PowerSync 服务，配置见[部署指南](../../deploy/README.md)。项目概览见[仓库说明](../../README.md)，架构设计见[系统架构设计](../../spec/系统架构设计.md)。
 
 ## 界面规范与组件预览
 

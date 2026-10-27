@@ -45,3 +45,21 @@ jobs:
           test/ui_catalog_test.dart
           test/ui_style_guard_test.dart
           test/ui_responsive_smoke_test.dart
+
+  client-tests:
+    name: Client tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.2'
+          cache: true
+      - name: Resolve client packages
+        working-directory: apps/client
+        run: flutter pub get --enforce-lockfile
+      - name: Run client tests
+        working-directory: apps/client
+        run: flutter test --no-pub --concurrency=1
