@@ -19,6 +19,13 @@ void main() {
   test('一次性清理已授权的本机测试笔记（默认dryrun）', () async {
     // 显式opt-in后才允许创建备份并清理。
     const bool execute = bool.fromEnvironment('NOTE_TEST_CLEANUP_EXECUTE');
+    // Resume only the explicitly selected post-commit backup operation.
+    const String resumePath = String.fromEnvironment(
+      'NOTE_TEST_CLEANUP_RESUME',
+    );
+    if (resumePath.isNotEmpty && !execute) {
+      throw StateError('续跑必须显式提供NOTE_TEST_CLEANUP_EXECUTE=true');
+    }
     // Documents默认为系统KnownFolder，可显式覆盖以选定运行用户。
     const String documentsOverride = String.fromEnvironment(
       'NOTE_TEST_CLEANUP_DOCUMENTS',
@@ -96,6 +103,7 @@ void main() {
           p.join(documents.path, 'note-test-cleanup-backups'),
         ),
         execute: execute,
+        resumeFrom: resumePath.isEmpty ? null : Directory(resumePath),
       );
       stdout.writeln(jsonEncode(result.toJson()));
     } finally {

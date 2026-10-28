@@ -7,6 +7,7 @@ export 'note_record_time.dart';
 import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 import 'package:omni_butler/core/database/app_database.dart';
+import 'package:omni_butler/features/notes/audio/note_file_paths.dart';
 import 'package:omni_butler/features/notes/data/note_image_repository.dart';
 import 'package:uuid/uuid.dart';
 
@@ -962,39 +963,87 @@ class NoteRepository {
     };
   });
 
-  /// 在已提交数据库状态下清理永久删除的文件，失败保留记录以便重试。
-  Future<void> purgeOrphanFiles() => database.transaction(() async {
-    await NoteImageRepository(database).purgeOrphans();
+  /// Clean committed orphan files while preserving all protected identities.
+  Future<void> purgeOrphanFiles({
+    Set<String> additionalProtectedPaths = const {},
+    Set<String>? localFileIds,
+  }) => database.transaction(() async {
     // 引用快照、文件删除与本机行清理持有同一写事务，新增草稿不能夹在检查之间。
     // 本机草稿原件与正式文件共享保护集合，取消不会删掉已另存的引用。
-    final Set<String> protectedPaths = await protectedAudioPaths();
-    // 本机已管理的原音缓存。
+    // Read the local records before determining targeted cleanup protection.
     final List<NoteAudioLocalFileRecord> local = await database
         .select(database.noteAudioLocalFiles)
         .get();
+    // Collect all references before resolving any physical identity.
+    final Set<String> protectedReferences = {
+      ...await protectedAudioPaths(),
+      ...additionalProtectedPaths,
+    };
+    if (localFileIds != null) {
+      // Unselected audio rows must retain any shared physical original.
+      protectedReferences.addAll(
+        local
+            .where((item) => !localFileIds.contains(item.id))
+            .map((item) => item.localPath)
+            .whereType<String>(),
+      );
+      // Targeted cleanup must also preserve all draft audio originals.
+      protectedReferences.addAll(
+        (await database.select(database.noteDraftAudioSegments).get())
+            .map((item) => item.localPath)
+            .whereType<String>(),
+      );
+      // Image drafts and attachment caches are outside this cleanup scope.
+      protectedReferences.addAll(
+        (await database.select(database.noteDraftImages).get())
+            .map((item) => item.localPath)
+            .whereType<String>(),
+      );
+      protectedReferences.addAll(
+        (await database.select(database.attachments).get())
+            .map((item) => item.localPath)
+            .whereType<String>(),
+      );
+    }
+    // Resolve every protected path before deleting any files.
+    final Set<String> protectedPaths = await NoteFilePaths.identities(
+      protectedReferences,
+    );
+    if (localFileIds == null) {
+      await NoteImageRepository(database).purgeOrphans();
+    }
     // 当前仍受业务引用保护的原音段。
     final Set<String> referenced =
         (await database.select(database.noteAudioSegments).get())
             .map((item) => item.id)
             .toSet();
     for (final NoteAudioLocalFileRecord item in local) {
+      if (localFileIds != null && !localFileIds.contains(item.id)) continue;
       if (referenced.contains(item.id)) continue;
-      if (item.localPath != null &&
-          !protectedPaths.contains(item.localPath) &&
-          !local.any(
-            (other) =>
-                other.id != item.id &&
-                referenced.contains(other.id) &&
-                other.localPath == item.localPath,
-          )) {
-        // 文件可能因系统或用户清理已不存在。
-        final File file = File(item.localPath!);
-        if (await file.exists()) await file.delete();
+      if (item.localPath != null) {
+        // Keep unresolved candidates for a later retry.
+        final String path;
+        try {
+          path = await NoteFilePaths.file(item.localPath!, allowMissing: true);
+        } on FileSystemException {
+          continue;
+        } on FormatException {
+          continue;
+        } on ArgumentError {
+          continue;
+        }
+        if (!protectedPaths.contains(path)) {
+          // Missing files are already clean.
+          final File file = File(path);
+          if (await file.exists()) await file.delete();
+        }
       }
       await (database.delete(
         database.noteAudioLocalFiles,
       )..where((table) => table.id.equals(item.id))).go();
     }
+    // Scoped maintenance must not mutate unrelated draft or image rows.
+    if (localFileIds != null) return;
     // 已取消或明确永久删除的草稿原件在事务提交后重试清理。
     final Set<String> activeDrafts =
         (await (database.select(
@@ -1008,10 +1057,23 @@ class NoteRepository {
         .get();
     for (final NoteDraftAudioSegmentRecord item in staged) {
       if (activeDrafts.contains(item.draftId)) continue;
-      if (item.localPath != null && !protectedPaths.contains(item.localPath)) {
-        // 路径来自当前受管理数据源的本机录音或已验证迁移副本。
-        final File file = File(item.localPath!);
-        if (await file.exists()) await file.delete();
+      if (item.localPath != null) {
+        // Keep unresolved candidates for a later retry.
+        final String path;
+        try {
+          path = await NoteFilePaths.file(item.localPath!, allowMissing: true);
+        } on FileSystemException {
+          continue;
+        } on FormatException {
+          continue;
+        } on ArgumentError {
+          continue;
+        }
+        if (!protectedPaths.contains(path)) {
+          // Missing files are already clean.
+          final File file = File(path);
+          if (await file.exists()) await file.delete();
+        }
       }
       await (database.delete(
         database.noteDraftAudioSegments,

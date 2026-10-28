@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:flutter/services.dart';
 import 'package:omni_butler/core/audio/microphone_coordinator.dart';
+import 'package:omni_butler/features/notes/audio/note_file_paths.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -679,6 +680,13 @@ class NoteRecorderService {
     await initialize();
     // 当前目录的未确认清单。
     final directory = await _directoryResolver();
+    // Unknown marker protection disables deletion while allowing safe recovery.
+    Set<String>? allProtected;
+    try {
+      allProtected = await _allMarkerProtectedPaths(directory);
+    } on FileSystemException {
+      allProtected = null;
+    }
     // 返回顺序按开始时间排列，调用方决定恢复到原笔记或另存。
     final results = <NoteRecordingResult>[];
     await for (final entry in directory.list(followLinks: false)) {
@@ -693,33 +701,63 @@ class NoteRecorderService {
         final String? draftId = session['draftId'] as String?;
         // 草稿取消只保护对应代次，不禁止同篇笔记以后再次录音。
         final String deletedOwner =
-            await _deletionMarker(
-              directory,
-              'recording:${session['id']}',
-            ).exists()
+            await _markerExists(
+              _deletionMarker(directory, 'recording:${session['id']}'),
+            )
             ? 'recording:${session['id']}'
             : draftId != null &&
-                  await _deletionMarker(directory, 'draft:$draftId').exists()
+                  await _markerExists(
+                    _deletionMarker(directory, 'draft:$draftId'),
+                  )
             ? 'draft:$draftId'
             : noteId;
         // 正式删除和本机取消共用可靠的清单清理。
         final File marker = _deletionMarker(directory, deletedOwner);
-        if (await marker.exists()) {
+        if (await _markerExists(marker)) {
           // 标记损坏时保守保留文件，但仍禁止恢复该笔记。
           final Set<String>? protected = await _readProtectedPaths(
             marker,
             deletedOwner,
           );
-          if (protected != null) {
-            await _discardManifest(entry, session, directory, protected);
+          if (protected != null && allProtected != null) {
+            // Pending manifests belonging to others also protect their originals.
+            final Set<String> pendingPaths = await _pendingProtectedPaths(
+              directory,
+              excluded: {entry.path},
+            );
+            // Compare the current original to every remaining pending identity.
+            final String? currentPath = await _ownedAudioPath(
+              directory,
+              session['path'],
+            );
+            if (currentPath == null) continue;
+            // Keep an independent set for this manifest's deletion decision.
+            final Set<String> effectiveProtected = NoteFilePaths.identitySet(
+              allProtected,
+            );
+            // Persist shared protection before removing the current manifest.
+            for (final String rawPath in pendingPaths) {
+              if (p.equals(
+                await NoteFilePaths.file(rawPath, allowMissing: true),
+                currentPath,
+              )) {
+                await _retainMarkerProtection(marker, directory, rawPath);
+                effectiveProtected.add(currentPath);
+                allProtected.add(currentPath);
+              }
+            }
+            await _discardManifest(
+              entry,
+              session,
+              directory,
+              effectiveProtected,
+            );
           }
           continue;
         }
         // 校验原件路径防止损坏清单写入其他文件。
-        final path = session['path'] as String;
-        if (p.dirname(p.normalize(path)) != p.normalize(directory.path)) {
-          continue;
-        }
+        final String? path = await _ownedAudioPath(directory, session['path']);
+        if (path == null) continue;
         // 修复中断时尚未更新的 WAV 长度字段。
         final duration = await NoteWav.repair(File(path));
         if (duration == null) continue;
@@ -728,7 +766,7 @@ class NoteRecorderService {
             id: session['id'] as String,
             noteId: session['noteId'] as String,
             draftId: draftId,
-            path: path,
+            path: session['path'] as String,
             duration: duration,
             startedAt: DateTime.parse(session['startedAt'] as String),
             creationTimezone:
@@ -744,7 +782,9 @@ class NoteRecorderService {
         continue;
       }
     }
-    await _retryDeletionMarkers(directory);
+    if (allProtected != null) {
+      await _retryDeletionMarkers(directory, allProtected);
+    }
     results.sort((a, b) => a.startedAt.compareTo(b.startedAt));
     return results;
   });
@@ -759,18 +799,38 @@ class NoteRecorderService {
     if (noteId.trim().isEmpty) throw ArgumentError('笔记标识不能为空');
     // 当前数据源私有目录，不初始化任何音频设备或事件通道。
     final Directory directory = await _directoryResolver();
+    // Check the eventual directory identity before creating any missing part.
+    final String expectedDirectory = await NoteFilePaths.prospectiveDirectory(
+      directory,
+    );
     await directory.create(recursive: true);
+    // Reject final links and changes in the resolved directory identity.
+    final String actualDirectory = await NoteFilePaths.directory(directory);
+    if (!p.equals(expectedDirectory, actualDirectory)) {
+      throw const FileSystemException('录音目录身份发生变化');
+    }
     // UUID派生名称不使用用户文本作为文件路径。
     final File marker = _deletionMarker(directory, noteId);
-    // 保留此前明确保护的另存引用，重启清理不能丢掉保护关系。
-    final Set<String> protected = {
-      ...?await _readProtectedPaths(marker, noteId),
-      ...protectedPaths.map(p.normalize),
-    };
+    // Detect an existing marker before merging its protection set.
+    final bool markerExists = await _markerExists(marker);
+    // Preserve an unreadable marker instead of replacing its protection set.
+    final Set<String>? savedProtected = await _readProtectedPaths(
+      marker,
+      noteId,
+    );
+    // Preserve the retry list from the same existing marker.
+    final Set<String>? savedPending = await _readDeletionPaths(
+      marker,
+      noteId,
+      'pendingPaths',
+    );
+    if (markerExists && (savedProtected == null || savedPending == null)) {
+      throw const FileSystemException('无法读取录音删除标记');
+    }
+    // Keep the stored spelling while comparing resolved file identities.
+    final Set<String> protected = {...?savedProtected, ...protectedPaths};
     // 删除清单前保存原件路径，原件删除失败后重启仍能继续清理。
-    final Set<String> pendingPaths = {
-      ...?await _readDeletionPaths(marker, noteId, 'pendingPaths'),
-    };
+    final Set<String> pendingPaths = {...?savedPending};
     // 先只读收集安全清单，不在删除事实落盘前做任何删除。
     final List<(File, Map<String, dynamic>)> candidates = [];
     await for (final FileSystemEntity entry in directory.list(
@@ -789,9 +849,9 @@ class NoteRecorderService {
           continue;
         }
         // 只有当前source同目录的绝对路径才进入删除标记。
-        final String? path = _ownedAudioPath(directory, session['path']);
+        final String? path = await _ownedAudioPath(directory, session['path']);
         if (path == null) continue;
-        pendingPaths.add(path);
+        pendingPaths.add(session['path'] as String);
         candidates.add((entry, session));
       } on FileSystemException {
         continue;
@@ -801,8 +861,37 @@ class NoteRecorderService {
         continue;
       }
     }
+    // Other pending recordings must remain recoverable after this deletion.
+    final Set<String> otherPending = await _pendingProtectedPaths(
+      directory,
+      excluded: candidates.map((candidate) => candidate.$1.path).toSet(),
+    );
+    // Persist shared references so later acknowledgment cannot expose them.
+    final Set<String> candidateIdentities = await NoteFilePaths.identities(
+      pendingPaths,
+    );
+    for (final String rawPath in otherPending) {
+      if (candidateIdentities.contains(
+        await NoteFilePaths.file(rawPath, allowMissing: true),
+      )) {
+        protected.add(rawPath);
+      }
+    }
+    // Fail before writing or deleting if a protection identity is unknown.
+    final Set<String> protectedIdentities = await NoteFilePaths.identities(
+      protected,
+    );
+    // Every existing marker can protect a shared original from this cleanup.
+    protectedIdentities.addAll(await _allMarkerProtectedPaths(directory));
     // 完整标记先flush再rename，清理失败仍有持久删除事实。
     final File temporary = File('${marker.path}.tmp');
+    // Reject a link or another non-file at the temporary marker path.
+    await NoteFilePaths.ownedFile(
+      temporary.path,
+      [directory],
+      directChild: true,
+      allowMissing: true,
+    );
     await temporary.writeAsString(
       jsonEncode({
         'noteId': noteId,
@@ -820,11 +909,21 @@ class NoteRecorderService {
           candidate.$1,
           candidate.$2,
           directory,
-          protected,
+          protectedIdentities,
         );
       } on FileSystemException catch (error) {
         failure ??= error;
       }
+    }
+    // Retry only this marker's previously saved originals after manifest cleanup.
+    try {
+      await _retryPendingPaths(
+        directory,
+        savedPending ?? const {},
+        protectedIdentities,
+      );
+    } on FileSystemException catch (error) {
+      failure ??= error;
     }
     if (failure != null) throw failure;
   });
@@ -852,7 +951,14 @@ class NoteRecorderService {
   /// 完成流与恢复流共用永久删除门禁，只访问当前数据源磁盘标记。
   Future<bool> isPermanentlyDiscarded(String noteId) async {
     if (noteId.trim().isEmpty) return false;
-    return _deletionMarker(await _directoryResolver(), noteId).exists();
+    return _markerExists(_deletionMarker(await _directoryResolver(), noteId));
+  }
+
+  /// Resolve the recorder directory without creating it or starting devices.
+  Future<String> recordingDirectoryIdentity() async {
+    // Resolve the configured directory through its existing ancestor.
+    final Directory directory = await _directoryResolver();
+    return NoteFilePaths.prospectiveDirectory(directory);
   }
 
   /// 生成稳定安全的删除标记名称，不包含笔记ID原文。
@@ -862,6 +968,11 @@ class NoteRecorderService {
       '${const Uuid().v5(Namespace.url.value, 'notes-deleted:$noteId')}.deleted.json',
     ),
   );
+
+  /// Treat any final marker entry as a deletion fact, including broken links.
+  Future<bool> _markerExists(File marker) async =>
+      await FileSystemEntity.type(marker.path, followLinks: false) !=
+      FileSystemEntityType.notFound;
 
   /// 读取持久保护关系，坏标记不自动推断可删原件。
   Future<Set<String>?> _readProtectedPaths(File marker, String noteId) =>
@@ -874,16 +985,15 @@ class NoteRecorderService {
     String field,
   ) async {
     try {
-      if (!await marker.exists()) return null;
+      if (!await _markerExists(marker)) return null;
+      // Read only ordinary files and never follow a final marker link.
+      await NoteFilePaths.file(marker.path);
       // 标记身份必须与派生路径对应。
       final Map<String, dynamic> value =
           jsonDecode(await marker.readAsString()) as Map<String, dynamic>;
       if (value['noteId'] != noteId) return null;
       if (value['protectedPaths'] is! List) return null;
-      return (value[field] as List? ?? const [])
-          .cast<String>()
-          .map(p.normalize)
-          .toSet();
+      return (value[field] as List? ?? const []).cast<String>().toSet();
     } on FileSystemException {
       return null;
     } on FormatException {
@@ -893,8 +1003,129 @@ class NoteRecorderService {
     }
   }
 
+  /// Resolve every remaining pending manifest or refuse deletion safely.
+  Future<Set<String>> _pendingProtectedPaths(
+    Directory directory, {
+    Set<String> excluded = const {},
+  }) async {
+    // Preserve original spellings for durable marker protection.
+    final Set<String> paths = <String>{};
+    await for (final FileSystemEntity entry in directory.list(
+      followLinks: false,
+    )) {
+      if (!entry.path.endsWith('.pending.json')) continue;
+      if (excluded.any((path) => p.equals(path, entry.path))) continue;
+      if (entry is! File) {
+        throw const FileSystemException('无法读取待恢复录音清单');
+      }
+      try {
+        // The manifest itself must be an ordinary file in the owned directory.
+        await NoteFilePaths.ownedFile(entry.path, [
+          directory,
+        ], directChild: true);
+        // Every remaining manifest must identify a valid owned original.
+        final Map<String, dynamic> session =
+            jsonDecode(await entry.readAsString()) as Map<String, dynamic>;
+        if (session['id'] is! String ||
+            session['noteId'] is! String ||
+            (session['draftId'] != null && session['draftId'] is! String) ||
+            session['path'] is! String) {
+          throw const FileSystemException('无法读取待恢复录音清单');
+        }
+        // The raw spelling remains unchanged after ownership validation.
+        final String path = session['path'] as String;
+        await NoteFilePaths.ownedFile(
+          path,
+          [directory],
+          directChild: true,
+          allowMissing: true,
+        );
+        paths.add(path);
+      } on FileSystemException {
+        rethrow;
+      } on FormatException {
+        throw const FileSystemException('无法读取待恢复录音清单');
+      } on TypeError {
+        throw const FileSystemException('无法读取待恢复录音清单');
+      }
+    }
+    return paths;
+  }
+
+  /// Persist a shared pending original before removing its old manifest.
+  Future<void> _retainMarkerProtection(
+    File marker,
+    Directory directory,
+    String rawPath,
+  ) async {
+    // Read only the validated marker and retain all existing fields.
+    await NoteFilePaths.ownedFile(marker.path, [directory], directChild: true);
+    // Preserve the historical marker format and any additional fields.
+    final Map<String, dynamic> value =
+        jsonDecode(await marker.readAsString()) as Map<String, dynamic>;
+    // The existing protection list is never replaced by an inferred empty set.
+    final List<String> protected = (value['protectedPaths'] as List)
+        .cast<String>();
+    if (protected.contains(rawPath)) return;
+    value['protectedPaths'] = [...protected, rawPath]..sort();
+    // Only a missing or ordinary temporary marker is safe to overwrite.
+    final File temporary = File('${marker.path}.tmp');
+    await NoteFilePaths.ownedFile(
+      temporary.path,
+      [directory],
+      directChild: true,
+      allowMissing: true,
+    );
+    await temporary.writeAsString(jsonEncode(value), flush: true);
+    await temporary.rename(marker.path);
+  }
+
+  /// Collect all marker protections before deleting any shared original.
+  Future<Set<String>> _allMarkerProtectedPaths(Directory directory) async {
+    // Preserve platform-aware path equality across all markers.
+    final Set<String> protected = NoteFilePaths.identitySet();
+    await for (final FileSystemEntity entry in directory.list(
+      followLinks: false,
+    )) {
+      if (!entry.path.endsWith('.deleted.json')) continue;
+      if (entry is! File) {
+        throw const FileSystemException('无法读取录音删除标记');
+      }
+      try {
+        // Reject links and verify that the marker belongs to this directory.
+        await NoteFilePaths.ownedFile(entry.path, [
+          directory,
+        ], directChild: true);
+        // A marker must match its deterministic owner-derived filename.
+        final Map<String, dynamic> value =
+            jsonDecode(await entry.readAsString()) as Map<String, dynamic>;
+        // The saved owner selects both the filename and protection field.
+        final String noteId = value['noteId'] as String;
+        if (!p.equals(entry.path, _deletionMarker(directory, noteId).path)) {
+          throw const FileSystemException('录音删除标记身份不匹配');
+        }
+        // A corrupt protection list cannot safely be interpreted as empty.
+        final Set<String>? paths = await _readProtectedPaths(entry, noteId);
+        if (paths == null) {
+          throw const FileSystemException('无法读取录音删除保护路径');
+        }
+        protected.addAll(await NoteFilePaths.identities(paths));
+      } on FileSystemException {
+        rethrow;
+      } on FormatException {
+        throw const FileSystemException('无法读取录音删除标记');
+      } on TypeError {
+        throw const FileSystemException('无法读取录音删除标记');
+      }
+    }
+    return protected;
+  }
+
   /// 清单已删除但原件清理失败时，重启按持久标记再次尝试。
-  Future<void> _retryDeletionMarkers(Directory directory) async {
+  Future<void> _retryDeletionMarkers(
+    Directory directory,
+    Set<String> allProtected,
+  ) async {
     await for (final FileSystemEntity entry in directory.list(
       followLinks: false,
     )) {
@@ -915,24 +1146,7 @@ class NoteRecorderService {
           'pendingPaths',
         );
         if (protected == null || pending == null) continue;
-        for (final String rawPath in pending) {
-          // 逐项验证最终删除路径仍直接处于当前source目录。
-          final String? path = _ownedAudioPath(directory, rawPath);
-          if (path == null || protected.any((saved) => p.equals(saved, path))) {
-            continue;
-          }
-          if (state.isActive &&
-              _session?['path'] is String &&
-              p.equals(_session!['path'] as String, path)) {
-            continue;
-          }
-          // 未能删除的清单先保留，避免违反先清单后原件规则。
-          if (await File(p.setExtension(path, '.pending.json')).exists()) {
-            continue;
-          }
-          final File audio = File(path);
-          if (await audio.exists()) await audio.delete();
-        }
+        await _retryPendingPaths(directory, pending, allProtected);
       } on FileSystemException {
         continue;
       } on FormatException {
@@ -943,12 +1157,70 @@ class NoteRecorderService {
     }
   }
 
-  /// 限定原件绝对路径为当前source直接子文件。
-  String? _ownedAudioPath(Directory directory, dynamic rawPath) {
+  /// Retry one marker's residual originals without losing its durable state.
+  Future<void> _retryPendingPaths(
+    Directory directory,
+    Set<String> pending,
+    Set<String> allProtected,
+  ) async {
+    // Any surviving pending manifest is a protection reference for this retry.
+    final Set<String> pendingProtected = NoteFilePaths.identitySet(
+      allProtected,
+    );
+    pendingProtected.addAll(
+      await NoteFilePaths.identities(await _pendingProtectedPaths(directory)),
+    );
+    // Preserve the first failure while attempting independent residual files.
+    FileSystemException? failure;
+    for (final String rawPath in pending) {
+      try {
+        // Revalidate each saved path before comparing or deleting its identity.
+        final String path = await NoteFilePaths.ownedFile(
+          rawPath,
+          [directory],
+          directChild: true,
+          allowMissing: true,
+        );
+        if (pendingProtected.contains(path)) continue;
+        if (state.isActive) {
+          // An unknown active identity cannot be considered safe to delete.
+          final String? activePath = await _ownedAudioPath(
+            directory,
+            _session?['path'],
+          );
+          if (activePath == null || p.equals(activePath, path)) continue;
+        }
+        // A surviving manifest must be removed before its original.
+        if (await File(p.setExtension(path, '.pending.json')).exists()) {
+          continue;
+        }
+        // A missing original is an already-completed retry.
+        final File audio = File(path);
+        if (await audio.exists()) await audio.delete();
+      } on FileSystemException catch (error) {
+        failure ??= error;
+      }
+    }
+    if (failure != null) throw failure;
+  }
+
+  /// Resolve only direct children of the current recording directory.
+  Future<String?> _ownedAudioPath(Directory directory, dynamic rawPath) async {
     if (rawPath is! String || !p.isAbsolute(rawPath)) return null;
-    // 删除操作使用此处核查后的规范绝对路径。
-    final String path = p.normalize(rawPath);
-    return p.equals(p.dirname(path), p.normalize(directory.path)) ? path : null;
+    try {
+      return await NoteFilePaths.ownedFile(
+        rawPath,
+        [directory],
+        directChild: true,
+        allowMissing: true,
+      );
+    } on FileSystemException {
+      return null;
+    } on FormatException {
+      return null;
+    } on ArgumentError {
+      return null;
+    }
   }
 
   /// 先删除清单再删同目录原件，另存引用和活动录音保留。
@@ -960,13 +1232,19 @@ class NoteRecorderService {
   ) async {
     if (state.isActive && session['id'] == state.recordingId) return;
     // 必须是绝对路径且直接位于当前私有目录，禁止相邻目录与路径穿越。
-    final String? path = _ownedAudioPath(directory, session['path']);
+    final String? path = await _ownedAudioPath(directory, session['path']);
     if (path == null) return;
+    if (state.isActive) {
+      // Protect the active original even if a stale manifest uses another ID.
+      final String? activePath = await _ownedAudioPath(
+        directory,
+        _session?['path'],
+      );
+      if (activePath == null || p.equals(activePath, path)) return;
+    }
     // 删除操作仅对已核查的原件绝对路径执行。
     await manifest.delete();
-    if (protectedPaths.any(
-      (protected) => p.equals(p.normalize(protected), path),
-    )) {
+    if (protectedPaths.contains(path)) {
       return;
     }
     // 原件可能已经由仓储删除，清理保持幂等。

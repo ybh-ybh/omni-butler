@@ -12,11 +12,40 @@ import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart'
 import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
 import 'package:omni_butler/features/notes/audio/note_wav.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
+import 'package:path/path.dart' as p;
+import 'package:uuid/uuid.dart';
 
 import '../tool/clear_note_test_data.dart';
+import 'support/note_path_test_support.dart';
+
+/// Simulates a service that returns without completing its filesystem work.
+class _IncompleteDiscard extends _FailingDiscard {
+  /// Bind the test double to the same preflighted directory as the real service.
+  _IncompleteDiscard(super.directory);
+
+  /// Leave the fixture unchanged so completion must detect the remaining files.
+  @override
+  Future<void> discardPendingForNote(
+    String noteId, {
+    String? draftId,
+    String? recordingId,
+    Set<String> protectedPaths = const {},
+  }) async {}
+}
 
 /// 模拟提交后磁盘标记写入失败；不能伪装成清理成功。
 class _FailingDiscard implements NoteRecorderService {
+  /// Bind the injected failure to one explicitly authorized fixture directory.
+  _FailingDiscard(this.directory);
+
+  /// Keep the test double's scope independently verifiable.
+  final Directory directory;
+
+  /// Resolve only the test-owned directory without creating anything.
+  @override
+  Future<String> recordingDirectoryIdentity() =>
+      directory.resolveSymbolicLinks();
+
   /// 没有活跃硬件会话。
   @override
   NoteRecordingState get state => const NoteRecordingState();
@@ -352,7 +381,10 @@ void main() {
       clearNoteTestData(
         runtime: runtime,
         recordings: [
-          NoteCleanupRecordingScope(audioDirectory, _FailingDiscard()),
+          NoteCleanupRecordingScope(
+            audioDirectory,
+            _FailingDiscard(audioDirectory),
+          ),
         ],
         audioRoots: [audioDirectory],
         backupParent: backups,
@@ -387,4 +419,340 @@ void main() {
       await store.close();
     }
   });
+
+  test('preflight rejects missing, traversing and wrong-owner manifests without side effects', () async {
+    // A valid business row must survive every rejected preflight.
+    final NoteRepository repository = NoteRepository(runtime.database);
+    await repository.save(
+      const NoteDraft(
+        id: 'kept',
+        body: 'keep',
+        dayKey: '2026-10-11',
+        baseRevision: '',
+      ),
+    );
+    // Preserve the original queue as well as the note itself.
+    final List<Map<String, Object?>> initialQueue = await runtime.powerSync
+        .getAll('SELECT * FROM ps_crud ORDER BY id');
+    // The ordinary original remains intact throughout the rejection cases.
+    final File original = await audio('invalid');
+    // All malformed records use the same test-owned manifest file.
+    final File manifest = await pending('kept', 'invalid', original);
+    // Each case violates a different preflight invariant.
+    for (final Map<String, Object?> invalid in [
+      {
+        'id': 'invalid',
+        'noteId': 'kept',
+        'path': p.join(audioDirectory.path, 'absent.wav'),
+      },
+      {
+        'id': 'invalid',
+        'noteId': 'kept',
+        'path': p.join(audioDirectory.path, '..', 'audio', 'invalid.wav'),
+      },
+      {'id': 'other-id', 'noteId': 'kept', 'path': original.path},
+      {'id': 'invalid', 'noteId': '', 'path': original.path},
+    ]) {
+      await manifest.writeAsString(jsonEncode(invalid));
+      await expectLater(
+        clean(execute: true),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(await backups.exists(), isFalse);
+      expect(await original.exists(), isTrue);
+      expect(await repository.find('kept'), isNotNull);
+      expect(
+        await runtime.powerSync.getAll('SELECT * FROM ps_crud ORDER BY id'),
+        initialQueue,
+      );
+    }
+  });
+
+  test('unfinished filesystem work never writes completed and remains retryable', () async {
+    // A pending-only recording exercises completion independently of database rows.
+    final File original = await audio('unfinished');
+    // The service deliberately leaves this expected manifest in place.
+    final File manifest = await pending(
+      'unfinished-note',
+      'unfinished',
+      original,
+    );
+    await expectLater(
+      clearNoteTestData(
+        runtime: runtime,
+        recordings: [
+          NoteCleanupRecordingScope(
+            audioDirectory,
+            _IncompleteDiscard(audioDirectory),
+          ),
+        ],
+        audioRoots: [audioDirectory],
+        backupParent: backups,
+        execute: true,
+      ),
+      throwsA(isA<FileSystemException>()),
+    );
+    // Inspect the durable phase rather than accepting the service return value.
+    final Directory backup =
+        (await backups.list().toList()).single as Directory;
+    // The committed SQL phase leaves a complete rollback record.
+    final Map<String, dynamic> journal = jsonDecode(
+      await File(p.join(backup.path, 'manifest.json')).readAsString(),
+    ) as Map<String, dynamic>;
+    expect(journal['phase'], 'database-cleaned');
+    expect(journal['files'], hasLength(2));
+    expect(await original.exists(), isTrue);
+    expect(await manifest.exists(), isTrue);
+    expect((await clean(execute: true)).executed, isTrue);
+    expect(await original.exists(), isFalse);
+    expect(await manifest.exists(), isFalse);
+  });
+
+  test('legacy marker-only originals are backed up and retried with shared protection', () async {
+    // The unprotected original survived a previous post-commit delete failure.
+    final File residual = await audio('residual');
+    // A different marker protects another original even without any business row.
+    final File shared = await audio('marker-shared');
+    // The marker owner is part of the existing deterministic filename format.
+    const String owner = 'old-note';
+    // No pending manifest remains; the durable marker is the only retry evidence.
+    final File marker = File(
+      p.join(
+        audioDirectory.path,
+        '${const Uuid().v5(Namespace.url.value, 'notes-deleted:$owner')}.deleted.json',
+      ),
+    );
+    await marker.writeAsString(
+      jsonEncode({
+        'noteId': owner,
+        'protectedPaths': [shared.path],
+        'pendingPaths': [
+          residual.path,
+          shared.path,
+          p.join(audioDirectory.path, 'already-gone.wav'),
+        ],
+      }),
+    );
+    // Both surviving originals are backed up before the old retry is executed.
+    final NoteTestCleanupReport result = await clean(execute: true);
+    // Verify the exact durable completion evidence.
+    final Map<String, dynamic> journal = jsonDecode(
+      await File(p.join(result.backupPath!, 'manifest.json')).readAsString(),
+    ) as Map<String, dynamic>;
+    expect(journal['phase'], 'completed');
+    expect(journal['files'], hasLength(2));
+    expect(await residual.exists(), isFalse);
+    expect(await shared.exists(), isTrue);
+    expect((await clean(execute: true)).executed, isTrue);
+    expect(await shared.exists(), isTrue);
+  });
+
+  test(
+    'mismatched scope and shared pending owners fail before backup or SQL',
+    () async {
+      // The recorder remains bound to audioDirectory while the scope points elsewhere.
+      final Directory other = await Directory(
+        p.join(directory.path, 'other-audio'),
+      ).create();
+      await expectLater(
+        clearNoteTestData(
+          runtime: runtime,
+          recordings: [NoteCleanupRecordingScope(other, recorder)],
+          audioRoots: [audioDirectory, other],
+          backupParent: backups,
+          execute: true,
+        ),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(await backups.exists(), isFalse);
+      // Different pending owners cannot silently create circular durable protection.
+      final File shared = await audio('shared-pending');
+      // Both original manifests must remain available for manual conflict resolution.
+      final File first = await pending('owner-a', 'pending-a', shared);
+      // This owner independently claims the same physical original.
+      final File second = await pending('owner-b', 'pending-b', shared);
+      await expectLater(
+        clean(execute: true),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(await backups.exists(), isFalse);
+      expect(await shared.exists(), isTrue);
+      expect(await first.exists(), isTrue);
+      expect(await second.exists(), isTrue);
+    },
+  );
+
+  test(
+    'related drafts outside the maintenance whitelist fail before mutation',
+    () async {
+      // A formal note with a related draft requires the separate product deletion flow.
+      final NoteRepository repository = NoteRepository(runtime.database);
+      await repository.save(
+        const NoteDraft(
+          id: 'draft-note',
+          body: 'keep',
+          dayKey: '2026-10-11',
+          baseRevision: '',
+        ),
+      );
+      await runtime.database
+          .into(runtime.database.noteLocalDrafts)
+          .insert(
+            NoteLocalDraftsCompanion.insert(
+              id: 'local-draft',
+              noteId: 'draft-note',
+              dayKey: '2026-10-11',
+              baseRevision: '',
+              updatedAt: DateTime.utc(2026),
+            ),
+          );
+      await expectLater(clean(execute: true), throwsStateError);
+      expect(await backups.exists(), isFalse);
+      expect(await repository.find('draft-note'), isNotNull);
+      expect(
+        (await runtime.database.select(runtime.database.noteLocalDrafts).get())
+            .single
+            .discarded,
+        isFalse,
+      );
+    },
+  );
+
+  if (Platform.isWindows) {
+    test('mixed real aliases preserve other business references and stored spelling', () async {
+      // Native resolution supplies a genuine long spelling even under short TEMP.
+      final String longRoot = await directory.resolveSymbolicLinks();
+      // Native 8.3 lookup must produce a distinct alias or fail the test.
+      final String shortRoot = await shortPathOf(directory);
+      expect(p.equals(longRoot, shortRoot), isFalse);
+      // Exercise both directions of manifest versus protection aliasing.
+      for (final bool shortManifest in [true, false]) {
+        // Each direction uses a different original and note owner.
+        final String id = shortManifest ? 'short-manifest' : 'long-manifest';
+        // The file is physically created only once.
+        final File shared = await audio(id);
+        // Persisted audio and protection paths intentionally use opposite aliases.
+        final String stored = p.join(
+          shortManifest ? shortRoot : longRoot,
+          'audio',
+          '$id.wav',
+        );
+        // An unrelated module must protect the same file by the other spelling.
+        final String protected = p.join(
+          shortManifest ? longRoot : shortRoot,
+          'audio',
+          '$id.wav',
+        );
+        await pending(id, id, File(stored));
+        await NoteRepository(runtime.database).addAudio(
+          draft: NoteDraft(
+            id: id,
+            body: 'alias',
+            dayKey: '2026-10-11',
+            baseRevision: '',
+          ),
+          id: id,
+          localPath: stored,
+          durationMs: 1000,
+          mime: 'audio/wav',
+        );
+        await runtime.database
+            .into(runtime.database.inventoryItems)
+            .insert(
+              InventoryItemsCompanion.insert(
+                id: id,
+                name: 'shared',
+                imageLocalPath: Value(protected),
+                createdAt: DateTime.utc(2026),
+                updatedAt: DateTime.utc(2026),
+              ),
+            );
+        // The scope itself also uses the alias opposite to the stored manifest.
+        final NoteTestCleanupReport result = await clearNoteTestData(
+          runtime: runtime,
+          recordings: [
+            NoteCleanupRecordingScope(
+              Directory(p.dirname(protected)),
+              recorder,
+            ),
+          ],
+          audioRoots: [audioDirectory],
+          backupParent: backups,
+          execute: true,
+        );
+        expect(await shared.exists(), isTrue);
+        // Backups retain the original stored spelling for exact restoration.
+        final Map<String, dynamic> journal = jsonDecode(
+          await File(p.join(result.backupPath!, 'manifest.json'))
+              .readAsString(),
+        ) as Map<String, dynamic>;
+        expect(
+          (journal['files'] as List).any(
+            (item) =>
+                item['originalPath'] == stored && item['protected'] == true,
+          ),
+          isTrue,
+        );
+        expect(
+          (await runtime.database.select(runtime.database.inventoryItems).get())
+              .last
+              .imageLocalPath,
+          protected,
+        );
+      }
+    });
+
+    test('backup aliases and redirected ancestors are rejected before directory creation', () async {
+      // One pending original makes accidental cleanup observable.
+      final File original = await audio('backup-boundary');
+      // This manifest must survive every rejected backup destination.
+      final File manifest = await pending(
+        'backup-note',
+        'backup-boundary',
+        original,
+      );
+      // The actual short alias bypassed the old textual boundary comparison.
+      final String shortAudio = await shortPathOf(audioDirectory);
+      // A junction models an existing ancestor redirecting into the audio root.
+      final Link junction = Link(p.join(directory.path, 'audio-alias'));
+      // The subprocess creates only a junction inside this fixture tree.
+      final ProcessResult process = await Process.run(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          r'New-Item -ItemType Junction -Path $env:OMNI_TEST_LINK -Target $env:OMNI_TEST_TARGET -ErrorAction Stop | Out-Null',
+        ],
+        environment: {
+          'OMNI_TEST_LINK': junction.path,
+          'OMNI_TEST_TARGET': audioDirectory.path,
+        },
+      );
+      expect(process.exitCode, 0, reason: process.stderr.toString());
+      try {
+        // Neither spelling may create even the first missing backup component.
+        for (final String parent in [shortAudio, junction.path]) {
+          await expectLater(
+            clearNoteTestData(
+              runtime: runtime,
+              recordings: [NoteCleanupRecordingScope(audioDirectory, recorder)],
+              audioRoots: [audioDirectory],
+              backupParent: Directory(p.join(parent, 'future', 'backup')),
+              execute: true,
+            ),
+            throwsStateError,
+          );
+          expect(
+            await Directory(p.join(audioDirectory.path, 'future')).exists(),
+            isFalse,
+          );
+          expect(await original.exists(), isTrue);
+          expect(await manifest.exists(), isTrue);
+        }
+      } finally {
+        await junction.delete();
+      }
+    });
+  }
 }

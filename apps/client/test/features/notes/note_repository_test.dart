@@ -9,6 +9,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/features/notes/audio/note_wav.dart';
 import 'package:omni_butler/features/notes/data/note_repository.dart';
+import 'package:path/path.dart' as p;
+
+import '../../support/note_path_test_support.dart';
 
 /// 延迟两个外层事务入场，让真实并发请求在同一旧状态完成校验。
 class _BarrierDatabase extends AppDatabase {
@@ -786,5 +789,152 @@ void main() {
       (await database.select(database.noteAudioLocalFiles).get()).single.id,
       'active-audio',
     );
+  });
+
+  if (Platform.isWindows) {
+    test('短长路径引用同一原音时草稿及外部保护阻止清理', () async {
+      // Resolve the long spelling even when TEMP uses an alias.
+      final Directory longDirectory = Directory(
+        await directory.resolveSymbolicLinks(),
+      );
+      audio = File(p.join(longDirectory.path, 'original.wav'));
+      // Point an orphan and a live draft at the same physical file.
+      final String shortDirectory = await shortPathOf(longDirectory);
+      // The legacy draft stores the short spelling.
+      final String shortAudioPath = p.join(
+        shortDirectory,
+        p.basename(audio.path),
+      );
+      await add('orphan-audio', 1000);
+      await database
+          .into(database.noteLocalDrafts)
+          .insert(
+            NoteLocalDraftsCompanion.insert(
+              id: 'active-draft',
+              noteId: 'other-note',
+              dayKey: '2026-10-11',
+              baseRevision: '',
+              updatedAt: DateTime(2026, 10, 11),
+            ),
+          );
+      await database
+          .into(database.noteDraftAudioSegments)
+          .insert(
+            NoteDraftAudioSegmentsCompanion.insert(
+              id: 'draft-audio',
+              draftId: 'active-draft',
+              noteId: 'other-note',
+              localPath: Value(shortAudioPath),
+              durationMs: 1000,
+              mime: 'audio/wav',
+              sha256: 'digest',
+              byteSize: 48,
+              startedAt: DateTime(2026, 10, 11),
+              sortOrder: 0,
+            ),
+          );
+      await repository.permanentlyDelete('note');
+      await repository.purgeOrphanFiles();
+      expect(await audio.exists(), isTrue);
+      expect(
+        await database.select(database.noteAudioLocalFiles).get(),
+        isEmpty,
+      );
+
+      // External recorder protection survives after the draft is discarded.
+      await (database.update(database.noteLocalDrafts)
+            ..where((row) => row.id.equals('active-draft')))
+          .write(const NoteLocalDraftsCompanion(discarded: Value(true)));
+      await repository.purgeOrphanFiles(additionalProtectedPaths: {audio.path});
+      expect(await audio.exists(), isTrue);
+      expect(
+        await database.select(database.noteDraftAudioSegments).get(),
+        isEmpty,
+      );
+    });
+  }
+
+  test('无法解析外部保护路径时保留孤儿和记录', () async {
+    await add('orphan-audio', 1000);
+    await repository.permanentlyDelete('note');
+    await expectLater(
+      repository.purgeOrphanFiles(additionalProtectedPaths: {'relative.wav'}),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(await audio.exists(), isTrue);
+    expect(
+      await database.select(database.noteAudioLocalFiles).get(),
+      hasLength(1),
+    );
+  });
+
+  test('按本机音频身份清理只处理目标并保护其他孤儿和草稿文件', () async {
+    // Two orphan rows share the original file; one remains outside the scope.
+    await add('selected-shared', 1000);
+    await add('unselected-shared', 1000);
+    // The independently selected original should be physically removed.
+    final File selected = File(p.join(directory.path, 'selected.wav'));
+    await selected.writeAsBytes([...NoteWav.header(4), 0, 0, 1, 0]);
+    await repository.addAudio(
+      draft: initial,
+      id: 'selected-only',
+      localPath: selected.path,
+      durationMs: 1000,
+      mime: 'audio/wav',
+    );
+    await repository.permanentlyDelete('note');
+    // A discarded draft's audio is unrelated to this targeted operation.
+    final File draftAudio = File(p.join(directory.path, 'draft.wav'));
+    await draftAudio.writeAsBytes([...NoteWav.header(4), 0, 0, 1, 0]);
+    await database
+        .into(database.noteDraftAudioSegments)
+        .insert(
+          NoteDraftAudioSegmentsCompanion.insert(
+            id: 'unrelated-draft-audio',
+            draftId: 'missing-draft',
+            noteId: 'other',
+            localPath: Value(draftAudio.path),
+            durationMs: 1000,
+            mime: 'audio/wav',
+            sha256: 'digest',
+            byteSize: 48,
+            startedAt: DateTime(2026, 10, 11),
+            sortOrder: 0,
+          ),
+        );
+    // An unrelated draft image must not be removed by audio maintenance.
+    final File draftImage = File(p.join(directory.path, 'draft.image'));
+    await draftImage.writeAsBytes([1, 2, 3]);
+    await database
+        .into(database.noteDraftImages)
+        .insert(
+          NoteDraftImagesCompanion.insert(
+            id: 'unrelated-draft-image',
+            draftId: 'missing-draft',
+            noteId: 'other',
+            localPath: Value(draftImage.path),
+            mimeType: 'image/png',
+            sha256: 'digest',
+            sizeBytes: 3,
+            sortOrder: 0,
+            createdAt: DateTime(2026, 10, 11),
+          ),
+        );
+    await repository.purgeOrphanFiles(
+      localFileIds: {'selected-shared', 'selected-only'},
+    );
+    expect(await selected.exists(), isFalse);
+    expect(await audio.exists(), isTrue);
+    expect(await draftAudio.exists(), isTrue);
+    expect(await draftImage.exists(), isTrue);
+    expect(
+      (await database.select(database.noteAudioLocalFiles).get()).single.id,
+      'unselected-shared',
+    );
+    expect(
+      await database.select(database.noteDraftAudioSegments).get(),
+      hasLength(1),
+    );
+    expect(await database.select(database.noteDraftImages).get(), hasLength(1));
   });
 }

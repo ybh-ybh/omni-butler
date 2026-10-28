@@ -1,6 +1,12 @@
 name: UI contract checks
 
 on:
+  workflow_dispatch:
+    inputs:
+      use_cache:
+        description: 'Use the Flutter and pub caches'
+        type: boolean
+        default: true
   pull_request:
     paths: ['apps/client/**', 'style.md', '.github/workflows/ui-checks.yml']
   push:
@@ -23,7 +29,9 @@ jobs:
         with:
           channel: stable
           flutter-version: '3.47.2'
-          cache: true
+          cache: ${{ github.event_name != 'workflow_dispatch' || inputs.use_cache }}
+          cache-path: ${{ runner.temp }}/omni-flutter-sdk
+          pub-cache-path: ${{ runner.temp }}/omni-pub-cache
       - name: Resolve client packages
         working-directory: apps/client
         run: flutter pub get --enforce-lockfile
@@ -49,17 +57,90 @@ jobs:
   client-tests:
     name: Client tests (Windows)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: '3.47.2'
-          cache: true
+          cache: ${{ github.event_name != 'workflow_dispatch' || inputs.use_cache }}
+          cache-path: ${{ runner.temp }}/omni-flutter-sdk
+          pub-cache-path: ${{ runner.temp }}/omni-pub-cache
+      - name: Record runner and SDK details
+        shell: pwsh
+        working-directory: apps/client
+        run: |
+          New-Item -ItemType Directory -Path build/ci -Force | Out-Null
+          @(
+            "Revision: $(git rev-parse HEAD)"
+            "Runner OS: $env:RUNNER_OS"
+            "Runner image: $env:ImageOS $env:ImageVersion"
+            (flutter --version | Out-String)
+          ) | Tee-Object -FilePath build/ci/environment.log
       - name: Resolve client packages
+        id: dependencies
         working-directory: apps/client
         run: flutter pub get --enforce-lockfile
-      - name: Run client tests
+      - name: Verify note paths with long and short TEMP
+        shell: pwsh
         working-directory: apps/client
-        run: flutter test --no-pub --concurrency=1
+        run: ./tool/verify_note_paths.ps1
+      - name: Run client tests
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        shell: pwsh
+        working-directory: apps/client
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          flutter test --no-pub --concurrency=1 --reporter expanded --file-reporter=json:build/ci/client-tests.json 2>&1 |
+            Tee-Object -FilePath build/ci/client-tests.log
+          # Preserve the Flutter result before parsing the test report.
+          $testExit = $LASTEXITCODE
+          if (Test-Path -LiteralPath build/ci/client-tests.json) {
+            try {
+              # Map test IDs, suite IDs, and skip messages from the JSON stream.
+              $tests = @{}
+              # Suite metadata supplies each test file path.
+              $suites = @{}
+              # Skip messages explain why a test did not run.
+              $reasons = @{}
+              # Completion events are authoritative for skipped tests.
+              $skippedIds = @()
+              # Each line is one independent JSON event.
+              foreach ($line in [IO.File]::ReadLines((Resolve-Path 'build/ci/client-tests.json').Path)) {
+                # Inspect the event fields needed for the skip report.
+                $event = $line | ConvertFrom-Json
+                if ($event.type -eq 'suite') { $suites["$($event.suite.id)"] = $event.suite.path }
+                if ($event.type -eq 'testStart') { $tests["$($event.test.id)"] = $event.test }
+                if ($event.type -eq 'print' -and $event.messageType -eq 'skip') { $reasons["$($event.testID)"] = $event.message }
+                if ($event.type -eq 'testDone' -and $event.skipped -eq $true) { $skippedIds += "$($event.testID)" }
+              }
+              "Client tests skipped: $($skippedIds.Count)" | Tee-Object -FilePath build/ci/client-tests.log -Append
+              foreach ($id in $skippedIds) {
+                # Include the source suite and test name for review.
+                $test = $tests[$id]
+                # Use static metadata only as a fallback for the skip reason.
+                $reason = if ($reasons.ContainsKey($id)) { $reasons[$id] } elseif ($test -and $test.metadata.skipReason) { $test.metadata.skipReason } else { 'No reason in reporter output' }
+                # A missing metadata event is retained as an explicit unknown.
+                $suite = if ($test) { $suites["$($test.suiteID)"] } else { 'unknown suite' }
+                # Preserve the test ID when a start event is unavailable.
+                $name = if ($test) { $test.name } else { "unknown test ID $id" }
+                "  $suite :: $name :: $reason" | Tee-Object -FilePath build/ci/client-tests.log -Append
+              }
+            } catch {
+              'Client tests skipped: unknown (invalid JSON report)' | Tee-Object -FilePath build/ci/client-tests.log -Append
+            }
+          } else {
+            'Client tests skipped: unknown (JSON report missing)' | Tee-Object -FilePath build/ci/client-tests.log -Append
+          }
+          exit $testExit
+      - name: Upload client test diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: client-test-diagnostics
+          if-no-files-found: warn
+          path: |
+            apps/client/build/ci/*.log
+            apps/client/build/ci/*.json
+            apps/client/test/**/failures/**

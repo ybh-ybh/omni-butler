@@ -9,7 +9,11 @@ import 'package:omni_butler/core/audio/microphone_coordinator.dart';
 import 'package:omni_butler/features/notes/audio/note_audio_player_service.dart';
 import 'package:omni_butler/features/notes/audio/note_recorder_service.dart';
 import 'package:omni_butler/features/notes/audio/note_wav.dart';
+import 'package:path/path.dart' as p;
 import 'package:record/record.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../support/note_path_test_support.dart';
 
 /// 可确定注入 PCM 和暂停事件的设备替身。
 class _Recorder implements AudioRecorder {
@@ -532,14 +536,428 @@ void main() {
       }),
     );
     await File('${directory.path}/bad.pending.json').writeAsString('{bad');
-    await service.discardPendingForNote('guard-note');
+    await expectLater(
+      service.discardPendingForNote('guard-note'),
+      throwsA(isA<FileSystemException>()),
+    );
     expect(await outside.exists(), isTrue);
     expect(await manifest.exists(), isTrue);
     expect(await File('${directory.path}/bad.pending.json').exists(), isTrue);
     expect(await service.recoverPending(), isEmpty);
     expect(await outside.exists(), isTrue);
-    expect(await service.isPermanentlyDiscarded('guard-note'), isTrue);
+    expect(await service.isPermanentlyDiscarded('guard-note'), isFalse);
     expect(device.starts, 0);
+  });
+
+  for (final bool legacyMarker in <bool>[false, true]) {
+    test('共享待恢复原音在${legacyMarker ? '旧标记重启' : '删除'}后继续受保护', () async {
+      // Use the resolved long path even when the temporary root is abbreviated.
+      final Directory longDirectory = Directory(
+        await directory.resolveSymbolicLinks(),
+      );
+      // One original belongs to both independently recoverable manifests.
+      final File shared = await _pendingFile(
+        longDirectory,
+        'shared-a',
+        'note-a',
+      );
+      await _pendingFile(longDirectory, 'shared-b', 'note-b');
+      // On Windows the second reference exercises the distinct 8.3 spelling.
+      final String otherDirectory = Platform.isWindows
+          ? await shortPathOf(longDirectory)
+          : longDirectory.path;
+      // Point the second manifest at the first recording's physical file.
+      final File secondManifest = File(
+        p.join(longDirectory.path, 'shared-b.pending.json'),
+      );
+      // Keep the legacy fields while changing the stored path spelling.
+      final Map<String, dynamic> second = jsonDecode(
+        await secondManifest.readAsString(),
+      ) as Map<String, dynamic>;
+      second['path'] = p.join(otherDirectory, p.basename(shared.path));
+      await secondManifest.writeAsString(jsonEncode(second));
+      // An older deletion marker did not yet know about the shared reference.
+      final File marker = File(
+        p.join(
+          longDirectory.path,
+          '${const Uuid().v5(Namespace.url.value, 'notes-deleted:note-a')}.deleted.json',
+        ),
+      );
+      if (legacyMarker) {
+        await marker.writeAsString(
+          jsonEncode({
+            'noteId': 'note-a',
+            'protectedPaths': <String>[],
+            'pendingPaths': [shared.path],
+          }),
+        );
+      } else {
+        await service.discardPendingForNote('note-a');
+      }
+      expect((await service.recoverPending()).map((item) => item.id), [
+        'shared-b',
+      ]);
+      expect(await shared.exists(), isTrue);
+      expect(
+        await File(p.join(longDirectory.path, 'shared-a.pending.json'))
+            .exists(),
+        isFalse,
+      );
+      // The persisted protection must survive acknowledgment of the other manifest.
+      await service.acknowledge('shared-b');
+      expect(await service.recoverPending(), isEmpty);
+      expect(await shared.exists(), isTrue);
+      // The old or new marker explicitly retains this shared original.
+      final Map<String, dynamic> saved =
+          jsonDecode(await marker.readAsString()) as Map<String, dynamic>;
+      expect(saved['protectedPaths'], contains(second['path']));
+    });
+  }
+
+  test('其他待恢复清单损坏时拒绝删除并保留目标原音', () async {
+    // The target is valid but the other manifest's references are unknowable.
+    final File target = await _pendingFile(directory, 'valid-target', 'note-a');
+    // A damaged unrelated manifest cannot be assumed not to share that file.
+    final File broken = File(
+      p.join(directory.path, 'broken-other.pending.json'),
+    );
+    await broken.writeAsString('{broken');
+    await expectLater(
+      service.discardPendingForNote('note-a'),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(await target.exists(), isTrue);
+    expect(
+      await File(p.join(directory.path, 'valid-target.pending.json')).exists(),
+      isTrue,
+    );
+    expect(await broken.exists(), isTrue);
+    expect(await service.isPermanentlyDiscarded('note-a'), isFalse);
+  });
+
+  if (Platform.isWindows) {
+    test('旧删除标记的短长路径在重启恢复和原件重试中保持保护', () async {
+      // Resolve the long spelling even if TEMP itself uses an alias.
+      final Directory longDirectory = Directory(
+        await directory.resolveSymbolicLinks(),
+      );
+      // The old marker and manifest use different names for one directory.
+      final String shortDirectory = await shortPathOf(longDirectory);
+      // These originals share one owner but only one is protected.
+      final File shared = await _pendingFile(
+        longDirectory,
+        'shared-alias',
+        'alias-note',
+      );
+      final File removed = await _pendingFile(
+        longDirectory,
+        'removed-alias',
+        'alias-note',
+      );
+      // Persist the old manifest using the short directory spelling.
+      final File sharedManifest = File(
+        p.join(directory.path, 'shared-alias.pending.json'),
+      );
+      // Rewrite only the stored path; the manifest format remains unchanged.
+      final Map<String, dynamic> session = jsonDecode(
+        await sharedManifest.readAsString(),
+      ) as Map<String, dynamic>;
+      session['path'] = p.join(shortDirectory, 'shared-alias.wav');
+      await sharedManifest.writeAsString(jsonEncode(session));
+      // A marker from an older version may contain mixed spellings.
+      final String markerName =
+          '${const Uuid().v5(Namespace.url.value, 'notes-deleted:alias-note')}.deleted.json';
+      final File marker = File(p.join(directory.path, markerName));
+      await marker.writeAsString(
+        jsonEncode({
+          'noteId': 'alias-note',
+          'protectedPaths': [shared.path],
+          'pendingPaths': [
+            p.join(shortDirectory, 'shared-alias.wav'),
+            removed.path,
+          ],
+        }),
+      );
+      // A new service reads only the persisted legacy marker.
+      final NoteRecorderService restarted = NoteRecorderService(
+        player: player,
+        android: false,
+        directoryResolver: () async => directory,
+      );
+      try {
+        expect(await restarted.recoverPending(), isEmpty);
+        expect(await shared.exists(), isTrue);
+        expect(await removed.exists(), isFalse);
+        expect(await sharedManifest.exists(), isFalse);
+        // Test the marker-only retry after the manifest has already gone.
+        await removed.writeAsBytes([
+          ...NoteWav.header(32000),
+          ...Uint8List(32000),
+        ]);
+        expect(await restarted.recoverPending(), isEmpty);
+        expect(await shared.exists(), isTrue);
+        expect(await removed.exists(), isFalse);
+      } finally {
+        await restarted.dispose();
+      }
+    });
+  }
+
+  if (Platform.isWindows) {
+    test('恢复路径及新删除标记保留原始短路径拼写', () async {
+      // Resolve the long spelling even if TEMP itself uses an alias.
+      final Directory longDirectory = Directory(
+        await directory.resolveSymbolicLinks(),
+      );
+      // The manifest uses an existing directory's distinct Windows alias.
+      final String shortDirectory = await shortPathOf(longDirectory);
+      // Keep the recording protected while inspecting its deletion marker.
+      final File audio = await _pendingFile(
+        longDirectory,
+        'spelling',
+        'spelling-note',
+      );
+      // The original persisted spelling uses a short directory and long filename.
+      final String originalPath = p.join(shortDirectory, 'spelling.wav');
+      // Change only the stored path of an otherwise valid manifest.
+      final File manifest = File(
+        p.join(directory.path, 'spelling.pending.json'),
+      );
+      // Preserve every other legacy manifest field.
+      final Map<String, dynamic> session =
+          jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
+      session['path'] = originalPath;
+      await manifest.writeAsString(jsonEncode(session));
+      expect((await service.recoverPending()).single.path, originalPath);
+      await service.discardPendingForNote(
+        'spelling-note',
+        protectedPaths: {audio.path},
+      );
+      // Read the generated marker without changing its legacy format.
+      final String markerName =
+          '${const Uuid().v5(Namespace.url.value, 'notes-deleted:spelling-note')}.deleted.json';
+      // The marker is created in the actual private recording directory.
+      final File marker = File(p.join(directory.path, markerName));
+      // The pending path remains byte-for-byte identical to the manifest value.
+      final Map<String, dynamic> value =
+          jsonDecode(await marker.readAsString()) as Map<String, dynamic>;
+      expect(value['pendingPaths'], [originalPath]);
+      expect(await audio.exists(), isTrue);
+    });
+  }
+
+  test('临时删除标记不是普通文件时保留清单和原音', () async {
+    // An existing directory must not be treated as a writable marker file.
+    final File audio = await _pendingFile(
+      directory,
+      'unsafe-tmp',
+      'unsafe-note',
+    );
+    // Build the exact temporary marker path used by the recorder.
+    final String markerName =
+        '${const Uuid().v5(Namespace.url.value, 'notes-deleted:unsafe-note')}.deleted.json';
+    // A directory at this location simulates an unsafe existing entry.
+    final Directory temporary = Directory(
+      p.join(directory.path, '$markerName.tmp'),
+    );
+    await temporary.create();
+    await expectLater(
+      service.discardPendingForNote('unsafe-note'),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(await audio.exists(), isTrue);
+    expect(
+      await File(p.join(directory.path, 'unsafe-tmp.pending.json')).exists(),
+      isTrue,
+    );
+    expect(await File(p.join(directory.path, markerName)).exists(), isFalse);
+    expect(await temporary.exists(), isTrue);
+  });
+
+  if (!Platform.isWindows) {
+    test('录音目录末端是链接时拒绝写删除标记', () async {
+      // Both link and target live in the isolated test directory.
+      final Directory target = Directory(p.join(directory.path, 'target'));
+      await target.create();
+      // The recorder receives a final-component symbolic link.
+      final Link link = Link(p.join(directory.path, 'linked'));
+      await link.create(target.path);
+      // A separate service exercises the untrusted directory resolver.
+      final NoteRecorderService linked = NoteRecorderService(
+        player: player,
+        android: false,
+        directoryResolver: () async => Directory(link.path),
+      );
+      try {
+        await expectLater(
+          linked.discardPendingForNote('linked-note'),
+          throwsA(isA<FileSystemException>()),
+        );
+        expect(await target.list().toList(), isEmpty);
+      } finally {
+        await linked.dispose();
+      }
+    });
+  }
+
+  test('旧标记的保护路径损坏时不覆盖标记或删除候选', () async {
+    // A legacy protection entry that cannot be resolved must remain intact.
+    final File audio = await _pendingFile(
+      directory,
+      'bad-protection',
+      'bad-note',
+    );
+    // The deterministic marker identifies the original note.
+    final String markerName =
+        '${const Uuid().v5(Namespace.url.value, 'notes-deleted:bad-note')}.deleted.json';
+    final File marker = File(p.join(directory.path, markerName));
+    // Keep the raw marker bytes to detect accidental replacement.
+    final String original = jsonEncode({
+      'noteId': 'bad-note',
+      'protectedPaths': ['relative.wav'],
+      'pendingPaths': [audio.path],
+    });
+    await marker.writeAsString(original);
+    await expectLater(
+      service.discardPendingForNote('bad-note'),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(await marker.readAsString(), original);
+    expect(await audio.exists(), isTrue);
+    expect(
+      await File(p.join(directory.path, 'bad-protection.pending.json'))
+          .exists(),
+      isTrue,
+    );
+    expect(await service.recoverPending(), isEmpty);
+    expect(await audio.exists(), isTrue);
+  });
+
+  test('其他删除标记保护共享原音，损坏标记暂停所有删除', () async {
+    // One owner's marker protects an original also named by another owner.
+    final File shared = await _pendingFile(
+      directory,
+      'shared-cross',
+      'owner-b',
+    );
+    // The first marker has no pending file but retains the shared protection.
+    final String markerName =
+        '${const Uuid().v5(Namespace.url.value, 'notes-deleted:owner-a')}.deleted.json';
+    // Store the legacy marker under its deterministic owner-derived name.
+    final File marker = File(p.join(directory.path, markerName));
+    await marker.writeAsString(
+      jsonEncode({
+        'noteId': 'owner-a',
+        'protectedPaths': [shared.path],
+        'pendingPaths': <String>[],
+      }),
+    );
+    await service.discardPendingForNote('owner-b');
+    expect(await shared.exists(), isTrue);
+    expect(
+      await File(p.join(directory.path, 'shared-cross.pending.json')).exists(),
+      isFalse,
+    );
+    expect(await service.recoverPending(), isEmpty);
+    expect(await shared.exists(), isTrue);
+
+    // A damaged protection marker must stop another owner's cleanup entirely.
+    final File other = await _pendingFile(
+      directory,
+      'damaged-cross',
+      'owner-c',
+    );
+    await marker.writeAsString('{broken');
+    await expectLater(
+      service.discardPendingForNote('owner-c'),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(await shared.exists(), isTrue);
+    expect(await other.exists(), isTrue);
+    expect(
+      await File(p.join(directory.path, 'damaged-cross.pending.json')).exists(),
+      isTrue,
+    );
+    expect((await service.recoverPending()).map((item) => item.id), [
+      'damaged-cross',
+    ]);
+    expect(await shared.exists(), isTrue);
+  });
+
+  test('删除请求只重试自身旧标记中没有清单的原音', () async {
+    // A prior attempt removed both manifests but left their audio files.
+    final File own = await _pendingFile(directory, 'retry-own', 'retry-owner');
+    // Another marker owns an independent residual original.
+    final File other = await _pendingFile(
+      directory,
+      'retry-other',
+      'other-owner',
+    );
+    await File(p.join(directory.path, 'retry-own.pending.json')).delete();
+    await File(p.join(directory.path, 'retry-other.pending.json')).delete();
+    // Keep an explicit protected file in the same marker's retry list.
+    final File protected = await _pendingFile(
+      directory,
+      'retry-protected',
+      'retry-owner',
+    );
+    await File(p.join(directory.path, 'retry-protected.pending.json')).delete();
+    // Persist the two owner-specific marker paths.
+    final File ownMarker = File(
+      p.join(
+        directory.path,
+        '${const Uuid().v5(Namespace.url.value, 'notes-deleted:retry-owner')}.deleted.json',
+      ),
+    );
+    final File otherMarker = File(
+      p.join(
+        directory.path,
+        '${const Uuid().v5(Namespace.url.value, 'notes-deleted:other-owner')}.deleted.json',
+      ),
+    );
+    await ownMarker.writeAsString(
+      jsonEncode({
+        'noteId': 'retry-owner',
+        'protectedPaths': [protected.path],
+        'pendingPaths': [own.path, protected.path],
+      }),
+    );
+    await otherMarker.writeAsString(
+      jsonEncode({
+        'noteId': 'other-owner',
+        'protectedPaths': <String>[],
+        'pendingPaths': [other.path],
+      }),
+    );
+    await service.discardPendingForNote('retry-owner');
+    expect(await own.exists(), isFalse);
+    expect(await protected.exists(), isTrue);
+    expect(await other.exists(), isTrue);
+    expect(await ownMarker.exists(), isTrue);
+    expect(await otherMarker.exists(), isTrue);
+  });
+
+  test('旧标记残余路径无法验证时报错并保留标记供重试', () async {
+    // A malformed pending path must not silently report successful cleanup.
+    final File marker = File(
+      p.join(
+        directory.path,
+        '${const Uuid().v5(Namespace.url.value, 'notes-deleted:bad-retry')}.deleted.json',
+      ),
+    );
+    await marker.writeAsString(
+      jsonEncode({
+        'noteId': 'bad-retry',
+        'protectedPaths': <String>[],
+        'pendingPaths': ['relative.wav'],
+      }),
+    );
+    await expectLater(
+      service.discardPendingForNote('bad-retry'),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(await marker.exists(), isTrue);
+    expect(await service.isPermanentlyDiscarded('bad-retry'), isTrue);
   });
 
   test('活动录音永久删除先留marker，结束后恢复不复活并清理原件', () async {
@@ -567,6 +985,29 @@ void main() {
       isFalse,
     );
     expect(device.starts, 1);
+  });
+
+  test('不同清单身份引用活动原音时不删除正在录制的文件', () async {
+    await service.start('active-note');
+    // The stale manifest points at the same file under another recording ID.
+    final String activeId = service.state.recordingId!;
+    // The active file is owned by the current source directory.
+    final File audio = File(p.join(directory.path, '$activeId.wav'));
+    // A stale manifest must stay available for retry after recording stops.
+    final File manifest = File(p.join(directory.path, 'stale.pending.json'));
+    await manifest.writeAsString(
+      jsonEncode({
+        'id': 'stale',
+        'noteId': 'stale-note',
+        'path': audio.path,
+        'startedAt': '2026-10-11T10:00:00Z',
+      }),
+    );
+    await service.discardPendingForNote('stale-note');
+    expect(await manifest.exists(), isTrue);
+    expect(await audio.exists(), isTrue);
+    expect(service.state.isActive, isTrue);
+    await service.stop();
   });
 
   test('按片段取消只删除命中原件，重启清单不能复活且保留同篇其他片段', () async {
