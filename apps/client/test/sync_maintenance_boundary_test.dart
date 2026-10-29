@@ -385,6 +385,32 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('下载等待中可停止连接并恢复原页面交互', (WidgetTester tester) async {
+    // Match the stuck download state with a live cancellation capability.
+    final _BoundaryCoordinator coordinator = _BoundaryCoordinator(
+      const SyncConnectionState(
+        maintenance: true,
+        busy: true,
+        canCancel: true,
+        message: '正在下载完整数据并验证同步检查点',
+      ),
+    );
+    addTearDown(coordinator.close);
+    // The underlying page can only receive edits after cleanup completes.
+    int clicks = 0;
+    await _mount(tester, coordinator, onPressed: () => clicks += 1);
+    expect(find.text('停止连接并退出'), findsOneWidget);
+    expect(find.text('继续迁移'), findsNothing);
+    await tester.tap(find.text('停止连接并退出'));
+    await tester.pump();
+    await tester.pump();
+    expect(coordinator.cancellations, 1);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    await tester.tap(find.byKey(const ValueKey<String>('business-button')));
+    expect(clicks, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('悬浮窗错误状态只指引主窗口，不提供重试或取消入口', (WidgetTester tester) async {
     // 即使允许取消，悬浮窗也不执行跨库迁移操作。
     final _BoundaryCoordinator coordinator = _BoundaryCoordinator(

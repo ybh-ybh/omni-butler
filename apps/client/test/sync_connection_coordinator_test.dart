@@ -89,7 +89,9 @@ class _Fixture {
   _Fixture._(this.directory, this.storage, this.auth, this.store, this.source);
 
   /// 打开真实数据库并安装内存 HTTP 拦截器。
-  static Future<_Fixture> open() async {
+  static Future<_Fixture> open({
+    Duration catchUpTimeout = const Duration(milliseconds: 200),
+  }) async {
     // 每次测试的新文件目录。
     final Directory directory = await Directory.systemTemp.createTemp(
       'omni_connection_coordinator_',
@@ -171,7 +173,7 @@ class _Fixture {
       runtime: source,
       auth: auth,
       freeBytes: (String _) async => fixture.availableBytes,
-      catchUpTimeout: const Duration(milliseconds: 200),
+      catchUpTimeout: catchUpTimeout,
     );
     await fixture.coordinator.initialize();
     await fixture.addTodo('original');
@@ -657,6 +659,149 @@ void main() {
     expect(await fixture.source.ownerId, 'owner-a');
     expect(fixture.replacements, isEmpty);
     await fixture.addTodo('after-cancel');
+    expect((await fixture.source.exportSnapshot()).totalCount, 2);
+  });
+
+  for (final SyncConnectionStrategy strategy in [
+    SyncConnectionStrategy.replaceLocal,
+    SyncConnectionStrategy.mergeInitial,
+    SyncConnectionStrategy.replaceServer,
+  ]) {
+    test('PowerSync不可达时停止${strategy.name}，恢复原库且迟到操作不能激活', () async {
+      await fixture.close();
+      fixture = await _Fixture.open(
+        catchUpTimeout: const Duration(seconds: 30),
+      );
+      // Reserve a private unused port; never contact an existing test service.
+      final ServerSocket socket = await ServerSocket.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      // Closing the listener reproduces the actual connection-refused failure.
+      final int port = socket.port;
+      await socket.close();
+      // Wait until the real SDK has obtained credentials for the offline endpoint.
+      final Completer<void> credentialsRequested = Completer<void>();
+      fixture.respond = (RequestOptions request) async {
+        if (request.path == '/auth/powersync-token') {
+          if (!credentialsRequested.isCompleted) {
+            credentialsRequested.complete();
+          }
+          return {
+            'endpoint': 'http://127.0.0.1:$port',
+            'token': 'test-only-token',
+            'userId': 'owner-b',
+            'expiresIn': 900,
+            'syncSchemaVersion': syncSchemaVersion,
+          };
+        }
+        if (request.path == '/sync/migrations/status') {
+          return {'status': 'notFound'};
+        }
+        if (request.path == '/sync/migrations') {
+          return {
+            'status': 'committed',
+            'ownerId': 'owner-b',
+            'payloadHash': 'test-hash',
+          };
+        }
+        if (request.path == '/sync/batch') return <String, dynamic>{};
+        return fixture.defaultResponse(request);
+      };
+      if (strategy == SyncConnectionStrategy.mergeInitial) {
+        await fixture.source.powerSync.execute(
+          'DELETE FROM device_sync_metadata WHERE id = ?',
+          ['owner'],
+        );
+      }
+      // Keep both identity and active pointers as cancellation invariants.
+      final String? sourceOwner = await fixture.source.ownerId;
+      // The source pointer must not be replaced by the candidate.
+      final Map<String, dynamic>? active = await fixture.store.read('active');
+      // Observe cancellation on the operation itself before any errors can escape.
+      final Future<void> operation = expectLater(
+        fixture.coordinator.start(
+          preview: await fixture.preview(),
+          syncKey: 'test-sync-secret',
+          strategy: strategy,
+        ),
+        throwsA(isA<SyncConnectionCancelled>()),
+      );
+      await credentialsRequested.future.timeout(const Duration(seconds: 5));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(fixture.coordinator.state.canCancel, isTrue);
+      // Keep the original snapshot and operation ID for post-stop checks.
+      final Map<String, dynamic> journal = (await fixture.store.read(
+        'pending',
+      ))!;
+      // Stopping must not wait for the 30-second synchronization deadline.
+      final Future<void> stopping = fixture.coordinator.cancel();
+      await expectLater(
+        fixture.coordinator.cancel(),
+        throwsA(isA<ApiFailure>()),
+      );
+      await stopping.timeout(const Duration(seconds: 3));
+      await operation;
+      expect(fixture.coordinator.state.maintenance, isFalse);
+      expect(fixture.source.writesFrozen, isFalse);
+      expect(await fixture.source.ownerId, sourceOwner);
+      expect(await fixture.store.read('active'), active);
+      expect(await fixture.store.read('pending'), isNull);
+      expect(
+        (await fixture.store.read('migration:${journal['id']}'))!['phase'],
+        'cancelled',
+      );
+      expect(await File(journal['snapshotPath'] as String).exists(), isTrue);
+      expect(await fixture.auth.loadSession(), isNull);
+      expect(
+        await fixture.storage.read(
+          key: journal['candidateSessionKey'] as String,
+        ),
+        isNull,
+      );
+      await fixture.addTodo('after-stopping');
+      expect((await fixture.source.exportSnapshot()).totalCount, 2);
+      // Restart recovery cannot resurrect a cancelled operation or refreeze edits.
+      await fixture.coordinator.initialize();
+      await fixture.coordinator.resume();
+      expect(fixture.coordinator.state.maintenance, isFalse);
+      expect(await fixture.store.read('active'), active);
+      expect(
+        fixture.replacements,
+        hasLength(strategy == SyncConnectionStrategy.replaceServer ? 1 : 0),
+      );
+    });
+  }
+
+  test('停止日志写入失败保留维护锁和待完成记录，重试后恢复本机编辑', () async {
+    // A failed download retains a cancellable candidate and the source database.
+    await expectLater(
+      fixture.coordinator.start(
+        preview: await fixture.preview(),
+        syncKey: 'test-sync-secret',
+        strategy: SyncConnectionStrategy.replaceLocal,
+      ),
+      throwsA(isA<TimeoutException>()),
+    );
+    // Keep the exact operation identity when the cancellation commit fails.
+    final Map<String, dynamic> journal = (await fixture.store.read('pending'))!;
+    await fixture.store.customStatement(
+      "CREATE TRIGGER reject_stop BEFORE INSERT ON connection_control WHEN NEW.id = 'migration:${journal['id']}' BEGIN SELECT RAISE(ABORT, 'stop failure'); END",
+    );
+    await expectLater(fixture.coordinator.cancel(), throwsA(isA<Exception>()));
+    expect(fixture.coordinator.state.busy, isFalse);
+    expect(fixture.coordinator.state.maintenance, isTrue);
+    expect(fixture.coordinator.state.canCancel, isTrue);
+    expect((await fixture.store.read('pending'))!['id'], journal['id']);
+    await expectLater(
+      fixture.addTodo('blocked'),
+      throwsA(isA<SyncWritesFrozen>()),
+    );
+    await fixture.store.customStatement('DROP TRIGGER reject_stop');
+    await fixture.coordinator.cancel();
+    expect(await fixture.store.read('pending'), isNull);
+    expect(fixture.coordinator.state.maintenance, isFalse);
+    await fixture.addTodo('after-stop-retry');
     expect((await fixture.source.exportSnapshot()).totalCount, 2);
   });
 

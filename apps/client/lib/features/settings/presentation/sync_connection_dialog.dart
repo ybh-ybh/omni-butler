@@ -155,7 +155,9 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
           _strategy != SyncConnectionStrategy.replaceLocal &&
           preview.missingImages.isNotEmpty) ...<Widget>[
         const SizedBox(height: OmniSpacing.md),
-        Text('有 ${preview.missingImages.length} 份附件（图片或笔记原音）在本机缺失。继续迁移将保留业务记录，但这些附件无法完整恢复：'),
+        Text(
+          '有 ${preview.missingImages.length} 份附件（图片或笔记原音）在本机缺失。继续迁移将保留业务记录，但这些附件无法完整恢复：',
+        ),
         for (final String image in preview.missingImages) Text(image),
       ],
     ];
@@ -510,6 +512,8 @@ class _SyncConnectionDialogState extends ConsumerState<_SyncConnectionDialog> {
         );
       }
       if (mounted) Navigator.pop(context, true);
+    } on SyncConnectionCancelled {
+      if (mounted) Navigator.pop(context, false);
     } on Object catch (error) {
       if (mounted) setState(() => _error = error.toString());
     } finally {

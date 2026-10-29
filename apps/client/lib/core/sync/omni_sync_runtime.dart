@@ -11,6 +11,7 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/sync/omni_powersync_connector.dart';
 import 'package:omni_butler/core/sync/omni_sync_schema.dart';
 import 'package:omni_butler/core/sync/sync_client_identity.dart';
+import 'package:omni_butler/core/sync/sync_connection_models.dart';
 import 'package:omni_butler/core/sync/sync_snapshot.dart';
 import 'package:omni_butler/core/sync/sync_image_report.dart';
 import 'package:omni_butler/core/sync/sync_note_audio_backup.dart';
@@ -705,32 +706,61 @@ class OmniSyncRuntime {
   }
 
   /// 等待上传全部获确认，再请求服务器检查点并等待其完整落入候选库。
-  Future<void> catchUp({Duration timeout = const Duration(minutes: 3)}) async {
+  Future<void> catchUp({
+    Duration timeout = const Duration(minutes: 3),
+    Future<void>? abortTrigger,
+    void Function(bool requesting)? onCheckpointRequest,
+  }) async {
     if (_schemaError != null) throw _schemaError!;
-    // 一个截止时间覆盖上传与下行，避免每阶段各自重置等待上限。
-    final DateTime deadline = DateTime.now().add(timeout);
-    while (await powerSync.getNextCrudTransaction() != null) {
-      if (_schemaError != null) throw _schemaError!;
-      if (DateTime.now().isAfter(deadline)) {
-        throw const ApiFailure('等待本机快照上传超时，请重试迁移');
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    }
-    // 请求发生在上传回执之后，不能仅依赖曾经完成过首次同步。
-    // ignore: experimental_member_use
-    final checkpoint = await powerSync.requestCheckpoint().timeout(
-      deadline.difference(DateTime.now()),
-    );
-    // 超时必须取消 SDK 内部状态监听，避免重试后遗留等待者。
+    // A single abort signal covers connection, upload, and checkpoint waits.
     final Completer<void> abort = Completer<void>();
-    // 与上传、请求共享同一个总截止时间。
+    // Retain the reason so SDK aborts cannot be mistaken for successful sync.
+    Object? stopped;
+    // Complete once even when cancellation races with the deadline.
+    void stop(Object reason) {
+      if (abort.isCompleted) return;
+      stopped = reason;
+      abort.complete();
+    }
+
+    // Bound the entire wait rather than resetting the timeout per phase.
     final Timer timer = Timer(
-      deadline.difference(DateTime.now()),
-      abort.complete,
+      timeout,
+      () => stop(TimeoutException('等待同步检查点超时')),
     );
+    if (abortTrigger != null) {
+      unawaited(
+        abortTrigger.then((_) => stop(const SyncConnectionCancelled())),
+      );
+    }
+    // Race waits while retaining late errors on the original Future.
+    Future<T> wait<T>(Future<T> pending) =>
+        Future.any<T>([pending, abort.future.then<T>((_) => throw stopped!)]);
     try {
+      while (await wait(powerSync.getNextCrudTransaction()) != null) {
+        if (_schemaError != null) throw _schemaError!;
+        await wait(Future<void>.delayed(const Duration(milliseconds: 100)));
+      }
+      // Do not acquire the SDK checkpoint mutex while the service is offline.
+      // SDK 2.5 waits for a seeded connection under the same lock as disconnect.
+      while (!powerSync.currentStatus.connected ||
+          powerSync.currentStatus.hasSynced != true) {
+        if (_schemaError != null) throw _schemaError!;
+        await wait(Future<void>.delayed(const Duration(milliseconds: 100)));
+      }
+      if (stopped != null) throw stopped!;
+      // The SDK request holds its disconnect lock; protect this short critical phase.
+      onCheckpointRequest?.call(true);
+      // Obtain a fresh checkpoint after all uploads, even after an earlier sync.
+      // ignore: experimental_member_use
+      final checkpoint = await wait(powerSync.requestCheckpoint());
+      onCheckpointRequest?.call(false);
       // ignore: experimental_member_use
       await checkpoint.waitForSync(abortTrigger: abort.future);
+      if (stopped != null) throw stopped!;
+    } catch (_) {
+      if (stopped != null) throw stopped!;
+      rethrow;
     } finally {
       timer.cancel();
     }

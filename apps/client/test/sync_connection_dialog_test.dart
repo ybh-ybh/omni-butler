@@ -29,6 +29,9 @@ class _DialogCoordinator implements SyncConnectionCoordinator {
   /// 延迟最终确认，用于验证迁移期间禁止退出。
   Completer<void>? confirmGate;
 
+  /// Model an explicit stop from the maintenance overlay.
+  bool cancelConfirmation = false;
+
   /// 创建独立表单测试协调器。
   _DialogCoordinator(this.result);
 
@@ -52,6 +55,7 @@ class _DialogCoordinator implements SyncConnectionCoordinator {
   }) async {
     strategies.add(strategy);
     await confirmGate?.future;
+    if (cancelConfirmation) throw const SyncConnectionCancelled();
   }
 
   /// 捕获用户明确确认的同 owner 续连。
@@ -136,6 +140,20 @@ Future<void> _checkServer(WidgetTester tester) async {
 
 /// 验证两步确认、三种策略、取消无副作用以及紧凑布局。
 void main() {
+  testWidgets('停止迁移后关闭连接表单并返回原页面', (WidgetTester tester) async {
+    // The operation reports cancellation rather than a successful connection.
+    final _DialogCoordinator coordinator = _DialogCoordinator(_preview())
+      ..cancelConfirmation = true;
+    await _showDialog(tester, coordinator, platform: TargetPlatform.android);
+    await _checkServer(tester);
+    await tester.ensureVisible(find.text('使用服务器数据替换本机'));
+    await tester.tap(find.text('使用服务器数据替换本机'));
+    await tester.pumpAndSettle();
+    expect(find.text('打开连接设置'), findsOneWidget);
+    expect(find.text('连接服务器'), findsNothing);
+    expect(coordinator.strategies, [SyncConnectionStrategy.replaceLocal]);
+  });
+
   // 普通手机与窄屏大字号均覆盖键盘避让和草稿恢复。
   for (final (double width, double scale) in <(double, double)>[
     (390, 1),

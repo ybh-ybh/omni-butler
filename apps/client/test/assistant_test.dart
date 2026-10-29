@@ -152,7 +152,11 @@ class _AuthController extends AuthController {
 class _ClarificationSync implements OmniSyncRuntime {
   /// 模拟已完成的上传检查点，不连接实际同步服务。
   @override
-  Future<void> catchUp({Duration timeout = const Duration(minutes: 3)}) async {}
+  Future<void> catchUp({
+    Duration timeout = const Duration(minutes: 3),
+    Future<void>? abortTrigger,
+    void Function(bool requesting)? onCheckpointRequest,
+  }) async {}
 
   /// 其他同步行为不属于补充信息的测试范围。
   @override

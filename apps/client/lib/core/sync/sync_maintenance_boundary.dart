@@ -70,8 +70,10 @@ class SyncMaintenanceBoundary extends ConsumerWidget {
                         ),
                         if (!compact) ...[
                           const SizedBox(height: 12),
-                          const Text(
-                            '原本机数据已保留。迁移期间暂停编辑，完成后自动恢复。',
+                          Text(
+                            state.canCancel
+                                ? '停止连接后恢复本机编辑；服务器已完成的修改会保留。'
+                                : '原本机数据已保留。迁移期间暂停编辑，完成后自动恢复。',
                             textAlign: TextAlign.center,
                           ),
                           if (state.error != null) ...[
@@ -99,18 +101,20 @@ class SyncMaintenanceBoundary extends ConsumerWidget {
                                   },
                                   child: const Text('继续迁移'),
                                 ),
-                                if (state.canCancel)
-                                  OmniTextButton(
-                                    onPressed: () async {
-                                      try {
-                                        await coordinator.cancel();
-                                      } catch (_) {
-                                        /* 保持维护门禁。 */
-                                      }
-                                    },
-                                    child: const Text('取消，保留本机数据'),
-                                  ),
                               ],
+                            ),
+                          ],
+                          if (state.canCancel && coordinator != null) ...[
+                            const SizedBox(height: 12),
+                            OmniTextButton(
+                              onPressed: () async {
+                                try {
+                                  await coordinator.cancel();
+                                } catch (_) {
+                                  /* Keep the durable maintenance gate on failure. */
+                                }
+                              },
+                              child: Text(state.busy ? '停止连接并退出' : '取消，保留本机数据'),
                             ),
                           ],
                         ],

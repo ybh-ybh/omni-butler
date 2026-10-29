@@ -27,5 +27,7 @@ flutter pub get --enforce-lockfile # 校验锁定的依赖版本及摘要。
 flutter run --no-pub -d windows
 ```
 
-Android 开发先启动自己的模拟器或连接设备，用 `flutter devices` 查询实际设备 ID，再执行 `flutter run --no-pub -d <设备ID>`。客户端默认使用本机数据；需要服务器功能时，按部署指南配置服务并在设置中连接。
+Android 开发先启动自己的模拟器或连接设备`emulator -avd omni_test -no-snapshot-load`，
+用 `flutter devices` 查询实际设备 ID，再执行 `flutter run --no-pub -d <设备ID>`。`flutter run --no-pub -d emulator-5554`
+客户端默认使用本机数据；需要服务器功能时，按部署指南配置服务并在设置中连接。
 

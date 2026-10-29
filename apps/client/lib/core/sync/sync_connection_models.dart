@@ -1,6 +1,16 @@
 /// 用户明确选择的数据来源策略。
 enum SyncConnectionStrategy { mergeInitial, replaceServer, replaceLocal }
 
+/// Signals an explicit stop without reporting a failed migration.
+class SyncConnectionCancelled implements Exception {
+  /// Creates a user-requested cancellation.
+  const SyncConnectionCancelled();
+
+  /// Describes the preserved local data.
+  @override
+  String toString() => '已停止连接，本机数据仍保留';
+}
+
 /// 经过密钥认证的连接预览；数量只用于确认，执行时重新获取本机快照。
 class SyncConnectionPreview {
   /// 创建双方数据预览。

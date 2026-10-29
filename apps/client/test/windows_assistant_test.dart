@@ -66,7 +66,11 @@ class _DesktopRuntime implements OmniSyncRuntime {
 
   /// 模拟已确认上传的检查点。
   @override
-  Future<void> catchUp({Duration timeout = const Duration(minutes: 3)}) async {
+  Future<void> catchUp({
+    Duration timeout = const Duration(minutes: 3),
+    Future<void>? abortTrigger,
+    void Function(bool requesting)? onCheckpointRequest,
+  }) async {
     checkpoints++;
   }
 

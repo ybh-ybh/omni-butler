@@ -72,6 +72,12 @@ class SyncConnectionCoordinator {
   /// 所有变更入口在第一个 await 前同步取得的互斥准入。
   bool _operationActive = false;
 
+  /// Cancels only the current candidate download, never a remote transaction.
+  Completer<void>? _downloadAbort;
+
+  /// Lets the stop button await cleanup performed by the owning operation.
+  Completer<void>? _downloadStopped;
+
   /// 数据库冻结前必须排空的后台传输器。
   final Set<Future<void> Function()> _backgroundStops = {};
 
@@ -116,7 +122,7 @@ class SyncConnectionCoordinator {
         maintenance: true,
         message: '检测到未完成的数据迁移',
         error: '本机旧数据完整保留。请继续同一次迁移。',
-        canCancel: pending['phase'] == 'prepared',
+        canCancel: _canCancel(pending),
       );
     }
   }
@@ -181,6 +187,8 @@ class SyncConnectionCoordinator {
       throw const ApiFailure('数据来源已变化，请重新检查服务器并选择策略');
     }
     _operationActive = true;
+    _downloadAbort = Completer<void>();
+    _downloadStopped = Completer<void>();
     _publish(maintenance: true, busy: true, message: '正在保留本机数据并准备新数据库');
     try {
       await _stopBackgroundTasks();
@@ -331,11 +339,17 @@ class SyncConnectionCoordinator {
       // 原会话撤销失败不影响本机断开；候选仍不作为活动会话发布。
       await auth.disconnect();
       await _run(journal, snapshot, syncKey);
+    } on SyncConnectionCancelled {
+      await _cancelPending();
+      rethrow;
     } catch (error) {
       await _failed(error);
       rethrow;
     } finally {
       _operationActive = false;
+      _downloadStopped?.complete();
+      _downloadAbort = null;
+      _downloadStopped = null;
     }
   }
 
@@ -345,6 +359,8 @@ class SyncConnectionCoordinator {
       throw const ApiFailure('迁移正在进行，请等待当前操作结束');
     }
     _operationActive = true;
+    _downloadAbort = Completer<void>();
+    _downloadStopped = Completer<void>();
     _publish(maintenance: true, busy: true, message: '正在恢复上次迁移');
     try {
       // 未完成的原始迁移日志。
@@ -376,11 +392,17 @@ class SyncConnectionCoordinator {
         ),
         secret,
       );
+    } on SyncConnectionCancelled {
+      await _cancelPending();
+      rethrow;
     } catch (error) {
       await _failed(error);
       rethrow;
     } finally {
       _operationActive = false;
+      _downloadStopped?.complete();
+      _downloadAbort = null;
+      _downloadStopped = null;
     }
   }
 
@@ -486,12 +508,30 @@ class SyncConnectionCoordinator {
     _publish(
       maintenance: true,
       busy: true,
+      canCancel: true,
       message: strategy == SyncConnectionStrategy.mergeInitial
           ? '正在合并本机数据并等待服务器确认'
           : '正在下载完整数据并验证同步检查点',
     );
     await _candidate!.connect(owner, session: session);
-    await _candidate!.catchUp(timeout: catchUpTimeout);
+    await _candidate!.catchUp(
+      timeout: catchUpTimeout,
+      abortTrigger: _downloadAbort!.future,
+      onCheckpointRequest: (bool requesting) {
+        // Check synchronously before the SDK takes its non-cancellable lock.
+        if (_downloadAbort!.isCompleted) throw const SyncConnectionCancelled();
+        _publish(
+          maintenance: true,
+          busy: true,
+          canCancel: !requesting,
+          message: requesting ? '正在请求同步检查点' : '正在验证同步检查点',
+        );
+      },
+    );
+    // Cancellation wins if it arrives with the last checkpoint response.
+    if (_downloadAbort!.isCompleted) throw const SyncConnectionCancelled();
+    // Activation and attachment restoration cannot race with user cancellation.
+    _publish(maintenance: true, busy: true, message: '正在完成数据切换');
     await _candidate!.restoreLocalAttachments(snapshot, matchingOnly: true);
     await _candidate!.restoreLocalNoteAudio(snapshot);
     // 检查点后再次验证当前 API 身份，旧 PowerSync JWT 不能作为身份有效凭据。
@@ -628,32 +668,75 @@ class SyncConnectionCoordinator {
     }
   }
 
-  /// 仅在尚未发出远端写入时取消；未知提交结果必须查询原回执。
+  /// Stops a safe preparation or download while preserving the original database.
   Future<void> cancel() async {
-    if (_operationActive || state.busy) throw const ApiFailure('请等待当前操作结束');
+    if (_operationActive) {
+      if (!state.canCancel ||
+          _downloadAbort == null ||
+          _downloadStopped == null) {
+        throw const ApiFailure('当前操作尚不能停止，请等待服务器结果确认');
+      }
+      // Claim the stop before awaiting so repeated taps cannot overlap cleanup.
+      final Future<void> stopped = _downloadStopped!.future;
+      _downloadAbort!.complete();
+      _publish(maintenance: true, busy: true, message: '正在停止连接');
+      await stopped;
+      if (state.maintenance) throw ApiFailure(state.error ?? '停止连接未完成，请重试');
+      return;
+    }
+    if (state.busy) throw const ApiFailure('请等待当前操作结束');
     _operationActive = true;
     try {
-      // 持久状态而非 UI 内存决定是否允许取消。
-      final Map<String, dynamic>? journal = await store.read('pending');
-      if (journal == null || journal['phase'] != 'prepared') {
-        throw const ApiFailure('服务器操作可能已提交，请继续原迁移');
-      }
-      // 关闭前取走字段引用，失败也不会遗留已关闭实例。
-      final OmniSyncRuntime? candidate = _candidate;
-      _candidate = null;
-      await candidate?.close();
-      await store.remove('pending');
-      runtime.resumeWrites();
-      _publish(message: '已取消迁移，本机数据仍保留', generation: state.generation + 1);
-      try {
-        await secureStorage.delete(
-          key: 'sync.migration.${journal['id']}.secret',
-        );
-      } catch (_) {
-        /* 取消已生效，临时密钥清理不阻塞本机使用。 */
-      }
+      await _cancelPending();
+    } catch (error) {
+      await _failed(error);
+      rethrow;
     } finally {
       _operationActive = false;
+    }
+  }
+
+  /// Remote submissions with an unknown outcome must keep their recovery journal.
+  bool _canCancel(Map<String, dynamic> journal) =>
+      journal['phase'] == 'prepared' || journal['phase'] == 'syncing';
+
+  /// Detaches the candidate before reopening local writes; no remote rollback occurs.
+  Future<void> _cancelPending() async {
+    // Recheck durable state instead of trusting a potentially stale button.
+    final Map<String, dynamic>? journal = await store.read('pending');
+    if (journal == null || !_canCancel(journal)) {
+      throw const ApiFailure('服务器操作可能已提交，请继续原迁移');
+    }
+    try {
+      // Retain a failed disconnect for retry, but never retain a closed instance.
+      final OmniSyncRuntime? candidate = _candidate;
+      await candidate?.disconnect();
+      _candidate = null;
+      await candidate?.close();
+      await auth
+          .forkForSession(journal['candidateSessionKey'] as String)
+          .clearSession();
+      // Prevent provider rebuilds from reconnecting the original source automatically.
+      await auth.clearSession();
+      // Preserve the operation identity and snapshot while preventing restart recovery.
+      await store.transaction(() async {
+        await store.write('migration:${journal['id']}', {
+          ...journal,
+          'phase': 'cancelled',
+          'cancelledAt': DateTime.now().toUtc().toIso8601String(),
+        });
+        await store.remove('pending');
+      });
+      runtime.resumeWrites();
+      _publish(message: '已停止连接，本机数据仍保留', generation: state.generation + 1);
+    } catch (error) {
+      await _failed(error);
+      rethrow;
+    }
+    try {
+      await secureStorage.delete(key: 'sync.migration.${journal['id']}.secret');
+    } catch (_) {
+      /* Local editing is already restored; secret cleanup can be retried. */
     }
   }
 
@@ -763,7 +846,7 @@ class SyncConnectionCoordinator {
       maintenance: journal != null,
       error: error.toString(),
       message: journal == null ? '连接尚未完成，本机数据仍保留' : '迁移已暂停，本机原数据完整保留',
-      canCancel: journal?['phase'] == 'prepared',
+      canCancel: journal != null && _canCancel(journal),
       generation: journal == null ? state.generation + 1 : state.generation,
     );
   }
