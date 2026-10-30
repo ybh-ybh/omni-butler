@@ -92,7 +92,7 @@ class _AssistantSettingsSectionState
     });
   }
 
-  /// 读取失败时不提供空白可写设置。
+  /// Show voice preferences only on platforms using tap-to-record input.
   @override
   Widget build(BuildContext context) {
     // 助手设置与笔记当前配置独立。
@@ -240,10 +240,12 @@ class _AssistantSettingsSectionState
               );
             },
           ),
-          const SizedBox(height: OmniSpacing.md),
-          const Divider(height: 1),
-          const SizedBox(height: OmniSpacing.md),
-          const _AssistantVoiceSettings(),
+          if (Theme.of(context).platform != TargetPlatform.android) ...<Widget>[
+            const SizedBox(height: OmniSpacing.md),
+            const Divider(height: 1),
+            const SizedBox(height: OmniSpacing.md),
+            const _AssistantVoiceSettings(),
+          ],
         ],
       ),
     );

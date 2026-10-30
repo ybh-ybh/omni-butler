@@ -24,10 +24,14 @@ class AssistantAttachmentButton extends StatefulWidget {
   /// 页面设置及网络状态允许选择。
   final bool enabled;
 
+  /// Platform-specific glyph without changing the picker lifecycle.
+  final IconData icon;
+
   /// 创建附件选择入口。
   const AssistantAttachmentButton({
     required this.attachments,
     required this.enabled,
+    this.icon = Icons.attach_file,
     super.key,
   });
 
@@ -98,7 +102,7 @@ class _AssistantAttachmentButtonState extends State<AssistantAttachmentButton> {
       : OmniIconButton(
           key: const ValueKey<String>('assistant-attach-button'),
           tooltip: '添加图片或文档',
-          icon: const Icon(Icons.attach_file),
+          icon: Icon(widget.icon),
           onPressed:
               widget.enabled &&
                   widget.attachments.editable &&

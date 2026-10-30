@@ -22,6 +22,7 @@ import 'package:omni_butler/features/assistant/presentation/assistant_cards.dart
 import 'package:omni_butler/features/assistant/presentation/assistant_markdown.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_attachment_widgets.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_windows_view.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_android_view.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_execution_progress.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_windows_tokens.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_answer_actions.dart';
@@ -167,37 +168,39 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
     unawaited(_chat.initialize());
   }
 
-  /// 监听实际路由，不依赖父页面是否销毁。
+  /// Observe the top route, including imperative pushes that do not update URLs.
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // 部件测试可不安装GoRouter，此时按当前页面处理。
+    // Standalone widget tests may omit a router.
     final GoRouter? router = GoRouter.maybeOf(context);
     if (identical(router, _router)) return;
-    _router?.routeInformationProvider.removeListener(_routeChanged);
+    _router?.routerDelegate.removeListener(_routeChanged);
     _router = router;
-    _router?.routeInformationProvider.addListener(_routeChanged);
+    _router?.routerDelegate.addListener(_routeChanged);
   }
 
-  /// 页面及应用必须仍可见，权限弹框的inactive不直接取消。
+  /// Require the actual top route and a visible app without relying on the URL.
   bool get _voiceContextCurrent =>
       mounted &&
       !_leaving &&
       widget.repository?.isCurrent == true &&
       (_router == null ||
-          _router!.routeInformationProvider.value.uri.path == '/assistant') &&
+          (_router!.routerDelegate.currentConfiguration.isNotEmpty &&
+              _router!.state.uri.path == '/assistant')) &&
       (WidgetsBinding.instance.lifecycleState == null ||
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed ||
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.inactive);
 
-  /// 路由跳转同步作废语音，再异步等待收尾。
+  /// Invalidate speech on route exit and refresh the entry gate on return.
   void _routeChanged() {
     if (_voice.busy && !_voiceContextCurrent) {
       unawaited(_cancelVoiceInBackground());
     }
+    if (mounted && !_leaving) setState(() {});
   }
 
-  /// Android后台和系统隐藏均中止本次输入，不触发自动发送。
+  /// Stop hidden capture and refresh eligibility when the app becomes visible.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (<AppLifecycleState>{
@@ -207,6 +210,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
     }.contains(state)) {
       unawaited(_cancelVoiceInBackground());
     }
+    if (mounted && !_leaving) setState(() {});
   }
 
   /// 共享控制器同时冻结附件及键盘发送。
@@ -258,36 +262,69 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
             }.contains(_chat.run?['status']));
   }
 
-  /// 一次点击开启，一次点击结束；准备期间不接受重复操作。
+  /// Preserve desktop click-to-toggle recording and ignore duplicate starts.
   Future<void> _toggleVoice() async {
     if (_voice.phase == AssistantVoicePhase.recording) {
       await _voice.finish();
       return;
     }
     if (_voice.busy || !_canVoiceInput) return;
-    // 语音结果永久绑定开始时的会话。
+    await _startVoice(autoSend: ref.read(assistantVoicePreferenceProvider));
+  }
+
+  /// Hold-to-talk explicitly sends the completed Android utterance.
+  Future<void> _startAndroidVoice() =>
+      _startVoice(autoSend: true, reportBlocked: true);
+
+  /// Bind either interaction to the original conversation and selection.
+  Future<void> _startVoice({
+    required bool autoSend,
+    bool reportBlocked = false,
+  }) async {
+    if (_voice.busy || !_canVoiceInput) return;
+    // Keep the session bound until its final response is consumed.
     final String? conversation = _chat.conversationId;
     // 先结束输入法组合，语音不能覆盖正在组词的范围。
     _input.value = _input.value.copyWith(composing: TextRange.empty);
     _focus.unfocus();
     await _voice.start(
       initial: _input.value,
-      autoSend: ref.read(assistantVoicePreferenceProvider),
+      autoSend: autoSend,
       isCurrent: () =>
           _voiceContextCurrent && _chat.conversationId == conversation,
       send: () async {
+        // Recheck current configuration after the final transcript arrives.
+        final Map<String, dynamic>? settings = ref
+            .read(assistantSettingsProvider)
+            .value;
+        // Attachment failures already provide a specific user-facing reason.
+        final String? attachmentBlock = _chat.attachments.blockReason(
+          settings,
+          includeVision: false,
+        );
         if (!_canVoiceInput ||
             _voice.busy ||
             _chat.conversationId != conversation ||
             _input.text.length > 20000 ||
-            _chat.attachments.blockReason(
-                  ref.read(assistantSettingsProvider).value,
-                  includeVision: false,
-                ) !=
-                null) {
+            attachmentBlock != null) {
+          if (reportBlocked) {
+            // Keep the combined draft visible with the reason it was not sent.
+            final String reason = !_chat.connected || _chat.offline
+                ? '当前离线，草稿已保留，请联网后发送'
+                : _input.text.length > 20000
+                ? '内容超过 20000 字，草稿已保留，请精简后发送'
+                : attachmentBlock ??
+                      (settings?['enabled'] != true
+                          ? 'AI 助手未启用或配置尚未就绪，草稿已保留'
+                          : '当前对话暂时无法发送，草稿已保留，请稍后发送');
+            throw ApiFailure(reason);
+          }
           return;
         }
         await _send();
+        if (reportBlocked && mounted && _chat.error != null) {
+          throw ApiFailure(_chat.error!);
+        }
       },
     );
   }
@@ -321,12 +358,12 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
     }
   }
 
-  /// 页面离开不停止后台任务，只结束事件订阅。
+  /// Release page listeners without cancelling existing background chat tasks.
   @override
   void dispose() {
     _leaving = true;
     WidgetsBinding.instance.removeObserver(this);
-    _router?.routeInformationProvider.removeListener(_routeChanged);
+    _router?.routerDelegate.removeListener(_routeChanged);
     _voice.removeListener(_voiceChanged);
     // 页面已经离开时，宿主退出仍须等待原会话的停麦和草稿快照。
     final Future<void> cleanup = Future.wait<void>(<Future<void>>[
@@ -380,6 +417,20 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
         builder: (BuildContext context) =>
             _AssistantRenameDialog(title: title, initial: initial),
       );
+
+  /// Rename the selected history item even when another chat is open.
+  Future<void> _renameConversation(String id) async {
+    // Resolve the title from the selected immutable conversation identity.
+    final String title =
+        _chat.conversations
+                .where((Map<String, dynamic> item) => item['id'] == id)
+                .firstOrNull?['title']
+            as String? ??
+        '新对话';
+    // Keep the existing dialog and validation lifecycle.
+    final String? value = await _askText('重命名对话', title);
+    if (value != null && mounted) await _chat.rename(value, id: id);
+  }
 
   /// 会话删除需要明确说明仅删除聊天。
   Future<void> _deleteConversation({String? id}) async {
@@ -704,9 +755,11 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
     ),
   );
 
-  /// 助手正文渲染 Markdown，用户消息沿用原有展示。
+  /// Render assistant Markdown and platform-specific user bubble surfaces.
   Widget _message(Map<String, dynamic> message, bool enabled) {
     enabled = enabled && !_voice.busy;
+    // Android uses the reference's unboxed assistant answer layout.
+    final bool android = Theme.of(context).platform == TargetPlatform.android;
     // 用户消息与助手消息使用位置和留白区别。
     final bool user = message['role'] == 'user';
     // 业务保存与撤销始终使用本条持久回答身份。
@@ -741,8 +794,17 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
                   vertical: 8,
                 ),
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(OmniRadius.control),
+                  color: android
+                      ? OmniColors.of(context).brand.withValues(alpha: .08)
+                      : Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: android
+                      ? const BorderRadius.only(
+                          topLeft: Radius.circular(OmniRadius.dialog),
+                          topRight: Radius.circular(OmniRadius.dialog),
+                          bottomLeft: Radius.circular(OmniRadius.dialog),
+                          bottomRight: Radius.circular(OmniRadius.tiny),
+                        )
+                      : BorderRadius.circular(OmniRadius.control),
                 ),
                 child: SelectableText.rich(
                   NoteMarkdownText.span(
@@ -763,7 +825,9 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
         alignment: user ? Alignment.centerRight : Alignment.centerLeft,
         child: Container(
           constraints: const BoxConstraints(maxWidth: 760),
-          padding: const EdgeInsets.all(OmniSpacing.md),
+          padding: android
+              ? EdgeInsets.zero
+              : const EdgeInsets.all(OmniSpacing.md),
           decoration: user
               ? BoxDecoration(
                   color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -788,11 +852,13 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text(
-                  user ? '你' : '知序',
-                  style: Theme.of(context).textTheme.labelMedium,
-                ),
-                const SizedBox(height: OmniSpacing.xs),
+                if (!android) ...<Widget>[
+                  Text(
+                    user ? '你' : '知序',
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  const SizedBox(height: OmniSpacing.xs),
+                ],
                 if (!user)
                   AssistantExecutionProgress(
                     key: ValueKey<String>(
@@ -882,7 +948,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
     );
   }
 
-  /// 宽屏双栏、窄屏独立对话，并保留加载和设置错误状态。
+  /// Select the platform view while retaining the original controller owners.
   @override
   Widget build(BuildContext context) {
     // 后端助手开关与独立模型配置。
@@ -918,6 +984,23 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
           final String? value = await _askText('重命名对话', title);
           if (value != null && mounted) await _chat.rename(value, id: id);
         },
+      );
+    }
+    if (Theme.of(context).platform == TargetPlatform.android) {
+      return AssistantAndroidView(
+        chat: _chat,
+        input: _input,
+        inputFocus: _focus,
+        scroll: _scroll,
+        voice: _voice,
+        canVoiceInput: _canVoiceInput,
+        enabled: enabled,
+        onSend: _send,
+        onContinue: _continueConversation,
+        onStartVoice: _startAndroidVoice,
+        onDelete: (String id) => _deleteConversation(id: id),
+        onRename: _renameConversation,
+        messageBuilder: _message,
       );
     }
     return LayoutBuilder(

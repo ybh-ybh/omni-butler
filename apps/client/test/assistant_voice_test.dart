@@ -95,7 +95,7 @@ Future<void> _turn() async {
   }
 }
 
-/// 覆盖终态、草稿、设备占用与本机偏好的运行时契约。
+/// Verify voice completion, draft recovery, device ownership, and preferences.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -150,6 +150,7 @@ void main() {
     final _Harness h = _Harness(value: original);
     addTearDown(h.close);
     await h.ready(autoSend: true);
+    h.connection.text('临时结果');
     await h.voice.finish();
     h.connection.complete('');
     await _turn();
@@ -171,6 +172,131 @@ void main() {
     expect(h.value.text, '前保留后');
     expect(h.sent, 0);
     expect(h.mic.isOccupied, isFalse);
+  });
+
+  // Explicit discard restores the exact selection without reviving IME composition.
+  test('上滑取消同步恢复原草稿和选区，清空组词并忽略迟到事件', () async {
+    // Preserve a directional selection and an active composition for rollback.
+    const TextEditingValue original = TextEditingValue(
+      text: '前旧词后',
+      selection: TextSelection(
+        baseOffset: 3,
+        extentOffset: 1,
+        affinity: TextAffinity.upstream,
+        isDirectional: true,
+      ),
+      composing: TextRange(start: 1, end: 3),
+    );
+    // Use the real controller with isolated recording and network boundaries.
+    final _Harness h = _Harness(value: original);
+    addTearDown(h.close);
+    await h.ready(autoSend: true);
+    h.connection.text('新词');
+    expect(h.value.text, '前新词后');
+    // Cancellation must restore before asynchronous device cleanup completes.
+    final Future<void> cancellation = h.voice.cancel(restoreInitial: true);
+    expect(h.value, original.copyWith(composing: TextRange.empty));
+    h.connection.text('迟到中间结果');
+    h.connection.complete('迟到最终结果');
+    await cancellation;
+    await _turn();
+    expect(h.value, original.copyWith(composing: TextRange.empty));
+    expect(h.sent, 0);
+    expect(h.voice.message, isNull);
+    expect(h.mic.isOccupied, isFalse);
+  });
+
+  // A stale recording must never replace another conversation's draft.
+  test('取消恢复只写原会话，身份失效后保留新会话草稿', () async {
+    // Start a recording whose origin can be invalidated independently.
+    final _Harness h = _Harness();
+    addTearDown(h.close);
+    await h.ready(autoSend: true);
+    h.connection.text('旧会话识别');
+    h.current = false;
+    // Simulate the new conversation restoring its own text and selection.
+    const TextEditingValue next = TextEditingValue(
+      text: '新会话草稿',
+      selection: TextSelection.collapsed(offset: 2),
+    );
+    h.value = next;
+    await h.voice.cancel(restoreInitial: true);
+    h.connection.complete('旧会话迟到结果');
+    await _turn();
+    expect(h.value, next);
+    expect(h.sent, 0);
+    expect(h.mic.isOccupied, isFalse);
+  });
+
+  // A completed event can still be discarded while its device cleanup is pending.
+  test('最终事件清理期间取消恢复原草稿，不触发已排队自动发送', () async {
+    // Capture the initial value before final completion starts cleanup.
+    final _Harness h = _Harness();
+    addTearDown(h.close);
+    // Preserve the original draft independently of later transcript callbacks.
+    final TextEditingValue original = h.value;
+    await h.ready(autoSend: true);
+    await h.voice.finish();
+    h.connection.complete('准备发送的最终结果');
+    expect(h.value.text, '前准备发送的最终结果后');
+    // Cancel synchronously before completion resumes after cleanup.
+    final Future<void> cancellation = h.voice.cancel(restoreInitial: true);
+    expect(h.value, original);
+    await cancellation;
+    await _turn();
+    expect(h.value, original);
+    expect(h.sent, 0);
+    expect(h.voice.phase, AssistantVoicePhase.idle);
+    expect(h.voice.message, isNull);
+  });
+
+  // Releasing before permission arrives must discard without starting later.
+  test('准备期间松手同步恢复草稿，迟到权限不会开麦或发送', () async {
+    // Keep the platform permission prompt unresolved until after release.
+    final Completer<bool> permission = Completer<bool>();
+    // Include composition to verify rollback ends any abandoned IME session.
+    const TextEditingValue original = TextEditingValue(
+      text: '保留草稿',
+      selection: TextSelection(baseOffset: 1, extentOffset: 3),
+      composing: TextRange(start: 1, end: 3),
+    );
+    // Use isolated recording resources for the unresolved permission request.
+    final _Harness h = _Harness(value: original);
+    addTearDown(h.close);
+    h.recorder.permission = permission.future;
+    // Start and cancel independently to exercise the preparing phase.
+    final Future<void> startup = h.start(autoSend: true);
+    await _turn();
+    expect(h.voice.phase, AssistantVoicePhase.preparing);
+    // Gesture release invalidates the session before permission returns.
+    final Future<void> cancellation = h.voice.cancel(restoreInitial: true);
+    expect(h.value, original.copyWith(composing: TextRange.empty));
+    expect(h.mic.isOccupied, isTrue);
+    permission.complete(true);
+    await startup;
+    await cancellation;
+    expect(h.recorder.starts, 0);
+    expect(h.sent, 0);
+    expect(h.mic.isOccupied, isFalse);
+    expect(h.voice.message, isNull);
+  });
+
+  // Explicit rollback must not hide a real device-release failure.
+  test('取消恢复后设备释放失败仍保留错误，不声称保留转写', () async {
+    // Simulate failure of both native stop and disposal after recording.
+    final _Harness h = _Harness();
+    addTearDown(h.close);
+    // Keep the snapshot before the transcript changes the visible draft.
+    final TextEditingValue original = h.value;
+    await h.ready();
+    h.connection.text('丢弃文字');
+    h.recorder.failCleanup = true;
+    await h.voice.cancel(restoreInitial: true);
+    expect(h.value, original);
+    expect(h.voice.message, contains('重启应用'));
+    expect(h.voice.message, isNot(contains('文字已保留')));
+    expect(h.voice.message, isNot(contains('已保留文字')));
+    expect(h.sent, 0);
   });
 
   test('等待权限时取消，迟到授权不会重新开麦', () async {

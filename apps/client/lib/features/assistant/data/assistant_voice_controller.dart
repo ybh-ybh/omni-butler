@@ -378,6 +378,10 @@ class AssistantVoiceController extends ChangeNotifier {
         session.isCurrent()) {
       try {
         await session.send();
+      } on ApiFailure catch (error) {
+        // Preserve actionable submission gates instead of hiding their reason.
+        message = error.message;
+        _changed();
       } catch (_) {
         message = '自动发送未完成，已保留草稿，请检查后发送';
         _changed();
@@ -398,10 +402,10 @@ class AssistantVoiceController extends ChangeNotifier {
     _changed();
   }
 
-  /// 导航取消同步使事件失效，收尾不再写任何草稿。
-  Future<void> cancel() {
+  /// Invalidate events immediately and optionally restore the original draft.
+  Future<void> cancel({bool restoreInitial = false}) {
     if (_cancelling != null) return _cancelling!;
-    // 同一对象即使已完成事件也需清理，禁止完成后的迟到发送。
+    // Keep final cleanup cancellable before it can submit the original session.
     final _VoiceSession? session = _session;
     if (session == null) return Future<void>.value();
     _session = null;
@@ -409,13 +413,22 @@ class AssistantVoiceController extends ChangeNotifier {
     session.manual = false;
     if (!session.ready.isCompleted) session.ready.complete();
     phase = AssistantVoicePhase.finishing;
+    if (restoreInitial && !_disposed && session.isCurrent()) {
+      onText(session.initial.copyWith(composing: TextRange.empty));
+    }
     _changed();
     _cancelling = _cleanup(session)
         .then((_) {
           if (_session != null) return;
           phase = AssistantVoicePhase.idle;
-          message = session.text.isEmpty ? null : '语音输入已中止，已保留文字，请检查后发送';
-          if (!session.deviceReleased) message = '麦克风未能释放，请重启应用后再录音；文字已保留';
+          message = restoreInitial || session.text.isEmpty
+              ? null
+              : '语音输入已中止，已保留文字，请检查后发送';
+          if (!session.deviceReleased) {
+            message = restoreInitial
+                ? '麦克风未能释放，请重启应用后再录音'
+                : '麦克风未能释放，请重启应用后再录音；文字已保留';
+          }
           _changed();
         })
         .whenComplete(() => _cancelling = null);

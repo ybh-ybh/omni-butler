@@ -23,6 +23,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:omni_butler/core/auth/auth_providers.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_page.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_android_view.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_settings_section.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_memories_page.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
@@ -36,6 +37,9 @@ import 'package:omni_butler/features/assistant/data/assistant_chat_controller.da
 import 'package:omni_butler/features/assistant/data/assistant_models.dart';
 import 'package:omni_butler/features/assistant/data/assistant_repository.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_cards.dart';
+
+part 'support/assistant_android_scenarios.dart';
+part 'support/assistant_android_sidebar_scenarios.dart';
 
 /// 无平台存储、无外网的认证边界。
 class _Auth implements AuthRepository {
@@ -178,6 +182,15 @@ class _VoiceNoteRecorder implements NoteRecorderService {
 Future<void> _settle() =>
     Future<void>.delayed(const Duration(milliseconds: 60));
 
+/// Drain sequential stream cancellation and SQLite callbacks across both zones.
+Future<void> _drainVoiceNavigation(WidgetTester tester) async {
+  // Cleanup awaits multiple stream futures before releasing the device.
+  for (int turn = 0; turn < 4; turn++) {
+    await tester.pump();
+    await tester.runAsync(_settle);
+  }
+}
+
 /// 完整事件的统一测试构造器。
 AssistantEvent _event(int seq, String text) => AssistantEvent(
   seq: seq,
@@ -186,7 +199,7 @@ AssistantEvent _event(int seq, String text) => AssistantEvent(
   data: <String, dynamic>{'messageId': 'answer', 'text': text},
 );
 
-/// 助手的幂等、恢复和只读卡片关键路径。
+/// Cover assistant recovery, route ownership, and protected business actions.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   // 各测试使用独立本机偏好，不访问用户设置。
@@ -196,9 +209,12 @@ void main() {
     testPreferences = await SharedPreferences.getInstance();
   });
 
+  // Android exercises hold-to-talk independently from desktop preferences.
+  _registerAndroidAssistantScenarios(() => testPreferences);
+  _registerAndroidSidebarScenarios(() => testPreferences);
+
   for (final TargetPlatform platform in <TargetPlatform>[
     TargetPlatform.windows,
-    TargetPlatform.android,
   ]) {
     for (final bool autoSend in <bool>[false, true]) {
       testWidgets(
@@ -309,17 +325,6 @@ void main() {
                 .readOnly,
             isTrue,
           );
-          if (platform == TargetPlatform.android) {
-            // 示例快捷填入也必须冻结，避免覆盖语音草稿。
-            expect(
-              tester
-                  .widget<OmniButton>(
-                    find.widgetWithText(OmniButton, '帮我做本周总结'),
-                  )
-                  .onPressed,
-              isNull,
-            );
-          }
           expect(
             repository.calls.where((call) => call.method == 'POST'),
             isEmpty,
@@ -424,6 +429,13 @@ void main() {
         find.byKey(const ValueKey<String>('assistant-voice-button')),
       );
       await tester.pump();
+      // Hold the Android recording surface until the host cancels it.
+      final TestGesture voiceHold = await tester.startGesture(
+        tester.getCenter(
+          find.byKey(const ValueKey<String>('assistant-voice-hold')),
+        ),
+      );
+      await tester.pump();
       connection.output.add(<String, dynamic>{'type': 'ready'});
       await tester.pump();
       connection.text('保留语音');
@@ -451,6 +463,7 @@ void main() {
       expect(recorder.disposals, 1);
       await tester.pumpAndSettle();
       await cancellation;
+      await voiceHold.up();
       connection.complete('迟到结果');
       await tester.pumpAndSettle();
       expect(recorder.disposals, 1);
@@ -476,7 +489,8 @@ void main() {
           assistantSettingsProvider.overrideWith((Ref ref) async => null),
         ],
         child: MaterialApp(
-          theme: AppTheme.build(brightness: Brightness.light),
+          theme: AppTheme.build(brightness: Brightness.light)
+              .copyWith(platform: TargetPlatform.windows),
           home: const Scaffold(
             body: SingleChildScrollView(child: AssistantSettingsSection()),
           ),
@@ -1023,7 +1037,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(
-        find.text(platform == TargetPlatform.windows ? '新聊天' : '知序助手'),
+        find.text(platform == TargetPlatform.windows ? '新聊天' : '新对话'),
         findsOneWidget,
       );
       expect(
@@ -1412,30 +1426,30 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('停止'), findsOneWidget);
+    expect(find.byTooltip('停止'), findsOneWidget);
     await tester.tap(
       find.byKey(const ValueKey<String>('assistant-stop-button')),
     );
     await tester.pumpAndSettle();
-    expect(find.text('停止'), findsNothing);
+    expect(find.byTooltip('停止'), findsNothing);
     expect(
       find.byKey(const ValueKey<String>('assistant-continue-button')),
       findsOneWidget,
     );
-    expect(find.text('开始'), findsOneWidget);
+    expect(find.byTooltip('开始'), findsOneWidget);
     await tester.enterText(
       find.byKey(const ValueKey<String>('assistant-input')),
       '新的问题',
     );
     await tester.pump();
-    expect(find.text('发送'), findsOneWidget);
-    expect(find.text('开始'), findsNothing);
+    expect(find.byTooltip('发送'), findsOneWidget);
+    expect(find.byTooltip('开始'), findsNothing);
     await tester.enterText(
       find.byKey(const ValueKey<String>('assistant-input')),
       '',
     );
     await tester.pump();
-    expect(find.text('开始'), findsOneWidget);
+    expect(find.byTooltip('开始'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -1744,13 +1758,22 @@ void main() {
           ),
         ],
         child: MaterialApp(
-          theme: AppTheme.build(brightness: Brightness.light),
+          theme: AppTheme.build(brightness: Brightness.light)
+              .copyWith(platform: TargetPlatform.android),
           home: const Scaffold(body: AssistantPage()),
         ),
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('重命名对话'));
+    await tester.tap(
+      find.byKey(const ValueKey<String>('assistant-history-button')),
+    );
+    await tester.pumpAndSettle();
+    await tester.longPress(
+      find.byKey(const ValueKey<String>('assistant-history-row-conversation')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('重命名'));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byWidgetPredicate(
@@ -2789,6 +2812,186 @@ void main() {
               : null,
         );
         expect(payload['content'], '只记住需要的偏好');
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  // Real imperative navigation must use the visible route rather than its URL.
+  for (final bool finishBeforeCover in <bool>[false, true]) {
+    testWidgets(
+      'Android真实push路由保持语音可用，覆盖页面在${finishBeforeCover ? '收尾' : '按住'}时取消并在pop后恢复',
+      (WidgetTester tester) async {
+        // Keep the production default where imperative pushes do not change URLs.
+        final bool previousUrlOption = GoRouter.optionURLReflectsImperativeAPIs;
+        GoRouter.optionURLReflectsImperativeAPIs = false;
+        // Ensure the test starts in a visible lifecycle state.
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        // Isolate chat drafts from the user's actual database.
+        final AssistantCache cache = AssistantCache.forTesting(
+          NativeDatabase.memory(),
+        );
+        // Keep all network calls observable without contacting a real server.
+        final _Repository repository = _Repository(_Auth());
+        // A fake device still exercises the real voice ownership controller.
+        final FakeVoiceRecorder recorder = FakeVoiceRecorder();
+        // Delayed final events verify cancellation after route coverage.
+        final FakeSpeechConnection connection = FakeSpeechConnection();
+        // The assistant is pushed from home exactly as in the Android app.
+        final GoRouter router = GoRouter(
+          initialLocation: '/home',
+          routes: <RouteBase>[
+            GoRoute(
+              path: '/home',
+              builder: (context, state) => Scaffold(
+                body: OmniButton(
+                  label: '打开助手',
+                  onPressed: () => context.push('/assistant'),
+                ),
+              ),
+            ),
+            GoRoute(
+              path: '/assistant',
+              builder: (context, state) =>
+                  const Scaffold(body: SafeArea(child: AssistantPage())),
+            ),
+            GoRoute(
+              path: '/covered',
+              builder: (context, state) => const Scaffold(body: Text('覆盖页面')),
+            ),
+          ],
+        );
+        addTearDown(() async {
+          await tester.pumpWidget(const SizedBox());
+          await tester.pumpAndSettle();
+          await tester.runAsync(_settle);
+          router.dispose();
+          await cache.close();
+          await recorder.audio.close();
+          await connection.output.close();
+          GoRouter.optionURLReflectsImperativeAPIs = previousUrlOption;
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.resumed,
+          );
+        });
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              sharedPreferencesProvider.overrideWithValue(testPreferences),
+              authControllerProvider.overrideWith(_AuthController.new),
+              assistantRepositoryProvider.overrideWithValue(repository),
+              assistantCacheProvider.overrideWithValue(cache),
+              assistantSettingsProvider.overrideWith(
+                (Ref ref) async => <String, dynamic>{'enabled': true},
+              ),
+              syncRuntimeProvider.overrideWithValue(_ClarificationSync()),
+              noteRecorderProvider.overrideWithValue(_VoiceNoteRecorder()),
+              assistantVoiceRecorderFactoryProvider.overrideWithValue(
+                () => recorder,
+              ),
+              assistantSpeechConnectorProvider.overrideWithValue(
+                (_, _) async => connection,
+              ),
+            ],
+            child: MaterialApp.router(
+              routerConfig: router,
+              theme: AppTheme.build(brightness: Brightness.light)
+                  .copyWith(platform: TargetPlatform.android),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('打开助手'));
+        await tester.pumpAndSettle();
+        expect(router.state.uri.path, '/assistant');
+        expect(router.routeInformationProvider.value.uri.path, '/home');
+        expect(
+          tester
+              .widget<AssistantAndroidView>(find.byType(AssistantAndroidView))
+              .canVoiceInput,
+          isTrue,
+        );
+        await tester.tap(
+          find.byKey(const ValueKey<String>('assistant-voice-button')),
+        );
+        await tester.pump();
+        // Keep the same physical press through recording or finalization.
+        final TestGesture hold = await tester.startGesture(
+          tester.getCenter(
+            find.byKey(const ValueKey<String>('assistant-voice-hold')),
+          ),
+        );
+        await tester.pump();
+        connection.output.add(<String, dynamic>{'type': 'ready'});
+        await tester.pump();
+        await tester.pump();
+        expect(recorder.starts, 1);
+        connection.text('路由切换前草稿');
+        await tester.pump();
+        // Keep the live controller available while the route is covered.
+        final AssistantVoiceController routeVoice = tester
+            .widget<AssistantAndroidView>(find.byType(AssistantAndroidView))
+            .voice;
+        expect(routeVoice.phase, AssistantVoicePhase.recording);
+        if (finishBeforeCover) {
+          await hold.up();
+          await _drainVoiceNavigation(tester);
+          expect(routeVoice.phase, AssistantVoicePhase.finishing);
+          expect(connection.endings, <bool>[true]);
+        }
+        unawaited(router.push<void>('/covered'));
+        await _drainVoiceNavigation(tester);
+        await tester.pumpAndSettle();
+        expect(router.state.uri.path, '/covered');
+        expect(routeVoice.phase, AssistantVoicePhase.idle);
+        expect(recorder.disposals, 1);
+        connection.complete('迟到结果不应发送');
+        await _drainVoiceNavigation(tester);
+        expect(
+          repository.calls.where(
+            (call) => call.method == 'POST' && call.path.endsWith('/messages'),
+          ),
+          isEmpty,
+        );
+        if (!finishBeforeCover) await hold.up();
+        router.pop();
+        await tester.pumpAndSettle();
+        expect(router.state.uri.path, '/assistant');
+        // Returning to the covered route must refresh its frozen eligibility.
+        final AssistantAndroidView restored = tester
+            .widget<AssistantAndroidView>(find.byType(AssistantAndroidView));
+        expect(restored.canVoiceInput, isTrue);
+        expect(restored.input.text, '路由切换前草稿');
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.inactive,
+        );
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        // Hidden apps normally stop frames; force one to inspect the guarded view.
+        tester.binding.scheduleForcedFrame();
+        await tester.pump();
+        expect(
+          tester
+              .widget<AssistantAndroidView>(find.byType(AssistantAndroidView))
+              .canVoiceInput,
+          isFalse,
+        );
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.inactive,
+        );
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        await tester.pump();
+        expect(
+          tester
+              .widget<AssistantAndroidView>(find.byType(AssistantAndroidView))
+              .canVoiceInput,
+          isTrue,
+        );
         expect(tester.takeException(), isNull);
       },
     );
