@@ -3762,6 +3762,8 @@ class _InventoryEditorDialogState
           label: '保存',
           onPressed: _saving ? null : _save,
           loading: _saving,
+          showLoadingIndicator:
+              Theme.of(context).platform != TargetPlatform.android,
         ),
       ],
       child: Padding(
@@ -3986,6 +3988,7 @@ class _InventoryEditorDialogState
         title: '新增物品',
         primaryKey: const ValueKey<String>('inventory-create-submit'),
         loading: _saving,
+        showLoadingIndicator: false,
         onPrimary: _save,
         onCancel: () => Navigator.of(context).pop(),
         child: _withSaveError(

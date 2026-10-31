@@ -13,6 +13,10 @@ Future<void> _mount(
   WidgetTester tester, {
   bool mobile = false,
   bool saved = false,
+  bool saving = false,
+  String? error,
+  String messageId = 'answer',
+  TargetPlatform platform = TargetPlatform.windows,
   double width = 1000,
   double scale = 1,
   Brightness brightness = Brightness.light,
@@ -25,7 +29,8 @@ Future<void> _mount(
   addTearDown(tester.view.resetDevicePixelRatio);
   await tester.pumpWidget(
     MaterialApp(
-      theme: AppTheme.build(brightness: brightness),
+      theme: AppTheme.build(brightness: brightness)
+          .copyWith(platform: platform),
       home: Scaffold(
         body: Builder(
           builder: (context) => MediaQuery(
@@ -34,12 +39,13 @@ Future<void> _mount(
             child: Padding(
               padding: const EdgeInsets.all(20),
               child: AssistantAnswerActions(
-                messageId: 'answer',
+                messageId: messageId,
                 createdAt: createdAt,
                 colors: AssistantWindowsPalette.of(context),
                 alwaysVisible: mobile,
                 saved: saved,
-                saving: false,
+                saving: saving,
+                error: error,
                 showSave: true,
                 onSave: onSave,
                 child: const SizedBox(height: 130, child: Text('完整回答正文')),
@@ -54,6 +60,59 @@ Future<void> _mount(
 }
 
 void main() {
+  testWidgets('安卓保存笔记及重试期间固定文案且不沿用其他消息状态', (tester) async {
+    // Identify the actual native action across controller-driven rebuilds.
+    final Finder button = find.byKey(
+      const ValueKey<String>('assistant-save-note-answer'),
+    );
+    await _mount(tester, mobile: true, platform: TargetPlatform.android);
+    // Compare the original action size with the pending first attempt.
+    final Rect original = tester.getRect(button);
+    await _mount(
+      tester,
+      mobile: true,
+      platform: TargetPlatform.android,
+      saving: true,
+    );
+    expect(find.text('保存笔记'), findsOneWidget);
+    expect(tester.getRect(button), original);
+    expect(tester.widget<OmniTextButton>(button).onPressed, isNull);
+    await _mount(
+      tester,
+      mobile: true,
+      platform: TargetPlatform.android,
+      error: '连接中断',
+    );
+    // A retry is wider and must keep its own pre-submit text after error clears.
+    final Rect retry = tester.getRect(button);
+    await _mount(
+      tester,
+      mobile: true,
+      platform: TargetPlatform.android,
+      saving: true,
+    );
+    expect(find.text('重试保存'), findsOneWidget);
+    expect(tester.getRect(button), retry);
+    await _mount(
+      tester,
+      mobile: true,
+      platform: TargetPlatform.android,
+      messageId: 'other-answer',
+      saving: true,
+    );
+    expect(find.text('保存笔记'), findsOneWidget);
+    expect(find.text('重试保存'), findsNothing);
+    await _mount(
+      tester,
+      mobile: true,
+      platform: TargetPlatform.android,
+      saved: true,
+    );
+    expect(find.text('已保存'), findsOneWidget);
+    await _mount(tester, mobile: true, saving: true);
+    expect(find.text('保存中…'), findsOneWidget);
+  });
+
   testWidgets('整行悬停显示操作和真实时间，离开隐藏且布局不跳动', (tester) async {
     await _mount(tester, onSave: () {});
     // 操作区占据固定高度，但默认不可见。

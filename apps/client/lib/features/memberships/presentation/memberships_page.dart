@@ -2916,6 +2916,8 @@ class _MembershipEditorDialogState
           label: '保存',
           onPressed: _saving ? null : _save,
           loading: _saving,
+          showLoadingIndicator:
+              Theme.of(context).platform != TargetPlatform.android,
         ),
       ],
       child: Padding(
@@ -3164,6 +3166,7 @@ class _MembershipEditorDialogState
         title: '新增会员',
         primaryKey: const ValueKey<String>('membership-create-save'),
         loading: _saving,
+        showLoadingIndicator: false,
         onPrimary: _saving ? null : _save,
         onCancel: _saving ? null : () => Navigator.of(context).pop(),
         child: _withSaveError(
@@ -3824,6 +3827,8 @@ class _PaymentEditorDialogState extends ConsumerState<_PaymentEditorDialog> {
           label: '保存',
           onPressed: _saving ? null : _save,
           loading: _saving,
+          showLoadingIndicator:
+              Theme.of(context).platform != TargetPlatform.android,
         ),
       ],
       child: Column(

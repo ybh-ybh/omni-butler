@@ -789,6 +789,8 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
             label: saveLabel,
             onPressed: _savingName ? null : onSave,
             loading: _savingName,
+            showLoadingIndicator:
+                Theme.of(context).platform != TargetPlatform.android,
           ),
         ],
       ),

@@ -1123,8 +1123,12 @@ class _TimeEntryEditorDialogState
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
         ),
         OmniButton(
-          label: _saving ? '保存中…' : '保存',
+          label: _saving && Theme.of(context).platform != TargetPlatform.android
+              ? '保存中…'
+              : '保存',
           loading: _saving,
+          showLoadingIndicator:
+              Theme.of(context).platform != TargetPlatform.android,
           onPressed: _saving || conflict != null ? null : _save,
         ),
       ],
@@ -3293,8 +3297,12 @@ class _AbsoluteTimeEntryDialogState
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
         ),
         OmniButton(
-          label: _saving ? '保存中…' : _actionLabel,
+          label: _saving && Theme.of(context).platform != TargetPlatform.android
+              ? '保存中…'
+              : _actionLabel,
           loading: _saving,
+          showLoadingIndicator:
+              Theme.of(context).platform != TargetPlatform.android,
           onPressed: onSave,
         ),
       ],
@@ -3421,6 +3429,7 @@ class _AbsoluteTimeEntryDialogState
         onPrimary: onSave,
         onCancel: _saving ? null : () => Navigator.of(context).pop(),
         loading: _saving,
+        showLoadingIndicator: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[

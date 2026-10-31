@@ -46,6 +46,9 @@ class _Repository extends AssistantRepository {
   /// 模拟延迟查询，验证换服竞态。
   Completer<Map<String, dynamic>>? read;
 
+  /// Hold each PATCH so its real in-flight presentation can be inspected.
+  Completer<void>? saveGate;
+
   /// 最新服务器记录。
   Map<String, dynamic> record = <String, dynamic>{
     'id': 'todo-id',
@@ -87,6 +90,7 @@ class _Repository extends AssistantRepository {
   }) async {
     calls.add((method: method, data: data));
     if (method == 'GET') return read == null ? snapshot : await read!.future;
+    await saveGate?.future;
     if (conflict) throw const AssistantApiFailure('记录已在其他位置修改，请刷新后再编辑', 409);
     if (receipt != null) return receipt!;
     // 模拟真正保存后响应丢失，客户端不能创建第二个操作身份。
@@ -133,6 +137,7 @@ Future<void> _mount(
   String? operation = 'create',
   VoidCallback? onUndo,
   String? undoExpiresAt,
+  TargetPlatform platform = TargetPlatform.windows,
 }) async {
   tester.view.physicalSize = Size(width, 1000);
   tester.view.devicePixelRatio = 1;
@@ -141,7 +146,7 @@ Future<void> _mount(
   await tester.pumpWidget(
     MaterialApp(
       theme: AppTheme.build(brightness: Brightness.light)
-          .copyWith(platform: TargetPlatform.windows),
+          .copyWith(platform: platform),
       builder: (context, child) => MediaQuery(
         data: MediaQuery.of(context)
             .copyWith(textScaler: TextScaler.linear(scale)),
@@ -197,6 +202,74 @@ Future<void> _title(WidgetTester tester, String value) async {
 }
 
 void main() {
+  // Cover the Android change alongside the existing Windows loading contract.
+  for (final TargetPlatform platform in <TargetPlatform>[
+    TargetPlatform.android,
+    TargetPlatform.windows,
+  ]) {
+    testWidgets('${platform.name}卡片保存与原请求重试保持各自加载呈现及防重', (tester) async {
+      // Simulate a committed write whose first response is lost.
+      final _Repository repository = _Repository(_Auth())..loseResponse = true;
+      await _mount(
+        tester,
+        repository,
+        platform: platform,
+        width: 390,
+        scale: 2,
+      );
+      await _edit(tester);
+      await _title(tester, '异步保存标题');
+      // Exercise both the first submission and its identity-preserving retry.
+      for (final String label in <String>['保存', '重试保存']) {
+        repository.saveGate = Completer<void>();
+        addTearDown(() {
+          if (!repository.saveGate!.isCompleted) {
+            repository.saveGate!.complete();
+          }
+        });
+        // Only settle before the request starts; Windows retains its spinner.
+        final Finder action = find.widgetWithText(OmniButton, label);
+        await tester.ensureVisible(action);
+        await tester.pumpAndSettle();
+        // Android must retain this exact pre-submit button rectangle.
+        final Rect before = tester.getRect(action);
+        await tester.tap(action);
+        await tester.pump();
+        if (platform == TargetPlatform.android) {
+          expect(tester.getRect(action), before);
+          expect(find.byType(CircularProgressIndicator), findsNothing);
+        } else {
+          expect(find.byType(CircularProgressIndicator), findsOneWidget);
+        }
+        // The pending request cannot be duplicated by a second native tap.
+        final Finder busy = find.byWidgetPredicate(
+          (Widget widget) => widget is OmniButton && widget.loading,
+        );
+        expect(tester.widget<OmniButton>(busy).onPressed, isNull);
+        await tester.tap(busy);
+        await tester.pump();
+        expect(
+          repository.calls.where((call) => call.method == 'PATCH'),
+          hasLength(label == '保存' ? 1 : 2),
+        );
+        repository.saveGate!.complete();
+        await tester.pumpAndSettle();
+        if (label == '保存') {
+          expect(find.text('保存结果尚未确认，请重试原请求核实结果'), findsOneWidget);
+          repository.loseResponse = false;
+        }
+      }
+      // Presentation changes must not change retry request identity or payload.
+      final List<Object?> sent = repository.calls
+          .where((call) => call.method == 'PATCH')
+          .map((call) => call.data)
+          .toList();
+      expect(sent[0], sent[1]);
+      expect(find.text('已保存'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('撤销到期无需重新请求即隐藏，窄屏双倍字号保持可用', (tester) async {
     // 有效期限只用于界面显隐，不替代服务端资格校验。
     final _Repository repository = _Repository(_Auth());

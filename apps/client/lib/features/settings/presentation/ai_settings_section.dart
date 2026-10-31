@@ -790,6 +790,7 @@ class _AiProfileEditorState extends ConsumerState<_AiProfileEditor> {
         ? OmniFullscreenFormScaffold(
             title: title,
             loading: _busy,
+            showLoadingIndicator: false,
             onCancel: _busy ? null : () => Navigator.of(context).pop(),
             onPrimary: _busy ? null : _save,
             child: SingleChildScrollView(

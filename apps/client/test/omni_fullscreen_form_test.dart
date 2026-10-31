@@ -29,6 +29,7 @@ void main() {
               onPrimary: () {},
               onCancel: () {},
               loading: loading,
+              showLoadingIndicator: false,
               child: Center(
                 child: OmniButton(label: '正文操作', onPressed: () => taps += 1),
               ),
@@ -40,11 +41,37 @@ void main() {
     // 普通和加载状态都保持标题位于屏幕中线。
     final Rect title = tester.getRect(find.text('新增物品'));
     expect(title.center.dx, closeTo(195, 0.1));
+    // Preserve both the primary surface and its label position during saving.
+    final Rect submit = tester.getRect(find.widgetWithText(OmniButton, '保存'));
     update(() => loading = true);
     await tester.pump();
     expect(tester.getRect(find.text('新增物品')), title);
+    expect(tester.getRect(find.widgetWithText(OmniButton, '保存')), submit);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
     await tester.tap(find.text('正文操作'), warnIfMissed: false);
     expect(taps, 0);
+  });
+
+  testWidgets('安卓非保存主操作默认保留加载圆圈', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.build(brightness: Brightness.light)
+            .copyWith(platform: TargetPlatform.android),
+        home: OmniFullscreenFormScaffold(
+          title: '一键搬家',
+          primaryLabel: '迁移',
+          loading: true,
+          onPrimary: () {},
+          onCancel: () {},
+          child: const SizedBox.shrink(),
+        ),
+      ),
+    );
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(
+      tester.widget<OmniButton>(find.widgetWithText(OmniButton, '迁移')).loading,
+      isTrue,
+    );
   });
 
   testWidgets('极窄屏大字标题独占行，摘要和按钮文案完整可达', (WidgetTester tester) async {

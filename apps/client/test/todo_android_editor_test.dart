@@ -112,6 +112,8 @@ void main() {
     // 保存期间仍保留父路由和当前草稿。
     final _EditorFixture fixture = await _openEditor(tester, gate: gate);
     await _enterTitle(tester, '异步待办');
+    // Measure the save surface before the real repository operation starts.
+    final Rect submitBefore = tester.getRect(_submit());
     // 捕获同一回调连调两次，验证业务锁而非仅按钮禁用。
     final VoidCallback save = tester.widget<OmniButton>(_submit()).onPressed!;
     save();
@@ -119,6 +121,14 @@ void main() {
     await tester.pump();
     expect(fixture.repository.calls, 1);
     expect(tester.widget<OmniButton>(_submit()).onPressed, isNull);
+    expect(tester.getRect(_submit()), submitBefore);
+    expect(
+      find.descendant(
+        of: _submit(),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsNothing,
+    );
     expect(
       tester
           .widget<OmniButton>(find.widgetWithText(OmniButton, '取消'))

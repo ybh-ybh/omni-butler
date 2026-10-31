@@ -75,6 +75,7 @@ class _AndroidTagPageScaffold extends StatelessWidget {
                     label: '保存',
                     visualHeight: OmniSize.pageAction,
                     loading: busy,
+                    showLoadingIndicator: false,
                     onPressed: busy ? null : onSave,
                   ),
               ],

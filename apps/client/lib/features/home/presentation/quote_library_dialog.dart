@@ -644,7 +644,12 @@ class _QuoteEditorDialogState extends ConsumerState<_QuoteEditorDialog> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         OmniButton(
-          label: _saving ? '保存中' : '保存',
+          label: _saving && Theme.of(context).platform != TargetPlatform.android
+              ? '保存中'
+              : '保存',
+          loading:
+              _saving && Theme.of(context).platform == TargetPlatform.android,
+          showLoadingIndicator: false,
           onPressed: _saving ? null : _submit,
         ),
       ],

@@ -572,6 +572,7 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
                           label: '保存',
                           visualHeight: OmniSize.control,
                           loading: _saving,
+                          showLoadingIndicator: false,
                           onPressed:
                               _saving || _loadingSteps || _stepsLoadFailed
                               ? null

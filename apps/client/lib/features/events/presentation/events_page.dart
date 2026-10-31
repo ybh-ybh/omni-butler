@@ -2226,6 +2226,8 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
           label: '保存',
           onPressed: _saving ? null : _save,
           loading: _saving,
+          showLoadingIndicator:
+              Theme.of(context).platform != TargetPlatform.android,
         ),
       ],
       child: Padding(
@@ -2358,6 +2360,7 @@ class _EventEditorDialogState extends ConsumerState<_EventEditorDialog> {
         title: '新增事件',
         primaryKey: const ValueKey<String>('event-create-save'),
         loading: _saving,
+        showLoadingIndicator: false,
         onPrimary: _saving ? null : _save,
         onCancel: _saving ? null : () => Navigator.of(context).pop(),
         child: _withSaveError(

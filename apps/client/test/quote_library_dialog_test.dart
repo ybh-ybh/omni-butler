@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -45,8 +46,111 @@ class _FakeQuoteJsonFileGateway implements QuoteJsonFileGateway {
   }
 }
 
+/// Delay persistence at the repository boundary without replacing the editor.
+class _DelayedQuoteRepository extends QuoteRepository {
+  /// Keep the first attempt pending until the test releases it.
+  final Completer<void> gate = Completer<void>();
+
+  /// Fail the first attempt so the original draft can be retried.
+  bool fail = true;
+
+  /// Count accepted repository calls to check duplicate protection.
+  int calls = 0;
+
+  /// Use the same database as the production repository implementation.
+  _DelayedQuoteRepository(super.database);
+
+  /// Resume the real save only after the controlled delay succeeds.
+  @override
+  Future<void> save(QuoteDraft draft) async {
+    calls++;
+    await gate.future;
+    if (fail) throw StateError('模拟保存失败');
+    await super.save(draft);
+  }
+}
+
 /// 验证名言库 JSON 操作菜单与导入预览交互。
 void main() {
+  // Android preserves the original action while Windows keeps its existing text.
+  for (final TargetPlatform platform in <TargetPlatform>[
+    TargetPlatform.android,
+    TargetPlatform.windows,
+  ]) {
+    testWidgets('${platform.name}名言异步保存保持平台外观并允许失败重试', (tester) async {
+      // Real database reads remain active while only saves are delayed.
+      final AppDatabase database = AppDatabase.forTesting(
+        NativeDatabase.memory(),
+      );
+      // Preserve the editor's normal provider wiring and save validation.
+      final _DelayedQuoteRepository repository = _DelayedQuoteRepository(
+        database,
+      );
+      addTearDown(() {
+        if (!repository.gate.isCompleted) repository.gate.complete();
+      });
+      await _pumpDialog(
+        tester,
+        database: database,
+        gateway: _FakeQuoteJsonFileGateway(),
+        repository: repository,
+        platform: platform,
+      );
+      await tester.tap(find.text('新增名言'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(OmniTextField).first, '保留的名言草稿');
+      // Capture the resting visual geometry and colors before the pending save.
+      final Finder save = find.widgetWithText(OmniButton, '保存');
+      // The Android action should keep its original measured surface.
+      final Rect before = tester.getRect(save);
+      // Native style resolution distinguishes busy from normally disabled.
+      final ButtonStyle style = tester
+          .widget<FilledButton>(
+            find.descendant(of: save, matching: find.byType(FilledButton)),
+          )
+          .style!;
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      // The desktop implementation intentionally retains its original busy label.
+      final Finder pending = find.widgetWithText(
+        OmniButton,
+        platform == TargetPlatform.android ? '保存' : '保存中',
+      );
+      expect(tester.widget<OmniButton>(pending).onPressed, isNull);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      if (platform == TargetPlatform.android) {
+        expect(tester.getRect(pending), before);
+        // The same native fill is retained even though repeat taps are disabled.
+        final ButtonStyle busyStyle = tester
+            .widget<FilledButton>(
+              find.descendant(of: pending, matching: find.byType(FilledButton)),
+            )
+            .style!;
+        expect(
+          busyStyle.backgroundColor!.resolve(<WidgetState>{
+            WidgetState.disabled,
+          }),
+          style.backgroundColor!.resolve(<WidgetState>{}),
+        );
+      }
+      await tester.tap(pending);
+      expect(repository.calls, 1);
+      repository.gate.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('名言未保存，请保留草稿并重试。'), findsOneWidget);
+      expect(find.text('保留的名言草稿'), findsOneWidget);
+      repository.fail = false;
+      await tester.tap(find.widgetWithText(OmniButton, '保存'));
+      await tester.pumpAndSettle();
+      expect(repository.calls, 2);
+      expect(
+        (await database.select(database.quotes).getSingle()).content,
+        '保留的名言草稿',
+      );
+      await _disposeDialog(tester, database);
+    });
+  }
+
   testWidgets('旧编辑器遇到MCP下行后保留窗口和草稿，不覆盖服务器内容', (WidgetTester tester) async {
     // 真实内存库与仓储，模拟已同步的正式名言。
     final AppDatabase database = AppDatabase.forTesting(
@@ -200,12 +304,19 @@ Future<void> _pumpDialog(
   WidgetTester tester, {
   required AppDatabase database,
   required QuoteJsonFileGateway gateway,
+  QuoteRepository? repository,
+  TargetPlatform platform = TargetPlatform.windows,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [appDatabaseProvider.overrideWithValue(database)],
+      overrides: [
+        appDatabaseProvider.overrideWithValue(database),
+        if (repository != null)
+          quoteRepositoryProvider.overrideWithValue(repository),
+      ],
       child: MaterialApp(
-        theme: AppTheme.build(brightness: Brightness.light),
+        theme: AppTheme.build(brightness: Brightness.light)
+            .copyWith(platform: platform),
         home: Scaffold(body: QuoteLibraryDialog(fileGateway: gateway)),
       ),
     ),

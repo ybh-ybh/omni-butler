@@ -64,9 +64,33 @@ class _AssistantAnswerActionsState extends State<AssistantAnswerActions> {
   /// 键盘聚焦回答中的按钮时也保持入口可见。
   bool _focused = false;
 
+  /// Preserve the pre-submit text when the controller clears a retry error.
+  String? _savingLabel;
+
+  /// Capture each attempt independently and discard labels from other messages.
+  @override
+  void didUpdateWidget(covariant AssistantAnswerActions oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.messageId != widget.messageId || !widget.saving) {
+      _savingLabel = null;
+    } else if (!oldWidget.saving) {
+      _savingLabel = oldWidget.error != null ? '重试保存' : '保存笔记';
+    }
+  }
+
   /// 时间和按钮共用轻量的操作行。
   @override
   Widget build(BuildContext context) {
+    // Use the actual platform rather than the layout width for this policy.
+    final bool isAndroid = Theme.of(context).platform == TargetPlatform.android;
+    // A failed attempt exposes an explicit retry action once it becomes idle.
+    final String idleLabel = widget.error != null ? '重试保存' : '保存笔记';
+    // Completed results may replace the frozen label once persistence succeeds.
+    final String saveLabel = widget.saved
+        ? '已保存'
+        : widget.saving
+        ? (isAndroid ? _savingLabel ?? idleLabel : '保存中…')
+        : idleLabel;
     // 只解析真实消息时间，使用本机时区显示。
     final DateTime? createdAt = DateTime.tryParse(widget.createdAt ?? '')
         ?.toLocal();
@@ -107,54 +131,51 @@ class _AssistantAnswerActionsState extends State<AssistantAnswerActions> {
                         spacing: 8,
                         children: <Widget>[
                           if (widget.showSave)
-                            OmniTextButton(
-                              key: ValueKey<String>(
-                                'assistant-save-note-${widget.messageId}',
-                              ),
-                              style: ButtonStyle(
-                                padding:
-                                    const WidgetStatePropertyAll<
-                                      EdgeInsetsGeometry
-                                    >(EdgeInsets.zero),
-                                minimumSize: const WidgetStatePropertyAll<Size>(
-                                  Size(0, 28),
+                            Semantics(
+                              liveRegion: isAndroid && widget.saving,
+                              value: isAndroid && widget.saving ? '正在处理' : null,
+                              child: OmniTextButton(
+                                key: ValueKey<String>(
+                                  'assistant-save-note-${widget.messageId}',
                                 ),
-                                overlayColor:
-                                    const WidgetStatePropertyAll<Color>(
-                                      Colors.transparent,
-                                    ),
-                                backgroundColor:
-                                    const WidgetStatePropertyAll<Color>(
-                                      Colors.transparent,
-                                    ),
-                                foregroundColor:
-                                    WidgetStateProperty.resolveWith<Color>(
-                                      (states) =>
-                                          states.contains(
-                                                WidgetState.hovered,
-                                              ) ||
-                                              states.contains(
-                                                WidgetState.focused,
-                                              )
-                                          ? widget.colors.ink
-                                          : widget.colors.muted,
-                                    ),
-                                textStyle: WidgetStatePropertyAll<TextStyle?>(
-                                  Theme.of(context).textTheme.labelSmall
-                                      ?.copyWith(fontSize: 12, height: 1.4),
+                                style: ButtonStyle(
+                                  padding:
+                                      const WidgetStatePropertyAll<
+                                        EdgeInsetsGeometry
+                                      >(EdgeInsets.zero),
+                                  minimumSize:
+                                      const WidgetStatePropertyAll<Size>(
+                                        Size(0, 28),
+                                      ),
+                                  overlayColor:
+                                      const WidgetStatePropertyAll<Color>(
+                                        Colors.transparent,
+                                      ),
+                                  backgroundColor:
+                                      const WidgetStatePropertyAll<Color>(
+                                        Colors.transparent,
+                                      ),
+                                  foregroundColor:
+                                      WidgetStateProperty.resolveWith<Color>(
+                                        (states) =>
+                                            states.contains(
+                                                  WidgetState.hovered,
+                                                ) ||
+                                                states.contains(
+                                                  WidgetState.focused,
+                                                )
+                                            ? widget.colors.ink
+                                            : widget.colors.muted,
+                                      ),
+                                  textStyle: WidgetStatePropertyAll<TextStyle?>(
+                                    Theme.of(context).textTheme.labelSmall
+                                        ?.copyWith(fontSize: 12, height: 1.4),
+                                  ),
                                 ),
-                              ),
-                              onPressed: widget.saved || widget.saving
-                                  ? null
-                                  : widget.onSave,
-                              child: Text(
-                                widget.saved
-                                    ? '已保存'
-                                    : widget.saving
-                                    ? '保存中…'
-                                    : widget.error != null
-                                    ? '重试保存'
-                                    : '保存笔记',
+                                onPressed: widget.saved || widget.saving
+                                    ? null
+                                    : widget.onSave,
+                                child: Text(saveLabel),
                               ),
                             ),
                           if (createdAt != null)

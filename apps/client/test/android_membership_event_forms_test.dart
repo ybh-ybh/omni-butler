@@ -216,6 +216,8 @@ void main() {
         await _enter(tester, 'membership-create-price', '10');
       }
       // 同一帧连续调用真实保存回调，验证业务防重而非仅按钮禁用。
+      // The real async save must keep the primary button's original geometry.
+      final Rect saveBefore = tester.getRect(_key('$prefix-create-save'));
       final VoidCallback submit = tester
           .widget<OmniFullscreenFormScaffold>(
             find.byType(OmniFullscreenFormScaffold),
@@ -225,6 +227,14 @@ void main() {
       submit();
       await tester.pump();
       expect(membership ? fixture.memberships.calls : fixture.events.calls, 1);
+      expect(tester.getRect(_key('$prefix-create-save')), saveBefore);
+      expect(
+        find.descendant(
+          of: _key('$prefix-create-save'),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsNothing,
+      );
       expect(
         tester
             .widget<OmniFullscreenFormScaffold>(

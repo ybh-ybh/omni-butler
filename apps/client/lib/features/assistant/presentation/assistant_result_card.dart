@@ -266,6 +266,9 @@ class _ResultEntityPanelState extends State<_ResultEntityPanel> {
   /// 正在保存固定请求。
   bool _saving = false;
 
+  /// Keep the action text stable until this save attempt finishes.
+  String _savingLabel = '保存';
+
   /// 表单是否处于编辑状态。
   bool _editing = false;
 
@@ -432,6 +435,7 @@ class _ResultEntityPanelState extends State<_ResultEntityPanel> {
       return;
     }
     setState(() {
+      _savingLabel = _pending == null ? '保存' : '重试保存';
       _saving = true;
       _error = null;
       _notice = null;
@@ -618,8 +622,18 @@ class _ResultEntityPanelState extends State<_ResultEntityPanel> {
                                   : null,
                             ),
                             OmniButton(
-                              label: _pending == null ? '保存' : '重试保存',
+                              label:
+                                  _saving &&
+                                      Theme.of(context).platform ==
+                                          TargetPlatform.android
+                                  ? _savingLabel
+                                  : _pending == null
+                                  ? '保存'
+                                  : '重试保存',
                               loading: _saving,
+                              showLoadingIndicator:
+                                  Theme.of(context).platform !=
+                                  TargetPlatform.android,
                               onPressed:
                                   _canEdit &&
                                       !_saving &&

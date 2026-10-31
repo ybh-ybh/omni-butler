@@ -617,8 +617,17 @@ void androidSidebarTests() {
     await tester.pump(const Duration(milliseconds: 200));
     await drag.up();
     await tester.pump(const Duration(milliseconds: 16));
+    // Keep the sort-save action stable while the reorder animation finishes.
+    final Rect saveBefore = tester.getRect(
+      find.byKey(const ValueKey('android-tag-order-save')),
+    );
     await tester.tap(find.byKey(const ValueKey('android-tag-order-save')));
     await tester.pump();
+    expect(
+      tester.getRect(find.byKey(const ValueKey('android-tag-order-save'))),
+      saveBefore,
+    );
+    expect(find.byType(CircularProgressIndicator), findsNothing);
     await tester.tap(find.byKey(const ValueKey('android-tag-order-save')));
     expect(find.byKey(const ValueKey('android-tag-sort-page')), findsOneWidget);
     expect((await _sidebarTag(tester, app, 'work')).sortOrder, 0);

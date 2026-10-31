@@ -242,6 +242,101 @@ void main() {
     expect(submitCount, 0);
   });
 
+  // Cover both original content shapes in each Android brightness.
+  for (final Brightness brightness in Brightness.values) {
+    // A hidden spinner must preserve a leading icon as well as plain text.
+    for (final IconData? icon in <IconData?>[null, Icons.save_outlined]) {
+      testWidgets(
+        '安卓${brightness.name}隐藏加载圈保留${icon == null ? '文字' : '图标'}外观及提交保护',
+        (WidgetTester tester) async {
+          // Keep accessibility enabled while the interaction state changes.
+          final SemanticsHandle semantics = tester.ensureSemantics();
+          try {
+            // Simulate a save that remains pending until the test releases it.
+            bool loading = false;
+            // Count real button activations rather than inspecting only callbacks.
+            int submissions = 0;
+            // Release the pending save to model a recoverable failure.
+            late StateSetter update;
+            await tester.pumpWidget(
+              MaterialApp(
+                theme: AppTheme.build(brightness: brightness)
+                    .copyWith(platform: TargetPlatform.android),
+                home: Scaffold(
+                  body: Center(
+                    child: StatefulBuilder(
+                      builder: (BuildContext context, StateSetter setState) {
+                        update = setState;
+                        return OmniButton(
+                          label: '保存修改',
+                          icon: icon,
+                          loading: loading,
+                          showLoadingIndicator: false,
+                          onPressed: () => setState(() {
+                            submissions++;
+                            loading = true;
+                          }),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            );
+            // Compare the actual button and label geometry across the transition.
+            final Rect before = tester.getRect(find.byType(FilledButton));
+            // The resting label must not shift when the spinner is suppressed.
+            final Rect labelBefore = tester.getRect(find.text('保存修改'));
+            // Resolve the original enabled colors before the operation starts.
+            final ButtonStyle original = tester
+                .widget<FilledButton>(find.byType(FilledButton))
+                .style!;
+            await tester.tap(find.text('保存修改'));
+            await tester.pumpAndSettle();
+            // Busy still disables the native button without restyling its content.
+            final FilledButton busy = tester.widget<FilledButton>(
+              find.byType(FilledButton),
+            );
+            expect(busy.onPressed, isNull);
+            expect(tester.getRect(find.byType(FilledButton)), before);
+            expect(tester.getRect(find.text('保存修改')), labelBefore);
+            expect(find.byType(CircularProgressIndicator), findsNothing);
+            if (icon != null) expect(find.byIcon(icon), findsOneWidget);
+            expect(
+              busy.style!.backgroundColor!.resolve(<WidgetState>{
+                WidgetState.disabled,
+              }),
+              original.backgroundColor!.resolve(<WidgetState>{}),
+            );
+            expect(
+              busy.style!.foregroundColor!.resolve(<WidgetState>{
+                WidgetState.disabled,
+              }),
+              original.foregroundColor!.resolve(<WidgetState>{}),
+            );
+            expect(
+              tester
+                  .getSemantics(find.byType(OmniButton))
+                  .getSemanticsData()
+                  .value,
+              '正在处理',
+            );
+            await tester.tap(find.text('保存修改'));
+            await tester.pump();
+            expect(submissions, 1);
+            update(() => loading = false);
+            await tester.pumpAndSettle();
+            await tester.tap(find.text('保存修改'));
+            await tester.pumpAndSettle();
+            expect(submissions, 2);
+          } finally {
+            semantics.dispose();
+          }
+        },
+      );
+    }
+  }
+
   testWidgets('禁用状态使用中性色且不触发操作', (WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(

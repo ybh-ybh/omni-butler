@@ -37,8 +37,11 @@ class OmniFullscreenFormScaffold extends StatelessWidget {
   /// 左侧取消操作不可用时为空。
   final VoidCallback? onCancel;
 
-  /// 提交期间显示加载状态并冻结正文。
+  /// Whether submission is busy and the form body must remain frozen.
   final bool loading;
+
+  /// Whether the primary action shows a spinner while interaction is locked.
+  final bool showLoadingIndicator;
 
   /// 业务确有统计意义时显示的灰色摘要。
   final String? subtitle;
@@ -54,6 +57,7 @@ class OmniFullscreenFormScaffold extends StatelessWidget {
     required this.onCancel,
     this.primaryLabel = '保存',
     this.loading = false,
+    this.showLoadingIndicator = true,
     this.subtitle,
     this.primaryKey,
     super.key,
@@ -159,6 +163,7 @@ class OmniFullscreenFormScaffold extends StatelessWidget {
         variant: OmniButtonVariant.primary,
         visualHeight: OmniSize.control,
         loading: loading,
+        showLoadingIndicator: showLoadingIndicator,
         onPressed: loading ? null : onPrimary,
       ),
     );

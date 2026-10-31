@@ -159,29 +159,54 @@ void main() {
     expect(find.byKey(const ValueKey('notes-tag-editor')), findsNothing);
   });
 
-  testWidgets('保存期间阻止重复提交、Esc及外部关闭，完成后退出', (tester) async {
-    // 可控延迟位于真正仓储事务之前，重现慢磁盘或锁等待。
-    final _EditorFixture fixture = await _mountEditor(tester);
-    // 本次提交的释放信号。
-    final Completer<void> gate = Completer<void>();
-    fixture.repository.gate = gate.future;
-    await tester.enterText(
-      find.byKey(const ValueKey('notes-tag-name')),
-      '慢速保存',
-    );
-    await tester.tap(find.byKey(const ValueKey('notes-tag-save')));
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.tapAt(const Offset(12, 12));
-    await tester.tap(find.byKey(const ValueKey('notes-tag-save')));
-    await tester.pump(const Duration(milliseconds: 250));
-    expect(fixture.repository.calls, 1);
-    expect(find.byKey(const ValueKey('notes-tag-editor')), findsOneWidget);
-    gate.complete();
-    await _settleEditor(tester);
-    expect((await _record(tester, fixture)).name, '慢速保存');
-    expect(find.byKey(const ValueKey('notes-tag-editor')), findsNothing);
-  });
+  // The shared taxonomy manager can open this editor on either platform.
+  for (final TargetPlatform platform in <TargetPlatform>[
+    TargetPlatform.android,
+    TargetPlatform.windows,
+  ]) {
+    testWidgets('${platform.name}保存期间保持平台外观并阻止重复提交及关闭', (tester) async {
+      // 可控延迟位于真正仓储事务之前，重现慢磁盘或锁等待。
+      final _EditorFixture fixture = await _mountEditor(
+        tester,
+        platform: platform,
+      );
+      // 本次提交的释放信号。
+      final Completer<void> gate = Completer<void>();
+      addTearDown(() {
+        if (!gate.isCompleted) gate.complete();
+      });
+      fixture.repository.gate = gate.future;
+      await tester.enterText(
+        find.byKey(const ValueKey('notes-tag-name')),
+        '慢速保存',
+      );
+      // Compare the resting save surface with the delayed repository operation.
+      final Rect saveBefore = tester.getRect(
+        find.byKey(const ValueKey('notes-tag-save')),
+      );
+      await tester.tap(find.byKey(const ValueKey('notes-tag-save')));
+      await tester.pump();
+      if (platform == TargetPlatform.android) {
+        expect(
+          tester.getRect(find.byKey(const ValueKey('notes-tag-save'))),
+          saveBefore,
+        );
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+      } else {
+        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.tapAt(const Offset(12, 12));
+      await tester.tap(find.byKey(const ValueKey('notes-tag-save')));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(fixture.repository.calls, 1);
+      expect(find.byKey(const ValueKey('notes-tag-editor')), findsOneWidget);
+      gate.complete();
+      await _settleEditor(tester);
+      expect((await _record(tester, fixture)).name, '慢速保存');
+      expect(find.byKey(const ValueKey('notes-tag-editor')), findsNothing);
+    });
+  }
 
   testWidgets('目录加载失败仍能移除图标，恢复资源后可重试', (tester) async {
     await _mountEditor(tester, emoji: '🐱');
@@ -337,6 +362,7 @@ Future<_EditorFixture> _mountEditor(
   Offset anchor = const Offset(120, 120),
   Brightness brightness = Brightness.light,
   AppThemePalette palette = AppThemePalette.classicBlue,
+  TargetPlatform platform = TargetPlatform.windows,
 }) async {
   NoteTagEmojiCatalog.resetCacheForTesting();
   await tester.runAsync(() => NoteTagEmojiCatalog.load());
@@ -391,7 +417,7 @@ Future<_EditorFixture> _mountEditor(
         theme: AppTheme.build(
           brightness: brightness,
           palette: palette,
-        ).copyWith(platform: TargetPlatform.windows),
+        ).copyWith(platform: platform),
         builder: (context, child) => MediaQuery(
           data: MediaQuery.of(context)
               .copyWith(textScaler: TextScaler.linear(scale)),

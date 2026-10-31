@@ -36,8 +36,11 @@ class OmniButton extends StatelessWidget {
   /// 可选前置图标。
   final IconData? icon;
 
-  /// 是否显示加载状态并阻止重复提交。
+  /// Whether submission is busy, preserving its colors and preventing repeats.
   final bool loading;
+
+  /// Whether the busy state replaces the leading content with a spinner.
+  final bool showLoadingIndicator;
 
   /// 是否使用大尺寸。
   final bool large;
@@ -55,6 +58,7 @@ class OmniButton extends StatelessWidget {
     this.variant = OmniButtonVariant.primary,
     this.icon,
     this.loading = false,
+    this.showLoadingIndicator = true,
     this.large = false,
     this.compact = false,
     this.visualHeight,
@@ -186,7 +190,7 @@ class OmniButton extends StatelessWidget {
     final Widget content = _ButtonContent(
       label: label,
       icon: icon,
-      loading: loading,
+      loading: loading && showLoadingIndicator,
     );
     return OmniPressBinding(
       enabled: effectiveOnPressed != null,

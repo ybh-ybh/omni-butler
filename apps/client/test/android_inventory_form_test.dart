@@ -130,8 +130,18 @@ void main() {
     await _enterInventory(tester, 'inventory-create-name', '重试的物品');
     fixture.repository.gate = Completer<void>();
     fixture.repository.fail = true;
+    // Capture the existing action before the delayed persistence attempt.
+    final Rect saveBefore = tester.getRect(_key('inventory-create-submit'));
     await tester.tap(_key('inventory-create-submit'));
     await tester.pump();
+    expect(tester.getRect(_key('inventory-create-submit')), saveBefore);
+    expect(
+      find.descendant(
+        of: _key('inventory-create-submit'),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsNothing,
+    );
     await tester.tap(_key('inventory-create-submit'));
     await tester.binding.handlePopRoute();
     await tester.pump();

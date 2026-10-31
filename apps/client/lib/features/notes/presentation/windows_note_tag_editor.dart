@@ -370,6 +370,8 @@ class _NoteTagAppearanceEditorState
           key: const ValueKey('notes-tag-save'),
           label: '保存',
           loading: _saving,
+          showLoadingIndicator:
+              Theme.of(context).platform != TargetPlatform.android,
           onPressed: _saving ? null : () => unawaited(_save()),
         );
         // 错误行独立于输入框，窄栏中可以完整换行。
