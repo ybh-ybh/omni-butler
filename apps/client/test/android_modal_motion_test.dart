@@ -15,6 +15,58 @@ const Size _viewport = Size(390, 844);
 
 /// 不依赖pumpAndSettle跳过动画，逐帧核验正反向位置。
 void main() {
+  testWidgets('动效偏好只订阅减少动画，键盘和安全区变化不重建稳定子树', (tester) async {
+    // Update only inherited media data while retaining the same child instance.
+    final ValueNotifier<MediaQueryData> media = ValueNotifier(
+      const MediaQueryData(
+        size: _viewport,
+        padding: EdgeInsets.only(bottom: 24),
+        viewPadding: EdgeInsets.only(bottom: 24),
+      ),
+    );
+    addTearDown(media.dispose);
+    // Count builds of a consumer that only requests the motion preference.
+    int builds = 0;
+    // Record the observable duration returned to a production animation caller.
+    Duration? duration;
+    // Reusing this widget avoids parent rebuilds obscuring inherited dependencies.
+    final Widget stableChild = Builder(
+      builder: (context) {
+        builds++;
+        duration = OmniMotion.duration(context, OmniMotion.normal);
+        return const SizedBox.shrink();
+      },
+    );
+    await tester.pumpWidget(
+      ValueListenableBuilder<MediaQueryData>(
+        valueListenable: media,
+        child: stableChild,
+        builder: (context, data, child) =>
+            MediaQuery(data: data, child: child!),
+      ),
+    );
+    expect(builds, 1);
+    expect(duration, OmniMotion.normal);
+    // Every IME frame must leave motion-only consumers untouched.
+    for (final double keyboard in [80, 180, 280, 180, 80, 0]) {
+      media.value = media.value.copyWith(
+        viewInsets: EdgeInsets.only(bottom: keyboard),
+        padding: EdgeInsets.only(bottom: keyboard == 0 ? 24 : 0),
+      );
+      await tester.pump();
+      expect(builds, 1);
+      expect(duration, OmniMotion.normal);
+    }
+    media.value = media.value.copyWith(disableAnimations: true);
+    await tester.pump();
+    expect(builds, 2);
+    expect(duration, Duration.zero);
+    media.value = media.value.copyWith(disableAnimations: false);
+    await tester.pump();
+    expect(builds, 3);
+    expect(duration, OmniMotion.normal);
+  });
+
   // 当前需要逐帧验证的模态入口。
   for (final _ModalKind kind in _ModalKind.values) {
     testWidgets('${kind.name}逐帧从底部进入并完整向下退出', (tester) async {

@@ -1,5 +1,31 @@
 part of 'notes_page_test.dart';
 
+/// Delay one completed save so source replacement can precede the next frame.
+class _PausedExitEditor extends NoteEditorController {
+  /// Use the production controller and real database for all draft writes.
+  _PausedExitEditor(super.repository, super.recorder)
+    : super(explicitCommit: true);
+
+  /// Only the requested close operation is paused, not initial draft loading.
+  bool pauseNextFlush = false;
+
+  /// Signal when persistence is complete but the UI close continuation is held.
+  final Completer<void> flushPaused = Completer<void>();
+
+  /// Resume the UI continuation after the provider has already been replaced.
+  final Completer<void> releaseFlush = Completer<void>();
+
+  /// Pause after the real save to avoid holding SQLite across fake clock turns.
+  @override
+  Future<void> flush() async {
+    await super.flush();
+    if (!pauseNextFlush) return;
+    pauseNextFlush = false;
+    flushPaused.complete();
+    await releaseFlush.future;
+  }
+}
+
 /// 同一张生产卡片的指定入口，避免操作预载页面。
 Finder _androidCardPart(String id, Finder matching) => find.descendant(
   of: find.byKey(ValueKey('android-note-card-$id')),
@@ -563,6 +589,15 @@ void androidNoteActionTests() {
     );
     expect(_bodyText(tester), '本机未提交的正文');
     expect(app.container.read(noteEditorProvider).conflicted, isTrue);
+    // A failed exit must keep the conflict's deliberate read-only protection.
+    expect(
+      tester
+          .widget<NoteRichEditor>(find.byType(NoteRichEditor))
+          .controller
+          .quillController
+          .readOnly,
+      isTrue,
+    );
     expect(
       (await tester.runAsync<NoteEntryRecord?>(
         () => repository.find('target'),
@@ -617,6 +652,20 @@ void androidNoteActionTests() {
       findsOneWidget,
     );
     expect(_bodyText(tester), '失败后重试保存的正文');
+    // A storage failure releases the close gate so the user can keep editing.
+    expect(
+      tester.widget<NoteRichEditor>(find.byType(NoteRichEditor)).enabled,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<NoteRichEditor>(find.byType(NoteRichEditor))
+          .controller
+          .quillController
+          .readOnly,
+      isFalse,
+    );
+    await _enterBody(tester, '失败后重试保存的正文，仍可继续编辑');
     await tester.runAsync(
       () => app.database.customStatement('DROP TRIGGER fail_history_save'),
     );
@@ -627,7 +676,7 @@ void androidNoteActionTests() {
     final NoteEntryRecord saved = (await tester.runAsync<NoteEntryRecord?>(
       () => NoteRepository(app.database).find('target'),
     ))!;
-    expect(saved.body, '失败后重试保存的正文');
+    expect(saved.body, '失败后重试保存的正文，仍可继续编辑');
     expect(saved.createdAt, original.createdAt);
     await _dispose(tester, app);
     expect(tester.takeException(), isNull);
@@ -878,6 +927,112 @@ void androidNoteActionTests() {
     );
     await _dispose(tester, app);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Android笔记动效 退场中替换来源不会弹掉底层导航', (tester) async {
+    // Open through the card so no URL can automatically reopen the editor.
+    final _App app = await _mount(
+      tester,
+      seed: true,
+      initialLocation: '/notes',
+    );
+    // The root shell must survive replacement of the departing editor source.
+    final ModalRoute<Object?> baseRoute = ModalRoute.of(
+      tester.element(find.byKey(const ValueKey('compact-navigation'))),
+    )!;
+    await _androidDoubleTap(
+      tester,
+      _androidCardPart('target', find.byType(NoteMarkdownText)).first,
+    );
+    await _enterBody(tester, '来源切换前已保存的正文');
+    // Preserve the actual route and document until its reverse transition.
+    final NoteRichEditor rich = tester.widget<NoteRichEditor>(
+      find.byType(NoteRichEditor),
+    );
+    // A popped route remains mounted while its exit animation is running.
+    final ModalRoute<Object?> editorRoute = ModalRoute.of(
+      tester.element(find.byType(NoteRichEditor)),
+    )!;
+    await tester.tap(find.byTooltip('保存'));
+    await _waitAndroidEditorExit(
+      tester,
+      editorRoute,
+      rich.controller,
+      rich.controller.quillController.document,
+      rich.controller.plainText,
+      rich.controller.selection,
+    );
+    expect(editorRoute.isActive, isFalse);
+    expect(baseRoute.isActive, isTrue);
+    app.container.invalidate(noteEditorProvider);
+    app.container.read(noteEditorProvider);
+    await _settle(tester);
+    expect(find.byType(NoteRichEditor), findsNothing);
+    expect(baseRoute.isActive, isTrue);
+    expect(baseRoute.isCurrent, isTrue);
+    expect(find.byKey(const ValueKey('compact-navigation')), findsOneWidget);
+    expect(find.byKey(const ValueKey('android-notes-list')), findsOneWidget);
+    expect(app.routerPath, '/notes');
+    expect(tester.takeException(), isNull);
+    await _dispose(tester, app);
+  });
+
+  testWidgets('Android笔记动效 暂存等待中换源完成后不会重新绑定旧编辑页', (tester) async {
+    // The compact route normally allows source replacement while idle.
+    final _App app = await _mount(
+      tester,
+      initialLocation: '/notes',
+      editorFactory: _PausedExitEditor.new,
+    );
+    await tester.tap(find.byKey(const ValueKey('android-note-input')));
+    await _settle(tester);
+    await _enterBody(tester, '仅属于旧来源的关闭草稿');
+    // Keep the old business controller while replacing the provider instance.
+    final _PausedExitEditor oldEditor =
+        app.container.read(noteEditorProvider) as _PausedExitEditor;
+    oldEditor.pauseNextFlush = true;
+    addTearDown(() {
+      if (!oldEditor.releaseFlush.isCompleted) {
+        oldEditor.releaseFlush.complete();
+      }
+    });
+    await tester.tapAt(const Offset(8, 8));
+    // Allow real persistence to finish without completing the route close gate.
+    for (
+      int attempt = 0;
+      attempt < 50 && !oldEditor.flushPaused.isCompleted;
+      attempt++
+    ) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+    }
+    expect(oldEditor.flushPaused.isCompleted, isTrue);
+    expect(oldEditor.dirty, isFalse);
+    expect(
+      tester
+          .widget<NoteRichEditor>(find.byType(NoteRichEditor))
+          .controller
+          .quillController
+          .readOnly,
+      isTrue,
+    );
+    app.container.invalidate(noteEditorProvider);
+    // Force provider replacement now, before the editor's next build.
+    final NoteEditorController replacement = app.container.read(
+      noteEditorProvider,
+    );
+    expect(replacement, isNot(same(oldEditor)));
+    oldEditor.releaseFlush.complete();
+    // Pump drains the old close continuation before rebuilding the replaced source.
+    await _settle(tester);
+    expect(find.byType(NoteRichEditor), findsNothing);
+    expect(find.byKey(const ValueKey('compact-navigation')), findsOneWidget);
+    expect(app.container.read(noteEditorProvider), same(replacement));
+    expect(replacement.draft.body, isNot('仅属于旧来源的关闭草稿'));
+    expect(tester.takeException(), isNull);
+    await _dispose(tester, app);
   });
 
   testWidgets('Android已有笔记 另一篇录音不被接管、返回原录音先退出历史页', (tester) async {

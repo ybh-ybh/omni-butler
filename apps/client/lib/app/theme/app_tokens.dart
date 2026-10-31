@@ -122,9 +122,9 @@ abstract final class OmniMenuMetrics {
 
 /// Omni Butler 的统一动效 Token。
 abstract final class OmniMotion {
-  /// 只依据系统禁用动画偏好，不将辅助服务导航等同于减少动画。
+  /// Observe only reduced motion so keyboard metrics do not rebuild consumers.
   static bool reduce(BuildContext context) {
-    return MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    return MediaQuery.maybeDisableAnimationsOf(context) ?? false;
   }
 
   /// 在减少动画模式下保留即时状态反馈，停止位移过渡。

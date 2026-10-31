@@ -350,68 +350,74 @@ class ResponsiveShell extends ConsumerWidget {
               );
 
               if (isCompact && !isDesktopPlatform) {
-                return Scaffold(
-                  resizeToAvoidBottomInset: !androidNotes,
-                  backgroundColor: colors.canvas,
-                  body: SafeArea(child: child),
-                  bottomNavigationBar: _CompactNavigation(
-                    location: location,
-                    destinations: compactDestinations,
-                    onSelected: (_AppDestination destination) =>
-                        _selectDestination(
-                          context,
-                          ref,
-                          destination,
-                          featurePreference,
-                          managementSection,
-                          navigationShell,
-                        ),
+                return _AndroidNotesBackground(
+                  enabled: androidNotes,
+                  child: Scaffold(
+                    resizeToAvoidBottomInset: !androidNotes,
+                    backgroundColor: colors.canvas,
+                    body: SafeArea(child: child),
+                    bottomNavigationBar: _CompactNavigation(
+                      location: location,
+                      destinations: compactDestinations,
+                      onSelected: (_AppDestination destination) =>
+                          _selectDestination(
+                            context,
+                            ref,
+                            destination,
+                            featurePreference,
+                            managementSection,
+                            navigationShell,
+                          ),
+                    ),
                   ),
                 );
               }
 
-              return Scaffold(
-                resizeToAvoidBottomInset: !androidNotes,
-                backgroundColor: colors.canvas,
-                body: Row(
-                  children: <Widget>[
-                    if (isExpanded && !windowsPlatform)
-                      _ExpandedSidebar(
-                        location: location,
-                        destinations: desktopDestinations,
-                        onSelected: (_AppDestination destination) =>
-                            _selectDestination(
-                              context,
-                              ref,
-                              destination,
-                              featurePreference,
-                              managementSection,
-                              navigationShell,
-                            ),
-                      )
-                    else
-                      _MediumNavigation(
-                        location: location,
-                        destinations: desktopDestinations,
-                        onSelected: (_AppDestination destination) =>
-                            _selectDestination(
-                              context,
-                              ref,
-                              destination,
-                              featurePreference,
-                              managementSection,
-                              navigationShell,
-                            ),
+              return _AndroidNotesBackground(
+                enabled: androidNotes,
+                child: Scaffold(
+                  resizeToAvoidBottomInset: !androidNotes,
+                  backgroundColor: colors.canvas,
+                  body: Row(
+                    children: <Widget>[
+                      if (isExpanded && !windowsPlatform)
+                        _ExpandedSidebar(
+                          location: location,
+                          destinations: desktopDestinations,
+                          onSelected: (_AppDestination destination) =>
+                              _selectDestination(
+                                context,
+                                ref,
+                                destination,
+                                featurePreference,
+                                managementSection,
+                                navigationShell,
+                              ),
+                        )
+                      else
+                        _MediumNavigation(
+                          location: location,
+                          destinations: desktopDestinations,
+                          onSelected: (_AppDestination destination) =>
+                              _selectDestination(
+                                context,
+                                ref,
+                                destination,
+                                featurePreference,
+                                managementSection,
+                                navigationShell,
+                              ),
+                        ),
+                      Expanded(
+                        child: Column(
+                          children: <Widget>[
+                            if (showTopBar) const _TopBar(),
+                            Expanded(child: child),
+                          ],
+                        ),
                       ),
-                    Expanded(
-                      child: Column(
-                        children: <Widget>[
-                          if (showTopBar) const _TopBar(),
-                          Expanded(child: child),
-                        ],
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               );
             },
@@ -474,6 +480,34 @@ class ResponsiveShell extends ConsumerWidget {
     }
     ref.read(managementSectionProvider.notifier).select(resolvedSection);
     context.go(resolvedSection.route);
+  }
+}
+
+/// Keep root note overlays from relaying IME animation into retained branches.
+class _AndroidNotesBackground extends StatelessWidget {
+  /// Enable the boundary only where note input lives on the root navigator.
+  final bool enabled;
+
+  /// Preserve the scaffold instance while inherited keyboard metrics change.
+  final Widget child;
+
+  /// Keep a consistent widget ancestry when switching primary tabs.
+  const _AndroidNotesBackground({required this.enabled, required this.child});
+
+  /// Root overlays still inherit the real media data outside this boundary.
+  @override
+  Widget build(BuildContext context) {
+    // Preserve actual viewport size, accessibility preferences and safe areas.
+    final MediaQueryData media = MediaQuery.of(context);
+    return MediaQuery(
+      data: enabled
+          ? media.copyWith(
+              viewInsets: media.viewInsets.copyWith(bottom: 0),
+              padding: media.padding.copyWith(bottom: media.viewPadding.bottom),
+            )
+          : media,
+      child: child,
+    );
   }
 }
 

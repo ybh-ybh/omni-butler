@@ -187,10 +187,17 @@ class _AndroidComposerSurfaceState extends State<_AndroidComposerSurface>
     }
   }
 
-  /// 下滑请求关闭，保存失败后面板仍停留在可编辑高度。
+  /// Restore the dragged height only when closing leaves this route active.
   Future<void> _dismiss() async {
+    _height.stop();
     await widget.onClose();
-    if (mounted) _settle(math.min(200, _available));
+    if (!mounted) return;
+    // A popped route stays mounted throughout its reverse animation.
+    final ModalRoute<Object?>? route = ModalRoute.of(context);
+    if (route?.isCurrent == true &&
+        route?.animation?.status != AnimationStatus.reverse) {
+      _settle(math.min(200, _available));
+    }
   }
 
   /// 固定底部工具栏，面板内所有高度都从真实键盘占用中扣除。

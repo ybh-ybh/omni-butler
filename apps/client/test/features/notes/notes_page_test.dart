@@ -4440,6 +4440,9 @@ Future<_App> _mount(
   Future<void> Function(AppDatabase)? prepareDatabase,
   Future<Directory> Function()? imageDirectory,
   ImagePicker? systemImagePicker,
+  // Allow deterministic lifecycle gates around the real editor implementation.
+  NoteEditorController Function(NoteRepository, NoteRecorderService)?
+  editorFactory,
 }) async {
   // 各widget用例拥有不同fake async区域，避免复用已结束区域中的Future。
   NoteTagEmojiCatalog.resetCacheForTesting();
@@ -4487,7 +4490,17 @@ Future<_App> _mount(
             picker: systemImagePicker,
           ),
         ),
-      if (imageDirectory != null)
+      if (editorFactory != null)
+        noteEditorProvider.overrideWith((ref) {
+          // Dispose injected sessions exactly like the production provider.
+          final NoteEditorController editor = editorFactory(
+            ref.watch(noteRepositoryProvider),
+            ref.watch(noteRecorderProvider),
+          );
+          ref.onDispose(editor.dispose);
+          return editor;
+        })
+      else if (imageDirectory != null)
         noteEditorProvider.overrideWith(
           (ref) => NoteEditorController(
             ref.watch(noteRepositoryProvider),

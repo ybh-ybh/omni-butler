@@ -3,6 +3,45 @@ part of 'android_notes_view.dart';
 /// 呈现选择不改变草稿和提交协议，旧入口默认保持紧凑面板。
 enum _AndroidNoteEditorMode { compact, fullscreen }
 
+/// Keep the visible draft stable while its persistence transaction completes.
+class _AndroidNoteExitSnapshot {
+  /// Capture the current visual identity and attachment layout.
+  const _AndroidNoteExitSnapshot({
+    required this.draft,
+    required this.draftId,
+    required this.audio,
+    required this.stagedAudio,
+    required this.hasImages,
+    required this.hasChanges,
+    required this.viewInsets,
+    required this.padding,
+  });
+
+  /// Preserve the body metadata until the route is disposed.
+  final NoteDraft draft;
+
+  /// Keep attachment subscriptions bound to the departing draft.
+  final String? draftId;
+
+  /// Retain published audio cards throughout the exit transition.
+  final List<NoteAudioSegmentRecord> audio;
+
+  /// Retain staged audio cards after their rows are promoted or removed.
+  final List<NoteDraftAudioSegmentRecord> stagedAudio;
+
+  /// Preserve the body height reserved for image attachments.
+  final bool hasImages;
+
+  /// Keep the history header unchanged while saving.
+  final bool hasChanges;
+
+  /// Preserve keyboard geometry while its native window closes.
+  final EdgeInsets viewInsets;
+
+  /// Preserve safe-area geometry for the same transition.
+  final EdgeInsets padding;
+}
+
 /// 根导航编辑面板只拥有输入状态，草稿及录音仍由应用会话管理。
 class _AndroidNoteEditor extends ConsumerStatefulWidget {
   /// 历史页先保存退出，再由原入口返回另一篇正在录音的草稿。
@@ -56,6 +95,15 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
   /// 面板关闭前暂存的独立门禁。
   bool _closing = false;
 
+  /// Freeze the departing content before the controller resets its draft.
+  _AndroidNoteExitSnapshot? _exitSnapshot;
+
+  /// Observe actual route completion instead of estimating its duration.
+  Animation<double>? _entryAnimation;
+
+  /// Consume the initial focus request once, including an interrupted entry.
+  bool _autofocusPending = true;
+
   /// 面板内显示可重试错误，不把失败变成静默关闭。
   String? _error;
 
@@ -83,7 +131,7 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
       !_editor.frozen &&
       !_editor.conflicted;
 
-  /// 初始化输入并在首帧后执行入口明确请求的动作。
+  /// Initialize content and defer automatic focus until entry completes.
   @override
   void initState() {
     super.initState();
@@ -99,28 +147,57 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
       if (_voice) return;
       if (widget.pickImages) {
         unawaited(_pickImages());
-      } else if (widget.autofocus) {
-        if (widget.mode == _AndroidNoteEditorMode.fullscreen) {
-          _rich.selection = TextSelection.collapsed(
-            offset: _rich.plainText.length,
-          );
-        }
-        _focus.requestFocus();
+      } else {
+        _requestInitialFocus();
       }
     });
   }
 
-  /// 注册根遮罩的唯一关闭门禁。
+  /// Register the close gate and track the route's real entry animation.
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // 业务面板负责保存与录音确认，路由只提供视觉覆盖。
+    // The route owns the transition while this page owns persistence.
     final ModalRoute<Object?>? route = ModalRoute.of(context);
     if (route is _AndroidComposerRoute) route.requestClose = _requestClose;
+    if (!identical(_entryAnimation, route?.animation)) {
+      _entryAnimation?.removeStatusListener(_entryStatusChanged);
+      _entryAnimation = route?.animation;
+      _entryAnimation?.addStatusListener(_entryStatusChanged);
+    }
   }
 
-  /// 返回先收工具或键盘，录音则进入显式退出确认。
+  /// Request focus only after a completed entry, including zero duration.
+  void _entryStatusChanged(AnimationStatus status) {
+    if (status == AnimationStatus.completed) _requestInitialFocus();
+    if (status == AnimationStatus.reverse) _autofocusPending = false;
+  }
+
+  /// Consume automatic focus once without reviving a closing or covered page.
+  void _requestInitialFocus() {
+    if (!mounted || !_autofocusPending) return;
+    if (_entryAnimation != null &&
+        _entryAnimation!.status != AnimationStatus.completed) {
+      return;
+    }
+    _autofocusPending = false;
+    if (!widget.autofocus ||
+        widget.pickImages ||
+        _voice ||
+        !_editable ||
+        _sourceChanged ||
+        ModalRoute.of(context)?.isCurrent == false) {
+      return;
+    }
+    if (widget.mode == _AndroidNoteEditorMode.fullscreen) {
+      _rich.selection = TextSelection.collapsed(offset: _rich.plainText.length);
+    }
+    _focus.requestFocus();
+  }
+
+  /// Preserve layered back handling without reopening a departing surface.
   Future<void> _requestClose({bool back = false}) async {
+    if (_closing || _sourceChanged) return;
     if (_voice) {
       await _recordingKey.currentState?.requestExit();
     } else if (_tool != null) {
@@ -132,9 +209,9 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     }
   }
 
-  /// 外部草稿恢复或转写变化同步正文，但不把选区变化保存为内容。
+  /// Preserve the visible document while a successful save resets its owner.
   void _sync() {
-    if (!mounted) return;
+    if (!mounted || _closing) return;
     _rich.syncMarkdown(_editor.draft.body, identity: _editor.draftId);
     setState(() {});
   }
@@ -148,10 +225,11 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     }
   }
 
-  /// 释放页面自己的控制器，不取消应用级采集。
+  /// Release route and input listeners without cancelling application audio.
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _entryAnimation?.removeStatusListener(_entryStatusChanged);
     _editor.removeListener(_sync);
     _rich.dispose();
     _focus.dispose();
@@ -174,29 +252,101 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     }
   }
 
-  /// 历史页退出正式保存，新建面板关闭仅暂存；失败均保留当前表面。
+  /// Keep exit state until disposal and restore input only when exit fails.
+  Future<void> _leave(
+    Future<bool> Function() action, {
+    bool rethrowFailure = false,
+    VoidCallback? onLeaving,
+  }) async {
+    if (!mounted || _busy || _closing || _editor.committing) return;
+    // Capture source ownership before asynchronous persistence begins.
+    final NoteEditorController editor = _editor;
+    // Restore the original input intent if persistence fails.
+    final bool restoreFocus = _focus.hasFocus;
+    // Freeze only keyboard-related geometry, allowing real size changes.
+    final MediaQueryData media = MediaQuery.of(context);
+    // Keep already visible attachments while commit promotes their rows.
+    final _AndroidNoteExitSnapshot snapshot = _AndroidNoteExitSnapshot(
+      draft: editor.draft,
+      draftId: editor.draftId,
+      audio: List.unmodifiable(
+        (ref.read(noteAudioProvider(editor.draft.id)).value ?? []).where(
+          (segment) => !editor.isAudioRemoved(segment.id),
+        ),
+      ),
+      stagedAudio: List.unmodifiable(
+        (ref.read(androidDraftAudioProvider(editor.draftId)).value ?? []).where(
+          (segment) => !editor.isAudioRemoved(segment.id),
+        ),
+      ),
+      hasImages: editor.hasImages,
+      hasChanges: editor.hasPendingChanges,
+      viewInsets: media.viewInsets,
+      padding: media.padding,
+    );
+    _autofocusPending = false;
+    setState(() {
+      _closing = true;
+      _exitSnapshot = snapshot;
+      _error = null;
+    });
+    _rich.quillController.readOnly = true;
+    _focus.unfocus();
+    _focus.canRequestFocus = false;
+    // Successful navigation must never re-enable the departing editor.
+    bool departed = false;
+    try {
+      if (!await action()) return;
+      if (!mounted ||
+          _sourceChanged ||
+          !identical(editor, ref.read(noteEditorProvider))) {
+        return;
+      }
+      onLeaving?.call();
+      departed = true;
+      Navigator.of(context).pop();
+    } on Object catch (error) {
+      if (mounted) setState(() => _error = '$error');
+      if (rethrowFailure) rethrow;
+    } finally {
+      if (mounted &&
+          !departed &&
+          !_sourceChanged &&
+          identical(editor, ref.read(noteEditorProvider))) {
+        _closing = false;
+        _exitSnapshot = null;
+        _focus.canRequestFocus = true;
+        _sync();
+        if (restoreFocus) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted &&
+                !_closing &&
+                !_sourceChanged &&
+                identical(editor, _editor) &&
+                ModalRoute.of(context)?.isCurrent != false) {
+              _focus.requestFocus();
+            }
+          });
+        }
+      }
+    }
+  }
+
+  /// Save existing notes on exit and only stage a new note when dismissing it.
   Future<void> _close() async {
     if (_busy || _closing || _editor.committing || _editor.recordingStarting) {
       return;
     }
-    // 已有笔记的实际退出默认正式保存，新建面板仍只暂存未发布输入。
+    // Existing notes retain the established save-before-exit contract.
     if (widget.mode == _AndroidNoteEditorMode.fullscreen) {
       await _commit();
       return;
     }
-    setState(() {
-      _closing = true;
-      _error = null;
-    });
-    try {
+    await _leave(() async {
       await _editor.flush();
       if (_editor.dirty) throw StateError(_editor.error ?? '草稿暂存失败，请重试');
-      if (mounted) Navigator.of(context).pop();
-    } on Object catch (error) {
-      if (mounted) setState(() => _error = '$error');
-    } finally {
-      if (mounted) setState(() => _closing = false);
-    }
+      return true;
+    });
   }
 
   /// 历史页所有普通退出共用提交结果，失败或冲突时保留页面与完整草稿。
@@ -219,33 +369,34 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     throw StateError(editor.error ?? '保存失败，修改仍保留在本机，请重试');
   }
 
-  /// 正式提交等待控制器排空音频与图片队列，失败保持面板。
-  Future<void> _commit({bool saveAsNew = false}) => _guard(() async {
+  /// Commit reliably while retaining the visual draft until route disposal.
+  Future<void> _commit({bool saveAsNew = false}) => _leave(() async {
     if (!saveAsNew && widget.mode == _AndroidNoteEditorMode.fullscreen) {
       await _saveHistoryForExit();
-      if (mounted) Navigator.pop(context);
-      return;
+      return true;
     }
     if (saveAsNew) {
       await _editor.saveAsNew();
-      if (_editor.error != null || _editor.conflicted || _editor.dirty) return;
+      if (_editor.error != null || _editor.conflicted || _editor.dirty) {
+        return false;
+      }
     } else {
-      // 空白和冲突都不作为提交成功处理。
+      // Empty content and conflicts never count as a successful commit.
       final NoteCommitResult result = await _editor.commit();
       if (result != NoteCommitResult.committed) {
         if (result == NoteCommitResult.empty && mounted) {
           setState(() => _error = '请先输入内容或添加图片、录音');
         }
-        return;
+        return false;
       }
     }
-    if (mounted) Navigator.of(context).pop();
+    return true;
   });
 
-  /// 明确放弃才取消这一代；取消不会删除正式笔记及其原件。
+  /// Discard only after confirmation and keep its old content during exit.
   Future<void> _discard() async {
     if (!_editable && !_editor.frozen && !_editor.conflicted) return;
-    // 丢弃入口与普通收起明确分开。
+    // Explicit discard remains separate from ordinary dismissal.
     final bool confirmed = await showOmniConfirmDialog(
       context,
       title: '放弃更改？',
@@ -254,10 +405,10 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
       danger: true,
     );
     if (!confirmed || !mounted) return;
-    await _guard(() async {
+    await _leave(() async {
       await _editor.cancel();
       if (_editor.error != null) throw StateError(_editor.error!);
-      if (mounted) Navigator.pop(context);
+      return true;
     });
   }
 
@@ -286,37 +437,44 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     });
   }
 
-  /// 主页确认发布；编辑器确认仅完成原音暂存并返回原文档。
+  /// Publish quick voice with stable exit state or return to the same draft.
   Future<void> _confirmVoice() async {
-    await _editor.finishRecording();
     if (widget.quickVoice) {
-      // 发布结果必须明确成功，失败时留在原卡片重试。
-      final NoteCommitResult result = await _editor.commit();
-      if (result != NoteCommitResult.committed) {
-        throw StateError(_editor.error ?? '语音笔记发布失败，请重试');
-      }
-      if (mounted) Navigator.pop(context);
-    } else if (mounted) {
+      await _leave(() async {
+        await _editor.finishRecording();
+        // Only a confirmed commit allows the recording route to depart.
+        final NoteCommitResult result = await _editor.commit();
+        if (result != NoteCommitResult.committed) {
+          throw StateError(_editor.error ?? '语音笔记发布失败，请重试');
+        }
+        return true;
+      }, rethrowFailure: true);
+      return;
+    }
+    await _editor.finishRecording();
+    if (mounted) {
       setState(() => _voice = false);
       if (_focusBeforeVoice) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _focus.requestFocus();
+          if (mounted && !_closing) _focus.requestFocus();
         });
       }
     }
   }
 
-  /// 卡片已清理本次片段，主页还需取消独立空草稿。
+  /// Discard the quick-voice draft without reviving its input during exit.
   Future<void> _cancelVoice() async {
     if (widget.quickVoice) {
-      await _editor.cancel();
-      if (_editor.error != null) throw StateError(_editor.error!);
-      if (mounted) Navigator.pop(context);
+      await _leave(() async {
+        await _editor.cancel();
+        if (_editor.error != null) throw StateError(_editor.error!);
+        return true;
+      }, rethrowFailure: true);
     } else if (mounted) {
       setState(() => _voice = false);
       if (_focusBeforeVoice) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _focus.requestFocus();
+          if (mounted && !_closing) _focus.requestFocus();
         });
       }
     }
@@ -370,22 +528,23 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     if (mounted && _editor.draftId == draftId) await _editor.removeAudio(id);
   });
 
-  /// 浏览另一篇笔记时可返回正在采集的原草稿，历史页切换先保存当前修改。
-  Future<void> _returnToRecording(NoteRecordingState recording) =>
-      _guard(() async {
-        if (widget.mode == _AndroidNoteEditorMode.fullscreen) {
-          await _saveHistoryForExit();
-          if (!mounted || _sourceChanged) return;
-          widget.onReturnRecording?.call(recording);
-          Navigator.pop(context);
-          return;
-        }
-        if (recording.draftId != null) {
-          await _editor.openLocalDraft(recording.draftId!);
-        } else if (recording.noteId != null) {
-          await _editor.open(recording.noteId!);
-        }
-      });
+  /// Save the history route before returning to an independently recording draft.
+  Future<void> _returnToRecording(NoteRecordingState recording) async {
+    if (widget.mode == _AndroidNoteEditorMode.fullscreen) {
+      await _leave(() async {
+        await _saveHistoryForExit();
+        return true;
+      }, onLeaving: () => widget.onReturnRecording?.call(recording));
+      return;
+    }
+    await _guard(() async {
+      if (recording.draftId != null) {
+        await _editor.openLocalDraft(recording.draftId!);
+      } else if (recording.noteId != null) {
+        await _editor.open(recording.noteId!);
+      }
+    });
+  }
 
   /// 新录音的自动转写授权只影响之后的采集。
   Future<void> _voiceConsent() async {
@@ -574,14 +733,7 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
       });
     }
     if (action == 'delete' && mounted) {
-      setState(() => _busy = true);
-      try {
-        if (await _androidDeleteNote(context, ref, id) && mounted) {
-          Navigator.pop(context);
-        }
-      } finally {
-        if (mounted) setState(() => _busy = false);
-      }
+      await _leave(() => _androidDeleteNote(context, ref, id));
     }
   }
 
@@ -868,19 +1020,20 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
     );
   }
 
-  /// 默认200dp的正文面板，原草稿与富文本控制器不随语音切换销毁。
+  /// Keep the departing document and attachment identity stable through exit.
   @override
   Widget build(BuildContext context) {
-    // 数据源替换时解绑原控制器，旧回调不得修改新资料库。
+    // Never redirect a pending exit transaction into a replacement source.
     final NoteEditorController editor = ref.watch(noteEditorProvider);
     if (!identical(editor, _editor) &&
-        widget.mode == _AndroidNoteEditorMode.fullscreen) {
+        (widget.mode == _AndroidNoteEditorMode.fullscreen || _closing)) {
       if (!_sourceChanged) {
         _sourceChanged = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
-          // 先关闭本页的菜单或选择器，随后退出原全屏路由。
+          // Close child overlays before dismissing the source-owned editor.
           final ModalRoute<Object?>? route = ModalRoute.of(context);
+          if (route == null || !route.isActive) return;
           Navigator.of(context)
               .popUntil((candidate) => identical(candidate, route));
           Navigator.pop(context);
@@ -894,12 +1047,23 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
       _editor = editor..addListener(_sync);
       _rich.syncMarkdown(editor.draft.body, identity: editor.draftId);
     }
-    ref.listen(noteByIdProvider(editor.draft.id), (_, next) {
-      // 延后读取当前正式记录，保留既有冲突保护。
-      final String id = editor.draft.id;
+    // Use the snapshot after persistence advances the application draft.
+    final _AndroidNoteExitSnapshot? snapshot = _exitSnapshot;
+    // Retain metadata and tags while their original route departs.
+    final NoteDraft draft = snapshot?.draft ?? editor.draft;
+    // A null snapshot owner must not fall through to a newly created draft.
+    final String? draftId = snapshot == null
+        ? editor.draftId
+        : snapshot.draftId;
+    ref.listen(noteByIdProvider(draft.id), (_, next) {
+      // Remote updates remain active until exit freezes the visible session.
+      final String id = draft.id;
       if (next.hasValue) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && identical(_editor, editor) && editor.draft.id == id) {
+          if (mounted &&
+              !_closing &&
+              identical(_editor, editor) &&
+              editor.draft.id == id) {
             editor.acceptRemote(next.value);
           }
         });
@@ -910,27 +1074,32 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
         (ref.watch(noteTaxonomiesProvider).value ?? [])
             .where((tag) => tag.kind == 'tag' && tag.deletedAt == null)
             .toList();
-    // 原音条与提交按钮只依据真实原音事实。
+    // Keep published audio from disappearing when commit changes ownership.
     final List<NoteAudioSegmentRecord> audio =
-        (ref.watch(noteAudioProvider(editor.draft.id)).value ?? [])
+        snapshot?.audio ??
+        (ref.watch(noteAudioProvider(draft.id)).value ?? [])
             .where((segment) => !editor.isAudioRemoved(segment.id))
             .toList();
-    // 本机未发布原音同样可以使发送按钮可用。
-    final AsyncValue<List<NoteDraftAudioSegmentRecord>> staged = ref.watch(
-      androidDraftAudioProvider(editor.draftId),
-    );
-    // 空白格式和空标签不作为可提交的正文。
+    // Snapshot staged rows before the transaction promotes or removes them.
+    final List<NoteDraftAudioSegmentRecord> staged =
+        snapshot?.stagedAudio ??
+        (ref.watch(androidDraftAudioProvider(draftId)).value ?? [])
+            .where((segment) => !editor.isAudioRemoved(segment.id))
+            .toList();
+    // Preserve image-dependent sizing while the input is frozen.
+    final bool hasImages = snapshot?.hasImages ?? editor.hasImages;
+    // Only actual content enables publishing.
     final bool content =
         _rich.plainText.trim().isNotEmpty ||
-        editor.hasImages ||
+        hasImages ||
         audio.isNotEmpty ||
-        (staged.value ?? []).any((item) => !editor.isAudioRemoved(item.id));
-    // 紧凑面板为附件预留首屏位置，避免空正文把图片和原音全部挤到下方。
+        staged.isNotEmpty;
+    // Maintain the same attachment space throughout the close transaction.
     final bool attachments =
-        editor.hasImages ||
-        editor.draft.tags.isNotEmpty ||
+        hasImages ||
+        draft.tags.isNotEmpty ||
         audio.isNotEmpty ||
-        (staged.value ?? []).any((item) => !editor.isAudioRemoved(item.id));
+        staged.isNotEmpty;
     // 语义颜色由当前主题决定。
     final OmniColors colors = OmniColors.of(context);
     // 正文与附件在两种表面中共用同一富文本控制器。
@@ -971,16 +1140,18 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
                   readOnly: editor.frozen || editor.conflicted,
                   style: Theme.of(context).textTheme.bodyLarge
                       ?.copyWith(height: 1.5),
-                  onChanged: (value) => editor.edit(body: value),
+                  onChanged: (value) {
+                    if (!_closing) editor.edit(body: value);
+                  },
                 ),
               ),
             ),
-            if (editor.draft.tags.isNotEmpty)
+            if (draft.tags.isNotEmpty)
               Wrap(
                 spacing: OmniSpacing.xs,
                 children: [
                   for (final TaxonomyEntry tag in tags.where(
-                    (tag) => editor.draft.tags.contains(tag.id),
+                    (tag) => draft.tags.contains(tag.id),
                   ))
                     Text(
                       '${tag.iconEmoji ?? '#'} ${tag.name}',
@@ -989,8 +1160,8 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
                 ],
               ),
             _AndroidNoteImages(
-              noteId: editor.draft.id,
-              draftId: editor.draftId,
+              noteId: draft.id,
+              draftId: draftId,
               onRemove: (id) => _guard(() => editor.removeImage(id)),
             ),
             for (final NoteAudioSegmentRecord segment in audio)
@@ -1000,7 +1171,7 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
                 onInsert: (text) => _insert(segment, text),
                 onDelete: () => _removeAudio(segment.id),
               ),
-            if (editor.draftId != null) _draftAudio(editor),
+            if (draftId != null) _draftAudio(editor, snapshot: snapshot),
           ],
         ),
       ),
@@ -1120,7 +1291,7 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
                   ),
                   OmniIconButton(
                     key: const ValueKey('android-note-publish'),
-                    tooltip: editor.draft.baseRevision.isEmpty ? '发布' : '保存',
+                    tooltip: draft.baseRevision.isEmpty ? '发布' : '保存',
                     onPressed: _editable && content ? () => _commit() : null,
                     style: ButtonStyle(
                       backgroundColor: const WidgetStatePropertyAll(
@@ -1156,8 +1327,8 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
             ),
             toolbar: toolbar,
             popup: _popup(tags, audio),
-            dateLabel: editor.draft.recordTime.label,
-            hasChanges: editor.hasPendingChanges,
+            dateLabel: draft.recordTime.label,
+            hasChanges: snapshot?.hasChanges ?? editor.hasPendingChanges,
             onBack: _busy || _closing || editor.committing
                 ? null
                 : () => unawaited(_close()),
@@ -1180,17 +1351,46 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
       onConfirm: _confirmVoice,
       onCancel: _cancelVoice,
     );
-    return PopScope<Object?>(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) unawaited(_requestClose(back: true));
-      },
-      child: fullscreen
-          ? Stack(
-              fit: StackFit.expand,
-              children: [
-                surface,
-                AnimatedSwitcher(
+    // Retain keyboard geometry without freezing orientation or viewport size.
+    final MediaQueryData media = MediaQuery.of(context);
+    return AbsorbPointer(
+      absorbing: _closing,
+      child: MediaQuery(
+        data: snapshot == null
+            ? media
+            : media.copyWith(
+                viewInsets: snapshot.viewInsets,
+                padding: snapshot.padding,
+              ),
+        child: PopScope<Object?>(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop) unawaited(_requestClose(back: true));
+          },
+          child: fullscreen
+              ? Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    surface,
+                    AnimatedSwitcher(
+                      duration: OmniMotion.duration(
+                        context,
+                        const Duration(milliseconds: 280),
+                      ),
+                      reverseDuration: OmniMotion.duration(
+                        context,
+                        const Duration(milliseconds: 220),
+                      ),
+                      child: _voice
+                          ? _AndroidHistoryVoiceCover(
+                              child: recording(),
+                              onClose: () => unawaited(_requestClose()),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  ],
+                )
+              : AnimatedSwitcher(
                   duration: OmniMotion.duration(
                     context,
                     const Duration(milliseconds: 280),
@@ -1199,69 +1399,64 @@ class _AndroidNoteEditorState extends ConsumerState<_AndroidNoteEditor>
                     context,
                     const Duration(milliseconds: 220),
                   ),
-                  child: _voice
-                      ? _AndroidHistoryVoiceCover(
-                          child: recording(),
-                          onClose: () => unawaited(_requestClose()),
-                        )
-                      : const SizedBox.shrink(),
+                  child: _voice ? recording() : surface,
                 ),
-              ],
-            )
-          : AnimatedSwitcher(
-              duration: OmniMotion.duration(
-                context,
-                const Duration(milliseconds: 280),
-              ),
-              reverseDuration: OmniMotion.duration(
-                context,
-                const Duration(milliseconds: 220),
-              ),
-              child: _voice ? recording() : surface,
-            ),
+        ),
+      ),
     );
   }
 
-  /// 本机原音复用回听组件，未发布前不提供正式识别入口。
-  Widget _draftAudio(NoteEditorController editor) =>
-      StreamBuilder<List<NoteDraftAudioSegmentRecord>>(
-        key: ValueKey('android-draft-audio-${editor.draftId}'),
-        stream:
-            (editor.repository.database.select(
-                    editor.repository.database.noteDraftAudioSegments,
-                  )
-                  ..where((table) => table.draftId.equals(editor.draftId!))
-                  ..orderBy([(table) => OrderingTerm.asc(table.sortOrder)]))
-                .watch(),
-        builder: (context, snapshot) => Column(
+  /// Reuse a stable provider and retain staged audio while its route exits.
+  Widget _draftAudio(
+    NoteEditorController editor, {
+    _AndroidNoteExitSnapshot? snapshot,
+  }) {
+    // Bind each card to its original draft even after commit resets it.
+    final String? draftId = snapshot == null
+        ? editor.draftId
+        : snapshot.draftId;
+    return Consumer(
+      key: ValueKey('android-draft-audio-$draftId'),
+      builder: (context, ref, _) {
+        // Preserve the previous sort order while sharing the stable provider.
+        final List<NoteDraftAudioSegmentRecord> staged =
+            (snapshot?.stagedAudio ??
+                    (ref.watch(androidDraftAudioProvider(draftId)).value ?? [])
+                        .where((audio) => !editor.isAudioRemoved(audio.id)))
+                .toList()
+              ..sort(
+                (left, right) => left.sortOrder.compareTo(right.sortOrder),
+              );
+        return Column(
           children: [
-            for (final NoteDraftAudioSegmentRecord audio in snapshot.data ?? [])
-              if (!editor.isAudioRemoved(audio.id))
-                _AndroidNoteAudio(
-                  staged: true,
-                  editing: true,
-                  segment: NoteAudioSegmentRecord(
-                    id: audio.id,
-                    noteId: audio.noteId,
-                    durationMs: audio.durationMs,
-                    mime: audio.mime,
-                    sha256: audio.sha256,
-                    byteSize: audio.byteSize,
-                    sortOrder: audio.sortOrder,
-                    createdAt: audio.startedAt,
-                    updatedAt: audio.startedAt,
-                  ),
-                  draftLocal: NoteAudioLocalFileRecord(
-                    polishState: 'disabled',
-                    id: audio.id,
-                    localPath: audio.localPath,
-                    uploadState: 'local',
-                    recognitionState: 'idle',
-                    consent: false,
-                  ),
-                  onDelete: () => _removeAudio(audio.id),
+            for (final NoteDraftAudioSegmentRecord audio in staged)
+              _AndroidNoteAudio(
+                staged: true,
+                editing: true,
+                segment: NoteAudioSegmentRecord(
+                  id: audio.id,
+                  noteId: audio.noteId,
+                  durationMs: audio.durationMs,
+                  mime: audio.mime,
+                  sha256: audio.sha256,
+                  byteSize: audio.byteSize,
+                  sortOrder: audio.sortOrder,
+                  createdAt: audio.startedAt,
+                  updatedAt: audio.startedAt,
                 ),
+                draftLocal: NoteAudioLocalFileRecord(
+                  polishState: 'disabled',
+                  id: audio.id,
+                  localPath: audio.localPath,
+                  uploadState: 'local',
+                  recognitionState: 'idle',
+                  consent: false,
+                ),
+                onDelete: () => _removeAudio(audio.id),
+              ),
           ],
-        ),
-      );
+        );
+      },
+    );
+  }
 }
