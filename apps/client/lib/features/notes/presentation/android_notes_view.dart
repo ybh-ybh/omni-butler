@@ -480,10 +480,13 @@ class _AndroidNotesViewState extends ConsumerState<AndroidNotesView>
     // 当前采集器的实际状态快照。
     final NoteRecordingState recording =
         ref.watch(noteRecordingProvider).value ?? editor.recorder.state;
+    // Quick categories share one visible label with the sidebar.
+    final String? categoryTitle = _androidSidebarFilterLabel(_filter);
     // 当前视图或卡片使用的可见标题。
     final String title = _recycle
         ? '笔记回收站'
         : _day ??
+              categoryTitle ??
               tags
                   .where((tag) => _filter.tagIds.contains(tag.id))
                   .map((tag) => tag.name)

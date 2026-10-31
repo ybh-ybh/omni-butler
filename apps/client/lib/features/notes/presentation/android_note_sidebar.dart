@@ -32,7 +32,7 @@ class _AndroidSidebarScrollController extends ScrollController {
 
 /// 侧栏只返回明确的导航选择，不改变编辑会话。
 class _AndroidSidebarSelection {
-  /// 全部、标签、日期、草稿或回收站。
+  /// Selects all notes, a quick category, tag, day, draft, or recycle bin.
   final String kind;
 
   /// 对应标签或日期身份。
@@ -44,6 +44,31 @@ class _AndroidSidebarSelection {
   /// 创建导航结果。
   const _AndroidSidebarSelection(this.kind, [this.value, this.origin = 'all']);
 }
+
+/// Recognizes only standalone quick filters as selected sidebar categories.
+String? _androidSidebarFilterKind(NoteSearchFilter filter) {
+  // Quick categories never carry date, tag, or anniversary constraints.
+  final bool hasSharedCondition =
+      filter.range != 'all' ||
+      filter.customRange != null ||
+      filter.tagIds.isNotEmpty ||
+      filter.onThisDay;
+  if (hasSharedCondition) return null;
+  if (filter.tagMode == 'none' && filter.contents.isEmpty) return 'untagged';
+  if (filter.tagMode != 'include' || filter.contents.length != 1) return null;
+  if (filter.contents.contains('image')) return 'image';
+  if (filter.contents.contains('audio')) return 'audio';
+  return null;
+}
+
+/// Maps the active quick filter to the title shared by the sidebar and page.
+String? _androidSidebarFilterLabel(NoteSearchFilter filter) =>
+    switch (_androidSidebarFilterKind(filter)) {
+      'untagged' => '无标签',
+      'image' => '有图片',
+      'audio' => '有语音',
+      _ => null,
+    };
 
 /// 根抽屉与二级页面独立，不让横滑传给一级导航。
 extension _AndroidNotesSidebar on _AndroidNotesViewState {
@@ -91,6 +116,27 @@ extension _AndroidNotesSidebar on _AndroidNotesViewState {
       case 'all':
         _update(() {
           _filter = const NoteSearchFilter.empty();
+          _day = null;
+          _recycle = false;
+          _sidebarOrigin = 'all';
+        });
+      case 'untagged':
+        _update(() {
+          _filter = NoteSearchFilter(tagMode: 'none');
+          _day = null;
+          _recycle = false;
+          _sidebarOrigin = 'all';
+        });
+      case 'image':
+        _update(() {
+          _filter = NoteSearchFilter(contents: {'image'});
+          _day = null;
+          _recycle = false;
+          _sidebarOrigin = 'all';
+        });
+      case 'audio':
+        _update(() {
+          _filter = NoteSearchFilter(contents: {'audio'});
           _day = null;
           _recycle = false;
           _sidebarOrigin = 'all';
@@ -322,14 +368,8 @@ class _AndroidNoteSidebar extends ConsumerStatefulWidget {
       _AndroidNoteSidebarState();
 }
 
-/// 搜索只影响全部标签，置顶分区与统计始终使用全量数据。
+/// Keeps pinned and all-tag sections backed by the full active tag set.
 class _AndroidNoteSidebarState extends ConsumerState<_AndroidNoteSidebar> {
-  /// 本次标签搜索草稿。
-  final TextEditingController _query = TextEditingController();
-
-  /// 搜索显隐不更改主列表条件。
-  bool _searching = false;
-
   /// 菜单和异步提交只允许执行一次。
   bool _busy = false;
 
@@ -342,16 +382,28 @@ class _AndroidNoteSidebarState extends ConsumerState<_AndroidNoteSidebar> {
   /// 当前具体分区，取消置顶后可回退。
   late String _origin = widget.origin;
 
+  /// Keeps the active quick category visible when the sidebar reopens.
+  late bool _allNotesExpanded;
+
+  /// Keeps pinned tags visible until their heading is explicitly collapsed.
+  bool _pinnedTagsExpanded = true;
+
+  /// Keeps the complete tag list visible until its heading is collapsed.
+  bool _allTagsExpanded = true;
+
+  /// Restores disclosure visibility from the applied list filter.
+  @override
+  void initState() {
+    super.initState();
+    _allNotesExpanded =
+        !widget.recycle &&
+        widget.selectedDay == null &&
+        _androidSidebarFilterKind(widget.filter) != null;
+  }
+
   /// 扩展方法通过这里更新，保持State的受保护成员边界。
   void _update(VoidCallback action) {
     if (mounted) setState(action);
-  }
-
-  /// 释放独立搜索输入。
-  @override
-  void dispose() {
-    _query.dispose();
-    super.dispose();
   }
 
   /// 导航结果在关闭后由根页面处理。
@@ -450,10 +502,15 @@ class _AndroidNoteSidebarState extends ConsumerState<_AndroidNoteSidebar> {
               if (state.hasError || taxonomy.hasError) const Text('统计加载失败'),
               Row(
                 children: [
-                  for (final (String, String) item in [
-                    ('${notes.length}', '笔记'),
-                    ('${tags.length}', '标签'),
-                    ('${notes.map((note) => note.dayKey).toSet().length}', '天'),
+                  // Each statistic owns one third with left, center, or right alignment.
+                  for (final (String, String, CrossAxisAlignment) item in [
+                    ('${notes.length}', '笔记', CrossAxisAlignment.start),
+                    ('${tags.length}', '标签', CrossAxisAlignment.center),
+                    (
+                      '${notes.map((note) => note.dayKey).toSet().length}',
+                      '天',
+                      CrossAxisAlignment.end,
+                    ),
                   ])
                     Expanded(
                       child: OmniInkWell(
@@ -464,7 +521,7 @@ class _AndroidNoteSidebarState extends ConsumerState<_AndroidNoteSidebar> {
                             vertical: OmniSpacing.sm,
                           ),
                           child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            crossAxisAlignment: item.$3,
                             children: [
                               Text(
                                 item.$1,
@@ -486,64 +543,47 @@ class _AndroidNoteSidebarState extends ConsumerState<_AndroidNoteSidebar> {
               const SizedBox(height: OmniSpacing.md),
               _heatmap(notes),
               const SizedBox(height: OmniSpacing.xl),
-              _navigation(
-                '全部笔记',
-                Icons.grid_view_rounded,
-                !widget.recycle &&
-                    widget.selectedDay == null &&
-                    (widget.filter.tagIds.isEmpty || _clearedSelection),
-                () => _select('all'),
-                arrow: true,
-              ),
-              _navigation(
-                '草稿',
-                Icons.drafts_outlined,
-                false,
-                () => _select('drafts'),
-              ),
+              _allNotesNavigation(),
               const SizedBox(height: OmniSpacing.lg),
               if (tags.any((tag) => tag.isPinned)) ...[
-                _sectionTitle('置顶标签'),
-                for (final TaxonomyEntry tag in tags.where(
-                  (tag) => tag.isPinned,
-                ))
-                  _tagRow(tag, 'pinned', origin),
+                _sectionToggle(
+                  '置顶标签',
+                  expanded: _pinnedTagsExpanded,
+                  onTap: () =>
+                      _update(() => _pinnedTagsExpanded = !_pinnedTagsExpanded),
+                ),
+                OmniDisclosure(
+                  key: const ValueKey('android-sidebar-pinned-tags'),
+                  expanded: _pinnedTagsExpanded,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final TaxonomyEntry tag in tags.where(
+                        (tag) => tag.isPinned,
+                      ))
+                        _tagRow(tag, 'pinned', origin),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: OmniSpacing.lg),
               ],
               _tagHeader(tags),
-              if (_searching)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: OmniSpacing.xs),
-                  child: OmniTextField(
-                    key: const ValueKey('android-sidebar-tag-search'),
-                    controller: _query,
-                    autofocus: true,
-                    decoration: InputDecoration(
-                      hintText: '搜索标签',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: OmniIconButton(
-                        tooltip: '关闭标签搜索',
-                        icon: const Icon(Icons.close),
-                        onPressed: () => setState(() {
-                          _searching = false;
-                          _query.clear();
-                        }),
+              OmniDisclosure(
+                key: const ValueKey('android-sidebar-all-tags'),
+                expanded: _allTagsExpanded,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final TaxonomyEntry tag in tags)
+                      _tagRow(tag, 'all', origin),
+                    if (tags.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(OmniSpacing.sm),
+                        child: Text('还没有标签'),
                       ),
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
+                  ],
                 ),
-              for (final TaxonomyEntry tag in tags.where(
-                (tag) => tag.name.toLowerCase().contains(
-                  _query.text.trim().toLowerCase(),
-                ),
-              ))
-                _tagRow(tag, 'all', origin),
-              if (tags.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(OmniSpacing.sm),
-                  child: Text('还没有标签'),
-                ),
+              ),
               const SizedBox(height: OmniSpacing.lg),
               _navigation(
                 '回收站',
@@ -558,18 +598,126 @@ class _AndroidNoteSidebarState extends ConsumerState<_AndroidNoteSidebar> {
     );
   }
 
-  /// 小标题沿用主题的弱化文字，不硬编码金色。
-  Widget _sectionTitle(String title) => Padding(
+  /// Uses the lighter secondary hierarchy from the reference video.
+  Widget _sectionTitle(String title, {String? label}) => Padding(
+    key: ValueKey('android-sidebar-section-$title'),
     padding: const EdgeInsets.symmetric(
       horizontal: OmniSpacing.sm,
       vertical: OmniSpacing.xs,
     ),
     child: Text(
-      title,
+      label ?? title,
       style: Theme.of(context).textTheme.labelLarge
-          ?.copyWith(color: OmniColors.of(context).muted),
+          ?.copyWith(color: const Color(0xFFC8C0A8)),
     ),
   );
+
+  /// Turns a section heading into the reference disclosure trigger.
+  Widget _sectionToggle(
+    String title, {
+    required bool expanded,
+    required VoidCallback onTap,
+  }) => OmniDisclosureToggle(
+    expanded: expanded,
+    child: OmniInkWell(
+      key: ValueKey('android-sidebar-section-toggle-$title'),
+      onTap: onTap,
+      child: _sectionTitle(title, label: expanded ? title : '$title...'),
+    ),
+  );
+
+  /// Separates all-notes selection from its quick-category disclosure button.
+  Widget _allNotesNavigation() {
+    // Combined search conditions must not falsely select the all-notes row.
+    final bool allSelected =
+        !widget.recycle &&
+        widget.selectedDay == null &&
+        (!widget.filter.isActive || _clearedSelection);
+    // The disclosure arrow uses the exact foreground color of its parent row.
+    final OmniColors colors = OmniColors.of(context);
+    // Selected rows use accent ink while inactive rows use regular text ink.
+    final Color rowForeground = allSelected ? colors.accentInk : colors.ink;
+    // A child is selected only while its standalone category owns the view.
+    final String? category =
+        _clearedSelection || widget.recycle || widget.selectedDay != null
+        ? null
+        : _androidSidebarFilterKind(widget.filter);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _AndroidSidebarRow(
+          key: const ValueKey('android-sidebar-all-notes'),
+          selected: allSelected,
+          leading: const Icon(Icons.grid_view_rounded),
+          title: '全部笔记',
+          onTap: () => _select('all'),
+          trailing: OmniDisclosureToggle(
+            expanded: _allNotesExpanded,
+            child: OmniIconButton(
+              key: const ValueKey('android-sidebar-all-notes-toggle'),
+              tooltip: _allNotesExpanded ? '收起笔记分类' : '展开笔记分类',
+              constraints: const BoxConstraints.tightFor(
+                width: _AndroidSidebarRow.compactHeight,
+                height: _AndroidSidebarRow.compactHeight,
+              ),
+              padding: EdgeInsets.zero,
+              color: rowForeground,
+              icon: AnimatedRotation(
+                turns: _allNotesExpanded ? 0.25 : 0,
+                duration: OmniMotion.duration(context, OmniMotion.panel),
+                curve: OmniMotion.standardCurve,
+                child: const Icon(Icons.chevron_right),
+              ),
+              onPressed: () =>
+                  _update(() => _allNotesExpanded = !_allNotesExpanded),
+            ),
+          ),
+        ),
+        OmniDisclosure(
+          key: const ValueKey('android-sidebar-note-categories'),
+          expanded: _allNotesExpanded,
+          child: Padding(
+            padding: const EdgeInsets.only(left: OmniSpacing.xl),
+            child: DecoratedBox(
+              key: const ValueKey('android-sidebar-note-categories-guide'),
+              decoration: BoxDecoration(
+                border: Border(left: BorderSide(color: colors.line)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.only(left: OmniSpacing.xs),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _navigation(
+                      '无标签',
+                      Icons.label_outline,
+                      category == 'untagged',
+                      () => _select('untagged'),
+                      key: const ValueKey('android-sidebar-filter-untagged'),
+                    ),
+                    _navigation(
+                      '有图片',
+                      Icons.image_outlined,
+                      category == 'image',
+                      () => _select('image'),
+                      key: const ValueKey('android-sidebar-filter-image'),
+                    ),
+                    _navigation(
+                      '有语音',
+                      Icons.mic_none_rounded,
+                      category == 'audio',
+                      () => _select('audio'),
+                      key: const ValueKey('android-sidebar-filter-audio'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   /// 主导航与标签使用相同圆角选中表面。
   Widget _navigation(
@@ -577,13 +725,13 @@ class _AndroidNoteSidebarState extends ConsumerState<_AndroidNoteSidebar> {
     IconData icon,
     bool selected,
     VoidCallback action, {
-    bool arrow = false,
+    Key? key,
   }) => _AndroidSidebarRow(
+    key: key,
     selected: selected,
     leading: Icon(icon),
     title: label,
     onTap: action,
-    trailing: arrow ? const Icon(Icons.chevron_right) : null,
   );
 
   /// 热图自然周与统计共用归档日，不把空白格做成假按钮。
@@ -688,6 +836,9 @@ class _AndroidNoteSidebarState extends ConsumerState<_AndroidNoteSidebar> {
 
 /// 通用安卓侧栏行，选中色与文本反色在同一处处理。
 class _AndroidSidebarRow extends StatelessWidget {
+  /// Matches the compact reference row while allowing large text to grow.
+  static const double compactHeight = 40;
+
   /// 左侧图标或标签emoji。
   final Widget leading;
 
@@ -703,7 +854,7 @@ class _AndroidSidebarRow extends StatelessWidget {
   /// 独立菜单热区。
   final Widget? trailing;
 
-  /// 创建最小48dp热区。
+  /// 创建紧凑的侧栏项。
   const _AndroidSidebarRow({
     super.key,
     required this.leading,
@@ -725,7 +876,7 @@ class _AndroidSidebarRow extends StatelessWidget {
       borderRadius: BorderRadius.circular(OmniSpacing.md),
       clipBehavior: Clip.antiAlias,
       child: IconTheme(
-        data: IconThemeData(color: foreground, size: OmniSpacing.xl),
+        data: IconThemeData(color: foreground, size: OmniSpacing.lg),
         child: DefaultTextStyle(
           style: Theme.of(context).textTheme.titleMedium!
               .copyWith(color: foreground),
@@ -735,13 +886,11 @@ class _AndroidSidebarRow extends StatelessWidget {
                 child: OmniInkWell(
                   onTap: onTap,
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(
-                      minHeight: OmniSize.touch,
-                    ),
+                    constraints: const BoxConstraints(minHeight: compactHeight),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: OmniSpacing.sm,
-                        vertical: OmniSpacing.xs,
+                        vertical: OmniSpacing.xxs,
                       ),
                       child: Row(
                         children: [
@@ -754,7 +903,8 @@ class _AndroidSidebarRow extends StatelessWidget {
                   ),
                 ),
               ),
-              ?trailing,
+              if (trailing != null)
+                SizedBox.square(dimension: compactHeight, child: trailing),
             ],
           ),
         ),

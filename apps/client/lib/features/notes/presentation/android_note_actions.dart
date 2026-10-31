@@ -162,16 +162,36 @@ Widget _androidNoteMenuLabel(
   );
 }
 
+/// Resolves the shared translucent surface for Android context menus.
+Color _androidContextMenuPanelColor(BuildContext context) {
+  // Dark surfaces retain slightly more opacity for legible foreground content.
+  final bool dark = Theme.of(context).brightness == Brightness.dark;
+  return OmniColors.of(context).paper.withValues(alpha: dark ? 0.96 : 0.94);
+}
+
+/// Builds the shared near and far shadows for Android context menus.
+List<BoxShadow> _androidContextMenuPanelShadows(BuildContext context) {
+  // Dark canvases need stronger shadow opacity to preserve visible depth.
+  final bool dark = Theme.of(context).brightness == Brightness.dark;
+  return <BoxShadow>[
+    BoxShadow(
+      color: Colors.black.withValues(alpha: dark ? 0.30 : 0.15),
+      blurRadius: 24,
+      offset: const Offset(0, 8),
+    ),
+    BoxShadow(
+      color: Colors.black.withValues(alpha: dark ? 0.16 : 0.07),
+      blurRadius: 6,
+      offset: const Offset(0, 2),
+    ),
+  ];
+}
+
 /// 菜单沿触发按钮定位，原生菜单负责短屏滚动与边缘避让。
 Future<_AndroidNoteAction?> _androidShowNoteMenu(
   BuildContext context,
   NoteEntryRecord note,
 ) {
-  // Adapt translucency and shadow contrast to the active brightness.
-  final bool dark = Theme.of(context).brightness == Brightness.dark;
-  // Preserve the semantic paper tone while allowing the note beneath to show.
-  final Color panelColor = OmniColors.of(context).paper
-      .withValues(alpha: dark ? 0.96 : 0.94);
   // 实际按钮和根导航覆盖层的坐标空间。
   final RenderBox anchor = context.findRenderObject()! as RenderBox;
   // 同一路由覆盖底部导航，但不模糊列表。
@@ -198,19 +218,8 @@ Future<_AndroidNoteAction?> _androidShowNoteMenu(
       width: math.min(200, MediaQuery.sizeOf(context).width - OmniSpacing.xl),
     ),
     menuPadding: EdgeInsets.zero,
-    panelColor: panelColor,
-    panelShadows: <BoxShadow>[
-      BoxShadow(
-        color: Colors.black.withValues(alpha: dark ? 0.30 : 0.15),
-        blurRadius: 24,
-        offset: const Offset(0, 8),
-      ),
-      BoxShadow(
-        color: Colors.black.withValues(alpha: dark ? 0.16 : 0.07),
-        blurRadius: 6,
-        offset: const Offset(0, 2),
-      ),
-    ],
+    panelColor: _androidContextMenuPanelColor(context),
+    panelShadows: _androidContextMenuPanelShadows(context),
     items: [
       const _AndroidNoteMenuHeader(),
       const PopupMenuDivider(height: OmniSpacing.xxs, thickness: 0.5),

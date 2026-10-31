@@ -73,6 +73,7 @@ class _AndroidTagPageScaffold extends StatelessWidget {
                   OmniButton(
                     key: const ValueKey('android-tag-order-save'),
                     label: '保存',
+                    visualHeight: OmniSize.pageAction,
                     loading: busy,
                     onPressed: busy ? null : onSave,
                   ),
@@ -282,10 +283,17 @@ class _AndroidTagSortPageState extends ConsumerState<_AndroidTagSortPage> {
                                 enabled: !_saving && same,
                                 child: Semantics(
                                   label: '拖动排序：${tag.name}',
-                                  child: const SizedBox(
-                                    width: OmniSize.touch,
+                                  child: SizedBox(
+                                    key: ValueKey(
+                                      'android-tag-order-handle-${tag.id}',
+                                    ),
+                                    width: OmniSize.controlLarge,
                                     height: OmniSize.touch,
-                                    child: Icon(Icons.drag_handle),
+                                    child: Icon(
+                                      Icons.drag_handle,
+                                      size: OmniSize.icon,
+                                      color: OmniColors.of(context).muted,
+                                    ),
                                   ),
                                 ),
                               ),

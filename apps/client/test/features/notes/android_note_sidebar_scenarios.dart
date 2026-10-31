@@ -46,6 +46,299 @@ Future<TaxonomyEntry> _sidebarTag(
 
 /// 五处安卓呈现与标签事务的生产路径回归。
 void androidSidebarTests() {
+  testWidgets('安卓侧栏全部笔记分类展开、紧凑样式与快捷筛选', (tester) async {
+    // The fixture covers one untagged note, one image note, and seeded audio.
+    final _App app = await _mount(
+      tester,
+      seed: true,
+      initialLocation: '/notes',
+      prepareDatabase: (database) async {
+        // Pin one tag so both requested section headings are rendered.
+        await TaxonomyRepository(database).setPinned('work', true);
+        // Add a standalone untagged note for the first quick category.
+        final DateTime now = DateTime.now();
+        await NoteRepository(database).save(
+          NoteDraft(
+            id: 'untagged-note',
+            body: '无标签测试笔记',
+            dayKey: businessDayKey(now),
+            baseRevision: '',
+          ),
+        );
+        // Mark yesterday's seeded note as the only image category result.
+        await database
+            .into(database.noteImages)
+            .insert(
+              NoteImagesCompanion.insert(
+                id: 'sidebar-image',
+                noteId: 'yesterday',
+                sortOrder: 0,
+                createdAt: now,
+                updatedAt: now,
+              ),
+            );
+      },
+    );
+    await _sidebarOpen(tester);
+    // The reference uses a 40dp compact row across navigation and tags.
+    const double compactRowHeight = 40;
+    expect(find.text('草稿'), findsNothing);
+    expect(find.byTooltip('搜索标签'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('android-sidebar-tag-search')),
+      findsNothing,
+    );
+    // The create action precedes sorting beside the all-tags heading.
+    final double createActionX = tester.getCenter(find.byTooltip('新建标签')).dx;
+    final double sortActionX = tester
+        .getCenter(find.byKey(const ValueKey('android-tags-sort')))
+        .dx;
+    expect(createActionX, lessThan(sortActionX));
+    // The middle statistic is centered while the final statistic hugs the right edge.
+    final Finder tagStatistic = find.byKey(
+      const ValueKey('android-note-stat-标签'),
+    );
+    final Finder tagStatisticLabel = find.descendant(
+      of: tagStatistic,
+      matching: find.text('标签'),
+    );
+    expect(
+      tester.getCenter(tagStatisticLabel).dx,
+      closeTo(tester.getCenter(tagStatistic).dx, 0.01),
+    );
+    final Finder dayStatistic = find.byKey(
+      const ValueKey('android-note-stat-天'),
+    );
+    final Finder dayStatisticLabel = find.descendant(
+      of: dayStatistic,
+      matching: find.text('天'),
+    );
+    expect(
+      tester.getTopRight(dayStatisticLabel).dx,
+      closeTo(tester.getTopRight(dayStatistic).dx, 0.01),
+    );
+    expect(
+      find.byKey(const ValueKey('android-sidebar-filter-untagged')),
+      findsNothing,
+    );
+    // Main navigation and tag rows share the compact visual height.
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('android-sidebar-all-notes')))
+          .height,
+      compactRowHeight,
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('notes-tag-work'))).height,
+      compactRowHeight,
+    );
+    // Both section headings use the same lighter muted color.
+    final Finder pinnedSection = find.byKey(
+      const ValueKey('android-sidebar-section-置顶标签'),
+    );
+    final Finder allSection = find.byKey(
+      const ValueKey('android-sidebar-section-全部标签'),
+    );
+    final Color? pinnedColor = tester
+        .widget<Text>(
+          find.descendant(of: pinnedSection, matching: find.text('置顶标签')),
+        )
+        .style
+        ?.color;
+    final Color? allColor = tester
+        .widget<Text>(
+          find.descendant(of: allSection, matching: find.text('全部标签')),
+        )
+        .style
+        ?.color;
+    expect(pinnedColor, allColor);
+    expect(pinnedColor, const Color(0xFFC8C0A8));
+    // Pinned tags collapse upward from their current height and remain independent.
+    final Finder pinnedToggle = find.byKey(
+      const ValueKey('android-sidebar-section-toggle-置顶标签'),
+    );
+    final Finder pinnedDisclosure = find.byKey(
+      const ValueKey('android-sidebar-pinned-tags'),
+    );
+    await tester.tap(pinnedToggle);
+    await tester.pump();
+    await tester.pump(
+      Duration(microseconds: OmniMotion.panel.inMicroseconds ~/ 2),
+    );
+    final double pinnedPartialHeight = tester.getSize(pinnedDisclosure).height;
+    expect(pinnedPartialHeight, greaterThan(0));
+    expect(pinnedPartialHeight, lessThan(compactRowHeight));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('notes-tag-pinned-work')), findsNothing);
+    expect(find.byKey(const ValueKey('notes-tag-work')), findsOneWidget);
+    expect(find.text('置顶标签...'), findsOneWidget);
+    await _capture(tester, app, 'sidebar-phone-pinned-tags-collapsed');
+    await tester.tap(pinnedToggle);
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('notes-tag-pinned-work')), findsOneWidget);
+    expect(find.text('置顶标签'), findsOneWidget);
+    // All tags use the same motion and hide their tools while collapsed.
+    final Finder allTagsToggle = find.byKey(
+      const ValueKey('android-sidebar-section-toggle-全部标签'),
+    );
+    final Finder allTagsDisclosure = find.byKey(
+      const ValueKey('android-sidebar-all-tags'),
+    );
+    await tester.tap(allTagsToggle);
+    await tester.pump();
+    await tester.pump(
+      Duration(microseconds: OmniMotion.panel.inMicroseconds ~/ 2),
+    );
+    final double allTagsPartialHeight = tester
+        .getSize(allTagsDisclosure)
+        .height;
+    expect(allTagsPartialHeight, greaterThan(0));
+    expect(allTagsPartialHeight, lessThan(compactRowHeight * 3));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('notes-tag-work')), findsNothing);
+    expect(find.text('全部标签...'), findsOneWidget);
+    expect(find.byTooltip('新建标签'), findsNothing);
+    expect(find.byKey(const ValueKey('android-tags-sort')), findsNothing);
+    expect(find.byKey(const ValueKey('notes-tag-pinned-work')), findsOneWidget);
+    await _capture(tester, app, 'sidebar-phone-all-tags-collapsed');
+    await tester.tap(allTagsToggle);
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('notes-tag-work')), findsOneWidget);
+    expect(find.text('全部标签'), findsOneWidget);
+    expect(find.byTooltip('新建标签').hitTestable(), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('android-tags-sort')).hitTestable(),
+      findsOneWidget,
+    );
+    // The selected parent arrow uses the same accent ink as its label.
+    final Finder disclosureToggle = find.byKey(
+      const ValueKey('android-sidebar-all-notes-toggle'),
+    );
+    expect(
+      tester.widget<OmniIconButton>(disclosureToggle).color,
+      OmniColors.of(tester.element(disclosureToggle)).accentInk,
+    );
+    // The right-side button reveals children with the shared height animation.
+    await tester.tap(disclosureToggle);
+    await tester.pump();
+    expect(
+      tester
+          .widget<AnimatedRotation>(
+            find.descendant(
+              of: find.byKey(
+                const ValueKey('android-sidebar-all-notes-toggle'),
+              ),
+              matching: find.byType(AnimatedRotation),
+            ),
+          )
+          .turns,
+      0.25,
+    );
+    await tester.pump(
+      Duration(microseconds: OmniMotion.panel.inMicroseconds ~/ 2),
+    );
+    // The disclosure occupies a partial height halfway through the motion.
+    final double partialHeight = tester
+        .getSize(find.byKey(const ValueKey('android-sidebar-note-categories')))
+        .height;
+    expect(partialHeight, greaterThan(0));
+    expect(partialHeight, lessThan(compactRowHeight * 3));
+    await _settle(tester);
+    expect(
+      tester
+          .getSize(
+            find.byKey(const ValueKey('android-sidebar-note-categories')),
+          )
+          .height,
+      compactRowHeight * 3,
+    );
+    // The guide follows the whole child group and uses the theme divider color.
+    final Finder categoryGuide = find.byKey(
+      const ValueKey('android-sidebar-note-categories-guide'),
+    );
+    final BoxDecoration guideDecoration =
+        tester.widget<DecoratedBox>(categoryGuide).decoration as BoxDecoration;
+    expect(guideDecoration.border, isA<Border>());
+    expect(
+      (guideDecoration.border! as Border).left.color,
+      OmniColors.of(tester.element(categoryGuide)).line,
+    );
+    expect(tester.getSize(categoryGuide).height, compactRowHeight * 3);
+    await _capture(tester, app, 'sidebar-phone-quick-categories');
+    // The same arrow collapses the group and removes hidden rows from the tree.
+    await tester.tap(
+      find.byKey(const ValueKey('android-sidebar-all-notes-toggle')),
+    );
+    await _settle(tester);
+    expect(
+      find.byKey(const ValueKey('android-sidebar-filter-untagged')),
+      findsNothing,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('android-sidebar-all-notes-toggle')),
+    );
+    await _settle(tester);
+    // Untagged selection closes the sidebar and filters the production list.
+    await tester.tap(
+      find.byKey(const ValueKey('android-sidebar-filter-untagged')),
+    );
+    await _settle(tester);
+    expect(find.text('无标签'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('android-note-card-untagged-note')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('android-note-card-target')),
+      findsNothing,
+    );
+    // Reopening preserves the active child and lets image filtering replace it.
+    await _sidebarOpen(tester);
+    final Finder untaggedRow = find.byKey(
+      const ValueKey('android-sidebar-filter-untagged'),
+    );
+    expect(
+      tester
+          .widget<Material>(
+            find
+                .descendant(of: untaggedRow, matching: find.byType(Material))
+                .first,
+          )
+          .color,
+      OmniColors.of(tester.element(untaggedRow)).brand,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('android-sidebar-filter-image')),
+    );
+    await _settle(tester);
+    expect(find.text('有图片'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('android-note-card-yesterday')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('android-note-card-untagged-note')),
+      findsNothing,
+    );
+    // Audio filtering reuses the existing note-audio query path.
+    await _sidebarOpen(tester);
+    await tester.tap(
+      find.byKey(const ValueKey('android-sidebar-filter-audio')),
+    );
+    await _settle(tester);
+    expect(find.text('有语音'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('android-note-card-target')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('android-note-card-yesterday')),
+      findsNothing,
+    );
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Android侧栏改版 置顶与点选来源、删除子页、关闭保留滚动', (tester) async {
     // 未发布正文不能被侧栏导航或标签操作抢占。
     final _App app = await _mount(
@@ -61,6 +354,26 @@ void androidSidebarTests() {
     final String? owner = app.container.read(noteEditorProvider).draftId;
     await _sidebarOpen(tester);
     await _sidebarTagMenu(tester);
+    // The tag menu matches the note menu's width and translucent surface.
+    final Finder menuSurface = find.byKey(
+      const ValueKey('omni-windows-menu-surface'),
+    );
+    final Material menuMaterial = tester.widget<Material>(menuSurface);
+    expect(tester.getSize(menuSurface).width, closeTo(200, 0.01));
+    expect(menuMaterial.color?.a, closeTo(0.94, 0.001));
+    expect(menuMaterial.elevation, 0);
+    // The shared two-layer shadow wraps the complete rounded menu panel.
+    final Finder shadowSurface = find
+        .ancestor(of: menuSurface, matching: find.byType(DecoratedBox))
+        .first;
+    final BoxDecoration shadowDecoration =
+        tester.widget<DecoratedBox>(shadowSurface).decoration as BoxDecoration;
+    expect(shadowDecoration.boxShadow, hasLength(2));
+    expect(shadowDecoration.boxShadow!.first.blurRadius, 24);
+    // Adjacent actions expose the compact 40dp row pitch.
+    final Rect pinRect = tester.getRect(find.text('置顶'));
+    final Rect renameRect = tester.getRect(find.text('编辑名称和图标'));
+    expect(renameRect.center.dy - pinRect.center.dy, closeTo(40, 0.01));
     expect(find.text('编辑名称和图标'), findsOneWidget);
     await tester.tap(find.text('置顶'));
     await _settle(tester);
@@ -145,6 +458,9 @@ void androidSidebarTests() {
           .setPinned('work', true),
     );
     await _settle(tester);
+    // A short viewport keeps the scroll-restoration assertion meaningful after compaction.
+    tester.view.physicalSize = const Size(390, 600);
+    await tester.pump();
     await _sidebarTap(tester, find.text('回收站'));
     await _sidebarOpen(tester);
     // 列表关闭重建后，真实ScrollController仍恢复上次末端位置。
@@ -177,6 +493,22 @@ void androidSidebarTests() {
     await _sidebarTap(tester, find.byKey(const ValueKey('android-tags-sort')));
     expect(find.text('恢复默认'), findsNothing);
     expect(find.text('反馈'), findsNothing);
+    // The save surface is shorter while its padded touch target remains intact.
+    final OmniButton saveButton = tester.widget(
+      find.byKey(const ValueKey('android-tag-order-save')),
+    );
+    expect(saveButton.visualHeight, OmniSize.pageAction);
+    // The drag handle uses a narrower slot and the theme's muted icon color.
+    final Finder workHandle = find.byKey(
+      const ValueKey('android-tag-order-handle-work'),
+    );
+    expect(tester.getSize(workHandle).width, OmniSize.controlLarge);
+    expect(tester.getSize(workHandle).height, OmniSize.touch);
+    final Icon handleIcon = tester.widget(
+      find.descendant(of: workHandle, matching: find.byType(Icon)),
+    );
+    expect(handleIcon.size, OmniSize.icon);
+    expect(handleIcon.color, OmniColors.of(tester.element(workHandle)).muted);
     // 从第一项手柄真实拖到末项后，不能立即更新数据库。
     final Offset start = tester.getCenter(
       find.descendant(

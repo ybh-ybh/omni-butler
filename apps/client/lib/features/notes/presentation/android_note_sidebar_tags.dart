@@ -28,20 +28,22 @@ extension _AndroidSidebarTags on _AndroidNoteSidebarState {
   /// 标题与工具在窄屏大字号下自然分行。
   Widget _tagHeader(List<TaxonomyEntry> tags) => LayoutBuilder(
     builder: (context, constraints) {
-      // 当前字号对应的小标题宽度，三项工具各保留48dp。
+      // Reserves 48dp for each of the two tools beside the scaled heading.
       final bool stacked =
           constraints.maxWidth <
-          MediaQuery.textScalerOf(context).scale(70) + OmniSize.touch * 3;
+          MediaQuery.textScalerOf(context).scale(70) + OmniSize.touch * 2;
       // 辅助入口使用紧凑图标，排序一击直达。
       final Widget actions = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           OmniIconButton(
-            tooltip: '搜索标签',
-            icon: const Icon(Icons.search),
+            tooltip: '新建标签',
+            icon: const Icon(Icons.add),
             onPressed: _busy
                 ? null
-                : () => _update(() => _searching = !_searching),
+                : () => _openTagPage(
+                    _AndroidTagEditorPage(source: widget.source),
+                  ),
           ),
           OmniIconButton(
             key: const ValueKey('android-tags-sort'),
@@ -53,29 +55,33 @@ extension _AndroidSidebarTags on _AndroidNoteSidebarState {
                     _AndroidTagSortPage(source: widget.source, tags: tags),
                   ),
           ),
-          OmniIconButton(
-            tooltip: '新建标签',
-            icon: const Icon(Icons.add),
-            onPressed: _busy
-                ? null
-                : () => _openTagPage(
-                    _AndroidTagEditorPage(source: widget.source),
-                  ),
-          ),
         ],
       );
       return stacked
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _sectionTitle('全部标签'),
-                Align(alignment: Alignment.centerRight, child: actions),
+                _sectionToggle(
+                  '全部标签',
+                  expanded: _allTagsExpanded,
+                  onTap: () =>
+                      _update(() => _allTagsExpanded = !_allTagsExpanded),
+                ),
+                if (_allTagsExpanded)
+                  Align(alignment: Alignment.centerRight, child: actions),
               ],
             )
           : Row(
               children: [
-                Expanded(child: _sectionTitle('全部标签')),
-                actions,
+                Expanded(
+                  child: _sectionToggle(
+                    '全部标签',
+                    expanded: _allTagsExpanded,
+                    onTap: () =>
+                        _update(() => _allTagsExpanded = !_allTagsExpanded),
+                  ),
+                ),
+                if (_allTagsExpanded) actions,
               ],
             );
     },
@@ -173,9 +179,14 @@ extension _AndroidSidebarTags on _AndroidNoteSidebarState {
           Offset.zero & overlay.size,
         ),
         constraints: BoxConstraints.tightFor(
-          width: math.min(240, MediaQuery.sizeOf(context).width - 24),
+          width: math.min(
+            200,
+            MediaQuery.sizeOf(context).width - OmniSpacing.xl,
+          ),
         ),
         menuPadding: EdgeInsets.zero,
+        panelColor: _androidContextMenuPanelColor(context),
+        panelShadows: _androidContextMenuPanelShadows(context),
         items: [_AndroidTagMenuEntry(pinned: tag.isPinned)],
       );
       if (!mounted || action == null) return;
@@ -327,9 +338,9 @@ class _AndroidTagMenuEntry extends PopupMenuEntry<String> {
   /// 创建同宽的两层菜单。
   const _AndroidTagMenuEntry({required this.pinned});
 
-  /// 实际内容可随字号自然增高。
+  /// Matches three compact rows plus the single divider.
   @override
-  double get height => OmniSize.touch * 3 + 8;
+  double get height => OmniSize.controlLarge * 3 + 1;
 
   /// 入口自身不代表某一个动作。
   @override
@@ -345,7 +356,7 @@ class _AndroidTagMenuState extends State<_AndroidTagMenuEntry> {
   /// 当前是否显示删除选项。
   bool _deleting = false;
 
-  /// 菜单行完整保留48dp以上触控与换行。
+  /// Builds one compact menu row while allowing scaled text to grow naturally.
   Widget _row(
     String label,
     IconData icon,
@@ -355,11 +366,11 @@ class _AndroidTagMenuState extends State<_AndroidTagMenuEntry> {
   }) => OmniInkWell(
     onTap: action,
     child: ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: OmniSize.touch),
+      constraints: const BoxConstraints(minHeight: OmniSize.controlLarge),
       child: Padding(
         padding: const EdgeInsets.symmetric(
           horizontal: OmniSpacing.md,
-          vertical: OmniSpacing.sm,
+          vertical: OmniSpacing.xxs,
         ),
         child: Row(
           children: [
