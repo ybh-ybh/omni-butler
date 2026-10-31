@@ -231,12 +231,6 @@ class _TimeFingerprintPanel extends StatelessWidget {
   /// 构建随周期改变形态的时间指纹。
   @override
   Widget build(BuildContext context) {
-    // 当前指纹说明。
-    final String description = switch (period) {
-      TimelineStatsPeriod.day => '颜色表示类别，灰色表示尚未记录的时间',
-      TimelineStatsPeriod.week => '对齐七天的 24 小时，查看重复出现的时间节律',
-      TimelineStatsPeriod.month => '每格代表一天，底部微缩条保留当天的时间分布',
-    };
     return OmniPanel(
       key: const ValueKey<String>('timeline-fingerprint'),
       child: Column(
@@ -259,8 +253,6 @@ class _TimeFingerprintPanel extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: OmniSpacing.xxs),
-          Text(description, style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: OmniSpacing.md),
           if (period == TimelineStatsPeriod.month)
             _MonthFingerprint(
@@ -946,7 +938,7 @@ class _CategoryStructurePanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          _PanelHeading(title: '类别结构', description: '按耗时排序，并与上一周期比较'),
+          Text('类别结构', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: OmniSpacing.md),
           if (entries.isEmpty)
             const _InlineEmpty(
@@ -1130,18 +1122,12 @@ class _TimeTrendPanel extends StatelessWidget {
     };
     // 当前趋势标题。
     final String title = period == TimelineStatsPeriod.day ? '时段节律' : '记录趋势';
-    // 当前趋势说明。
-    final String description = switch (period) {
-      TimelineStatsPeriod.day => '观察时间主要落在哪个时段',
-      TimelineStatsPeriod.week => '比较一周内每天的记录总量',
-      TimelineStatsPeriod.month => '按自然周观察整月变化',
-    };
     return OmniPanel(
       key: const ValueKey<String>('timeline-daily-trend'),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          _PanelHeading(title: title, description: description),
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: OmniSpacing.md),
           for (final _TimeTrendDatum item in data) ...<Widget>[
             Row(
