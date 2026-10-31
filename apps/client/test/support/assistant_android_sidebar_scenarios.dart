@@ -16,6 +16,71 @@ Future<void> _openAndroidSidebar(WidgetTester tester) async {
 void _registerAndroidSidebarScenarios(
   SharedPreferences Function() preferences,
 ) {
+  // Real panel geometry must preserve the current model for short and long menus.
+  for (final int profileCount in <int>[1, 2, 20]) {
+    testWidgets('Android侧栏 模型菜单完整位于当前模型上方 $profileCount', (
+      WidgetTester tester,
+    ) async {
+      // The large-text viewport also exercises scrolling within a long menu.
+      final _AndroidAssistantFixture fixture = _AndroidAssistantFixture();
+      await fixture.mount(
+        tester,
+        preferences(),
+        size: const Size(320, 640),
+        textScale: profileCount == 1 ? 1 : 2,
+      );
+      // Keep root safe-area coordinates in the same production overlay space.
+      tester.view.padding = const FakeViewPadding(top: 24, bottom: 24);
+      addTearDown(tester.view.resetPadding);
+      // Supply real profile identities, including a selected item at the end.
+      final Map<String, dynamic> settings = ProviderScope.containerOf(
+        tester.element(find.byType(AssistantAndroidView)),
+        listen: false,
+      ).read(assistantSettingsProvider).requireValue!;
+      settings['profileId'] = 'model-${profileCount - 1}';
+      settings['profiles'] = <Map<String, dynamic>>[
+        for (int index = 0; index < profileCount; index++)
+          <String, dynamic>{
+            'id': 'model-$index',
+            'model': '模型 $index',
+            'hasApiKey': true,
+          },
+      ];
+      await _openAndroidSidebar(tester);
+      // Compare the full Material panel, including its outer menu padding.
+      final Finder button = find.byKey(
+        const ValueKey<String>('assistant-model-button'),
+      );
+      final Rect buttonBounds = tester.getRect(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      final Finder lastItem = find.byKey(
+        ValueKey<String>('assistant-android-model-model-${profileCount - 1}'),
+      );
+      final Finder panel = find
+          .ancestor(of: lastItem, matching: find.byType(Material))
+          .first;
+      final Rect panelBounds = tester.getRect(panel);
+      expect(panelBounds.bottom, closeTo(buttonBounds.top - 8, 0.1));
+      expect(panelBounds.top, greaterThanOrEqualTo(32));
+      expect(panelBounds.overlaps(buttonBounds), isFalse);
+      expect(tester.getRect(button), buttonBounds);
+      // The selected last profile remains reachable when the menu must scroll.
+      await tester.ensureVisible(lastItem);
+      await tester.pumpAndSettle();
+      expect(lastItem.hitTestable(), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(lastItem, findsNothing);
+      expect(button.hitTestable(), findsOneWidget);
+      expect(
+        fixture.repository.calls.where((call) => call.method == 'PUT'),
+        isEmpty,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('Android侧栏 长按非当前会话的置顶重命名删除绑定真实ID', (WidgetTester tester) async {
     // The current chat differs from the row targeted by all three operations.
     final _AndroidAssistantFixture fixture = _AndroidAssistantFixture();

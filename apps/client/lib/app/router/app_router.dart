@@ -17,6 +17,7 @@ import 'package:omni_butler/features/timeline/presentation/timeline_page.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/presentation/todos_page.dart';
 import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
+import 'package:omni_butler/shared/layout/android_secondary_page.dart';
 import 'package:omni_butler/shared/layout/responsive_shell.dart';
 import 'package:omni_butler/features/notes/presentation/notes_page.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
@@ -41,41 +42,53 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
   return GoRouter(
     initialLocation: '/home',
     routes: <RouteBase>[
-      GoRoute(
-        path: '/assistant',
-        builder: (BuildContext context, GoRouterState state) {
-          if (Theme.of(context).platform == TargetPlatform.android) {
-            return Scaffold(
-              backgroundColor: OmniColors.of(context).paper,
-              body: const SafeArea(child: AssistantPage()),
+      if (!preloadPrimaryBranches)
+        GoRoute(
+          path: '/assistant',
+          builder: (BuildContext context, GoRouterState state) {
+            if (Theme.of(context).platform == TargetPlatform.android) {
+              return _AndroidRootBackScope(
+                location: state.uri.path,
+                child: Scaffold(
+                  backgroundColor: OmniColors.of(context).paper,
+                  body: const SafeArea(child: AssistantPage()),
+                ),
+              );
+            }
+            return const ResponsiveShell(
+              location: '/assistant',
+              child: AssistantPage(),
             );
-          }
-          return const ResponsiveShell(
-            location: '/assistant',
-            child: AssistantPage(),
-          );
-        },
-        routes: <RouteBase>[
-          GoRoute(
-            path: 'memories',
-            builder: (BuildContext context, GoRouterState state) =>
-                const AssistantMemoriesPage(),
-          ),
-        ],
-      ),
+          },
+          routes: <RouteBase>[
+            GoRoute(
+              path: 'memories',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const AssistantMemoriesPage(),
+            ),
+          ],
+        ),
       StatefulShellRoute(
         builder: (context, state, navigationShell) {
-          return ResponsiveShell(
+          return _AndroidRootBackScope(
             location: state.uri.path,
-            navigationShell: navigationShell,
-            primaryNavigationCoordinator: primaryNavigationCoordinator,
-            child: navigationShell,
+            child: ResponsiveShell(
+              location: state.uri.path,
+              navigationShell: navigationShell,
+              primaryNavigationCoordinator: primaryNavigationCoordinator,
+              child: navigationShell,
+            ),
           );
         },
         navigatorContainerBuilder: (context, navigationShell, children) {
           return PrimaryNavigationBranchContainer(
             navigationShell: navigationShell,
             coordinator: primaryNavigationCoordinator,
+            primaryNavigationEnabled: <String>{
+              '/home',
+              '/notes',
+              '/assistant',
+            }.contains(GoRouter.of(context).state.uri.path),
             children: children,
           );
         },
@@ -110,8 +123,12 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
                       ? TodoPriorityQuadrant.fromValue(quadrantValue)
                       : null;
                   return _PrimaryRouteSurface(
-                    child: TodosPage(
-                      initialPriorityQuadrant: initialPriorityQuadrant,
+                    child: AndroidSecondaryPage(
+                      location: '/todos',
+                      title: '全部待办',
+                      child: TodosPage(
+                        initialPriorityQuadrant: initialPriorityQuadrant,
+                      ),
                     ),
                   );
                 },
@@ -125,8 +142,13 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
                 path: '/timeline',
                 redirect: (context, state) =>
                     _redirectDisabledFeature(ref, AppFeature.timeline),
-                builder: (context, state) =>
-                    _PrimaryRouteSurface(child: const TimelinePage()),
+                builder: (context, state) => _PrimaryRouteSurface(
+                  child: const AndroidSecondaryPage(
+                    location: '/timeline',
+                    title: '时间记录',
+                    child: TimelinePage(),
+                  ),
+                ),
               ),
             ],
           ),
@@ -136,10 +158,16 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
               GoRoute(
                 path: '/notes',
                 onExit: (context, state) async {
-                  // 保存失败保持当前页面，让用户重试或复制未保存内容。
+                  // Reject both route and visual transitions if saving fails.
                   final editor = ref.read(noteEditorProvider);
-                  await editor.flush();
-                  return !editor.dirty;
+                  try {
+                    await editor.flush();
+                    if (!editor.dirty) return true;
+                  } catch (_) {
+                    // The editor retains its draft and existing save error UI.
+                  }
+                  primaryNavigationCoordinator.rejectPendingNavigation();
+                  return false;
                 },
                 redirect: (context, state) =>
                     _redirectDisabledFeature(ref, AppFeature.notes),
@@ -193,18 +221,100 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
               GoRoute(
                 path: '/settings',
                 builder: (context, state) => _PrimaryRouteSurface(
-                  child: SettingsPage(
-                    initialCategory: state.uri.queryParameters['section'],
+                  child: AndroidSecondaryPage(
+                    location: '/settings',
+                    child: SettingsPage(
+                      initialCategory: state.uri.queryParameters['section'],
+                    ),
                   ),
                 ),
               ),
             ],
           ),
+          if (preloadPrimaryBranches)
+            StatefulShellBranch(
+              preload: true,
+              routes: <RouteBase>[
+                GoRoute(
+                  path: '/assistant',
+                  builder: (context, state) => const _PrimaryRouteSurface(
+                    child: _RetainedAssistantPage(),
+                  ),
+                  routes: <RouteBase>[
+                    GoRoute(
+                      path: 'memories',
+                      builder: (context, state) =>
+                          const AssistantMemoriesPage(),
+                    ),
+                  ],
+                ),
+              ],
+            ),
         ],
       ),
     ],
   );
 });
+
+/// Keep Android back registered on the root route while branch roots handle it.
+class _AndroidRootBackScope extends StatelessWidget {
+  /// Track the actual top location, including imperative feature pushes.
+  final String location;
+
+  /// Keep the shell mounted when back ownership changes between destinations.
+  final Widget child;
+
+  /// Declare platform back ownership without replacing nested navigators.
+  const _AndroidRootBackScope({required this.location, required this.child});
+
+  /// Inner navigators handle local surfaces before this final home fallback.
+  @override
+  Widget build(BuildContext context) {
+    // Wide Android retains assistant back handling; desktop stays unchanged.
+    final bool handlesBack =
+        Theme.of(context).platform == TargetPlatform.android &&
+        (location == '/assistant' ||
+            location.startsWith('/assistant/') ||
+            (OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width) &&
+                location != '/home'));
+    return PopScope<Object?>(
+      key: const ValueKey<String>('android-root-back-scope'),
+      canPop: !handlesBack,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (!didPop && handlesBack) GoRouter.of(context).go('/home');
+      },
+      child: child,
+    );
+  }
+}
+
+/// Defers chat I/O until its first visible frame, then retains the same page.
+class _RetainedAssistantPage extends StatefulWidget {
+  /// Keeps the preloaded navigator lightweight before the first AI visit.
+  const _RetainedAssistantPage();
+
+  /// Remembers whether the assistant has entered a visible navigation frame.
+  @override
+  State<_RetainedAssistantPage> createState() => _RetainedAssistantPageState();
+}
+
+/// Preserves chat state after activation without loading it on home startup.
+class _RetainedAssistantPageState extends State<_RetainedAssistantPage> {
+  /// A visible transition target activates once, including swipe previews.
+  bool _activated = false;
+
+  /// The navigation container disables tickers only for inactive branches.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (TickerMode.valuesOf(context).enabled) _activated = true;
+  }
+
+  /// Subsequent offstage frames retain the live assistant instead of replacing it.
+  @override
+  Widget build(BuildContext context) =>
+      _activated ? const AssistantPage() : const SizedBox.expand();
+}
 
 /// Windows 管理分区直接切换，紧凑 Android 复用页面身份以保留在途横滑。
 Page<void> _buildManagementRoutePage(
@@ -226,9 +336,13 @@ Page<void> _buildManagementRoutePage(
   };
   // 各平台共用完整页面表面，保留 Android 管理分页壳层。
   final Widget surface = _PrimaryRouteSurface(
-    child: embedded
-        ? AndroidManagementShell(selectedSection: section, child: content)
-        : content,
+    child: AndroidSecondaryPage(
+      location: section.route,
+      title: '管理',
+      child: embedded
+          ? AndroidManagementShell(selectedSection: section, child: content)
+          : content,
+    ),
   );
   if (Theme.of(context).platform == TargetPlatform.windows) {
     return NoTransitionPage<void>(

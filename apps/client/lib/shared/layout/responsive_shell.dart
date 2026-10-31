@@ -165,7 +165,7 @@ const List<_AppDestination> _compactDestinations = <_AppDestination>[
   ),
 ];
 
-/// Android 紧凑布局的五个底部导航目的地。
+/// Shows the three frequent destinations on compact Android screens.
 const List<_AppDestination> _androidCompactDestinations = <_AppDestination>[
   _AppDestination(
     path: '/home',
@@ -173,22 +173,6 @@ const List<_AppDestination> _androidCompactDestinations = <_AppDestination>[
     icon: Icons.home_outlined,
     selectedIcon: Icons.home_rounded,
     primaryDestination: PrimaryNavigationDestination.home,
-  ),
-  _AppDestination(
-    path: '/todos',
-    label: '待办',
-    icon: Icons.check_box_outlined,
-    selectedIcon: Icons.check_box_rounded,
-    features: <AppFeature>[AppFeature.todos],
-    primaryDestination: PrimaryNavigationDestination.todos,
-  ),
-  _AppDestination(
-    path: '/timeline',
-    label: '时间',
-    icon: Icons.access_time_outlined,
-    selectedIcon: Icons.access_time_filled,
-    features: <AppFeature>[AppFeature.timeline],
-    primaryDestination: PrimaryNavigationDestination.timeline,
   ),
   _AppDestination(
     path: '/notes',
@@ -199,25 +183,11 @@ const List<_AppDestination> _androidCompactDestinations = <_AppDestination>[
     primaryDestination: PrimaryNavigationDestination.notes,
   ),
   _AppDestination(
-    path: '/inventory',
-    label: '管理',
-    icon: Icons.dashboard_customize_outlined,
-    selectedIcon: Icons.dashboard_customize_rounded,
-    features: <AppFeature>[
-      AppFeature.inventory,
-      AppFeature.events,
-      AppFeature.memberships,
-    ],
-    selectionPaths: <String>['/inventory', '/events', '/memberships'],
-    managementGroup: true,
-    primaryDestination: PrimaryNavigationDestination.management,
-  ),
-  _AppDestination(
-    path: '/settings',
-    label: '设置',
-    icon: Icons.settings_outlined,
-    selectedIcon: Icons.settings_rounded,
-    primaryDestination: PrimaryNavigationDestination.more,
+    path: '/assistant',
+    label: 'AI',
+    icon: Icons.auto_awesome_outlined,
+    selectedIcon: Icons.auto_awesome,
+    primaryDestination: PrimaryNavigationDestination.assistant,
   ),
 ];
 
@@ -294,10 +264,14 @@ class ResponsiveShell extends ConsumerWidget {
         .toList(growable: false);
 
     return Shortcuts(
-      shortcuts: const <ShortcutActivator, Intent>{
-        SingleActivator(LogicalKeyboardKey.keyN): _CreateTodoIntent(),
-        SingleActivator(LogicalKeyboardKey.keyF, control: true):
-            _SearchIntent(),
+      shortcuts: <ShortcutActivator, Intent>{
+        // Chat and its child pages previously lived outside letter shortcuts.
+        if (!(androidPlatform &&
+            (location == '/assistant' || location.startsWith('/assistant/'))))
+          const SingleActivator(LogicalKeyboardKey.keyN):
+              const _CreateTodoIntent(),
+        const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+            const _SearchIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -350,26 +324,46 @@ class ResponsiveShell extends ConsumerWidget {
               );
 
               if (isCompact && !isDesktopPlatform) {
+                // Secondary routes are full screen; keyboard space belongs to input.
+                final bool hideBottomNavigation =
+                    androidPlatform &&
+                    (!const <String>{
+                          '/home',
+                          '/notes',
+                          '/assistant',
+                        }.contains(location) ||
+                        (location == '/assistant' &&
+                            MediaQuery.viewInsetsOf(context).bottom > 0));
                 return _AndroidNotesBackground(
                   enabled: androidNotes,
                   child: Scaffold(
                     resizeToAvoidBottomInset: !androidNotes,
                     backgroundColor: colors.canvas,
                     body: SafeArea(child: child),
-                    bottomNavigationBar: _CompactNavigation(
-                      location: location,
-                      destinations: compactDestinations,
-                      onSelected: (_AppDestination destination) =>
-                          _selectDestination(
-                            context,
-                            ref,
-                            destination,
-                            featurePreference,
-                            managementSection,
-                            navigationShell,
+                    bottomNavigationBar: hideBottomNavigation
+                        ? null
+                        : _CompactNavigation(
+                            location: location,
+                            destinations: compactDestinations,
+                            onSelected: (_AppDestination destination) =>
+                                _selectDestination(
+                                  context,
+                                  ref,
+                                  destination,
+                                  featurePreference,
+                                  managementSection,
+                                  navigationShell,
+                                ),
                           ),
-                    ),
                   ),
+                );
+              }
+
+              // Android tablets retain the existing full-screen assistant surface.
+              if (androidPlatform && location.startsWith('/assistant')) {
+                return Scaffold(
+                  backgroundColor: colors.paper,
+                  body: SafeArea(child: child),
                 );
               }
 
@@ -441,7 +435,9 @@ class ResponsiveShell extends ConsumerWidget {
     ManagementSection preferredSection,
     StatefulNavigationShell? navigationShell,
   ) {
-    if (destination.path == '/notes') {
+    if (destination.path == '/notes' &&
+        !(Theme.of(context).platform == TargetPlatform.android &&
+            OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width))) {
       // 主动导航清除旧搜索定位；安卓保留原草稿，其他平台维持原进入行为。
       if (location == '/notes' &&
           Theme.of(context).platform != TargetPlatform.android) {
@@ -823,7 +819,15 @@ class _CompactNavigation extends StatelessWidget {
       top: false,
       child: Container(
         key: const ValueKey<String>('compact-navigation'),
-        height: 60,
+        height: Theme.of(context).platform == TargetPlatform.android
+            ? math.max(
+                60,
+                OmniSize.navigationIcon +
+                    OmniSpacing.xxs +
+                    MediaQuery.textScalerOf(context).scale(11) * 1.4 +
+                    OmniSpacing.xs,
+              )
+            : 60,
         decoration: BoxDecoration(
           color: colors.paper,
           border: Border(top: BorderSide(color: colors.line)),

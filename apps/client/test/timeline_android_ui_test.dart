@@ -77,16 +77,20 @@ void main() {
       find.descendant(of: primaryButton, matching: find.text('开始')),
       findsOneWidget,
     );
-    // 底部导航栏的实际位置。
-    final Rect navigationRect = tester.getRect(
-      find.byKey(const ValueKey<String>('navigation-/timeline')),
+    // Secondary pages fill the safe viewport without a bottom navigation bar.
+    final double contentBottom =
+        (tester.view.physicalSize.height - tester.view.padding.bottom) /
+        tester.view.devicePixelRatio;
+    expect(
+      find.byKey(const ValueKey<String>('compact-navigation')),
+      findsNothing,
     );
-    expect(tester.getRect(actionGroup).bottom, lessThan(navigationRect.top));
-    // 时间复盘滚动视口应填满到底部导航栏上方。
+    expect(tester.getRect(actionGroup).bottom, lessThan(contentBottom));
+    // The review viewport fills the area below the feature header.
     final Rect reviewViewportRect = tester.getRect(
       find.byKey(const ValueKey<String>('timeline-review-content')),
     );
-    expect(reviewViewportRect.bottom, closeTo(navigationRect.top, 1.1));
+    expect(reviewViewportRect.bottom, closeTo(contentBottom, 1.1));
     expect(tester.takeException(), isNull);
 
     await tester.tap(
@@ -139,7 +143,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('补记'), findsOneWidget);
     expect(find.text('保存'), findsOneWidget);
-    // 时间页根模态覆盖底部导航，取消后回到原有页面。
+    // The root form fills the screen and returns to the existing timeline page.
     expect(
       tester.getSize(find.byType(Dialog)),
       tester.view.physicalSize / tester.view.devicePixelRatio,
@@ -638,7 +642,12 @@ Future<_TimelineAndroidTestContext> _pumpAndroidTimeline(
   );
   // 极窄大字号单独验证时间页，避免预载首页的既有溢出影响本页证据。
   final bool isolated = viewport.width == 320 && textScale == 2;
-  if (!isolated) container.read(appRouterProvider).go('/timeline');
+  // Phones enter from home; desktop and tablet retain their existing routing.
+  final bool useHomeShortcut =
+      !isolated && platform == TargetPlatform.android && viewport.width < 720;
+  if (!isolated && !useHomeShortcut) {
+    container.read(appRouterProvider).go('/timeline');
+  }
   await tester.pumpWidget(
     UncontrolledProviderScope(
       container: container,
@@ -652,6 +661,12 @@ Future<_TimelineAndroidTestContext> _pumpAndroidTimeline(
     ),
   );
   await tester.pumpAndSettle();
+  if (useHomeShortcut) {
+    await tester.tap(
+      find.byKey(const ValueKey<String>('home-shortcut-timeline')),
+    );
+    await tester.pumpAndSettle();
+  }
   return _TimelineAndroidTestContext(
     database: activeDatabase,
     container: container,

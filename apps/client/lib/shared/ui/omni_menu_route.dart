@@ -104,6 +104,8 @@ Future<T?> showOmniMenu<T>({
   bool? requestFocus,
   // 移动端可按需复用完整面板淡入缩放，默认入口仍沿用原生过渡。
   bool wholePanelTransition = false,
+  // Place the measured panel above the trigger, scrolling within that space.
+  bool aboveAnchor = false,
   // 特定参考界面可覆盖面板阴影，未指定时保持统一菜单原样。
   List<BoxShadow>? panelShadows,
   // Allow one menu to override its panel fill without changing shared defaults.
@@ -112,7 +114,8 @@ Future<T?> showOmniMenu<T>({
   assert(items.isNotEmpty);
   assert((position == null) != (positionBuilder == null));
   if (Theme.of(context).platform != TargetPlatform.windows &&
-      !wholePanelTransition) {
+      !wholePanelTransition &&
+      !aboveAnchor) {
     return showMenu<T>(
       context: context,
       position: position,
@@ -154,12 +157,16 @@ Future<T?> showOmniMenu<T>({
       requestFocus: requestFocus,
       panelShadows: panelShadows,
       panelColor: panelColor,
+      aboveAnchor: aboveAnchor,
     ),
   );
 }
 
 /// 保留菜单返回值、外部关闭和焦点循环，同时只动画完整面板。
 class _OmniPopupMenuRoute<T> extends PopupRoute<T> {
+  /// Keeps the complete panel above its trigger without estimating row heights.
+  final bool aboveAnchor;
+
   /// 可选的局部面板阴影，不影响其他菜单入口。
   final List<BoxShadow>? panelShadows;
 
@@ -211,6 +218,7 @@ class _OmniPopupMenuRoute<T> extends PopupRoute<T> {
     required this.semanticLabel,
     required this.panelShadows,
     required this.panelColor,
+    required this.aboveAnchor,
     super.requestFocus,
   }) : super(traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop);
 
@@ -485,6 +493,7 @@ class _OmniMenuHostState<T> extends State<_OmniMenuHost<T>>
           delegate: _OmniMenuPanelsLayout<T>(
             position: widget.position,
             padding: widget.padding,
+            aboveAnchor: widget.route.aboveAnchor,
             textDirection: Directionality.of(context),
             submenu: submenu,
             onInvalidAnchor: _invalidAnchor,
@@ -504,9 +513,13 @@ class _OmniMenuHostState<T> extends State<_OmniMenuHost<T>>
                   animation: widget.animation,
                   onDismiss: _dismiss,
                   onKeyboard: _useKeyboard,
-                  alignment: widget.position.left <= widget.position.right
-                      ? Alignment.topLeft
-                      : Alignment.topRight,
+                  alignment: widget.route.aboveAnchor
+                      ? (widget.position.left <= widget.position.right
+                            ? Alignment.bottomLeft
+                            : Alignment.bottomRight)
+                      : (widget.position.left <= widget.position.right
+                            ? Alignment.topLeft
+                            : Alignment.topRight),
                 ),
               ),
             ),
@@ -546,6 +559,9 @@ class _OmniMenuHostState<T> extends State<_OmniMenuHost<T>>
 
 /// 先固定主面板，再以父行实测位置将二级面板翻转或钳制在窗口内。
 class _OmniMenuPanelsLayout<T> extends MultiChildLayoutDelegate {
+  /// Limits the primary menu to the area above the original trigger.
+  final bool aboveAnchor;
+
   /// 主菜单锚点。
   final RelativeRect position;
 
@@ -568,6 +584,7 @@ class _OmniMenuPanelsLayout<T> extends MultiChildLayoutDelegate {
     required this.textDirection,
     required this.submenu,
     required this.onInvalidAnchor,
+    required this.aboveAnchor,
   });
 
   /// 实测菜单尺寸并定位，空间不足时允许面板重叠但不越过窗口。
@@ -578,6 +595,7 @@ class _OmniMenuPanelsLayout<T> extends MultiChildLayoutDelegate {
       position: position,
       padding: padding,
       textDirection: textDirection,
+      aboveAnchor: aboveAnchor,
     );
     // 两块面板都受到当前窗口实际尺寸约束。
     final BoxConstraints constraints = mainLayout.getConstraintsForChild(
@@ -635,6 +653,9 @@ class _OmniMenuPanelsLayout<T> extends MultiChildLayoutDelegate {
 
 /// 将最终尺寸的面板限制在当前应用窗口安全区域内。
 class _OmniMenuLayout extends SingleChildLayoutDelegate {
+  /// Uses measured height to align the menu bottom above the trigger top.
+  final bool aboveAnchor;
+
   /// 触发器或指针相对于窗口覆盖层的位置。
   final RelativeRect position;
 
@@ -649,13 +670,21 @@ class _OmniMenuLayout extends SingleChildLayoutDelegate {
     required this.position,
     required this.padding,
     required this.textDirection,
+    required this.aboveAnchor,
   });
 
   /// 预留面板与窗口边缘之间的间距。
   @override
-  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
-      BoxConstraints.loose(constraints.biggest)
-          .deflate(padding + const EdgeInsets.all(OmniSpacing.xs));
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
+    // Preserve existing menu bounds for all default placements.
+    final BoxConstraints safe = BoxConstraints.loose(constraints.biggest)
+        .deflate(padding + const EdgeInsets.all(OmniSpacing.xs));
+    if (!aboveAnchor) return safe;
+    // Both the top safe margin and the gap above the button need their own space.
+    final double availableHeight =
+        position.top - padding.top - OmniSpacing.xs * 2;
+    return safe.copyWith(maxHeight: availableHeight.clamp(0, safe.maxHeight));
+  }
 
   /// 优先贴合锚点，在窗口边缘将完整面板移回可见范围。
   @override
@@ -672,6 +701,10 @@ class _OmniMenuLayout extends SingleChildLayoutDelegate {
     final double left = padding.left + OmniSpacing.xs;
     // 完整菜单可处于的最小纵坐标。
     final double top = padding.top + OmniSpacing.xs;
+    // Actual rendered panel height includes large text and menu padding.
+    final double targetY = aboveAnchor
+        ? position.top - OmniSpacing.xs - childSize.height
+        : position.top;
     return Offset(
       targetX.clamp(
         left,
@@ -680,7 +713,7 @@ class _OmniMenuLayout extends SingleChildLayoutDelegate {
           double.infinity,
         ),
       ),
-      position.top.clamp(
+      targetY.clamp(
         top,
         (size.height - padding.bottom - OmniSpacing.xs - childSize.height)
             .clamp(top, double.infinity),
@@ -691,6 +724,7 @@ class _OmniMenuLayout extends SingleChildLayoutDelegate {
   /// 只有锚点、安全区域或阅读方向变化时重新定位。
   @override
   bool shouldRelayout(_OmniMenuLayout oldDelegate) =>
+      aboveAnchor != oldDelegate.aboveAnchor ||
       position != oldDelegate.position ||
       padding != oldDelegate.padding ||
       textDirection != oldDelegate.textDirection;

@@ -71,6 +71,9 @@ class OmniExpandableBottomSheetScaffold extends StatefulWidget {
   /// 左侧取消操作。
   final Widget leading;
 
+  /// 可选的居中顶栏标题。
+  final String? headerTitle;
+
   /// 右侧主要操作。
   final Widget trailing;
 
@@ -98,6 +101,7 @@ class OmniExpandableBottomSheetScaffold extends StatefulWidget {
     required this.trailing,
     required this.bodyBuilder,
     required this.semanticsLabel,
+    this.headerTitle,
     this.canClose = true,
     this.onRequestClose,
     this.initialExtent = 0.5,
@@ -422,10 +426,7 @@ class _OmniExpandableBottomSheetScaffoldState
                           padding: const EdgeInsets.symmetric(
                             horizontal: OmniSpacing.md,
                           ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: <Widget>[widget.leading, widget.trailing],
-                          ),
+                          child: _buildHeader(context),
                         ),
                         const SizedBox(height: OmniSpacing.md),
                         Expanded(
@@ -452,6 +453,44 @@ class _OmniExpandableBottomSheetScaffoldState
           },
         ),
       ),
+    );
+  }
+
+  /// 构建可选居中标题与两侧等宽操作区。
+  Widget _buildHeader(BuildContext context) {
+    // 未配置标题时保留既有左右操作布局。
+    final String? title = widget.headerTitle;
+    if (title == null) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: <Widget>[widget.leading, widget.trailing],
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: <Widget>[
+        Expanded(
+          child: Align(alignment: Alignment.centerLeft, child: widget.leading),
+        ),
+        Expanded(
+          child: Semantics(
+            header: true,
+            child: Text(
+              title,
+              maxLines: 2,
+              textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: widget.trailing,
+          ),
+        ),
+      ],
     );
   }
 }

@@ -25,12 +25,16 @@ class AttachmentPickerDialog extends ConsumerWidget {
   /// 选择图片后是否进入裁剪流程，非 null 时裁剪框锁定为该宽高比。
   final double? cropAspectRatio;
 
+  /// Whether Android phones present this picker as the shared half sheet.
+  final bool expandableOnAndroid;
+
   /// 创建附件选择弹窗。
   const AttachmentPickerDialog({
     required this.businessType,
     required this.businessId,
     required this.title,
     this.cropAspectRatio,
+    this.expandableOnAndroid = false,
     super.key,
   });
 
@@ -41,7 +45,25 @@ class AttachmentPickerDialog extends ConsumerWidget {
     required String businessId,
     required String title,
     double? cropAspectRatio,
+    bool expandableOnAndroid = false,
   }) {
+    // Only the requested compact Android flow uses the expandable half sheet.
+    final bool useExpandableSheet =
+        expandableOnAndroid &&
+        Theme.of(context).platform == TargetPlatform.android &&
+        OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
+    if (useExpandableSheet) {
+      return showOmniExpandableBottomSheet<void>(
+        context: context,
+        builder: (BuildContext context) => AttachmentPickerDialog(
+          businessType: businessType,
+          businessId: businessId,
+          title: title,
+          cropAspectRatio: cropAspectRatio,
+          expandableOnAndroid: true,
+        ),
+      );
+    }
     return showOmniDialog<void>(
       context: context,
       builder: (BuildContext context) => AttachmentPickerDialog(
@@ -49,6 +71,7 @@ class AttachmentPickerDialog extends ConsumerWidget {
         businessId: businessId,
         title: title,
         cropAspectRatio: cropAspectRatio,
+        expandableOnAndroid: false,
       ),
     );
   }
@@ -89,6 +112,9 @@ class AttachmentPickerDialog extends ConsumerWidget {
             sourcePath: selectedPath,
             mimeType: _mimeFor(selectedPath),
           );
+      if (expandableOnAndroid && context.mounted) {
+        Navigator.of(context).pop();
+      }
     } on FileSystemException catch (error) {
       if (context.mounted) {
         showOmniMessage(
@@ -101,10 +127,83 @@ class AttachmentPickerDialog extends ConsumerWidget {
   }
 
   /// 恢复默认图或移除当前主图。
-  Future<void> _remove(WidgetRef ref) {
-    return ref
+  Future<void> _remove(BuildContext context, WidgetRef ref) async {
+    await ref
         .read(attachmentRepositoryProvider)
         .removeCurrent(businessType: businessType, businessId: businessId);
+    if (expandableOnAndroid && context.mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  /// Builds the quote background picker in the shared expandable half sheet.
+  Widget _buildExpandablePicker(
+    BuildContext context,
+    WidgetRef ref,
+    AsyncValue<Attachment?> attachment,
+  ) {
+    // Current attachment determines the primary button label and remove action.
+    final Attachment? current = attachment.asData?.value;
+    // The file action waits until attachment state is ready.
+    final bool ready = attachment.asData != null;
+    return OmniExpandableBottomSheetScaffold(
+      key: const ValueKey<String>('attachment-picker-expandable'),
+      semanticsLabel: '背景选择面板',
+      headerTitle: title,
+      leading: OmniButton(
+        label: '取消',
+        variant: OmniButtonVariant.text,
+        onPressed: () => Navigator.of(context).pop(),
+      ),
+      trailing: OmniButton(
+        key: const ValueKey<String>('attachment-picker-primary'),
+        label: current == null ? '选择图片' : '更换图片',
+        visualHeight: OmniSize.control,
+        onPressed: ready ? () => _pick(context, ref) : null,
+      ),
+      bodyBuilder: (BuildContext context, bool expanded) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            attachment.when(
+              data: (Attachment? record) => Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  AspectRatio(
+                    aspectRatio: cropAspectRatio ?? 16 / 9,
+                    child: _AttachmentPreview(attachment: record),
+                  ),
+                  if (record != null) ...<Widget>[
+                    const SizedBox(height: OmniSpacing.sm),
+                    _AttachmentStateLine(attachment: record),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OmniButton(
+                        key: const ValueKey<String>('attachment-picker-remove'),
+                        label:
+                            businessType == AttachmentBusinessType.quoteBanner
+                            ? '恢复默认背景'
+                            : '移除图片',
+                        variant: OmniButtonVariant.text,
+                        onPressed: () => _remove(context, ref),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              loading: () => const SizedBox(
+                height: 180,
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (Object error, StackTrace stackTrace) => SizedBox(
+                height: 180,
+                child: Center(child: Text('附件读取失败：$error')),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   /// 构建附件选择弹窗。
@@ -114,6 +213,14 @@ class AttachmentPickerDialog extends ConsumerWidget {
     final AsyncValue<Attachment?> attachment = ref.watch(
       currentAttachmentProvider((businessType, businessId)),
     );
+    // Compact quote background flow reuses the start-record half sheet.
+    final bool useExpandableSheet =
+        expandableOnAndroid &&
+        Theme.of(context).platform == TargetPlatform.android &&
+        OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
+    if (useExpandableSheet) {
+      return _buildExpandablePicker(context, ref, attachment);
+    }
     return OmniDialogScaffold(
       title: title,
       width: 600,
@@ -150,7 +257,7 @@ class AttachmentPickerDialog extends ConsumerWidget {
                       ? '恢复默认背景'
                       : '移除图片',
                   variant: OmniButtonVariant.text,
-                  onPressed: () => _remove(ref),
+                  onPressed: () => _remove(context, ref),
                 ),
               OmniButton(
                 label: attachment.asData?.value == null ? '选择图片' : '更换图片',
@@ -202,15 +309,33 @@ class _AttachmentPreview extends StatelessWidget {
           color: OmniColors.of(context).mist,
           borderRadius: BorderRadius.circular(OmniRadius.panel),
         ),
-        child: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Icon(Icons.add_photo_alternate_outlined, size: 48),
-              SizedBox(height: 10),
-              Text('尚未选择图片'),
-            ],
-          ),
+        child: LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            // Shallow banner previews use a row so large text remains unscaled.
+            final bool horizontal = constraints.maxHeight < 120;
+            if (horizontal) {
+              return const Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(Icons.add_photo_alternate_outlined, size: 36),
+                    SizedBox(width: OmniSpacing.xs),
+                    Flexible(child: Text('尚未选择图片')),
+                  ],
+                ),
+              );
+            }
+            return const Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(Icons.add_photo_alternate_outlined, size: 48),
+                  SizedBox(height: 10),
+                  Text('尚未选择图片'),
+                ],
+              ),
+            );
+          },
         ),
       );
     }

@@ -17,6 +17,7 @@ import 'package:omni_butler/features/home/presentation/home_card_catalog.dart';
 import 'package:omni_butler/features/home/presentation/home_card_manager.dart';
 import 'package:omni_butler/features/home/presentation/home_context_card.dart';
 import 'package:omni_butler/features/home/presentation/home_mobile_dashboard.dart';
+import 'package:omni_butler/features/home/presentation/home_mobile_shortcuts.dart';
 import 'package:omni_butler/features/home/presentation/home_time_status_card.dart';
 import 'package:omni_butler/features/home/presentation/quote_library_dialog.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
@@ -158,6 +159,7 @@ class HomePage extends ConsumerWidget {
     final Widget quoteCard = _QuoteHero(
       quoteAsync: quoteAsync,
       dense: true,
+      mobile: androidCompact,
       onManage: () => QuoteLibraryDialog.show(context),
       onBackground: () => AttachmentPickerDialog.show(
         context,
@@ -207,6 +209,7 @@ class HomePage extends ConsumerWidget {
             visibleCards: visibleCards,
             cards: cards,
             onManageCards: () => showHomeCardManager(context),
+            shortcuts: const HomeMobileShortcuts(),
             bottomPadding: featurePreference.isEnabled(AppFeature.timeline)
                 ? _mobileActionClearance
                 : OmniSpacing.xl,
@@ -933,7 +936,7 @@ class _EmptyHomeDashboard extends StatelessWidget {
 }
 
 /// 每日名言横幅。
-class _QuoteHero extends ConsumerWidget {
+class _QuoteHero extends ConsumerStatefulWidget {
   /// 今日名言异步状态。
   final AsyncValue<QuoteRecord?> quoteAsync;
 
@@ -949,6 +952,9 @@ class _QuoteHero extends ConsumerWidget {
   /// 是否使用桌面分栏中的紧凑样式。
   final bool dense;
 
+  /// Enables direct card gestures and uncropped text on Android phones.
+  final bool mobile;
+
   /// 创建每日名言横幅。
   const _QuoteHero({
     required this.quoteAsync,
@@ -956,11 +962,41 @@ class _QuoteHero extends ConsumerWidget {
     required this.onManage,
     required this.onBackground,
     this.dense = false,
+    this.mobile = false,
   });
+
+  /// Creates retained interaction state for the compact quote card.
+  @override
+  ConsumerState<_QuoteHero> createState() => _QuoteHeroState();
+}
+
+/// Coordinates compact quote gestures without replacing visible content.
+class _QuoteHeroState extends ConsumerState<_QuoteHero> {
+  /// Prevents repeated taps while the persisted daily selection changes.
+  bool _changing = false;
+
+  /// Changes the daily quote once and reports failures without clearing text.
+  Future<void> _changeQuote() async {
+    if (_changing) return;
+    setState(() => _changing = true);
+    try {
+      await widget.onChange();
+    } on Object {
+      if (mounted) {
+        showOmniMessage(
+          context,
+          message: '名言切换失败，请重试',
+          tone: OmniMessageTone.error,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _changing = false);
+    }
+  }
 
   /// 构建具有时间流动感的名言区域。
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
     // 当前横幅附件。
@@ -976,35 +1012,61 @@ class _QuoteHero extends ConsumerWidget {
     // 当前可读本地背景路径。
     final String? backgroundPath = banner?.localPath;
     // 当前名言内容。
-    final Widget quoteContent = quoteAsync.when(
-      data: (QuoteRecord? quote) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Text(
-            quote == null ? '暂无可用名言，可在名言库中添加' : '“${quote.content}”',
-            maxLines: dense ? 2 : null,
-            overflow: dense ? TextOverflow.ellipsis : TextOverflow.visible,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: dense ? 18 : 20,
-              height: dense ? 1.35 : 1.45,
-              fontWeight: FontWeight.w600,
-            ),
+    final Widget quoteContent = widget.quoteAsync.when(
+      data: (QuoteRecord? quote) {
+        // Shared quote text keeps desktop truncation and mobile natural growth.
+        final Widget text = Text(
+          quote == null ? '暂无可用名言，可在名言库中添加' : '“${quote.content}”',
+          maxLines: widget.dense && !widget.mobile ? 2 : null,
+          overflow: widget.dense && !widget.mobile
+              ? TextOverflow.ellipsis
+              : TextOverflow.visible,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: widget.dense ? 18 : 20,
+            height: widget.dense ? 1.35 : 1.45,
+            fontWeight: FontWeight.w600,
           ),
-          SizedBox(height: dense ? 2 : OmniSpacing.sm),
-          Text(
-            quote == null ? '' : '— ${quote.source ?? '未署名'}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.right,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.84),
-              fontSize: dense ? 12 : 13,
-            ),
+        );
+        // Shared attribution remains right-aligned on every presentation.
+        final Widget source = Text(
+          key: widget.mobile
+              ? const ValueKey<String>('home-quote-source')
+              : null,
+          quote == null ? '' : '— ${quote.source ?? '未署名'}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.right,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.84),
+            fontSize: widget.dense ? 12 : 13,
           ),
-        ],
-      ),
+        );
+        if (!widget.mobile) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              text,
+              SizedBox(height: widget.dense ? 2 : OmniSpacing.sm),
+              source,
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            text,
+            if (quote != null)
+              Padding(
+                padding: const EdgeInsets.only(top: OmniSpacing.sm),
+                child: source,
+              ),
+          ],
+        );
+      },
       loading: () => LinearProgressIndicator(
         color: Colors.white,
         backgroundColor: Colors.white.withValues(alpha: 0.15),
@@ -1013,83 +1075,141 @@ class _QuoteHero extends ConsumerWidget {
           const Text('名言暂时无法读取', style: TextStyle(color: Colors.white)),
     );
 
-    return Container(
-      key: const ValueKey<String>('home-quote-card'),
-      constraints: BoxConstraints(minHeight: dense ? 0 : 156),
-      padding: dense
-          ? const EdgeInsets.fromLTRB(18, 12, 12, 12)
-          : const EdgeInsets.all(OmniSpacing.lg),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: <Color>[colors.heroStart, colors.heroEnd],
-        ),
-        borderRadius: BorderRadius.circular(OmniRadius.dialog),
-        border: Border.all(color: colors.brand.withValues(alpha: 0.24)),
-        image: backgroundPath == null
-            ? null
-            : DecorationImage(
-                image: FileImage(File(backgroundPath)),
-                fit: BoxFit.cover,
-                colorFilter: ColorFilter.mode(
-                  Colors.black.withValues(alpha: 0.42),
-                  BlendMode.darken,
-                ),
-                onError: (_, _) {},
-              ),
+    // Shared border radius clips the background and native press feedback.
+    final BorderRadius borderRadius = BorderRadius.circular(OmniRadius.dialog);
+    // Shared decoration keeps phone and desktop banner rendering identical.
+    final BoxDecoration decoration = BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: <Color>[colors.heroStart, colors.heroEnd],
       ),
-      child: Stack(
-        children: <Widget>[
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      borderRadius: borderRadius,
+      border: Border.all(color: colors.brand.withValues(alpha: 0.24)),
+      image: backgroundPath == null
+          ? null
+          : DecorationImage(
+              image: FileImage(File(backgroundPath)),
+              fit: BoxFit.cover,
+              colorFilter: ColorFilter.mode(
+                Colors.black.withValues(alpha: 0.42),
+                BlendMode.darken,
+              ),
+              onError: (_, _) {},
+            ),
+    );
+    // Shared content preserves current text while a replacement is persisted.
+    final Widget content = widget.mobile
+        ? quoteContent
+        : Stack(
             children: <Widget>[
-              Row(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: <Widget>[
-                  OmniIconButton(
-                    tooltip: '知序助手',
-                    onPressed: () => context.push('/assistant'),
-                    color: Colors.white,
-                    icon: const Icon(Icons.auto_awesome_outlined),
+                  Row(
+                    children: <Widget>[
+                      OmniIconButton(
+                        tooltip: '知序助手',
+                        onPressed: () => context.push('/assistant'),
+                        color: Colors.white,
+                        icon: const Icon(Icons.auto_awesome_outlined),
+                      ),
+                      const Spacer(),
+                      OmniIconButton(
+                        tooltip: '名言库',
+                        onPressed: widget.onManage,
+                        color: Colors.white,
+                        icon: const Icon(Icons.library_books_outlined),
+                      ),
+                      OmniIconButton(
+                        tooltip: '设置横幅背景',
+                        onPressed: widget.onBackground,
+                        color: Colors.white,
+                        constraints: widget.dense
+                            ? const BoxConstraints.tightFor(
+                                width: 32,
+                                height: 32,
+                              )
+                            : null,
+                        padding: widget.dense ? EdgeInsets.zero : null,
+                        visualDensity: widget.dense
+                            ? VisualDensity.compact
+                            : null,
+                        icon: const Icon(Icons.wallpaper_rounded),
+                      ),
+                      OmniIconButton(
+                        tooltip: '换一条',
+                        onPressed: widget.onChange,
+                        color: Colors.white,
+                        constraints: widget.dense
+                            ? const BoxConstraints.tightFor(
+                                width: 32,
+                                height: 32,
+                              )
+                            : null,
+                        padding: widget.dense ? EdgeInsets.zero : null,
+                        visualDensity: widget.dense
+                            ? VisualDensity.compact
+                            : null,
+                        icon: const Icon(Icons.refresh_rounded),
+                      ),
+                    ],
                   ),
-                  const Spacer(),
-                  OmniIconButton(
-                    tooltip: '名言库',
-                    onPressed: onManage,
-                    color: Colors.white,
-                    icon: const Icon(Icons.library_books_outlined),
-                  ),
-                  OmniIconButton(
-                    tooltip: '设置横幅背景',
-                    onPressed: onBackground,
-                    color: Colors.white,
-                    constraints: dense
-                        ? const BoxConstraints.tightFor(width: 32, height: 32)
-                        : null,
-                    padding: dense ? EdgeInsets.zero : null,
-                    visualDensity: dense ? VisualDensity.compact : null,
-                    icon: const Icon(Icons.wallpaper_rounded),
-                  ),
-                  OmniIconButton(
-                    tooltip: '换一条',
-                    onPressed: onChange,
-                    color: Colors.white,
-                    constraints: dense
-                        ? const BoxConstraints.tightFor(width: 32, height: 32)
-                        : null,
-                    padding: dense ? EdgeInsets.zero : null,
-                    visualDensity: dense ? VisualDensity.compact : null,
-                    icon: const Icon(Icons.refresh_rounded),
-                  ),
+                  SizedBox(height: widget.dense ? 4 : OmniSpacing.md),
+                  quoteContent,
                 ],
               ),
-              SizedBox(height: dense ? 4 : OmniSpacing.md),
-              quoteContent,
             ],
-          ),
-        ],
+          );
+    // Desktop and tablet retain their exact established render tree and pixels.
+    if (!widget.mobile) {
+      return Container(
+        key: const ValueKey<String>('home-quote-card'),
+        constraints: BoxConstraints(minHeight: widget.dense ? 0 : 156),
+        padding: widget.dense
+            ? const EdgeInsets.fromLTRB(18, 12, 12, 12)
+            : const EdgeInsets.all(OmniSpacing.lg),
+        decoration: decoration,
+        child: content,
+      );
+    }
+    // Padded mobile banner content keeps the compact 112dp minimum height.
+    final Widget paddedContent = ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 112),
+      child: Padding(
+        padding: widget.dense
+            ? const EdgeInsets.fromLTRB(18, 12, 12, 12)
+            : const EdgeInsets.all(OmniSpacing.lg),
+        child: content,
       ),
+    );
+    // The material surface lets the entire rounded banner show press feedback.
+    final Widget card = Material(
+      color: Colors.transparent,
+      borderRadius: borderRadius,
+      clipBehavior: Clip.antiAlias,
+      child: Ink(
+        decoration: decoration,
+        child: widget.mobile
+            ? OmniInkWell(
+                key: const ValueKey<String>('home-quote-interaction'),
+                onTap: _changing ? null : _changeQuote,
+                onLongPress: widget.onManage,
+                excludeFromSemantics: true,
+                borderRadius: borderRadius,
+                child: paddedContent,
+              )
+            : paddedContent,
+      ),
+    );
+    return Semantics(
+      key: const ValueKey<String>('home-quote-card'),
+      button: true,
+      hint: '双击换一条，长按打开名言库',
+      onTap: _changing ? null : _changeQuote,
+      onLongPress: widget.onManage,
+      child: card,
     );
   }
 }

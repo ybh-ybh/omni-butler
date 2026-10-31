@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -6,8 +8,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/router/app_router.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
+import 'package:omni_butler/core/audio/microphone_coordinator.dart';
+import 'package:omni_butler/core/auth/auth_models.dart';
+import 'package:omni_butler/core/auth/auth_providers.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/features/assistant/data/assistant_cache.dart';
+import 'package:omni_butler/features/notes/data/note_editor_controller.dart';
+import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -52,36 +60,36 @@ void main() {
     );
   });
 
-  testWidgets('六个一级页面双向切换且拖动时展示真实卡片动效', (WidgetTester tester) async {
+  testWidgets('三个一级页面双向切换且拖动时展示真实卡片动效', (WidgetTester tester) async {
     // 当前测试使用的应用环境。
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
       tester,
     );
     expect(_currentPath(app.container), '/home');
 
-    // 首页与待办隔离一级横滑，通过底栏进入仍支持一级横滑的时间页。
-    await tester.tap(
-      find.byKey(const ValueKey<String>('navigation-/timeline')),
+    // Only the three core destinations occupy the Android navigation bar.
+    for (final String path in <String>['home', 'notes', 'assistant']) {
+      expect(find.byKey(ValueKey<String>('navigation-/$path')), findsOneWidget);
+    }
+    for (final String path in <String>[
+      'todos',
+      'timeline',
+      'inventory',
+      'settings',
+    ]) {
+      expect(find.byKey(ValueKey<String>('navigation-/$path')), findsNothing);
+    }
+    // Inspect the shared controller used by real primary gesture surfaces.
+    final PrimaryNavigationSwipeController controller = _primaryController(
+      tester,
     );
-    await tester.pumpAndSettle();
-    expect(_currentPath(app.container), '/timeline');
-
-    // 时间页顶部视图选择器不会认领水平拖动。
-    final Finder timelineHeader = find.byKey(
-      const ValueKey<String>('timeline-view-mode'),
-    );
-    // 当前用于检查跟手中间态的真实触摸手势。
-    final TestGesture gesture = await tester.startGesture(
-      tester.getTopRight(timelineHeader) + const Offset(-24, 24),
-    );
-    await gesture.moveBy(const Offset(-24, 0));
-    await tester.pump();
-    await gesture.moveBy(const Offset(-72, 0));
+    controller.beginPrimarySwipe();
+    controller.updatePrimarySwipe(-96);
     await tester.pump();
 
     // 当前时间卡片的缩放变换。
     final Transform currentScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-2')),
+      find.byKey(const ValueKey<String>('primary-navigation-scale-0')),
     );
     // 正在进入的笔记卡片缩放变换。
     final Transform targetScale = tester.widget<Transform>(
@@ -89,49 +97,27 @@ void main() {
     );
     // 当前时间卡片的物理外观。
     final PhysicalModel currentCard = tester.widget<PhysicalModel>(
-      find.byKey(const ValueKey<String>('primary-navigation-card-2')),
+      find.byKey(const ValueKey<String>('primary-navigation-card-0')),
     );
     expect(currentScale.transform.storage[0], lessThan(1));
     expect(currentScale.transform.storage[0], greaterThan(0.985));
     expect(targetScale.transform.storage[0], greaterThan(0.985));
     expect(currentCard.elevation, greaterThan(0));
     expect(currentCard.borderRadius, isNot(BorderRadius.zero));
-    expect(_currentPath(app.container), '/timeline');
+    expect(_currentPath(app.container), '/home');
 
-    await gesture.moveBy(const Offset(-160, 0));
-    await tester.pump();
-    await gesture.up();
+    controller.updatePrimarySwipe(-256);
+    controller.endPrimarySwipe(0);
     await tester.pumpAndSettle();
     expect(_currentPath(app.container), '/notes');
     await _swipePrimary(tester, -220);
-    expect(_currentPath(app.container), '/inventory');
-
-    // 管理末页不能横滑进入更多，通过底栏继续一级导航。
-    await _dragNestedPage(
-      tester,
-      'android-management-swipe-surface',
-      -250,
-      1200,
-    );
-    await tester.pumpAndSettle();
-    expect(_currentPath(app.container), '/inventory');
-    await tester.tap(
-      find.byKey(const ValueKey<String>('navigation-/settings')),
-    );
-    await tester.pumpAndSettle();
-    expect(_currentPath(app.container), '/settings');
-    // 更多页到达末端后不会循环回首页。
+    expect(_currentPath(app.container), '/assistant');
+    // The assistant is the final destination and does not wrap to home.
     await _swipePrimary(tester, -220);
-    expect(_currentPath(app.container), '/settings');
+    expect(_currentPath(app.container), '/assistant');
 
-    // 反向依次返回管理、笔记、时间、待办和首页。
-    for (final String expectedPath in <String>[
-      '/inventory',
-      '/notes',
-      '/timeline',
-      '/todos',
-      '/home',
-    ]) {
+    // Reverse navigation visits only the two remaining primary destinations.
+    for (final String expectedPath in <String>['/notes', '/home']) {
       await _swipePrimary(tester, 220);
       expect(_currentPath(app.container), expectedPath);
     }
@@ -143,7 +129,7 @@ void main() {
   });
 
   testWidgets('短拖回弹、底栏同款动画并跳过已关闭入口', (WidgetTester tester) async {
-    // 当前测试使用的应用环境，只保留首页、管理和更多入口。
+    // Disabling notes leaves home and the assistant as primary destinations.
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
       tester,
       preferences: <String, Object>{
@@ -157,23 +143,22 @@ void main() {
     await _swipePrimary(tester, -20);
     expect(_currentPath(app.container), '/home');
     await _swipePrimary(tester, -10, velocity: -600);
-    expect(_currentPath(app.container), '/inventory');
+    expect(_currentPath(app.container), '/assistant');
 
-    await tester.tap(
-      find.byKey(const ValueKey<String>('navigation-/settings')),
-    );
+    await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
     expect(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-4')),
+      find.byKey(const ValueKey<String>('primary-navigation-scale-6')),
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-5')),
+      find.byKey(const ValueKey<String>('primary-navigation-scale-0')),
       findsOneWidget,
     );
-    expect(_currentPath(app.container), '/inventory');
+    expect(_currentPath(app.container), '/assistant');
     await tester.pumpAndSettle();
-    expect(_currentPath(app.container), '/settings');
+    expect(_currentPath(app.container), '/home');
 
     await _disposePrimaryNavigationApp(tester, app);
   });
@@ -237,13 +222,13 @@ void main() {
     controller.endPrimarySwipe(-8000);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 16));
-    expect(_currentPath(app.container), '/todos');
-    expect(_primaryOffset(tester, 1), 0);
+    expect(_currentPath(app.container), '/notes');
+    expect(_primaryOffset(tester, 3), 0);
     await tester.pumpAndSettle();
 
     // 反向拖过半页后向原页甩回，原生落点应取消提交。
     await _swipePrimary(tester, 220, velocity: -900);
-    expect(_currentPath(app.container), '/todos');
+    expect(_currentPath(app.container), '/notes');
     await _swipePrimary(tester, 120, velocity: 900);
     expect(_currentPath(app.container), '/home');
 
@@ -252,8 +237,8 @@ void main() {
     controller.updatePrimarySwipe(-390);
     controller.endPrimarySwipe(600);
     await tester.pump();
-    expect(_currentPath(app.container), '/todos');
-    expect(_primaryOffset(tester, 1), 0);
+    expect(_currentPath(app.container), '/notes');
+    expect(_primaryOffset(tester, 3), 0);
     await _disposePrimaryNavigationApp(tester, app);
   });
 
@@ -266,30 +251,21 @@ void main() {
         const FakeAccessibilityFeatures(accessibleNavigation: true);
     addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
     await tester.pump();
-    // 首页和待办隔离一级横滑后，从时间页验证真实触摸的连续接手。
-    app.container.read(appRouterProvider).go('/timeline');
-    await tester.pumpAndSettle();
-    expect(_currentPath(app.container), '/timeline');
-    // 固定在标题区发起快滑，避免命中管理正文的内部分页。
-    final Offset flingStart =
-        tester.getTopRight(
-          find.byKey(const ValueKey<String>('timeline-view-mode')),
-        ) +
-        const Offset(-52, 24);
-    // 连续甩动过程中始终不等待旧弹簧完成。
-    for (final int targetIndex in <int>[3, 4, 5]) {
-      // 真实带时间戳和离手速度的触摸，吸附中的卡片不能吞掉后续手势。
-      await tester.flingFrom(flingStart, const Offset(-230, 0), 900);
+    // Continue primary gestures before the previous spring reaches its end.
+    for (final int targetIndex in <int>[3, 6]) {
+      _primaryController(tester).beginPrimarySwipe();
+      _primaryController(tester).updatePrimarySwipe(-230);
+      _primaryController(tester).endPrimarySwipe(-900);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
       expect(tester.hasRunningAnimations, isTrue);
       expect(_primaryOffset(tester, targetIndex), inExclusiveRange(0, 195));
     }
     await tester.pumpAndSettle();
-    expect(_currentPath(app.container), '/settings');
-    expect(_primaryOffset(tester, 5), 0);
+    expect(_currentPath(app.container), '/assistant');
+    expect(_primaryOffset(tester, 6), 0);
     // 反向也可在旧动画结束前连续接手，且不会被旧回调跳回。
-    for (final int targetIndex in <int>[4, 3, 2, 1, 0]) {
+    for (final int targetIndex in <int>[3, 0]) {
       _primaryController(tester).beginPrimarySwipe();
       _primaryController(tester).updatePrimarySwipe(230);
       _primaryController(tester).endPrimarySwipe(900);
@@ -382,6 +358,282 @@ void main() {
     await _disposePrimaryNavigationApp(tester, app);
   });
 
+  testWidgets('次级页面禁用一级横滑且返回保留首页 Navigator', (WidgetTester tester) async {
+    // The secondary route shares the retained home navigator.
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+    );
+    // The same shell state must survive the push and subsequent pop.
+    final Object shellState = tester.state(
+      find.byType(PrimaryNavigationBranchContainer),
+    );
+    unawaited(app.container.read(appRouterProvider).push<void>('/todos'));
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/todos');
+    expect(
+      find.byKey(const ValueKey<String>('compact-navigation')),
+      findsNothing,
+    );
+    await _swipePrimary(tester, -250, velocity: -1000);
+    expect(_currentPath(app.container), '/todos');
+    expect(_primaryOffset(tester, 0), 0);
+    app.container.read(appRouterProvider).pop();
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/home');
+    expect(
+      tester.state(find.byType(PrimaryNavigationBranchContainer)),
+      same(shellState),
+    );
+    await _swipePrimary(tester, -250);
+    expect(_currentPath(app.container), '/notes');
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
+  testWidgets('笔记保存失败阻止底栏与横滑并可安全打断回弹', (WidgetTester tester) async {
+    // A controlled editor retains the production page and router lifecycle.
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+      controlledEditor: true,
+    );
+    app.container.read(appRouterProvider).go('/notes');
+    await tester.pumpAndSettle();
+    // Fail the persistence seam without discarding the actual editor draft.
+    final _ControlledExitNoteEditor editor =
+        app.container.read(noteEditorProvider) as _ControlledExitNoteEditor;
+    editor.armed = true;
+    editor.dirty = true;
+    await tester.tap(
+      find.byKey(const ValueKey<String>('navigation-/assistant')),
+    );
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/notes');
+    expect(_primaryOffset(tester, 3), 0);
+    // Reject a committed drag and grab the failing bounce before its midpoint.
+    final PrimaryNavigationSwipeController controller = _primaryController(
+      tester,
+    );
+    controller.beginPrimarySwipe();
+    controller.updatePrimarySwipe(-300);
+    controller.endPrimarySwipe(-900);
+    await tester.pump();
+    controller.beginPrimarySwipe();
+    controller.updatePrimarySwipe(-20);
+    controller.endPrimarySwipe(-900);
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/notes');
+    expect(_primaryOffset(tester, 3), 0);
+    expect(editor.dirty, isTrue);
+    // Exceptions from the same save boundary also preserve the visible note.
+    editor.throwOnFailure = true;
+    await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/notes');
+    expect(_primaryOffset(tester, 3), 0);
+    expect(tester.takeException(), isNull);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
+  testWidgets('笔记保存等待期间合并重复导航且路由最终拒绝恢复视觉', (WidgetTester tester) async {
+    // Delay the first save to exercise overlapping bottom-tab and swipe input.
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+      controlledEditor: true,
+    );
+    app.container.read(appRouterProvider).go('/notes');
+    await tester.pumpAndSettle();
+    // The save gate has no timers and resolves only when this test releases it.
+    final _ControlledExitNoteEditor editor =
+        app.container.read(noteEditorProvider) as _ControlledExitNoteEditor;
+    editor.armed = true;
+    editor.dirty = true;
+    editor.gate = Completer<void>();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('navigation-/assistant')),
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
+    _primaryController(tester).beginPrimarySwipe();
+    _primaryController(tester).updatePrimarySwipe(300);
+    _primaryController(tester).endPrimarySwipe(900);
+    await tester.pump();
+    expect(editor.attempts, 1);
+    expect(_currentPath(app.container), '/notes');
+    editor.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(_primaryOffset(tester, 3), 0);
+    // The preflight succeeds but the router's final onExit rejects its save.
+    editor.gate = null;
+    editor.attempts = 0;
+    editor.callSites.clear();
+    editor.failFromAttempt = 2;
+    await tester.tap(
+      find.byKey(const ValueKey<String>('navigation-/assistant')),
+    );
+    await tester.pumpAndSettle();
+    // The workspace's existing route listener also flushes before onExit runs.
+    expect(editor.callSites, hasLength(3), reason: editor.callSites.join('\n'));
+    expect(
+      editor.callSites.where((site) => site.contains('_prepareBranchChange')),
+      hasLength(1),
+    );
+    expect(
+      editor.callSites.where((site) => site.contains('_routeChanged')),
+      hasLength(1),
+    );
+    expect(
+      editor.callSites.where((site) => site.contains('app_router.dart')),
+      hasLength(1),
+    );
+    expect(_currentPath(app.container), '/notes');
+    expect(_primaryOffset(tester, 3), 0);
+    expect(
+      find.byKey(const ValueKey<String>('primary-navigation-card-6')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
+  testWidgets('AI 离开立即取消语音并等待草稿保存后才开始切页', (WidgetTester tester) async {
+    // The real assistant page registers its normal cancellation callback.
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+    );
+    app.container.read(appRouterProvider).go('/assistant');
+    await tester.pumpAndSettle();
+    // A second owner exposes the exact lifecycle completion boundary.
+    final VoiceInputLifecycle lifecycle = app.container.read(
+      voiceInputLifecycleProvider,
+    );
+    // Only this test owns the delayed cancellation callback.
+    final Object owner = Object();
+    // Cleanup stays pending until the user-visible navigation checks finish.
+    final Completer<void> cancellation = Completer<void>();
+    // Count callback starts to detect repeated navigation during cancellation.
+    int cancellationCalls = 0;
+    lifecycle.register(owner, () {
+      cancellationCalls++;
+      return cancellation.future;
+    });
+    addTearDown(() => lifecycle.unregister(owner));
+    await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
+    expect(cancellationCalls, 1);
+    expect(_currentPath(app.container), '/assistant');
+    expect(_primaryOffset(tester, 6), 0);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey<String>('navigation-/notes')));
+    _primaryController(tester).beginPrimarySwipe();
+    _primaryController(tester).updatePrimarySwipe(300);
+    _primaryController(tester).endPrimarySwipe(900);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(cancellationCalls, 1);
+    expect(_currentPath(app.container), '/assistant');
+    expect(_primaryOffset(tester, 6), 0);
+    // Wait for both the controlled owner and the real SQLite draft flush.
+    await tester.runAsync(() async {
+      cancellation.complete();
+      await lifecycle.cancelAll();
+    });
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(_currentPath(app.container), '/assistant');
+    expect(_primaryOffset(tester, 6), greaterThan(0));
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/home');
+    lifecycle.unregister(owner);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
+  testWidgets('AI 横滑取消等待被外部导航接管后旧等待不能触发回弹', (WidgetTester tester) async {
+    // Exercise actual shell routing while the assistant lifecycle is pending.
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+    );
+    app.container.read(appRouterProvider).go('/assistant');
+    await tester.pumpAndSettle();
+    // Keep one registered cancellation pending across the external route change.
+    final VoiceInputLifecycle lifecycle = app.container.read(
+      voiceInputLifecycleProvider,
+    );
+    // This owner is removed independently from the assistant's real callback.
+    final Object owner = Object();
+    // The old gesture can finish only after home has started its own transition.
+    final Completer<void> cancellation = Completer<void>();
+    lifecycle.register(owner, () => cancellation.future);
+    addTearDown(() => lifecycle.unregister(owner));
+    // A rightward AI swipe would normally commit the adjacent notes branch.
+    final PrimaryNavigationSwipeController controller = _primaryController(
+      tester,
+    );
+    controller.beginPrimarySwipe();
+    controller.updatePrimarySwipe(300);
+    controller.endPrimarySwipe(900);
+    await tester.pump();
+    expect(_currentPath(app.container), '/assistant');
+    expect(_primaryOffset(tester, 6), 300);
+    app.container.read(appRouterProvider).go('/home');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(_currentPath(app.container), '/home');
+    expect(_primaryOffset(tester, 6), inExclusiveRange(0, 390));
+    // Complete real SQLite work without advancing the replacement animation.
+    await tester.runAsync(() async {
+      cancellation.complete();
+      await lifecycle.cancelAll();
+    });
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/home');
+    expect(_primaryOffset(tester, 0), 0);
+    expect(
+      find.byKey(const ValueKey<String>('primary-navigation-card-6')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+    lifecycle.unregister(owner);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
+  testWidgets('AI 退出保存失败保持当前页且反向接手不能绕过取消', (WidgetTester tester) async {
+    // Use the normal branch stack so visibility and route checks stay real.
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+    );
+    app.container.read(appRouterProvider).go('/assistant');
+    await tester.pumpAndSettle();
+    // This registered callback simulates a local draft persistence failure.
+    final VoiceInputLifecycle lifecycle = app.container.read(
+      voiceInputLifecycleProvider,
+    );
+    // An independent owner avoids replacing the assistant's own callback.
+    final Object owner = Object();
+    lifecycle.register(owner, () async {
+      throw StateError('模拟草稿保存失败');
+    });
+    addTearDown(() => lifecycle.unregister(owner));
+    await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/assistant');
+    expect(_primaryOffset(tester, 6), 0);
+    expect(find.text('草稿未能保存，请检查后重试'), findsOneWidget);
+    // Interrupt a rejected swipe while its card is still beyond half a page.
+    final PrimaryNavigationSwipeController controller = _primaryController(
+      tester,
+    );
+    controller.beginPrimarySwipe();
+    controller.updatePrimarySwipe(300);
+    controller.endPrimarySwipe(900);
+    await tester.pump();
+    controller.beginPrimarySwipe();
+    controller.updatePrimarySwipe(20);
+    controller.endPrimarySwipe(900);
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/assistant');
+    expect(_primaryOffset(tester, 6), 0);
+    expect(tester.takeException(), isNull);
+    lifecycle.unregister(owner);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
   testWidgets('系统减少动态效果时立即切页且不保留卡片装饰', (WidgetTester tester) async {
     // 当前测试使用的应用环境。
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
@@ -392,18 +644,18 @@ void main() {
     addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
     await tester.pump();
 
-    app.container.read(appRouterProvider).go('/settings');
+    app.container.read(appRouterProvider).go('/assistant');
     await tester.pump();
 
     // 减弱动效后的完整目标卡片。
     final PhysicalModel card = tester.widget<PhysicalModel>(
-      find.byKey(const ValueKey<String>('primary-navigation-card-5')),
+      find.byKey(const ValueKey<String>('primary-navigation-card-6')),
     );
     // 减弱动效后的目标缩放变换。
     final Transform scale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-5')),
+      find.byKey(const ValueKey<String>('primary-navigation-scale-6')),
     );
-    expect(_currentPath(app.container), '/settings');
+    expect(_currentPath(app.container), '/assistant');
     expect(scale.transform.storage[0], 1);
     expect(card.elevation, 0);
     expect(card.borderRadius, BorderRadius.zero);
@@ -441,16 +693,72 @@ class _PrimaryNavigationTestApp {
   /// 当前应用的内存数据库。
   final AppDatabase database;
 
+  /// Each navigation scenario owns an isolated in-memory assistant cache.
+  final AssistantCache assistantCache;
+
   /// 当前测试环境是否已经完成释放。
   bool disposed = false;
 
   /// 创建全局导航测试环境。
-  _PrimaryNavigationTestApp({required this.container, required this.database});
+  _PrimaryNavigationTestApp({
+    required this.container,
+    required this.database,
+    required this.assistantCache,
+  });
+}
+
+/// Resolve authentication immediately without platform secure-storage calls.
+class _LocalNavigationAuth extends AuthController {
+  /// Navigation coverage needs an explicit local-only authentication state.
+  @override
+  Future<SyncSession?> build() async => null;
+}
+
+/// Control save outcomes while retaining the actual note controller and page.
+class _ControlledExitNoteEditor extends NoteEditorController {
+  /// Construct an editor with the same explicit-commit behavior as Android.
+  _ControlledExitNoteEditor(super.repository, super.recorder)
+    : super(explicitCommit: true);
+
+  /// Normal initialization uses production persistence until the test arms it.
+  bool armed = false;
+
+  /// Number of armed persistence attempts.
+  int attempts = 0;
+
+  /// Direct callers distinguish navigation guards from existing page saves.
+  final List<String> callSites = <String>[];
+
+  /// Reject this attempt and all later attempts.
+  int failFromAttempt = 1;
+
+  /// Exercise an exceptional failure in addition to a retained dirty draft.
+  bool throwOnFailure = false;
+
+  /// Optional asynchronous save boundary controlled by the test.
+  Completer<void>? gate;
+
+  /// Preserve dirty state on failure without touching unrelated dependencies.
+  @override
+  Future<void> flush() async {
+    if (!armed) return super.flush();
+    attempts++;
+    callSites.add(StackTrace.current.toString().split('\n')[1]);
+    await gate?.future;
+    if (attempts >= failFromAttempt) {
+      dirty = true;
+      error = '模拟写入失败';
+      if (throwOnFailure) throw StateError(error!);
+      return;
+    }
+    dirty = false;
+  }
 }
 
 /// 启动使用 Android 紧凑视口的完整应用。
 Future<_PrimaryNavigationTestApp> _pumpPrimaryNavigationApp(
   WidgetTester tester, {
+  bool controlledEditor = false,
   Map<String, Object> preferences = const <String, Object>{
     'appearance.theme_mode': 'light',
   },
@@ -466,12 +774,29 @@ Future<_PrimaryNavigationTestApp> _pumpPrimaryNavigationApp(
       await SharedPreferences.getInstance();
   // 测试用内存数据库。
   final AppDatabase database = AppDatabase.forTesting(NativeDatabase.memory());
+  // Pre-open the assistant cache outside fake async before mounting AI.
+  final AssistantCache assistantCache = AssistantCache.forTesting(
+    NativeDatabase.memory(),
+  );
+  await tester.runAsync(() => assistantCache.readScope(null));
   // 显式管理的应用依赖容器。
   final ProviderContainer container = ProviderContainer(
     overrides: [
       sharedPreferencesProvider.overrideWithValue(sharedPreferences),
       appDatabaseProvider.overrideWithValue(database),
+      authControllerProvider.overrideWith(_LocalNavigationAuth.new),
+      assistantCacheProvider.overrideWithValue(assistantCache),
       nowProvider.overrideWithValue(DateTime(2026, 10, 1, 10)),
+      if (controlledEditor)
+        noteEditorProvider.overrideWith((ref) {
+          // Share the normal repository and native-recorder test boundaries.
+          final _ControlledExitNoteEditor editor = _ControlledExitNoteEditor(
+            ref.watch(noteRepositoryProvider),
+            ref.watch(noteRecorderProvider),
+          );
+          ref.onDispose(editor.dispose);
+          return editor;
+        }),
     ],
   );
   await tester.pumpWidget(
@@ -486,6 +811,7 @@ Future<_PrimaryNavigationTestApp> _pumpPrimaryNavigationApp(
   final _PrimaryNavigationTestApp app = _PrimaryNavigationTestApp(
     container: container,
     database: database,
+    assistantCache: assistantCache,
   );
   addTearDown(() => _disposePrimaryNavigationApp(tester, app));
   return app;
@@ -504,6 +830,7 @@ Future<void> _disposePrimaryNavigationApp(
   await tester.pump();
   app.container.dispose();
   await tester.pump(const Duration(milliseconds: 100));
+  await app.assistantCache.close();
   await app.database.close();
   debugDefaultTargetPlatformOverride = null;
 }
@@ -546,10 +873,5 @@ Future<void> _swipePrimary(
 
 /// 返回当前路由路径。
 String _currentPath(ProviderContainer container) {
-  return container
-      .read(appRouterProvider)
-      .routeInformationProvider
-      .value
-      .uri
-      .path;
+  return container.read(appRouterProvider).state.uri.path;
 }

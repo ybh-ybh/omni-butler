@@ -1247,12 +1247,10 @@ void main() {
       container.read(appRouterProvider).routeInformationProvider.value.uri.path,
       '/todos',
     );
-    // 底栏切出后返回应保留最后选择的分类。
-    await tester.tap(
-      find.byKey(const ValueKey<String>('navigation-/timeline')),
-    );
+    // Direct branch navigation retains the last selected business category.
+    container.read(appRouterProvider).go('/timeline');
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey<String>('navigation-/todos')));
+    container.read(appRouterProvider).go('/todos');
     await tester.pumpAndSettle();
     expect(tester.widget<PageView>(pager).controller!.page, 4);
     await tester.fling(pager, const Offset(180, 0), 800);

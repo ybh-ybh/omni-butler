@@ -28,6 +28,7 @@ import 'package:omni_butler/features/settings/presentation/sync_connection_dialo
 import 'package:omni_butler/features/settings/presentation/sync_backup_dialog.dart';
 import 'package:omni_butler/features/settings/presentation/theme_palette_selector.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
+import 'package:omni_butler/shared/layout/android_secondary_page.dart';
 import 'package:powersync/powersync.dart' show SyncStatus;
 
 /// 断开服务器时对本机数据的明确处理方式。
@@ -452,7 +453,11 @@ class _AndroidSettingsOverview extends StatelessWidget {
       color: colors.canvas,
       child: Column(
         children: <Widget>[
-          const _AndroidSettingsHeader(title: '设置'),
+          _AndroidSettingsHeader(
+            title: '设置',
+            onBack: AndroidSecondaryPageScope.maybeOf(context)?.onBack,
+            backToHome: true,
+          ),
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(
@@ -531,8 +536,15 @@ class _AndroidSettingsHeader extends StatelessWidget {
   /// 可选返回回调。
   final VoidCallback? onBack;
 
+  /// Distinguishes the feature exit from its internal category return.
+  final bool backToHome;
+
   /// 创建 Android 设置标题栏。
-  const _AndroidSettingsHeader({required this.title, this.onBack});
+  const _AndroidSettingsHeader({
+    required this.title,
+    this.onBack,
+    this.backToHome = false,
+  });
 
   /// 构建居中标题与可选返回按钮。
   @override
@@ -552,8 +564,12 @@ class _AndroidSettingsHeader extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.only(left: OmniSpacing.xxs),
                 child: OmniIconButton(
-                  key: const ValueKey<String>('android-settings-back'),
-                  tooltip: '返回设置',
+                  key: ValueKey<String>(
+                    backToHome
+                        ? 'android-secondary-back'
+                        : 'android-settings-back',
+                  ),
+                  tooltip: backToHome ? '返回' : '返回设置',
                   onPressed: onBack,
                   color: colors.ink,
                   icon: const Icon(Icons.arrow_back_rounded),

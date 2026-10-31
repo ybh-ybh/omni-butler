@@ -15,6 +15,15 @@ class _AndroidAssistantFixture {
   /// Native capture substitute never requests a system microphone.
   final FakeVoiceRecorder recorder = FakeVoiceRecorder();
 
+  /// Count acquisition attempts even before a fake device starts recording.
+  int recorderCreations = 0;
+
+  /// Observe resource creation without contacting a native microphone.
+  FakeVoiceRecorder createRecorder() {
+    recorderCreations++;
+    return recorder;
+  }
+
   /// Speech completion is explicitly delivered by each scenario.
   final FakeSpeechConnection speech = FakeSpeechConnection();
 
@@ -39,6 +48,7 @@ class _AndroidAssistantFixture {
     Brightness brightness = Brightness.light,
     bool disableAnimations = false,
     Map<String, dynamic>? snapshot,
+    GoRouter? router,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
@@ -66,6 +76,32 @@ class _AndroidAssistantFixture {
         await stream.close();
       }
     });
+    // Both standalone and retained-tab fixtures use identical media settings.
+    Widget configureMedia(BuildContext context, Widget? child) => MediaQuery(
+      data: MediaQuery.of(context).copyWith(
+        textScaler: TextScaler.linear(textScale),
+        disableAnimations: disableAnimations,
+      ),
+      child: child!,
+    );
+    // Preserve the production Android theme in both navigation modes.
+    final ThemeData theme = AppTheme.build(brightness: brightness)
+        .copyWith(platform: TargetPlatform.android);
+    // A supplied router exercises real offstage branches without platform I/O.
+    final Widget app = router == null
+        ? MaterialApp(
+            theme: theme,
+            builder: configureMedia,
+            home: const RepaintBoundary(
+              key: ValueKey<String>('android-assistant-preview'),
+              child: Scaffold(body: SafeArea(child: AssistantPage())),
+            ),
+          )
+        : MaterialApp.router(
+            theme: theme,
+            builder: configureMedia,
+            routerConfig: router,
+          );
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -99,27 +135,13 @@ class _AndroidAssistantFixture {
           syncRuntimeProvider.overrideWithValue(_ClarificationSync()),
           noteRecorderProvider.overrideWithValue(_VoiceNoteRecorder()),
           assistantVoiceRecorderFactoryProvider.overrideWithValue(
-            () => recorder,
+            createRecorder,
           ),
           assistantSpeechConnectorProvider.overrideWithValue(
             (_, _) async => speech,
           ),
         ],
-        child: MaterialApp(
-          theme: AppTheme.build(brightness: brightness)
-              .copyWith(platform: TargetPlatform.android),
-          builder: (BuildContext context, Widget? child) => MediaQuery(
-            data: MediaQuery.of(context).copyWith(
-              textScaler: TextScaler.linear(textScale),
-              disableAnimations: disableAnimations,
-            ),
-            child: child!,
-          ),
-          home: const RepaintBoundary(
-            key: ValueKey<String>('android-assistant-preview'),
-            child: Scaffold(body: SafeArea(child: AssistantPage())),
-          ),
-        ),
+        child: app,
       ),
     );
     await tester.pumpAndSettle();

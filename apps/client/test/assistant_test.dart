@@ -40,6 +40,7 @@ import 'package:omni_butler/features/assistant/presentation/assistant_cards.dart
 
 part 'support/assistant_android_scenarios.dart';
 part 'support/assistant_android_sidebar_scenarios.dart';
+part 'support/assistant_tab_scenarios.dart';
 
 /// 无平台存储、无外网的认证边界。
 class _Auth implements AuthRepository {
@@ -212,6 +213,7 @@ void main() {
   // Android exercises hold-to-talk independently from desktop preferences.
   _registerAndroidAssistantScenarios(() => testPreferences);
   _registerAndroidSidebarScenarios(() => testPreferences);
+  _registerAssistantTabScenarios(() => testPreferences);
 
   for (final TargetPlatform platform in <TargetPlatform>[
     TargetPlatform.windows,

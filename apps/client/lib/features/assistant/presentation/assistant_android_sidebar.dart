@@ -395,6 +395,7 @@ class _AssistantAndroidSidebarState
         context: context,
         useRootNavigator: true,
         position: position,
+        aboveAnchor: true,
         initialValue: fixed['profileId'] as String?,
         items: <PopupMenuEntry<String>>[
           for (final Map<String, dynamic> profile in profiles)

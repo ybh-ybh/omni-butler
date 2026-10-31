@@ -5,10 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/core/audio/microphone_coordinator.dart';
 import 'package:omni_butler/features/management/presentation/management_navigation.dart';
+import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 
-/// Android 底部导航对应的五个一级分支。
+/// Stable branch identities shared with desktop navigation.
 enum PrimaryNavigationDestination {
   /// 首页分支。
   home,
@@ -27,23 +29,18 @@ enum PrimaryNavigationDestination {
 
   /// 更多与设置分支。
   more,
+
+  /// Android assistant branch follows the existing branch identities.
+  assistant,
 }
 
 /// 返回当前功能开关下可通过底栏和横滑访问的一级分支。
 List<int> enabledPrimaryBranchIndices(FeaturePreference preference) {
   return <int>[
     PrimaryNavigationDestination.home.index,
-    if (preference.isEnabled(AppFeature.todos))
-      PrimaryNavigationDestination.todos.index,
-    if (preference.isEnabled(AppFeature.timeline))
-      PrimaryNavigationDestination.timeline.index,
     if (preference.isEnabled(AppFeature.notes))
       PrimaryNavigationDestination.notes.index,
-    if (preference.isEnabled(AppFeature.events) ||
-        preference.isEnabled(AppFeature.memberships) ||
-        preference.isEnabled(AppFeature.inventory))
-      PrimaryNavigationDestination.management.index,
-    PrimaryNavigationDestination.more.index,
+    PrimaryNavigationDestination.assistant.index,
   ];
 }
 
@@ -63,6 +60,9 @@ abstract interface class PrimaryNavigationSwipeController {
 
   /// 取消当前一级页面横滑并回弹。
   void cancelPrimarySwipe();
+
+  /// Restore the actual branch when a route exit guard rejects navigation.
+  void rejectPendingNavigation();
 }
 
 /// 在路由壳层与底部导航之间转发一级页面切换请求。
@@ -88,6 +88,11 @@ class PrimaryNavigationCoordinator {
   /// 将底栏选择转发给当前卡片导航控制器。
   void navigateTo(PrimaryNavigationDestination destination) {
     _controller?.navigateToPrimaryDestination(destination);
+  }
+
+  /// Reconcile a rejected asynchronous route exit with the visible branch.
+  void rejectPendingNavigation() {
+    _controller?.rejectPendingNavigation();
   }
 }
 
@@ -682,22 +687,26 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
   }
 }
 
-/// StatefulShellRoute 的五分支卡片式导航容器。
+/// Retained branch container with Android primary navigation gestures.
 class PrimaryNavigationBranchContainer extends ConsumerStatefulWidget {
   /// 当前有状态导航壳层。
   final StatefulNavigationShell navigationShell;
 
-  /// 五个分支各自的 Navigator。
+  /// Retained navigators, including secondary destinations.
   final List<Widget> children;
 
   /// 与底栏共享的一级导航协调器。
   final PrimaryNavigationCoordinator coordinator;
+
+  /// Secondary pages retain their navigator without primary swipe handling.
+  final bool primaryNavigationEnabled;
 
   /// 创建一级分支导航容器。
   const PrimaryNavigationBranchContainer({
     required this.navigationShell,
     required this.children,
     required this.coordinator,
+    this.primaryNavigationEnabled = true,
     super.key,
   });
 
@@ -754,6 +763,18 @@ class _PrimaryNavigationBranchContainerState
   /// 用于忽略已被新手势打断的旧动画回调。
   int _animationEpoch = 0;
 
+  /// Serialize draft saves and voice cancellation before changing branches.
+  bool _exitGuardPending = false;
+
+  /// Only a successful save permits adopting a target midway through settling.
+  bool _noteExitApproved = false;
+
+  /// Mid-animation adoption cannot bypass assistant voice cancellation.
+  bool _assistantExitApproved = false;
+
+  /// Invalidate pending saves after external navigation or route rejection.
+  int _exitGuardEpoch = 0;
+
   /// 初始化当前分支与落位动画控制器。
   @override
   void initState() {
@@ -774,6 +795,10 @@ class _PrimaryNavigationBranchContainerState
     }
     // 路由壳层当前选中的真实分支。
     final int routeIndex = widget.navigationShell.currentIndex;
+    if (oldWidget.primaryNavigationEnabled != widget.primaryNavigationEnabled) {
+      _resetTransition(routeIndex);
+      return;
+    }
     if (routeIndex == _displayedIndex || routeIndex == _targetIndex) {
       if (_ownedNavigationTarget == routeIndex) {
         _ownedNavigationTarget = null;
@@ -787,6 +812,7 @@ class _PrimaryNavigationBranchContainerState
   /// 释放一级页面落位动画控制器。
   @override
   void dispose() {
+    _exitGuardEpoch++;
     widget.coordinator.detach(this);
     _settleController
       ..removeListener(_updateSettlingOffset)
@@ -834,7 +860,11 @@ class _PrimaryNavigationBranchContainerState
   /// 由底栏请求目标分支，并在动画落位后统一更新路由与选中态。
   @override
   void navigateToPrimaryDestination(PrimaryNavigationDestination destination) {
-    if (_animating || _gestureActive) {
+    if (!widget.primaryNavigationEnabled ||
+        _exitGuardPending ||
+        _ownedNavigationTarget != null ||
+        _animating ||
+        _gestureActive) {
       return;
     }
     // 底栏请求进入的分支索引。
@@ -849,11 +879,24 @@ class _PrimaryNavigationBranchContainerState
   /// 开始记录一级页面横滑。
   @override
   void beginPrimarySwipe() {
+    if (!widget.primaryNavigationEnabled ||
+        _exitGuardPending ||
+        _ownedNavigationTarget != null) {
+      return;
+    }
     if (_animating) {
       _animationEpoch += 1;
       _settleController.stop();
       _animating = false;
-      if (_targetIndex != null && _dragOffset.abs() > _viewportWidth / 2) {
+      // A failed note save may still be animating back from beyond half a page.
+      final bool canAdoptTarget =
+          (_displayedIndex != PrimaryNavigationDestination.notes.index ||
+              (_noteExitApproved && !ref.read(noteEditorProvider).dirty)) &&
+          (_displayedIndex != PrimaryNavigationDestination.assistant.index ||
+              _assistantExitApproved);
+      if (canAdoptTarget &&
+          _targetIndex != null &&
+          _dragOffset.abs() > _viewportWidth / 2) {
         // 交换逻辑基准而非重置画面，让后一次手势可以越过新页面继续前进。
         final int previousIndex = _displayedIndex;
         _displayedIndex = _targetIndex!;
@@ -876,7 +919,11 @@ class _PrimaryNavigationBranchContainerState
   /// 使用累计距离更新当前卡片与真实相邻页面。
   @override
   void updatePrimarySwipe(double distance) {
-    if (_animating || !_gestureActive || _viewportWidth <= 0) {
+    if (!widget.primaryNavigationEnabled ||
+        _exitGuardPending ||
+        _animating ||
+        !_gestureActive ||
+        _viewportWidth <= 0) {
       return;
     }
     // 累计距离基于接手位置，吸附期间重新拖动不会重置页面。
@@ -909,7 +956,10 @@ class _PrimaryNavigationBranchContainerState
   /// 根据离手速度提交一级切页或让卡片回弹。
   @override
   void endPrimarySwipe(double velocity) {
-    if (_animating || !_gestureActive) {
+    if (!widget.primaryNavigationEnabled ||
+        _exitGuardPending ||
+        _animating ||
+        !_gestureActive) {
       return;
     }
     // 当前是否存在可以进入的真实相邻分支。
@@ -933,11 +983,86 @@ class _PrimaryNavigationBranchContainerState
   /// 取消一级页面横滑并让卡片返回原位。
   @override
   void cancelPrimarySwipe() {
-    if (_animating || !_gestureActive) {
+    if (!widget.primaryNavigationEnabled ||
+        _exitGuardPending ||
+        _animating ||
+        !_gestureActive) {
       return;
     }
     _gestureActive = false;
     unawaited(_animateBack());
+  }
+
+  /// Cancel stale animation callbacks while preserving navigator identities.
+  void _resetTransition(int index) {
+    _animationEpoch++;
+    _exitGuardEpoch++;
+    _settleController.stop();
+    _exitGuardPending = false;
+    _noteExitApproved = false;
+    _assistantExitApproved = false;
+    _ownedNavigationTarget = null;
+    _completeTransition(index);
+  }
+
+  /// A rejected router guard must also reject an optimistic visual transition.
+  @override
+  void rejectPendingNavigation() {
+    if (mounted) _resetTransition(widget.navigationShell.currentIndex);
+  }
+
+  /// Stop assistant capture and save drafts before committing a branch exit.
+  Future<bool> _prepareBranchChange() async {
+    if (!widget.primaryNavigationEnabled || _exitGuardPending) return false;
+    // Interrupted transitions can temporarily differ from the actual route.
+    final bool leavingNotes =
+        _displayedIndex == PrimaryNavigationDestination.notes.index ||
+        widget.navigationShell.currentIndex ==
+            PrimaryNavigationDestination.notes.index;
+    // Voice must be invalidated before an animation can leave the route active.
+    final bool leavingAssistant =
+        _displayedIndex == PrimaryNavigationDestination.assistant.index ||
+        widget.navigationShell.currentIndex ==
+            PrimaryNavigationDestination.assistant.index;
+    if (!leavingNotes && !leavingAssistant) return true;
+    // The focused input must stop accepting edits while its save is pending.
+    FocusManager.instance.primaryFocus?.unfocus();
+    // This request owns the save gate until navigation invalidates its epoch.
+    final int epoch = ++_exitGuardEpoch;
+    _noteExitApproved = false;
+    _assistantExitApproved = false;
+    setState(() => _exitGuardPending = true);
+    try {
+      if (leavingAssistant) {
+        await ref.read(voiceInputLifecycleProvider).cancelAll();
+      }
+      if (leavingNotes) {
+        // Reuse the same editor and save semantics as the router's final guard.
+        final editor = ref.read(noteEditorProvider);
+        await editor.flush();
+        if (editor.dirty) return false;
+      }
+      // Approval belongs only to the still-current guarded transition.
+      final bool approved =
+          mounted &&
+          widget.primaryNavigationEnabled &&
+          epoch == _exitGuardEpoch;
+      if (approved) {
+        _noteExitApproved = leavingNotes;
+        _assistantExitApproved = leavingAssistant;
+      }
+      return approved;
+    } catch (_) {
+      if (mounted && leavingAssistant && epoch == _exitGuardEpoch) {
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(const SnackBar(content: Text('草稿未能保存，请检查后重试')));
+      }
+      return false;
+    } finally {
+      if (mounted && epoch == _exitGuardEpoch) {
+        setState(() => _exitGuardPending = false);
+      }
+    }
   }
 
   /// 提交当前手势目标并完成两张真实页面卡片的落位。
@@ -945,6 +1070,23 @@ class _PrimaryNavigationBranchContainerState
     // 当前手势已经解析出的目标分支。
     final int? targetIndex = _targetIndex;
     if (targetIndex == null || _targetDirection == 0) {
+      await _animateBack();
+      return;
+    }
+    // Only this visual transition may roll back after asynchronous exit work.
+    final int sourceIndex = _displayedIndex;
+    // External navigation or a reset invalidates the old gesture's ownership.
+    final int transitionEpoch = _animationEpoch;
+    // A denied guard differs from a request superseded by another route.
+    final bool approved = await _prepareBranchChange();
+    if (!mounted ||
+        !widget.primaryNavigationEnabled ||
+        sourceIndex != _displayedIndex ||
+        targetIndex != _targetIndex ||
+        transitionEpoch != _animationEpoch) {
+      return;
+    }
+    if (!approved) {
       await _animateBack();
       return;
     }
@@ -963,6 +1105,7 @@ class _PrimaryNavigationBranchContainerState
 
   /// 为底栏请求播放卡片动画，并在落位后执行真实分支导航。
   Future<void> _animateRequestedBranchChange(int targetIndex) async {
+    if (!await _prepareBranchChange() || !mounted) return;
     // 当前与目标分支在可见入口中的位置。
     final List<int> visibleIndices = _visibleBranchIndices;
     // 当前视觉分支的位置。
@@ -996,13 +1139,20 @@ class _PrimaryNavigationBranchContainerState
       _ownedNavigationTarget = null;
       return;
     }
+    _exitGuardEpoch++;
+    _exitGuardPending = false;
+    _noteExitApproved = false;
+    _assistantExitApproved = false;
     // 当前与目标分支在可见入口中的位置。
     final List<int> visibleIndices = _visibleBranchIndices;
     // 当前视觉分支的位置。
     final int currentPosition = visibleIndices.indexOf(_displayedIndex);
     // 新目标分支的位置。
     final int targetPosition = visibleIndices.indexOf(targetIndex);
-    if (currentPosition < 0 || targetPosition < 0 || _reduceMotion) {
+    if (!widget.primaryNavigationEnabled ||
+        currentPosition < 0 ||
+        targetPosition < 0 ||
+        _reduceMotion) {
       _completeTransition(targetIndex);
       return;
     }
@@ -1121,7 +1271,11 @@ class _PrimaryNavigationBranchContainerState
       _dragStartOffset = 0;
       _gestureActive = false;
       _animating = false;
-      _ownedNavigationTarget = null;
+      _noteExitApproved = false;
+      _assistantExitApproved = false;
+      if (widget.navigationShell.currentIndex == targetIndex) {
+        _ownedNavigationTarget = null;
+      }
     });
   }
 
@@ -1189,7 +1343,7 @@ class _PrimaryNavigationBranchContainerState
     return Positioned.fill(
       key: ValueKey<String>('primary-navigation-positioned-$index'),
       child: IgnorePointer(
-        ignoring: !current || _gestureActive || _animating,
+        ignoring: !current || _gestureActive || _animating || _exitGuardPending,
         child: ExcludeSemantics(
           excluding: !current,
           child: TickerMode(
@@ -1264,10 +1418,18 @@ class _PrimaryNavigationBranchContainerState
           child: GestureDetector(
             key: const ValueKey<String>('primary-navigation-swipe-surface'),
             behavior: HitTestBehavior.translucent,
-            onHorizontalDragStart: _startOuterDrag,
-            onHorizontalDragUpdate: _updateOuterDrag,
-            onHorizontalDragEnd: _finishOuterDrag,
-            onHorizontalDragCancel: _cancelOuterDrag,
+            onHorizontalDragStart: widget.primaryNavigationEnabled
+                ? _startOuterDrag
+                : null,
+            onHorizontalDragUpdate: widget.primaryNavigationEnabled
+                ? _updateOuterDrag
+                : null,
+            onHorizontalDragEnd: widget.primaryNavigationEnabled
+                ? _finishOuterDrag
+                : null,
+            onHorizontalDragCancel: widget.primaryNavigationEnabled
+                ? _cancelOuterDrag
+                : null,
             child: ColoredBox(
               color: OmniColors.of(context).canvas,
               child: ClipRect(

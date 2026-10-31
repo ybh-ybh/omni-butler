@@ -90,16 +90,16 @@ class _AndroidManagementShellState
     // 当前路由实例。
     final GoRouter? router = GoRouter.maybeOf(context);
     if (_router == router) return;
-    _router?.routeInformationProvider.removeListener(_routeChanged);
+    _router?.routerDelegate.removeListener(_routeChanged);
     _router = router;
-    _router?.routeInformationProvider.addListener(_routeChanged);
+    _router?.routerDelegate.addListener(_routeChanged);
     _routeActive = _isManagementRoute;
   }
 
   /// 判断主路由是否仍在管理三分区。
   bool get _isManagementRoute {
     // 当前顶层地址。
-    final String? path = _router?.routeInformationProvider.value.uri.path;
+    final String? path = _router?.state.uri.path;
     return path == null ||
         ManagementSection.values.any(
           (ManagementSection section) => section.route == path,
@@ -204,9 +204,9 @@ class _AndroidManagementShellState
       _collapseEpoch++;
     });
     ref.read(managementSectionProvider.notifier).select(section);
-    if (_routeActive &&
-        _router?.routeInformationProvider.value.uri.path != section.route) {
-      _router?.go(section.route);
+    if (_routeActive && _router?.state.uri.path != section.route) {
+      // Keep one feature page above its original caller while switching tabs.
+      _router?.replace(section.route);
     }
   }
 
@@ -238,7 +238,7 @@ class _AndroidManagementShellState
   /// 释放路由监听和分页控制器。
   @override
   void dispose() {
-    _router?.routeInformationProvider.removeListener(_routeChanged);
+    _router?.routerDelegate.removeListener(_routeChanged);
     _pages.dispose();
     super.dispose();
   }

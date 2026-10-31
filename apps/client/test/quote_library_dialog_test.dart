@@ -98,6 +98,12 @@ void main() {
       );
       await tester.tap(find.text('新增名言'));
       await tester.pumpAndSettle();
+      // The default wide test viewport preserves the established side sheet.
+      expect(
+        find.byKey(const ValueKey<String>('quote-editor-fullscreen')),
+        findsNothing,
+      );
+      expect(find.byType(OmniSideSheetScaffold), findsOneWidget);
       await tester.enterText(find.byType(OmniTextField).first, '保留的名言草稿');
       // Capture the resting visual geometry and colors before the pending save.
       final Finder save = find.widgetWithText(OmniButton, '保存');
@@ -186,6 +192,42 @@ void main() {
     await _disposeDialog(tester, database);
   });
 
+  testWidgets('Android宽屏保留卡片列表和侧边编辑器', (WidgetTester tester) async {
+    // A wide Android viewport represents the unchanged tablet presentation.
+    tester.view.physicalSize = const Size(800, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    // Seed one quote so the established card and leading icon are rendered.
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // The production repository keeps the test on the normal read path.
+    final QuoteRepository repository = QuoteRepository(database);
+    await repository.save(const QuoteDraft(content: '宽屏名言'));
+    await _pumpDialog(
+      tester,
+      database: database,
+      gateway: _FakeQuoteJsonFileGateway(),
+      platform: TargetPlatform.android,
+    );
+
+    expect(
+      find.byKey(const ValueKey<String>('quote-library-fullscreen')),
+      findsNothing,
+    );
+    expect(find.byType(OmniPanel), findsOneWidget);
+    expect(find.byIcon(Icons.format_quote_rounded), findsOneWidget);
+    await tester.tap(find.text('宽屏名言'));
+    await tester.pumpAndSettle();
+    expect(find.byType(OmniSideSheetScaffold), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('quote-editor-fullscreen')),
+      findsNothing,
+    );
+    await _disposeDialog(tester, database);
+  });
+
   testWidgets('紧凑布局可预览并选择替换导入且不发生溢出', (WidgetTester tester) async {
     // 模拟 Android 紧凑视口。
     tester.view.physicalSize = const Size(390, 844);
@@ -214,8 +256,13 @@ void main() {
       inputFile: inputFile,
     );
 
-    await _pumpDialog(tester, database: database, gateway: gateway);
-    await tester.tap(find.byTooltip('导入或导出'));
+    await _pumpDialog(
+      tester,
+      database: database,
+      gateway: gateway,
+      platform: TargetPlatform.android,
+    );
+    await tester.tap(find.byKey(const ValueKey<String>('quote-transfer-menu')));
     await tester.pumpAndSettle();
     expect(find.text('导入 JSON'), findsOneWidget);
     expect(find.text('导出 JSON'), findsOneWidget);
@@ -266,6 +313,182 @@ void main() {
     await _disposeDialog(tester, database);
   });
 
+  // Both themes use the same compact full-screen geometry and nested flows.
+  for (final Brightness brightness in <Brightness>[
+    Brightness.light,
+    Brightness.dark,
+  ]) {
+    testWidgets('安卓全屏名言库适配窄屏大字并保留操作层级 $brightness', (
+      WidgetTester tester,
+    ) async {
+      // Exercise the minimum supported phone width with doubled system text.
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      // Seed one editable row so list and fixed actions can be measured together.
+      final AppDatabase database = AppDatabase.forTesting(
+        NativeDatabase.memory(),
+      );
+      final QuoteRepository repository = QuoteRepository(database);
+      await repository.save(const QuoteDraft(content: '窄屏名言', source: '测试作者'));
+      await _pumpDialog(
+        tester,
+        database: database,
+        gateway: _FakeQuoteJsonFileGateway(),
+        platform: TargetPlatform.android,
+        brightness: brightness,
+      );
+
+      expect(
+        find.byKey(const ValueKey<String>('quote-library-fullscreen')),
+        findsOneWidget,
+      );
+      expect(find.text('完成'), findsNothing);
+      // Compact Android renders the list directly on the former card surface.
+      final Finder library = find.byKey(
+        const ValueKey<String>('quote-library-fullscreen'),
+      );
+      final Material librarySurface = tester.widget<Material>(library);
+      expect(
+        librarySurface.color,
+        OmniColors.of(tester.element(library)).paper,
+      );
+      expect(
+        find.descendant(of: library, matching: find.byType(OmniPanel)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey<String>('quote-library-list')),
+          matching: find.byIcon(Icons.format_quote_rounded),
+        ),
+        findsNothing,
+      );
+      final Rect listBounds = tester.getRect(
+        find.byKey(const ValueKey<String>('quote-library-list')),
+      );
+      expect(listBounds.left, 0);
+      expect(listBounds.right, 320);
+      // The three actions remain equal, at least 48dp tall, and below the list.
+      final List<Rect> actionBounds =
+          <String>[
+                'quote-background-action',
+                'quote-transfer-menu',
+                'quote-add-action',
+              ]
+              .map(
+                (String key) =>
+                    tester.getRect(find.byKey(ValueKey<String>(key))),
+              )
+              .toList();
+      for (final Rect bounds in actionBounds) {
+        expect(bounds.height, greaterThanOrEqualTo(48));
+        expect(bounds.top, closeTo(actionBounds.first.top, 0.1));
+        expect(bounds.width, closeTo(actionBounds.first.width, 0.1));
+      }
+      expect(
+        tester
+            .getRect(find.byKey(const ValueKey<String>('quote-library-list')))
+            .bottom,
+        lessThanOrEqualTo(actionBounds.first.top),
+      );
+      for (final String label in <String>['更换背景', '导入导出 JSON', '新增名言']) {
+        expect(find.text(label).hitTestable(), findsOneWidget);
+      }
+
+      // The JSON menu is fully above its fixed trigger with a visible gap.
+      await tester.tap(
+        find.byKey(const ValueKey<String>('quote-transfer-menu')),
+      );
+      await tester.pumpAndSettle();
+      for (final String key in <String>[
+        'quote-import-json-action',
+        'quote-export-json-action',
+      ]) {
+        final Rect menuItem = tester.getRect(find.byKey(ValueKey<String>(key)));
+        expect(menuItem.bottom, lessThan(actionBounds[1].top));
+      }
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      // Background management opens above the library and returns to it.
+      await tester.tap(
+        find.byKey(const ValueKey<String>('quote-background-action')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('背景图片'), findsOneWidget);
+      expect(find.text('首页横幅背景'), findsNothing);
+      expect(find.byType(OmniExpandableBottomSheetScaffold), findsOneWidget);
+      final Rect sheetBounds = tester.getRect(
+        find.byKey(const ValueKey<String>('omni-expandable-sheet-surface')),
+      );
+      expect(sheetBounds.top, greaterThanOrEqualTo(640 * 0.45));
+      expect(sheetBounds.height, lessThanOrEqualTo(640 * 0.55));
+      final Rect cancelBounds = tester.getRect(
+        find.widgetWithText(OmniButton, '取消'),
+      );
+      final Rect primaryBounds = tester.getRect(
+        find.byKey(const ValueKey<String>('attachment-picker-primary')),
+      );
+      final Rect titleBounds = tester.getRect(find.text('背景图片'));
+      expect(cancelBounds.center.dy, closeTo(primaryBounds.center.dy, 0.1));
+      expect(titleBounds.center.dy, closeTo(cancelBounds.center.dy, 0.1));
+      expect(titleBounds.center.dx, closeTo(160, 0.1));
+      expect(cancelBounds.left, lessThan(primaryBounds.left));
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('quote-library-fullscreen')),
+        findsOneWidget,
+      );
+
+      // The existing full-screen editor is the next back-stack layer.
+      await tester.tap(find.byKey(const ValueKey<String>('quote-add-action')));
+      await tester.pumpAndSettle();
+      final Finder editor = find.byKey(
+        const ValueKey<String>('quote-editor-fullscreen'),
+      );
+      expect(editor, findsOneWidget);
+      expect(find.byType(OmniFullscreenFormScaffold), findsOneWidget);
+      expect(find.byType(OmniTextField), findsWidgets);
+      final Rect editorTitleBounds = tester.getRect(
+        find.descendant(of: editor, matching: find.text('新增名言')),
+      );
+      final Rect editorCancelBounds = tester.getRect(
+        find.descendant(
+          of: editor,
+          matching: find.widgetWithText(OmniButton, '取消'),
+        ),
+      );
+      final Rect editorSaveBounds = tester.getRect(
+        find.byKey(const ValueKey<String>('quote-editor-save')),
+      );
+      expect(editorTitleBounds.center.dx, closeTo(160, 0.1));
+      expect(editorTitleBounds.top, lessThan(editorCancelBounds.top));
+      expect(editorCancelBounds.left, lessThan(editorSaveBounds.left));
+      expect(
+        editorCancelBounds.center.dy,
+        closeTo(editorSaveBounds.center.dy, 0.1),
+      );
+      await tester.tap(
+        find.descendant(
+          of: editor,
+          matching: find.widgetWithText(OmniButton, '取消'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('quote-library-fullscreen')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await _disposeDialog(tester, database);
+    });
+  }
+
   testWidgets('导出入口将固定 JSON 格式交给文件网关', (WidgetTester tester) async {
     // 测试用内存数据库。
     final AppDatabase database = AppDatabase.forTesting(
@@ -306,6 +529,7 @@ Future<void> _pumpDialog(
   required QuoteJsonFileGateway gateway,
   QuoteRepository? repository,
   TargetPlatform platform = TargetPlatform.windows,
+  Brightness brightness = Brightness.light,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -315,7 +539,7 @@ Future<void> _pumpDialog(
           quoteRepositoryProvider.overrideWithValue(repository),
       ],
       child: MaterialApp(
-        theme: AppTheme.build(brightness: Brightness.light)
+        theme: AppTheme.build(brightness: brightness)
             .copyWith(platform: platform),
         home: Scaffold(body: QuoteLibraryDialog(fileGateway: gateway)),
       ),

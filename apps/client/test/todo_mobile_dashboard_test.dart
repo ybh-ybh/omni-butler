@@ -359,9 +359,9 @@ void main() {
     }
   });
 
-  _todoTest('冷启动从底栏进入待办时全部标签完整可见', (WidgetTester tester) async {
+  _todoTest('冷启动从首页入口进入待办时全部标签完整可见', (WidgetTester tester) async {
     await _startTodos(tester, openTodos: false);
-    await tester.tap(find.byKey(const ValueKey<String>('navigation-/todos')));
+    await tester.tap(find.byKey(const ValueKey<String>('home-shortcut-todos')));
     await tester.pumpAndSettle();
     expect(_selected(tester), isNull);
     expect(_pager(tester).page, 0);
@@ -503,7 +503,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  _todoTest('分类独立滚动且历史与底栏往返保留树展开和日期', (WidgetTester tester) async {
+  _todoTest('分类独立滚动且历史与功能路由往返保留树展开和日期', (WidgetTester tester) async {
     // 足量真实任务使全部和单分类都有独立的滚动范围。
     final _TodoFixture fixture = await _startTodos(tester);
     await tester.tap(
@@ -532,7 +532,7 @@ void main() {
       const Offset(0, -350),
     );
     await tester.pumpAndSettle();
-    // 本分类的滚动位置，随后打开历史和离开底栏。
+    // Retain this quadrant offset through history and an external route change.
     final double quadrantOffset = _verticalController(tester, '3').offset;
     expect(quadrantOffset, greaterThan(100));
     await tester.tap(
@@ -556,20 +556,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(
-      fixture.container
-          .read(appRouterProvider)
-          .routeInformationProvider
-          .value
-          .uri
-          .path,
-      '/todos',
-    );
+    expect(fixture.container.read(appRouterProvider).state.uri.path, '/todos');
     expect(_selected(tester), TodoPriorityQuadrant.urgentImportant);
     expect(_verticalController(tester, '3').offset, closeTo(quadrantOffset, 1));
-    await tester.tap(find.text('时间').hitTestable().last);
+    fixture.container.read(appRouterProvider).go('/timeline');
     await tester.pumpAndSettle();
-    await tester.tap(find.text('待办').hitTestable().last);
+    fixture.container.read(appRouterProvider).go('/todos');
     await tester.pumpAndSettle();
     expect(_selected(tester), TodoPriorityQuadrant.urgentImportant);
     expect(_verticalController(tester, '3').offset, closeTo(quadrantOffset, 1));

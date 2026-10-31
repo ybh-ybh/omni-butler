@@ -92,6 +92,9 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
   /// 子路由覆盖时也结束采集。
   GoRouter? _router;
 
+  /// Detect one visible-to-hidden transition while the tab stays mounted.
+  bool _routeWasCurrent = false;
+
   /// 页面销毁标记，异步回调不得再操作输入控件。
   bool _leaving = false;
 
@@ -177,26 +180,36 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
     if (identical(router, _router)) return;
     _router?.routerDelegate.removeListener(_routeChanged);
     _router = router;
+    _routeWasCurrent = _assistantRouteCurrent;
     _router?.routerDelegate.addListener(_routeChanged);
   }
+
+  /// Keep route visibility independent of authentication and voice availability.
+  bool get _assistantRouteCurrent =>
+      _router == null ||
+      (_router!.routerDelegate.currentConfiguration.isNotEmpty &&
+          _router!.state.uri.path == '/assistant');
 
   /// Require the actual top route and a visible app without relying on the URL.
   bool get _voiceContextCurrent =>
       mounted &&
       !_leaving &&
       widget.repository?.isCurrent == true &&
-      (_router == null ||
-          (_router!.routerDelegate.currentConfiguration.isNotEmpty &&
-              _router!.state.uri.path == '/assistant')) &&
+      _assistantRouteCurrent &&
       (WidgetsBinding.instance.lifecycleState == null ||
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed ||
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.inactive);
 
-  /// Invalidate speech on route exit and refresh the entry gate on return.
+  /// Release focus and persist drafts when a retained tab becomes hidden.
   void _routeChanged() {
-    if (_voice.busy && !_voiceContextCurrent) {
+    // Imperative pushes and branch switches share the same top-route check.
+    final bool routeCurrent = _assistantRouteCurrent;
+    if (!routeCurrent) _focus.unfocus();
+    if ((!routeCurrent && _routeWasCurrent) ||
+        (_voice.busy && !_voiceContextCurrent)) {
       unawaited(_cancelVoiceInBackground());
     }
+    _routeWasCurrent = routeCurrent;
     if (mounted && !_leaving) setState(() {});
   }
 
@@ -407,7 +420,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
     await _chat.continueConversation();
     if (!mounted || _chat.conversationId != target) return;
     _input.text = _chat.draft;
-    _focus.requestFocus();
+    if (_assistantRouteCurrent) _focus.requestFocus();
   }
 
   /// 输入控制器由弹窗状态管理，退出动画完成后再释放。

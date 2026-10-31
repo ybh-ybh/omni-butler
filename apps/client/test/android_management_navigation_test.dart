@@ -18,11 +18,205 @@ import 'package:omni_butler/features/management/presentation/management_mobile_s
 import 'package:omni_butler/features/memberships/data/membership_repository.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/shared/ui/omni_page_header.dart';
+import 'package:omni_butler/shared/ui/omni_overlay.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 验证 Android 管理聚合页的导航、操作与功能开关联动。
 void main() {
-  testWidgets('Android 更多页展示分组设置并支持二级返回', (WidgetTester tester) async {
+  testWidgets('系统返回优先处理根弹层且不能绕过保存中的返回保护', (WidgetTester tester) async {
+    // Start on a real secondary page with its own branch navigator.
+    final _ManagementTestApp app = await _pumpManagementApp(tester);
+    // A saving form prevents dismissal until its operation finishes.
+    final ValueNotifier<bool> canDismiss = ValueNotifier<bool>(false);
+    addTearDown(canDismiss.dispose);
+    // Record rejected pops to prove the guard receives the system action.
+    int blockedPops = 0;
+    // The shared dialog helper pushes onto the root navigator by default.
+    final dialogClosed = showOmniDialog<void>(
+      context: tester.element(
+        find.byKey(const ValueKey<String>('android-secondary-back')),
+      ),
+      barrierDismissible: false,
+      builder: (BuildContext context) => ValueListenableBuilder<bool>(
+        valueListenable: canDismiss,
+        builder: (BuildContext context, bool allowed, Widget? child) =>
+            PopScope<void>(
+              canPop: allowed,
+              onPopInvokedWithResult: (bool didPop, void result) {
+                if (!didPop) blockedPops += 1;
+              },
+              child: const OmniDialogScaffold(
+                key: ValueKey<String>('protected-root-dialog'),
+                title: '保存中',
+                child: Text('等待当前操作完成'),
+              ),
+            ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(blockedPops, 1);
+    expect(
+      find.byKey(const ValueKey<String>('protected-root-dialog')),
+      findsOneWidget,
+    );
+    expect(_managementPath(app), '/inventory');
+    canDismiss.value = true;
+    await tester.pump();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await dialogClosed;
+    expect(
+      find.byKey(const ValueKey<String>('protected-root-dialog')),
+      findsNothing,
+    );
+    expect(_managementPath(app), '/inventory');
+    expect(
+      find.byKey(const ValueKey<String>('android-secondary-back')),
+      findsOneWidget,
+    );
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/home');
+    expect(tester.takeException(), isNull);
+    await _disposeManagementApp(tester, app);
+  });
+
+  testWidgets('首页管理入口切换两个分区后一次返回首页', (WidgetTester tester) async {
+    // Enter through the real shortcut so the test covers an imperative push.
+    final _ManagementTestApp app = await _pumpManagementApp(
+      tester,
+      initialLocation: '/home',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('home-shortcut-management')),
+    );
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/inventory');
+    expect(
+      find.byKey(const ValueKey<String>('compact-navigation')),
+      findsNothing,
+    );
+    _expectPrimarySwipesDisabled(tester);
+    for (final String section in <String>['events', 'memberships']) {
+      await tester.tap(
+        find.byKey(ValueKey<String>('management-section-$section')),
+      );
+      await tester.pumpAndSettle();
+      expect(_managementPath(app), '/$section');
+      expect(app.container.read(appRouterProvider).canPop(), isTrue);
+    }
+    await tester.tap(
+      find.byKey(const ValueKey<String>('android-secondary-back')),
+    );
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/home');
+    expect(
+      find.byKey(const ValueKey<String>('navigation-/home')),
+      findsOneWidget,
+    );
+    // Reopening uses the last management section without accumulating a stack.
+    await tester.tap(
+      find.byKey(const ValueKey<String>('home-shortcut-management')),
+    );
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/memberships');
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/home');
+    expect(tester.takeException(), isNull);
+    await _disposeManagementApp(tester, app);
+  });
+
+  testWidgets('首页设置入口系统返回先关闭分类再退出全屏设置', (WidgetTester tester) async {
+    // The settings route must preserve the home page below its local categories.
+    final _ManagementTestApp app = await _pumpManagementApp(
+      tester,
+      initialLocation: '/home',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('home-shortcut-settings')),
+    );
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/settings');
+    expect(
+      find.byKey(const ValueKey<String>('compact-navigation')),
+      findsNothing,
+    );
+    await tester.tap(
+      find.byKey(
+        const ValueKey<String>('android-settings-category-appearance'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-detail-appearance')),
+      findsOneWidget,
+    );
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/settings');
+    expect(
+      find.byKey(const ValueKey<String>('android-settings-overview')),
+      findsOneWidget,
+    );
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(_managementPath(app), '/home');
+    expect(
+      find.byKey(const ValueKey<String>('navigation-/home')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    await _disposeManagementApp(tester, app);
+  });
+
+  // Direct feature links have no previous page and must fall back to home.
+  for (final String location in <String>[
+    '/todos',
+    '/timeline',
+    '/inventory',
+    '/settings',
+  ]) {
+    testWidgets('直接打开 $location 全屏页禁止一级横滑且返回兜底首页', (WidgetTester tester) async {
+      // Use go rather than push to reproduce a direct link with no return stack.
+      final _ManagementTestApp app = await _pumpManagementApp(
+        tester,
+        initialLocation: location,
+      );
+      expect(_managementPath(app), location);
+      expect(
+        find.byKey(const ValueKey<String>('compact-navigation')),
+        findsNothing,
+      );
+      _expectPrimarySwipesDisabled(tester);
+      // Settings owns its header while other features use the shared header.
+      final Finder header = find.byKey(
+        ValueKey<String>(
+          location == '/settings'
+              ? 'android-settings-header'
+              : 'android-secondary-header',
+        ),
+      );
+      await tester.drag(header, const Offset(-260, 0));
+      await tester.pumpAndSettle();
+      expect(_managementPath(app), location);
+      await tester.tap(
+        find.byKey(const ValueKey<String>('android-secondary-back')),
+      );
+      await tester.pumpAndSettle();
+      expect(_managementPath(app), '/home');
+      expect(
+        find.byKey(const ValueKey<String>('compact-navigation')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await _disposeManagementApp(tester, app);
+    });
+  }
+
+  testWidgets('Android 全屏设置展示分组并优先处理分类返回', (WidgetTester tester) async {
     await _configureAndroidView(tester);
     SharedPreferences.setMockInitialValues(<String, Object>{
       'appearance.theme_mode': 'light',
@@ -65,6 +259,14 @@ void main() {
     );
     expect(
       find.byKey(const ValueKey<String>('android-settings-back')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('android-secondary-back')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('compact-navigation')),
       findsNothing,
     );
     expect(
@@ -185,10 +387,7 @@ void main() {
     // Android 系统返回复用同样的右移退场，而不是直接替换页面。
     expect(_settingsCardOffset(tester, 'overview'), inExclusiveRange(-1, 0));
     expect(_settingsCardOffset(tester, 'detail'), inExclusiveRange(0, 1));
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/settings',
-    );
+    expect(container.read(appRouterProvider).state.uri.path, '/settings');
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey<String>('android-settings-overview')),
@@ -380,11 +579,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(_managementPath(app), '/memberships');
 
-    await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
+    app.container.read(appRouterProvider).go('/home');
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const ValueKey<String>('navigation-/inventory')),
-    );
+    app.container
+        .read(appRouterProvider)
+        .go(app.container.read(managementSectionProvider).route);
     await tester.pumpAndSettle();
     expect(_managementPath(app), '/memberships');
     expect(
@@ -439,7 +638,7 @@ void main() {
     }
   });
 
-  testWidgets('管理各分区搜索滚动保留且统计随标签底栏和外部路由收起', (WidgetTester tester) async {
+  testWidgets('管理各分区搜索滚动保留且统计随标签和外部路由收起', (WidgetTester tester) async {
     // 每个分区均写入足够多的独立记录。
     final _ManagementTestApp app = await _pumpManagementApp(tester);
     // 记录各分区在查询后的实际滚动位置。
@@ -524,18 +723,16 @@ void main() {
       _managementListOffset(tester, 'inventory-management-list'),
       closeTo(offsets['inventory']!, 0.1),
     );
-    // 底部一级导航离开并返回也必须关闭摘要。
+    // Direct route changes still retain branch state and close its summary.
     await tester.tap(
       find
           .byKey(const ValueKey<String>('management-summary-toggle'))
           .hitTestable(),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
+    app.container.read(appRouterProvider).go('/home');
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const ValueKey<String>('navigation-/inventory')),
-    );
+    app.container.read(appRouterProvider).go('/inventory');
     await tester.pumpAndSettle();
     _expectManagementCollapsed(tester);
     expect(
@@ -595,9 +792,7 @@ void main() {
     );
     app.container.read(appRouterProvider).go('/settings');
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const ValueKey<String>('navigation-/inventory')),
-    );
+    app.container.read(appRouterProvider).go(selectedBeforeLeave.route);
     await tester.pumpAndSettle();
     // 当前启用分区顺序决定返回时应当落定的整数页。
     final List<ManagementSection> enabled = enabledManagementSections(
@@ -629,9 +824,7 @@ void main() {
     await tester.pump();
     await gesture.up();
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const ValueKey<String>('navigation-/inventory')),
-    );
+    app.container.read(appRouterProvider).go('/events');
     await tester.pumpAndSettle();
     expect(_managementPath(app), '/events');
     expect(controller.page, closeTo(0, 0.001));
@@ -919,10 +1112,7 @@ void main() {
           .filterCount,
       1,
     );
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/inventory',
-    );
+    expect(container.read(appRouterProvider).state.uri.path, '/inventory');
 
     semanticsHandle.dispose();
     await tester.pumpWidget(const SizedBox.shrink());
@@ -1040,10 +1230,7 @@ void main() {
           .filterCount,
       2,
     );
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/memberships',
-    );
+    expect(container.read(appRouterProvider).state.uri.path, '/memberships');
 
     // 弹层出现前缓存当前入口几何。
     final Rect moreActionRect = tester.getRect(moreActionsButton);
@@ -1116,10 +1303,7 @@ void main() {
     // 只剩一个管理分区时隐藏标签，横滑仍停留当前管理。
     await _dragManagementPage(tester, -260);
     await tester.pumpAndSettle();
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/inventory',
-    );
+    expect(container.read(appRouterProvider).state.uri.path, '/inventory');
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -1130,7 +1314,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('Android 三个管理功能全部关闭时隐藏底栏入口', (WidgetTester tester) async {
+  testWidgets('Android 三个管理功能全部关闭时隐藏首页入口', (WidgetTester tester) async {
     await _configureAndroidView(tester);
     SharedPreferences.setMockInitialValues(<String, Object>{
       'appearance.theme_mode': 'light',
@@ -1159,7 +1343,7 @@ void main() {
 
     expect(find.text('管理'), findsNothing);
     expect(
-      find.byKey(const ValueKey<String>('navigation-/inventory')),
+      find.byKey(const ValueKey<String>('home-shortcut-management')),
       findsNothing,
     );
 
@@ -1203,10 +1387,7 @@ void main() {
     await _dragManagementPage(tester, -260);
     await tester.pumpAndSettle();
 
-    expect(
-      container.read(appRouterProvider).routeInformationProvider.value.uri.path,
-      '/inventory',
-    );
+    expect(container.read(appRouterProvider).state.uri.path, '/inventory');
     expect(
       container.read(managementSectionProvider),
       ManagementSection.inventory,
@@ -1223,6 +1404,18 @@ void main() {
     await database.close();
     debugDefaultTargetPlatformOverride = null;
   });
+}
+
+/// Verifies that the retained primary container cannot accept horizontal drags.
+void _expectPrimarySwipesDisabled(WidgetTester tester) {
+  // Keeping this widget mounted preserves branch state without enabling swipes.
+  final GestureDetector surface = tester.widget<GestureDetector>(
+    find.byKey(const ValueKey<String>('primary-navigation-swipe-surface')),
+  );
+  expect(surface.onHorizontalDragStart, isNull);
+  expect(surface.onHorizontalDragUpdate, isNull);
+  expect(surface.onHorizontalDragEnd, isNull);
+  expect(surface.onHorizontalDragCancel, isNull);
 }
 
 /// 读取 Android 更多层级卡片相对于视口宽度的水平位移。
@@ -1261,11 +1454,11 @@ Future<void> _dragManagementPage(WidgetTester tester, double deltaX) async {
   await tester.dragFrom(start, Offset(deltaX, 0));
 }
 
-/// 验证管理页滚动视口铺到底栏上方，内容末尾保留悬浮按钮避让空间。
+/// Checks full-screen content bounds and clearance for floating actions.
 void _expectManagementScrollableLayout(WidgetTester tester, Finder scrollable) {
-  // Android 底部导航栏。
-  final Finder compactNavigation = find.byKey(
-    const ValueKey<String>('compact-navigation'),
+  // The secondary-page shell fills the area below its return header.
+  final Finder shell = find.byKey(
+    const ValueKey<String>('android-management-shell'),
   );
   // 当前管理分区的滚动视图配置。
   final BoxScrollView scrollView = tester.widget<BoxScrollView>(scrollable);
@@ -1275,7 +1468,11 @@ void _expectManagementScrollableLayout(WidgetTester tester, Finder scrollable) {
   );
   expect(
     tester.getRect(scrollable).bottom,
-    closeTo(tester.getRect(compactNavigation).top, 0.1),
+    closeTo(tester.getRect(shell).bottom, 0.1),
+  );
+  expect(
+    find.byKey(const ValueKey<String>('compact-navigation')),
+    findsNothing,
   );
   expect(contentPadding.bottom, 88);
 }
@@ -1296,7 +1493,10 @@ class _ManagementTestApp {
 }
 
 /// 启动三分区均含长列表的真实安卓路由宿主。
-Future<_ManagementTestApp> _pumpManagementApp(WidgetTester tester) async {
+Future<_ManagementTestApp> _pumpManagementApp(
+  WidgetTester tester, {
+  String initialLocation = '/inventory',
+}) async {
   await _configureAndroidView(tester);
   SharedPreferences.setMockInitialValues(<String, Object>{
     'appearance.theme_mode': 'light',
@@ -1355,7 +1555,7 @@ Future<_ManagementTestApp> _pumpManagementApp(WidgetTester tester) async {
       child: const OmniButlerApp(),
     ),
   );
-  container.read(appRouterProvider).go('/inventory');
+  container.read(appRouterProvider).go(initialLocation);
   await tester.pumpAndSettle();
   // 同时注册失败路径清理，避免一个失败污染后续用例。
   final _ManagementTestApp app = _ManagementTestApp(
@@ -1367,12 +1567,8 @@ Future<_ManagementTestApp> _pumpManagementApp(WidgetTester tester) async {
 }
 
 /// 读取真实路由中当前管理地址。
-String _managementPath(_ManagementTestApp app) => app.container
-    .read(appRouterProvider)
-    .routeInformationProvider
-    .value
-    .uri
-    .path;
+String _managementPath(_ManagementTestApp app) =>
+    app.container.read(appRouterProvider).state.uri.path;
 
 /// 读取当前列表真实纵向滚动位置。
 double _managementListOffset(WidgetTester tester, String listKey) {

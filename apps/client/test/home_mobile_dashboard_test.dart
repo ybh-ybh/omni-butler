@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/app/router/app_router.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
@@ -16,8 +17,256 @@ import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// Fails one user-requested quote rotation while retaining the real database.
+class _FailingQuoteChangeDatabase extends AppDatabase {
+  /// Whether the next rotation should fail before persistence.
+  bool failChange = true;
+
+  /// Number of accepted rotation attempts.
+  int changeCalls = 0;
+
+  /// Creates an isolated database with controllable quote rotation failures.
+  _FailingQuoteChangeDatabase() : super.forTesting(NativeDatabase.memory());
+
+  /// Delegates successful retries to the production rotation logic.
+  @override
+  Future<QuoteRecord?> changeQuoteForDay(DateTime day) async {
+    changeCalls += 1;
+    if (failChange) throw StateError('模拟名言切换失败');
+    return super.changeQuoteForDay(day);
+  }
+}
+
 /// 验证安卓首页真实业务模块的分页、手势隔离与本次运行状态。
 void main() {
+  testWidgets('首页快捷入口同排且名言单击轮换长按打开全屏库', (WidgetTester tester) async {
+    // Use the real mobile page to verify touch targets and header placement.
+    final _HomeTestApp app = await _pumpHome(tester);
+    // Keep the shortcut order independent from optional feature route choices.
+    final List<String> ids = <String>[
+      'todos',
+      'timeline',
+      'management',
+      'settings',
+    ];
+    // All ordinary-size shortcuts occupy one row below the quote.
+    final List<Rect> bounds = ids
+        .map((String id) => tester.getRect(_key('home-shortcut-$id')))
+        .toList();
+    expect(
+      bounds.first.top,
+      greaterThan(tester.getRect(_key('home-quote-card')).bottom),
+    );
+    for (final Rect boundsForEntry in bounds) {
+      expect(boundsForEntry.size.shortestSide, greaterThanOrEqualTo(48));
+      expect(
+        boundsForEntry.top,
+        closeTo(tester.getRect(_key('home-shortcut-todos')).top, 0.1),
+      );
+    }
+    expect(
+      bounds.map((Rect rect) => rect.left),
+      orderedEquals(bounds.map((Rect rect) => rect.left).toList()..sort()),
+    );
+    expect(find.byTooltip('知序助手'), findsNothing);
+    expect(find.byTooltip('名言库'), findsNothing);
+    expect(find.byTooltip('设置横幅背景'), findsNothing);
+    expect(_key('home-quote-menu'), findsNothing);
+    // Attribution stays pinned to the card's padded bottom-right corner.
+    final Rect quoteCard = tester.getRect(_key('home-quote-card'));
+    final Rect quoteSource = tester.getRect(_key('home-quote-source'));
+    expect(
+      quoteCard.right - quoteSource.right,
+      closeTo(OmniSpacing.sm + 1, 0.1),
+    );
+    expect(
+      quoteCard.bottom - quoteSource.bottom,
+      closeTo(OmniSpacing.sm + 1, 0.1),
+    );
+    // Read the persisted initial selection before exercising card gestures.
+    final QuoteRecord initialQuote = (await app.database.quoteForDay(
+      DateTime(2026, 10, 8),
+    ))!;
+    // Two immediate taps must commit only one rotation while the first is pending.
+    await tester.tap(_key('home-quote-interaction'));
+    await tester.tap(_key('home-quote-interaction'));
+    await tester.pumpAndSettle();
+    // The next quote remains visible and persisted after the guarded rotation.
+    final QuoteRecord changedQuote = (await app.database.quoteForDay(
+      DateTime(2026, 10, 8),
+    ))!;
+    expect(changedQuote.id, isNot(initialQuote.id));
+    expect(find.text('“${changedQuote.content}”'), findsOneWidget);
+    // Long press opens management without rotating the retained quote again.
+    await tester.longPress(_key('home-quote-interaction'));
+    await tester.pumpAndSettle();
+    expect(_key('quote-library-fullscreen'), findsOneWidget);
+    expect(_key('quote-background-action'), findsOneWidget);
+    expect(_key('quote-transfer-menu'), findsOneWidget);
+    expect(_key('quote-add-action'), findsOneWidget);
+    expect(find.text('完成'), findsNothing);
+    expect(_key('compact-navigation').hitTestable(), findsNothing);
+    // The stored daily selection proves long press did not also fire the tap.
+    final QuoteRecord quoteAfterLongPress = (await app.database.quoteForDay(
+      DateTime(2026, 10, 8),
+    ))!;
+    expect(quoteAfterLongPress.id, changedQuote.id);
+    await tester.tap(_key('quote-library-back'));
+    await tester.pumpAndSettle();
+    expect(_key('home-quote-card'), findsOneWidget);
+    expect(find.text('“${changedQuote.content}”'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await _disposeHome(tester, app);
+  });
+
+  testWidgets('320宽双倍字号的快捷入口使用两列且不裁剪文字', (WidgetTester tester) async {
+    // Large system text must reflow without reducing its scale.
+    final _HomeTestApp app = await _pumpHome(
+      tester,
+      size: const Size(320, 844),
+      textScale: 2,
+      cards: const <String>['todos'],
+    );
+    // Measure the actual laid-out controls rather than a breakpoint flag.
+    final Rect todos = tester.getRect(_key('home-shortcut-todos'));
+    // The second shortcut stays in the first row.
+    final Rect timeline = tester.getRect(_key('home-shortcut-timeline'));
+    // The remaining shortcuts wrap onto a second row.
+    final Rect management = tester.getRect(_key('home-shortcut-management'));
+    // Settings keeps the same second-row baseline.
+    final Rect settings = tester.getRect(_key('home-shortcut-settings'));
+    expect(todos.top, closeTo(timeline.top, 0.1));
+    expect(management.top, greaterThanOrEqualTo(todos.bottom));
+    expect(management.top, closeTo(settings.top, 0.1));
+    for (final String label in <String>['全部待办', '时间记录', '管理', '设置']) {
+      expect(find.text(label).hitTestable(), findsOneWidget);
+    }
+    expect(tester.takeException(), isNull);
+    await _disposeHome(tester, app);
+  });
+
+  testWidgets('隐藏名言仍显示快捷入口且功能开关即时过滤', (WidgetTester tester) async {
+    // Feature shortcuts are independent from the optional home cards.
+    final _HomeTestApp app = await _pumpHome(tester, cards: const <String>[]);
+    expect(_key('home-quote-card'), findsNothing);
+    expect(_key('home-shortcut-settings'), findsOneWidget);
+    // Toggle existing preferences through their production controller.
+    final FeaturePreferenceController preference = app.container.read(
+      featurePreferenceProvider.notifier,
+    );
+    await preference.setFeatureEnabled(AppFeature.todos, false);
+    await preference.setFeatureEnabled(AppFeature.timeline, false);
+    await preference.setFeatureEnabled(AppFeature.inventory, false);
+    await preference.setFeatureEnabled(AppFeature.memberships, false);
+    await tester.pumpAndSettle();
+    expect(_key('home-shortcut-todos'), findsNothing);
+    expect(_key('home-shortcut-timeline'), findsNothing);
+    expect(_key('home-shortcut-management'), findsOneWidget);
+    await preference.setFeatureEnabled(AppFeature.events, false);
+    await tester.pumpAndSettle();
+    expect(_key('home-shortcut-management'), findsNothing);
+    expect(_key('home-shortcut-settings').hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await _disposeHome(tester, app);
+  });
+
+  testWidgets('安卓长名言自然增高且正文不省略', (WidgetTester tester) async {
+    // A single enabled quote makes the real daily selection deterministic.
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    // The long text intentionally exceeds the compact banner height.
+    const String content =
+        '认真观察生活中的每一个细节，让记录成为理解自己的过程。'
+        '把今天需要完成的事情逐一写下来，也为休息和思考留出足够的空间。'
+        '在变化中保持耐心，允许每一次尝试慢慢积累成新的经验。';
+    await database
+        .into(database.quotes)
+        .insert(
+          QuotesCompanion.insert(
+            id: 'long-mobile-quote',
+            content: content,
+            createdAt: DateTime(2026, 10, 8),
+            updatedAt: DateTime(2026, 10, 8),
+          ),
+        );
+    // Keep the default font size so growth comes from content, not text scaling.
+    final _HomeTestApp app = await _pumpHome(tester, database: database);
+    // Inspect the full displayed text together with its real banner bounds.
+    final Text quote = tester.widget<Text>(find.text('“$content”'));
+    expect(quote.maxLines, isNull);
+    expect(quote.overflow, TextOverflow.visible);
+    expect(tester.getSize(_key('home-quote-card')).height, greaterThan(112));
+    final Rect longCard = tester.getRect(_key('home-quote-card'));
+    final Rect longSource = tester.getRect(_key('home-quote-source'));
+    expect(longCard.right - longSource.right, closeTo(OmniSpacing.sm + 1, 0.1));
+    expect(
+      longCard.bottom - longSource.bottom,
+      closeTo(OmniSpacing.sm + 1, 0.1),
+    );
+    expect(
+      tester.getRect(find.text('“$content”')).bottom,
+      lessThan(longSource.top),
+    );
+    expect(tester.takeException(), isNull);
+    await _disposeHome(tester, app);
+  });
+
+  testWidgets('空名言状态仍可长按进入全屏名言库', (WidgetTester tester) async {
+    // Simulate a migrated dataset where the empty library must not be reseeded.
+    final AppDatabase database = AppDatabase.forTesting(
+      NativeDatabase.memory(),
+    );
+    await database.customStatement(
+      'CREATE TABLE device_sync_metadata (id TEXT PRIMARY KEY, value TEXT)',
+    );
+    await database.customStatement(
+      'INSERT INTO device_sync_metadata (id, value) VALUES (?, ?)',
+      <Object?>[AppDatabase.suppressDefaultSeedingMetadataId, '1'],
+    );
+    final _HomeTestApp app = await _pumpHome(tester, database: database);
+    expect(find.text('暂无可用名言，可在名言库中添加'), findsOneWidget);
+
+    await tester.longPress(_key('home-quote-interaction'));
+    await tester.pumpAndSettle();
+    expect(_key('quote-library-fullscreen'), findsOneWidget);
+    expect(find.text('名言库为空，首页会展示内置占位内容。'), findsOneWidget);
+    expect(_key('quote-add-action').hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await _disposeHome(tester, app);
+  });
+
+  testWidgets('名言切换失败保留当前文字并允许重试', (WidgetTester tester) async {
+    // The production database remains active except for the controlled failure.
+    final _FailingQuoteChangeDatabase database = _FailingQuoteChangeDatabase();
+    final _HomeTestApp app = await _pumpHome(tester, database: database);
+    // Capture the current persisted quote before the failing request.
+    final QuoteRecord initialQuote = (await database.quoteForDay(
+      DateTime(2026, 10, 8),
+    ))!;
+
+    await tester.tap(_key('home-quote-interaction'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(database.changeCalls, 1);
+    expect(find.text('名言切换失败，请重试'), findsOneWidget);
+    expect(find.text('“${initialQuote.content}”'), findsOneWidget);
+    // A later tap is accepted and advances through the same real rotation path.
+    await tester.tap(find.byTooltip('关闭提示'));
+    await tester.pump();
+    database.failChange = false;
+    await tester.tap(_key('home-quote-interaction'));
+    await tester.pumpAndSettle();
+    final QuoteRecord retriedQuote = (await database.quoteForDay(
+      DateTime(2026, 10, 8),
+    ))!;
+    expect(database.changeCalls, 2);
+    expect(retriedQuote.id, isNot(initialQuote.id));
+    expect(find.text('“${retriedQuote.content}”'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await _disposeHome(tester, app);
+  });
+
   testWidgets('各模块删除重复标题且胶囊只展开选中模块文字', (WidgetTester tester) async {
     // 包含可选刻度页，确保每个分页标题都遵循同一规则。
     final _HomeTestApp app = await _pumpHome(
@@ -149,6 +398,10 @@ void main() {
     expect(find.text('今日工作台'), findsNothing);
     expect(find.text('首页设置'), findsNothing);
     expect(_key('home-mobile-tab-dayRuler'), findsNothing);
+    // Keep the persisted selection as evidence that drags never become taps.
+    final QuoteRecord quoteBeforeDrag = (await app.database.quoteForDay(
+      DateTime(2026, 10, 8),
+    ))!;
     _expectPage(tester, 0);
     _expectFlatPanel(tester, 'home-todo-card');
 
@@ -190,6 +443,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(_currentPath(app), '/home');
     _expectPage(tester, 2);
+    // Vertical scrolling through the same surface also cancels quote activation.
+    await tester.drag(_key('home-quote-card'), const Offset(0, -72));
+    await tester.pumpAndSettle();
+    final QuoteRecord quoteAfterDrags = (await app.database.quoteForDay(
+      DateTime(2026, 10, 8),
+    ))!;
+    expect(quoteAfterDrags.id, quoteBeforeDrag.id);
     expect(tester.takeException(), isNull);
     await _disposeHome(tester, app);
   });
@@ -204,24 +464,11 @@ void main() {
       closeTo(tester.getTopLeft(_key('home-mobile-header')).dy + 8, 0.1),
     );
     await _selectModule(tester, 'timeStatus');
-    await tester.tap(_key('navigation-/settings'));
+    await tester.tap(_key('home-shortcut-settings'));
     await tester.pumpAndSettle();
     expect(_currentPath(app), '/settings');
     expect(find.text('更多'), findsNothing);
-    expect(
-      find.descendant(
-        of: _key('navigation-/settings'),
-        matching: find.text('设置'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: _key('navigation-/settings'),
-        matching: find.byIcon(Icons.settings_rounded),
-      ),
-      findsOneWidget,
-    );
+    expect(_key('compact-navigation'), findsNothing);
     expect(_key('android-settings-home').hitTestable(), findsOneWidget);
     await tester.tap(_key('android-settings-home'));
     await tester.pumpAndSettle();
@@ -237,11 +484,11 @@ void main() {
       'dayRuler',
     ]);
     expect(_key('android-settings-detail-home'), findsOneWidget);
-    expect(_key('navigation-/settings').hitTestable(), findsOneWidget);
+    expect(_key('compact-navigation'), findsNothing);
     expect(find.byType(OmniSideSheetScaffold), findsNothing);
     await tester.tap(_key('android-settings-back'));
     await tester.pumpAndSettle();
-    await tester.tap(_key('navigation-/home'));
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     _expectPage(tester, 1);
     expect(_key('home-quote-card'), findsNothing);
@@ -261,7 +508,7 @@ void main() {
         textScale: 1.5,
         themeMode: themeMode,
       );
-      await tester.tap(_key('navigation-/settings'));
+      await tester.tap(_key('home-shortcut-settings'));
       await tester.pumpAndSettle();
       await tester.tap(_key('android-settings-home'));
       await tester.pumpAndSettle();
@@ -269,7 +516,7 @@ void main() {
       expect(_key('home-settings-banner-panel'), findsOneWidget);
       expect(_key('home-settings-added-panel'), findsOneWidget);
       expect(find.byType(OmniSideSheetScaffold), findsNothing);
-      expect(_key('navigation-/settings').hitTestable(), findsOneWidget);
+      expect(_key('compact-navigation'), findsNothing);
       // 只滚动正文，使底部功能管理入口在大字布局下仍能访问。
       final Finder contentScrollable = find
           .descendant(
@@ -407,7 +654,7 @@ void main() {
     await _disposeHome(tester, app);
   });
 
-  testWidgets('时间图例筛选跨模块和底栏往返保留，重排按模块身份定位', (WidgetTester tester) async {
+  testWidgets('时间图例筛选跨模块和功能页往返保留，重排按模块身份定位', (WidgetTester tester) async {
     // 两种真实类别让图例过滤产生可验证的时长变化。
     final AppDatabase database = AppDatabase.forTesting(
       NativeDatabase.memory(),
@@ -424,13 +671,25 @@ void main() {
     await _selectModule(tester, 'timeStatus');
     expect(_donutDuration(tester), '0h30m');
 
-    await tester.tap(_key('navigation-/todos'));
+    // Partially collapse the header with a real drag while keeping its entry visible.
+    await tester.drag(_key('home-quote-card'), const Offset(0, -48));
+    await tester.pumpAndSettle();
+    // Observe the actual coordinated home scroll position across push and pop.
+    final ScrollController homeScroll = tester
+        .widget<NestedScrollView>(_key('home-mobile-vertical-layout'))
+        .controller!;
+    // Capture a nonzero position rather than merely asserting retained widgets.
+    final double homeOffsetBeforeFeature = homeScroll.offset;
+    expect(homeOffsetBeforeFeature, greaterThan(0));
+    expect(_key('home-shortcut-todos').hitTestable(), findsOneWidget);
+    await tester.tap(_key('home-shortcut-todos'));
     await tester.pumpAndSettle();
     expect(_currentPath(app), '/todos');
-    await tester.tap(_key('navigation-/home'));
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     _expectPage(tester, 1);
     expect(_donutDuration(tester), '0h30m');
+    expect(homeScroll.offset, closeTo(homeOffsetBeforeFeature, 0.1));
 
     // 调整当前模块顺序后仍保留时间页和图例状态。
     final HomeCardPreferenceController preference = app.container.read(
@@ -645,6 +904,10 @@ void main() {
       lessThan(quoteTop - 30),
     );
     expect(_key('home-mobile-tabs').hitTestable(), findsOneWidget);
+    // The shortcuts add header height; finish collapsing it with a real drag.
+    await tester.drag(_key('home-mobile-pager'), const Offset(0, -380));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(_key('home-mobile-tabs')).dy, closeTo(0, 0.1));
     // 顶部已折叠后，继续滚动只推动业务正文。
     final double tabsTop = tester.getTopLeft(_key('home-mobile-tabs')).dy;
     await tester.drag(_key('home-mobile-pager'), const Offset(0, -160));
@@ -779,12 +1042,8 @@ String _donutDuration(WidgetTester tester) =>
     tester.widget<Text>(_key('home-time-donut-duration-今日')).data!;
 
 /// 返回完整应用当前的一级路由。
-String _currentPath(_HomeTestApp app) => app.container
-    .read(appRouterProvider)
-    .routeInformationProvider
-    .value
-    .uri
-    .path;
+String _currentPath(_HomeTestApp app) =>
+    app.container.read(appRouterProvider).state.uri.path;
 
 /// 用真实父子关系生成超过手机一屏的待办内容。
 Future<TodoRecord> _seedTodoTree(AppDatabase database) async {

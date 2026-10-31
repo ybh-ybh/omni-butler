@@ -1,14 +1,18 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/core/attachments/attachment_repository.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/home/data/quote_repository.dart';
+import 'package:omni_butler/shared/attachments/attachment_picker_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 用户选择的名言 JSON 文件内容。
@@ -94,9 +98,16 @@ class QuoteLibraryDialog extends ConsumerStatefulWidget {
 
   /// 显示名言库管理弹窗。
   static Future<void> show(BuildContext context) {
+    // Android phones use a root fullscreen management surface.
+    final bool fullscreen =
+        Theme.of(context).platform == TargetPlatform.android &&
+        OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
     return showOmniDialog<void>(
       context: context,
       builder: (BuildContext context) => const QuoteLibraryDialog(),
+      barrierDismissible: !fullscreen,
+      useSafeArea: !fullscreen,
+      fullscreenDialog: fullscreen,
     );
   }
 
@@ -277,11 +288,237 @@ class _QuoteLibraryDialogState extends ConsumerState<QuoteLibraryDialog> {
     ref.invalidate(quoteForDayProvider(DateUtils.dateOnly(DateTime.now())));
   }
 
+  /// Opens the existing banner picker above the retained quote library.
+  Future<void> _openBackground() {
+    return AttachmentPickerDialog.show(
+      context,
+      businessType: AttachmentBusinessType.quoteBanner,
+      businessId: 'home-banner',
+      title: '背景图片',
+      cropAspectRatio: 3.0,
+      expandableOnAndroid: true,
+    );
+  }
+
+  /// Builds the shared import and export menu entries.
+  List<PopupMenuEntry<_QuoteTransferAction>> _buildTransferItems(
+    BuildContext context,
+  ) {
+    return <PopupMenuEntry<_QuoteTransferAction>>[
+      OmniPopupMenuItem<_QuoteTransferAction>(
+        key: const ValueKey<String>('quote-import-json-action'),
+        value: _QuoteTransferAction.importJson,
+        label: '导入 JSON',
+        icon: Icons.file_upload_outlined,
+      ),
+      OmniPopupMenuItem<_QuoteTransferAction>(
+        key: const ValueKey<String>('quote-export-json-action'),
+        value: _QuoteTransferAction.exportJson,
+        label: '导出 JSON',
+        icon: Icons.file_download_outlined,
+      ),
+    ];
+  }
+
+  /// Builds the existing editable quote rows for either presentation shell.
+  Widget _buildQuoteList(
+    BuildContext context,
+    AsyncValue<List<QuoteRecord>> quotes, {
+    bool flat = false,
+  }) {
+    return quotes.when(
+      data: (List<QuoteRecord> records) {
+        if (records.isEmpty) {
+          return const Center(child: Text('名言库为空，首页会展示内置占位内容。'));
+        }
+        // The compact library uses the page surface itself instead of a card.
+        final Widget list = ListView.separated(
+          key: const ValueKey<String>('quote-library-list'),
+          padding: EdgeInsets.zero,
+          itemCount: records.length,
+          separatorBuilder: (_, _) => const Divider(height: 1),
+          itemBuilder: (BuildContext context, int index) {
+            // Current quote row.
+            final QuoteRecord quote = records[index];
+            // Compact rows group editing and deletion in one action menu.
+            final bool compact = OmniBreakpoint.isCompact(
+              MediaQuery.sizeOf(context).width,
+            );
+            return OmniListRow(
+              leading: flat ? null : const Icon(Icons.format_quote_rounded),
+              title: Text(
+                quote.content,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(quote.source ?? '未署名'),
+              onTap: () => _edit(quote),
+              trailing: Wrap(
+                spacing: OmniSpacing.xxs,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[
+                  OmniSwitch(
+                    value: quote.isEnabled,
+                    onChanged: (bool value) async {
+                      await ref
+                          .read(quoteRepositoryProvider)
+                          .setEnabled(quote.id, value);
+                      _invalidateToday();
+                    },
+                  ),
+                  if (!compact) ...<Widget>[
+                    OmniIconButton(
+                      tooltip: '编辑',
+                      onPressed: () => _edit(quote),
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
+                    OmniIconButton(
+                      tooltip: '移入回收站',
+                      onPressed: () => _delete(quote),
+                      icon: const Icon(Icons.delete_outline_rounded),
+                    ),
+                  ] else
+                    OmniPopupMenuButton<String>(
+                      tooltip: '更多操作',
+                      onSelected: (String value) {
+                        if (value == 'edit') {
+                          _edit(quote);
+                        } else if (value == 'delete') {
+                          _delete(quote);
+                        }
+                      },
+                      itemBuilder: (BuildContext context) =>
+                          <PopupMenuEntry<String>>[
+                            OmniPopupMenuItem<String>(
+                              value: 'edit',
+                              label: '编辑',
+                              icon: Icons.edit_outlined,
+                            ),
+                            OmniPopupMenuItem<String>(
+                              value: 'delete',
+                              label: '移入回收站',
+                              icon: Icons.delete_outline_rounded,
+                              danger: true,
+                            ),
+                          ],
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+        if (flat) return list;
+        return OmniPanel(padding: EdgeInsets.zero, child: list);
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (Object error, StackTrace stackTrace) =>
+          Center(child: Text('名言库读取失败：$error')),
+    );
+  }
+
+  /// Builds one fixed mobile action with a full-width touch target.
+  Widget _buildMobileAction({
+    required Key key,
+    required String label,
+    required IconData icon,
+    required VoidCallback? onTap,
+  }) {
+    return Expanded(
+      child: Material(
+        color: Colors.transparent,
+        child: OmniInkWell(
+          key: key,
+          onTap: onTap,
+          child: _QuoteLibraryActionContent(label: label, icon: icon),
+        ),
+      ),
+    );
+  }
+
+  /// Builds the compact Android fullscreen library and its fixed action bar.
+  Widget _buildMobileLibrary(
+    BuildContext context,
+    AsyncValue<List<QuoteRecord>> quotes,
+  ) {
+    // Current semantic surface colors.
+    final OmniColors colors = OmniColors.of(context);
+    return Material(
+      key: const ValueKey<String>('quote-library-fullscreen'),
+      color: colors.paper,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xs),
+              child: Row(
+                children: <Widget>[
+                  OmniIconButton(
+                    key: const ValueKey<String>('quote-library-back'),
+                    tooltip: '返回',
+                    onPressed: () => Navigator.of(context).maybePop(),
+                    icon: const Icon(Icons.arrow_back_rounded),
+                  ),
+                  Expanded(
+                    child: Text(
+                      '名言库',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  const SizedBox(width: OmniSize.touch),
+                ],
+              ),
+            ),
+            Divider(color: colors.line),
+            Expanded(child: _buildQuoteList(context, quotes, flat: true)),
+            Divider(height: 1, color: colors.line),
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  _buildMobileAction(
+                    key: const ValueKey<String>('quote-background-action'),
+                    label: '更换背景',
+                    icon: Icons.wallpaper_rounded,
+                    onTap: _transferring
+                        ? null
+                        : () => unawaited(_openBackground()),
+                  ),
+                  Expanded(
+                    child: _QuoteTransferMenuAction(
+                      key: const ValueKey<String>('quote-transfer-menu'),
+                      enabled: !_transferring,
+                      loading: _transferring,
+                      onSelected: _handleTransferAction,
+                      itemBuilder: _buildTransferItems,
+                    ),
+                  ),
+                  _buildMobileAction(
+                    key: const ValueKey<String>('quote-add-action'),
+                    label: '新增名言',
+                    icon: Icons.add_rounded,
+                    onTap: _transferring ? null : _edit,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// 构建名言库管理弹窗。
   @override
   Widget build(BuildContext context) {
     // 当前名言库流。
     final AsyncValue<List<QuoteRecord>> quotes = ref.watch(quotesProvider);
+    // Only compact Android replaces the established desktop dialog.
+    final bool mobile =
+        Theme.of(context).platform == TargetPlatform.android &&
+        OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
+    if (mobile) return _buildMobileLibrary(context, quotes);
     return OmniDialogScaffold(
       title: '名言库',
       width: 680,
@@ -298,21 +535,7 @@ class _QuoteLibraryDialogState extends ConsumerState<QuoteLibraryDialog> {
                 )
               : const Icon(Icons.swap_vert_rounded),
           onSelected: _handleTransferAction,
-          itemBuilder: (BuildContext context) =>
-              <PopupMenuEntry<_QuoteTransferAction>>[
-                OmniPopupMenuItem<_QuoteTransferAction>(
-                  key: const ValueKey<String>('quote-import-json-action'),
-                  value: _QuoteTransferAction.importJson,
-                  label: '导入 JSON',
-                  icon: Icons.file_upload_outlined,
-                ),
-                OmniPopupMenuItem<_QuoteTransferAction>(
-                  key: const ValueKey<String>('quote-export-json-action'),
-                  value: _QuoteTransferAction.exportJson,
-                  label: '导出 JSON',
-                  icon: Icons.file_download_outlined,
-                ),
-              ],
+          itemBuilder: _buildTransferItems,
         ),
         OmniButton(
           label: '新增名言',
@@ -322,93 +545,153 @@ class _QuoteLibraryDialogState extends ConsumerState<QuoteLibraryDialog> {
         ),
         OmniButton(label: '完成', onPressed: () => Navigator.of(context).pop()),
       ],
-      child: SizedBox(
-        height: 460,
-        child: quotes.when(
-          data: (List<QuoteRecord> records) {
-            if (records.isEmpty) {
-              return const Center(child: Text('名言库为空，首页会展示内置占位内容。'));
-            }
-            return OmniPanel(
-              padding: EdgeInsets.zero,
-              child: ListView.separated(
-                itemCount: records.length,
-                separatorBuilder: (_, _) => const Divider(height: 1),
-                itemBuilder: (BuildContext context, int index) {
-                  // 当前名言。
-                  final QuoteRecord quote = records[index];
-                  // 当前是否为紧凑布局。
-                  final bool compact = OmniBreakpoint.isCompact(
-                    MediaQuery.sizeOf(context).width,
-                  );
-                  return OmniListRow(
-                    leading: const Icon(Icons.format_quote_rounded),
-                    title: Text(
-                      quote.content,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(quote.source ?? '未署名'),
-                    onTap: () => _edit(quote),
-                    trailing: Wrap(
-                      spacing: OmniSpacing.xxs,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: <Widget>[
-                        OmniSwitch(
-                          value: quote.isEnabled,
-                          onChanged: (bool value) async {
-                            await ref
-                                .read(quoteRepositoryProvider)
-                                .setEnabled(quote.id, value);
-                            _invalidateToday();
-                          },
-                        ),
-                        if (!compact) ...<Widget>[
-                          OmniIconButton(
-                            tooltip: '编辑',
-                            onPressed: () => _edit(quote),
-                            icon: const Icon(Icons.edit_outlined),
-                          ),
-                          OmniIconButton(
-                            tooltip: '移入回收站',
-                            onPressed: () => _delete(quote),
-                            icon: const Icon(Icons.delete_outline_rounded),
-                          ),
-                        ] else
-                          OmniPopupMenuButton<String>(
-                            tooltip: '更多操作',
-                            onSelected: (String value) {
-                              if (value == 'edit') {
-                                _edit(quote);
-                              } else if (value == 'delete') {
-                                _delete(quote);
-                              }
-                            },
-                            itemBuilder: (BuildContext context) =>
-                                <PopupMenuEntry<String>>[
-                                  OmniPopupMenuItem<String>(
-                                    value: 'edit',
-                                    label: '编辑',
-                                    icon: Icons.edit_outlined,
-                                  ),
-                                  OmniPopupMenuItem<String>(
-                                    value: 'delete',
-                                    label: '移入回收站',
-                                    icon: Icons.delete_outline_rounded,
-                                    danger: true,
-                                  ),
-                                ],
-                          ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            );
-          },
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (Object error, StackTrace stackTrace) =>
-              Center(child: Text('名言库读取失败：$error')),
+      child: SizedBox(height: 460, child: _buildQuoteList(context, quotes)),
+    );
+  }
+}
+
+/// Displays one fixed mobile quote-library action with accessible text wrapping.
+class _QuoteLibraryActionContent extends StatelessWidget {
+  /// Visible action label.
+  final String label;
+
+  /// Stable action icon.
+  final IconData icon;
+
+  /// Replaces the icon while JSON work is pending.
+  final bool loading;
+
+  /// Creates one vertically arranged mobile action.
+  const _QuoteLibraryActionContent({
+    required this.label,
+    required this.icon,
+    this.loading = false,
+  });
+
+  /// Builds a two-line-capable action without shrinking system text.
+  @override
+  Widget build(BuildContext context) {
+    // Current muted foreground color.
+    final Color foreground = OmniColors.of(context).muted;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 72),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: OmniSpacing.xxs,
+          vertical: OmniSpacing.xs,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            loading
+                ? SizedBox.square(
+                    dimension: OmniSize.navigationIcon,
+                    child: const CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(icon, size: OmniSize.navigationIcon, color: foreground),
+            const SizedBox(height: OmniSpacing.xxs),
+            Text(
+              label,
+              maxLines: 2,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.labelMedium
+                  ?.copyWith(color: foreground),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Anchors JSON actions above the fixed bottom control without overlap.
+class _QuoteTransferMenuAction extends StatelessWidget {
+  /// Whether the menu can be opened.
+  final bool enabled;
+
+  /// Whether a JSON operation is currently running.
+  final bool loading;
+
+  /// Handles the selected import or export operation.
+  final ValueChanged<_QuoteTransferAction> onSelected;
+
+  /// Builds the existing import and export menu entries.
+  final PopupMenuItemBuilder<_QuoteTransferAction> itemBuilder;
+
+  /// Creates the fixed quote transfer action.
+  const _QuoteTransferMenuAction({
+    required this.enabled,
+    required this.loading,
+    required this.onSelected,
+    required this.itemBuilder,
+    super.key,
+  });
+
+  /// Opens a two-row menu with a stable gap above the trigger.
+  Future<void> _showMenu(BuildContext context) async {
+    // Trigger bounds in the root overlay coordinate space.
+    final RenderBox anchor = context.findRenderObject()! as RenderBox;
+    // Root overlay keeps the menu above the full-screen library route.
+    final RenderBox overlay =
+        Navigator.of(
+              context,
+              rootNavigator: true,
+            ).overlay!.context.findRenderObject()!
+            as RenderBox;
+    // Actual trigger top-left in the overlay.
+    final Offset anchorTopLeft = anchor.localToGlobal(
+      Offset.zero,
+      ancestor: overlay,
+    );
+    // Android menu rows expand to the minimum touch target before text scaling.
+    final double menuItemHeight = math.max(
+      OmniDropdownMetrics.itemHeight,
+      OmniSize.touch,
+    );
+    // Two touch rows plus route padding keep the rendered panel above its action.
+    final double menuHeight = menuItemHeight * 2 + OmniSpacing.xxs * 3;
+    // Keep the panel above the trigger and inside the top safe area.
+    final double menuTop = math.max(
+      MediaQuery.paddingOf(context).top + OmniSpacing.xs,
+      anchorTopLeft.dy - menuHeight - OmniSpacing.xs,
+    );
+    // Full trigger width gives the menu the same horizontal anchor as before.
+    final Rect menuAnchor = Rect.fromLTWH(
+      anchorTopLeft.dx,
+      menuTop,
+      anchor.size.width,
+      0,
+    );
+    // Selected transfer action, if the menu was not dismissed.
+    final _QuoteTransferAction? action =
+        await showOmniMenu<_QuoteTransferAction>(
+          context: context,
+          useRootNavigator: true,
+          position: RelativeRect.fromRect(
+            menuAnchor,
+            Offset.zero & overlay.size,
+          ),
+          items: itemBuilder(context),
+          menuPadding: const EdgeInsets.all(OmniSpacing.xxs),
+        );
+    if (action != null) onSelected(action);
+  }
+
+  /// Builds the full-width menu trigger and its accessible label.
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: '导入导出 JSON',
+      child: Material(
+        color: Colors.transparent,
+        child: OmniInkWell(
+          onTap: enabled ? () => unawaited(_showMenu(context)) : null,
+          child: _QuoteLibraryActionContent(
+            label: '导入导出 JSON',
+            icon: Icons.swap_vert_rounded,
+            loading: loading,
+          ),
         ),
       ),
     );
@@ -635,8 +918,57 @@ class _QuoteEditorDialogState extends ConsumerState<_QuoteEditorDialog> {
   /// 构建名言编辑表单。
   @override
   Widget build(BuildContext context) {
+    // Stable editor title for both mobile and desktop presentations.
+    final String title = widget.quote == null ? '新增名言' : '编辑名言';
+    // Shared form body preserves validation, draft, and focus behavior.
+    final Widget form = SingleChildScrollView(
+      padding: const EdgeInsets.all(OmniSpacing.xl),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          if (_saveError != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: OmniSpacing.md),
+              child: Text(_saveError!),
+            ),
+          OmniTextField(
+            controller: _contentController,
+            autofocus: true,
+            maxLines: 4,
+            decoration: const InputDecoration(labelText: '正文 *'),
+          ),
+          const SizedBox(height: OmniSpacing.md),
+          OmniTextField(
+            controller: _sourceController,
+            decoration: const InputDecoration(labelText: '出处'),
+          ),
+          OmniSwitchListTile(
+            value: _isEnabled,
+            title: const Text('参与每日选择'),
+            onChanged: (bool value) => setState(() => _isEnabled = value),
+          ),
+        ],
+      ),
+    );
+    // Android phones use the shared centered-title form header.
+    final bool mobile =
+        Theme.of(context).platform == TargetPlatform.android &&
+        OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
+    if (mobile) {
+      return OmniFullscreenFormScaffold(
+        key: const ValueKey<String>('quote-editor-fullscreen'),
+        title: title,
+        primaryKey: const ValueKey<String>('quote-editor-save'),
+        primaryLabel: '保存',
+        onPrimary: _saving ? null : _submit,
+        onCancel: _saving ? null : () => Navigator.of(context).maybePop(),
+        loading: _saving,
+        showLoadingIndicator: false,
+        child: form,
+      );
+    }
     return OmniSideSheetScaffold(
-      title: widget.quote == null ? '新增名言' : '编辑名言',
+      title: title,
       actions: <Widget>[
         OmniButton(
           label: '取消',
@@ -653,35 +985,7 @@ class _QuoteEditorDialogState extends ConsumerState<_QuoteEditorDialog> {
           onPressed: _saving ? null : _submit,
         ),
       ],
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(OmniSpacing.xl),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            if (_saveError != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: OmniSpacing.md),
-                child: Text(_saveError!),
-              ),
-            OmniTextField(
-              controller: _contentController,
-              autofocus: true,
-              maxLines: 4,
-              decoration: const InputDecoration(labelText: '正文 *'),
-            ),
-            const SizedBox(height: OmniSpacing.md),
-            OmniTextField(
-              controller: _sourceController,
-              decoration: const InputDecoration(labelText: '出处'),
-            ),
-            OmniSwitchListTile(
-              value: _isEnabled,
-              title: const Text('参与每日选择'),
-              onChanged: (bool value) => setState(() => _isEnabled = value),
-            ),
-          ],
-        ),
-      ),
+      child: form,
     );
   }
 }

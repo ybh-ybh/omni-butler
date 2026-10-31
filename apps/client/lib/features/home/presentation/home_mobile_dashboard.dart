@@ -3,7 +3,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:flutter/rendering.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
@@ -24,12 +23,16 @@ class HomeMobileDashboard extends StatefulWidget {
   /// 为悬浮操作预留的正文末尾空间。
   final double bottomPadding;
 
+  /// Optional feature shortcuts that scroll away with the quote.
+  final Widget? shortcuts;
+
   /// 创建安卓首页分页布局。
   const HomeMobileDashboard({
     required this.visibleCards,
     required this.cards,
     required this.onManageCards,
     required this.bottomPadding,
+    this.shortcuts,
     super.key,
   });
 
@@ -170,18 +173,13 @@ class _HomeMobileDashboardState extends State<HomeMobileDashboard> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
-                    if (!widget.visibleCards.contains(HomeCardId.quote))
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: OmniButton(
-                          label: '知序助手',
-                          icon: Icons.auto_awesome_outlined,
-                          variant: OmniButtonVariant.text,
-                          onPressed: () => context.push('/assistant'),
-                        ),
-                      ),
                     if (widget.visibleCards.contains(HomeCardId.quote))
                       widget.cards[HomeCardId.quote]!,
+                    if (widget.shortcuts != null) ...<Widget>[
+                      if (widget.visibleCards.contains(HomeCardId.quote))
+                        const SizedBox(height: OmniSpacing.xs),
+                      widget.shortcuts!,
+                    ],
                   ],
                 ),
               ),

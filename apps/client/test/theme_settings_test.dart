@@ -72,7 +72,13 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      container.read(appRouterProvider).go('/settings');
+      if (platform == TargetPlatform.android) {
+        await tester.tap(
+          find.byKey(const ValueKey<String>('home-shortcut-settings')),
+        );
+      } else {
+        container.read(appRouterProvider).go('/settings');
+      }
       await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(
@@ -127,15 +133,7 @@ void main() {
         expect(container.read(themeControllerProvider).palette, palette);
         expect(preferences.getString('appearance.theme_palette'), palette.id);
         expect(find.text(palette.label), findsOneWidget);
-        expect(
-          container
-              .read(appRouterProvider)
-              .routeInformationProvider
-              .value
-              .uri
-              .path,
-          '/settings',
-        );
+        expect(container.read(appRouterProvider).state.uri.path, '/settings');
         // 读取设置内容实际继承的主题，避免只验证控制器。
         final BuildContext context = tester.element(
           platform == TargetPlatform.android

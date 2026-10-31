@@ -111,14 +111,17 @@ void main() {
     await _disposeSettingsApp(tester, app);
   });
 
-  testWidgets('详情页离开更多主分支后再次进入保留层级并可正常返回', (WidgetTester tester) async {
+  testWidgets('设置分支通过外部路由离开再进入仍保留层级并可返回', (WidgetTester tester) async {
     // 当前测试使用的完整应用环境。
-    final _SettingsTransitionTestApp app = await _pumpSettingsApp(tester);
+    final _SettingsTransitionTestApp app = await _pumpSettingsApp(
+      tester,
+      enterFromShortcut: false,
+    );
     await tester.tap(
       find.byKey(const ValueKey<String>('android-settings-category-features')),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
+    app.container.read(appRouterProvider).go('/home');
     await tester.pumpAndSettle();
     expect(_currentPath(app), '/home');
     expect(
@@ -126,9 +129,7 @@ void main() {
       findsNothing,
     );
 
-    await tester.tap(
-      find.byKey(const ValueKey<String>('navigation-/settings')),
-    );
+    app.container.read(appRouterProvider).go('/settings');
     await tester.pumpAndSettle();
     expect(_currentPath(app), '/settings');
     expect(
@@ -212,7 +213,10 @@ class _SettingsTransitionTestApp {
 }
 
 /// 启动 Android 紧凑布局并完整落位到更多首页。
-Future<_SettingsTransitionTestApp> _pumpSettingsApp(WidgetTester tester) async {
+Future<_SettingsTransitionTestApp> _pumpSettingsApp(
+  WidgetTester tester, {
+  bool enterFromShortcut = true,
+}) async {
   debugDefaultTargetPlatformOverride = TargetPlatform.android;
   addTearDown(() => debugDefaultTargetPlatformOverride = null);
   tester.view.physicalSize = const Size(390, 844);
@@ -248,7 +252,13 @@ Future<_SettingsTransitionTestApp> _pumpSettingsApp(WidgetTester tester) async {
   );
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 600));
-  container.read(appRouterProvider).go('/settings');
+  if (enterFromShortcut) {
+    await tester.tap(
+      find.byKey(const ValueKey<String>('home-shortcut-settings')),
+    );
+  } else {
+    container.read(appRouterProvider).go('/settings');
+  }
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 600));
   return app;
@@ -343,10 +353,5 @@ double _cardOffset(WidgetTester tester, String role) {
 
 /// 读取当前完整应用的路由路径。
 String _currentPath(_SettingsTransitionTestApp app) {
-  return app.container
-      .read(appRouterProvider)
-      .routeInformationProvider
-      .value
-      .uri
-      .path;
+  return app.container.read(appRouterProvider).state.uri.path;
 }
