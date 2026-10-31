@@ -3,6 +3,7 @@ import type { NotePolishJob, Prisma } from '../src/generated/prisma/client';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { AiKeyStore } from '../src/ai/ai-key-store';
 import { AiProvider, AiProviderError } from '../src/ai/ai-provider';
+import type { NotePolishContext } from '../src/ai/ai-provider';
 import { AiService } from '../src/ai/ai.service';
 
 describe('AI 持久 worker 的领取、未知提交和独立撤回', () => {
@@ -14,17 +15,29 @@ describe('AI 持久 worker 的领取、未知提交和独立撤回', () => {
   let deletedAt: Date | null;
   /// 是否允许本实例取得数据库 CAS 的唯一调用权。
   let canClaim: boolean;
+  /// Calendar day captured with the note.
+  let dayKey: string;
+  /// Wall-clock seconds, or null for legacy notes.
+  let recordTimeSeconds: number | null;
+  /// Recorded UTC offset, or null for legacy notes.
+  let recordUtcOffsetMinutes: number | null;
+  /// Creation instant used only for legacy fallback.
+  let noteCreatedAt: Date;
+  /// Creation timezone string used only for legacy fallback.
+  let creationTimezone: string;
   /// 固定不可变配置快照和原文摘要。
   let job: NotePolishJob;
   /// 不需要真实 PostgreSQL 的网络生命周期测试边界。
   let service: AiService;
   /// 可观察的付费调用边界。
-  const polish = jest.fn<Promise<string>, [unknown, string, AbortSignal?]>();
+  const polish = jest.fn<Promise<string>, [unknown, string, NotePolishContext, AbortSignal?]>();
   /// 所有状态写入仍验证 CAS 条件和不重复提交的行为。
   const updateMany = jest.fn<Promise<{ count: number }>, [{ where: Record<string, unknown>; data: Record<string, unknown> }]>();
 
   beforeEach(() => {
     remoteStatus = 'processing'; deletedAt = null; canClaim = true;
+    dayKey = '2026-10-31'; recordTimeSeconds = 14 * 3600 + 5 * 60 + 59; recordUtcOffsetMinutes = 480;
+    noteCreatedAt = new Date('2026-10-31T06:05:59.000Z'); creationTimezone = 'CST|+08:00';
     job = { id: randomUUID(), userId: randomUUID(), segmentId: randomUUID(), recognitionId: randomUUID(), attempt: 0, enabled: true, status: 'queued', profileId: randomUUID(), profileRevision: 1, provider: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'unit-model', thinkingEnabled: false, encryptedApiKey: 'unit-ciphertext', promptVersion: 1, sourceHash: createHash('sha256').update(source).digest('hex'), text: null, errorCode: null, createdAt: new Date(), updatedAt: new Date() };
     polish.mockReset().mockResolvedValue('今天 3 件事还不确定。');
     updateMany.mockReset().mockImplementation((input) => Promise.resolve({ count: input.data.status === 'processing' && !canClaim ? 0 : 1 }));
@@ -33,7 +46,7 @@ describe('AI 持久 worker 的领取、未知提交和独立撤回', () => {
       $queryRaw: jest.fn().mockResolvedValue([]),
       $transaction: async (work: (transaction: Prisma.TransactionClient) => Promise<unknown>): Promise<unknown> => work(database as unknown as Prisma.TransactionClient),
       aiSettings: { findUnique: jest.fn().mockResolvedValue({ notePolishEnabled: true }) },
-      noteRecognitionJob: { findFirst: jest.fn().mockImplementation(() => Promise.resolve({ transcript: source, segment: { deletedAt, note: { deletedAt } } })) },
+      noteRecognitionJob: { findFirst: jest.fn().mockImplementation(() => Promise.resolve({ transcript: source, segment: { deletedAt, note: { deletedAt, dayKey, recordTimeSeconds, recordUtcOffsetMinutes, createdAt: noteCreatedAt, creationTimezone } } })) },
       noteAudioSegment: { findFirst: jest.fn().mockImplementation(() => Promise.resolve({ deletedAt, note: { deletedAt } })) },
       notePolishJob: { updateMany, findMany: jest.fn().mockImplementation(() => Promise.resolve([job])), findUnique: jest.fn().mockImplementation(() => Promise.resolve({ status: remoteStatus, segment: { deletedAt, note: { deletedAt } }, user: { aiSettings: { notePolishEnabled: true } } })) },
     };
@@ -44,7 +57,7 @@ describe('AI 持久 worker 的领取、未知提交和独立撤回', () => {
     canClaim = false;
     await service.tick();
     expect(polish).not.toHaveBeenCalled();
-    expect(updateMany).toHaveBeenCalledWith({ where: { id: job.id, status: 'queued' }, data: { status: 'processing', promptVersion: 2 } });
+    expect(updateMany).toHaveBeenCalledWith({ where: { id: job.id, status: 'queued' }, data: { status: 'processing', promptVersion: 3 } });
   });
 
   it('超时标记未知提交并清除终态密钥，不把原文作为成功输出', async () => {
@@ -57,16 +70,23 @@ describe('AI 持久 worker 的领取、未知提交和独立撤回', () => {
 
   it('成功结果保留原文摘要绑定并清除终态密钥', async () => {
     await service.tick();
-    expect(updateMany).toHaveBeenCalledWith({ where: { id: job.id, status: 'queued' }, data: { status: 'processing', promptVersion: 2 } });
-    expect(polish).toHaveBeenCalledWith(expect.objectContaining({ model: 'unit-model', apiKey: 'unit-only-key' }), source, expect.any(AbortSignal));
+    expect(updateMany).toHaveBeenCalledWith({ where: { id: job.id, status: 'queued' }, data: { status: 'processing', promptVersion: 3 } });
+    expect(polish).toHaveBeenCalledWith(expect.objectContaining({ model: 'unit-model', apiKey: 'unit-only-key' }), source, { dayKey: '2026-10-31', recordTimeSeconds: 14 * 3600 + 5 * 60 + 59, utcOffsetMinutes: 480 }, expect.any(AbortSignal));
     expect(updateMany).toHaveBeenCalledWith({ where: { id: job.id, status: 'processing' }, data: { status: 'succeeded', text: '今天 3 件事还不确定。', errorCode: null, encryptedApiKey: null } });
   });
 
   it.each([false, true])('笔记任务采用固定思考快照%s，不读取之后的配置', async (thinkingEnabled) => {
     job.thinkingEnabled = thinkingEnabled;
     await service.tick();
-    expect(polish).toHaveBeenCalledWith(expect.objectContaining({ thinkingEnabled }), source, expect.any(AbortSignal));
+    expect(polish).toHaveBeenCalledWith(expect.objectContaining({ thinkingEnabled }), source, expect.any(Object), expect.any(AbortSignal));
     expect(polish).toHaveBeenCalledTimes(1);
+  });
+
+  it('旧笔记从创建偏移稳定推导提示词时分', async () => {
+    dayKey = '2020-02-29'; recordTimeSeconds = null; recordUtcOffsetMinutes = null;
+    noteCreatedAt = new Date('2020-02-29T01:02:03.000Z'); creationTimezone = 'CST|+08:00';
+    await service.tick();
+    expect(polish).toHaveBeenCalledWith(expect.any(Object), source, { dayKey: '2020-02-29', recordTimeSeconds: 9 * 3600 + 2 * 60 + 3, utcOffsetMinutes: 480 }, expect.any(AbortSignal));
   });
 
   it.each(['remoteCancel', 'softDelete'])('模型请求仍挂起时独立轮询能中止 %s', async (scenario) => {
@@ -76,7 +96,7 @@ describe('AI 持久 worker 的领取、未知提交和独立撤回', () => {
     let markStarted: () => void = (): void => undefined;
     // 该 Promise 不等待模型完成，只确认请求已发出。
     const started = new Promise<void>((resolve) => { markStarted = resolve; });
-    polish.mockImplementationOnce((_input, _source, signal) => new Promise<string>((_resolve, reject) => {
+    polish.mockImplementationOnce((_input, _source, _context, signal) => new Promise<string>((_resolve, reject) => {
       activeSignal = signal;
       signal?.addEventListener('abort', () => reject(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)), { once: true });
       markStarted();

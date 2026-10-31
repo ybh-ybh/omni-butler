@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException, 
 import { createHash, randomUUID } from 'node:crypto';
 import type { NotePolishJob, Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { effectiveNoteRecordTime } from '../sync/note-record-time';
 import { AiKeyStore } from './ai-key-store';
 import { AI_POLISH_PROMPT_VERSION, AI_PRESETS, AiProvider, AiProviderError, aiFailure, normalizeAiBaseUrl } from './ai-provider';
 import type { AiProfileDto, AiSettingsDto, AiTestDto } from './ai.dto';
@@ -269,8 +270,8 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
 
   /// 领取、网络调用和回写分别验证，任何迟到响应都不能复活任务。
   private async process(job: NotePolishJob): Promise<void> {
-    // 锁内固定本次允许发送的原文，删除、关闭和领取串行。
-    const transcript = await this.prisma.$transaction(async (transaction) => {
+    // The ownership lock freezes both transcript and recorded time for this paid call.
+    const source = await this.prisma.$transaction(async (transaction) => {
       await this.lock(transaction, job.userId);
       // 同步删除与设置写入都使用同一归属锁。
       const settings = await transaction.aiSettings.findUnique({ where: { userId: job.userId } });
@@ -282,9 +283,19 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
       }
       // 唯一 CAS 领取者才拥有一次付费调用权。
       const claimed = await transaction.notePolishJob.updateMany({ where: { id: job.id, status: 'queued' }, data: { status: 'processing', promptVersion: AI_POLISH_PROMPT_VERSION } });
-      return claimed.count === 1 ? recognition.transcript : null;
+      if (claimed.count !== 1) return null;
+      // Legacy notes derive time only from persisted creation facts, never the server timezone.
+      const recordTime = effectiveNoteRecordTime(recognition.segment.note);
+      return {
+        transcript: recognition.transcript,
+        context: {
+          dayKey: recognition.segment.note.dayKey,
+          recordTimeSeconds: recordTime.seconds,
+          utcOffsetMinutes: recordTime.offsetMinutes,
+        },
+      };
     });
-    if (transcript === null) return;
+    if (source === null) return;
     // 当前实例记住网络取消句柄，状态事实始终仍在数据库。
     const controller = new AbortController();
     this.requests.set(job.id, { userId: job.userId, segmentId: job.segmentId, controller });
@@ -293,7 +304,7 @@ export class AiService implements OnModuleInit, OnModuleDestroy {
       // 解密只在出站调用前进行，明文不保存到任务。
       const apiKey = this.keys.decrypt(job.encryptedApiKey);
       // 仅当前段 ASR 文本作为模型输入。
-      const text = await this.provider.polish({ provider: job.provider, baseUrl: job.baseUrl, model: job.model, thinkingEnabled: job.thinkingEnabled, apiKey }, transcript, controller.signal);
+      const text = await this.provider.polish({ provider: job.provider, baseUrl: job.baseUrl, model: job.model, thinkingEnabled: job.thinkingEnabled, apiKey }, source.transcript, source.context, controller.signal);
       await this.prisma.$transaction(async (transaction) => {
         await this.lock(transaction, job.userId);
         // 同归属读取当前开关与删除事实，再比较任务仍未被取消。

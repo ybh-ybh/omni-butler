@@ -9,6 +9,7 @@ import type { ClientRequest, IncomingMessage, RequestOptions } from 'node:http';
 import { resolveAiAddresses } from '../src/ai/ai-dns';
 import { AiKeyStore } from '../src/ai/ai-key-store';
 import { AI_PRESETS, AiProvider, aiFailure, isPublicAiAddress, normalizeAiBaseUrl } from '../src/ai/ai-provider';
+import type { NotePolishContext } from '../src/ai/ai-provider';
 
 jest.mock('node:https', () => ({ request: jest.fn() }));
 jest.mock('../src/ai/ai-dns', () => ({ resolveAiAddresses: jest.fn() }));
@@ -21,6 +22,8 @@ function completedResponse(content: unknown = [{ type: 'output_text', text: '今
 describe('AI Responses 公网协议与正文边界', () => {
   /// 有效模型输入不包含真实用户数据或凭据。
   const input = { provider: 'custom', baseUrl: 'https://model.example.test/prefix/v1', model: 'unit-model', apiKey: 'unit-only-key' };
+  /// Stable recorded time used to verify dynamic polish instructions.
+  const noteContext: NotePolishContext = { dayKey: '2026-10-31', recordTimeSeconds: 14 * 3600 + 5 * 60 + 59, utcOffsetMinutes: 480 };
   /// 最近一次固定网络地址，验证请求时不再次解析 DNS。
   let sentOptions: RequestOptions;
   /// 本次实际请求的模型端点。
@@ -80,7 +83,7 @@ describe('AI Responses 公网协议与正文边界', () => {
     expect(isPublicAiAddress('8.8.8.8')).toBe(true); expect(isPublicAiAddress('2606:4700:4700::1111')).toBe(true);
     // 原文中的否定、数字和不确定表达完整进入数据消息。
     const source = '嗯，今天，今天 3 件事情，不确定，不确定是否完成。';
-    expect(await new AiProvider().polish(input, source)).toContain('3');
+    expect(await new AiProvider().polish(input, source, noteContext)).toContain('3');
     expect(sentUrl.pathname).toBe('/prefix/v1/responses');
     expect(JSON.parse(sentPayload)).toEqual({ model: input.model, instructions: expect.stringContaining('不得推断补充事实'), input: source, max_output_tokens: 12000, stream: false, store: false, reasoning: { effort: 'none' } });
     // 正式请求必须同时表达通顺改写、卡顿清理和保留有意义限定，不能只做删词。
@@ -91,6 +94,11 @@ describe('AI Responses 公网协议与正文边界', () => {
     expect(instructions).toContain('仅在不承载实际含义时删除');
     expect(instructions).toContain('不能把猜测写成定论');
     expect(instructions).toContain('不得把完整记录缩成摘要');
+    expect(instructions).toContain('当前笔记记录时间：2026年10月31日 14时05分（UTC+08:00）');
+    expect(instructions).toContain('第一行必须直接是这篇笔记的简洁标题');
+    expect(instructions).toContain('标题后空一行');
+    expect(instructions).toContain('日报 - 2026年10月31日');
+    expect(instructions).toContain('一般的当日工作记录不得推测为日报');
     // 验证 lookup 不使用未校验的新 DNS 结果。
     const callback = jest.fn();
     sentOptions.lookup!('model.example.test', {}, callback);
@@ -100,6 +108,18 @@ describe('AI Responses 公网协议与正文边界', () => {
     sentOptions.lookup!('model.example.test', { all: true }, allCallback);
     expect(allCallback).toHaveBeenCalledWith(null, [{ address: '8.8.8.8', family: 4 }]);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('记录时间精确到分钟并保留负的非整小时 UTC 偏移', async () => {
+    // Seconds are omitted, natural dates are unpadded, and clock fields remain padded.
+    const context: NotePolishContext = { dayKey: '2026-01-02', recordTimeSeconds: 3 * 3600 + 4 * 60 + 59, utcOffsetMinutes: -330 };
+    await new AiProvider().polish(input, '这是一篇日报。', context);
+    // Recorded time belongs only to instructions and must not alter transcript input.
+    const payload = JSON.parse(sentPayload) as { instructions: string; input: string };
+    expect(payload.instructions).toContain('当前笔记记录时间：2026年1月2日 03时04分（UTC-05:30）');
+    expect(payload.instructions).toContain('日报 - 2026年1月2日');
+    expect(payload.input).toBe('这是一篇日报。');
+    expect(payload.input).not.toContain('2026年1月2日 03时04分');
   });
 
   it.each(AI_PRESETS)('$provider 入口只发送 Responses 字段及对应推理参数', async (preset) => {
@@ -117,7 +137,7 @@ describe('AI Responses 公网协议与正文边界', () => {
     const current = { ...input, provider: preset.provider, baseUrl: preset.baseUrl || input.baseUrl, thinkingEnabled: true };
     await new AiProvider().test(current);
     expect(JSON.parse(sentPayload)).toMatchObject({ reasoning: { effort: 'high' }, max_output_tokens: 2048 });
-    await new AiProvider().polish(current, '待整理正文');
+    await new AiProvider().polish(current, '待整理正文', noteContext);
     expect(JSON.parse(sentPayload)).toMatchObject({ reasoning: { effort: 'high' }, max_output_tokens: 12000 });
     expect(request).toHaveBeenCalledTimes(2);
   });
@@ -137,18 +157,18 @@ describe('AI Responses 公网协议与正文边界', () => {
       { type: 'function_call', arguments: '不得进入正文' },
       { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '尚未确认。' }] },
     ] };
-    await expect(new AiProvider().polish(input, '合成原文')).resolves.toBe('今天 3 件事。\n\n尚未确认。');
+    await expect(new AiProvider().polish(input, '合成原文', noteContext)).resolves.toBe('今天 3 件事。\n\n尚未确认。');
   });
 
   it('智谱支持官方单对象正文，其他服务仍要求标准内容数组', async () => {
     body = completedResponse({ type: 'output_text', text: '智谱整理正文' });
-    await expect(new AiProvider().polish({ ...input, provider: 'zhipu' }, '原文')).resolves.toBe('智谱整理正文');
-    await expect(new AiProvider().polish(input, '原文')).rejects.toMatchObject({ code: 'AI_INVALID_RESPONSE' });
+    await expect(new AiProvider().polish({ ...input, provider: 'zhipu' }, '原文', noteContext)).resolves.toBe('智谱整理正文');
+    await expect(new AiProvider().polish(input, '原文', noteContext)).rejects.toMatchObject({ code: 'AI_INVALID_RESPONSE' });
   });
 
   it('同一域名出现任意私网解析时拒绝发送', async () => {
     jest.mocked(resolveAiAddresses).mockResolvedValue([{ address: '8.8.8.8', family: 4 }, { address: '127.0.0.1', family: 4 }]);
-    await expect(new AiProvider().polish(input, '文本')).rejects.toThrow(BadRequestException);
+    await expect(new AiProvider().polish(input, '文本', noteContext)).rejects.toThrow(BadRequestException);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -161,7 +181,7 @@ describe('AI Responses 公网协议与正文边界', () => {
   it('上层取消信号传入DoH解析，模型连接禁用全局连接池', async () => {
     // 独立取消控制器只用于测试。
     const controller = new AbortController();
-    await new AiProvider().polish(input, '文本', controller.signal);
+    await new AiProvider().polish(input, '文本', noteContext, controller.signal);
     expect(resolveAiAddresses).toHaveBeenCalledWith('model.example.test', controller.signal);
     expect(sentOptions.agent).toBe(false);
   });
@@ -190,7 +210,7 @@ describe('AI Responses 公网协议与正文边界', () => {
     [[], 'AI_INVALID_RESPONSE'],
   ])('不采用失败、拒绝、不完整或非Responses结果 %#', async (response, code) => {
     body = response;
-    await expect(new AiProvider().polish(input, '原文')).rejects.toMatchObject({ code });
+    await expect(new AiProvider().polish(input, '原文', noteContext)).rejects.toMatchObject({ code });
     expect(request).toHaveBeenCalledTimes(1);
   });
 
@@ -202,7 +222,7 @@ describe('AI Responses 公网协议与正文边界', () => {
 
   it('达到正文长度边界的完整内容仍可采用', async () => {
     body = completedResponse([{ type: 'output_text', text: '字'.repeat(20000) }]);
-    await expect(new AiProvider().polish(input, '原文')).resolves.toHaveLength(20000);
+    await expect(new AiProvider().polish(input, '原文', noteContext)).resolves.toHaveLength(20000);
   });
 
   it('响应超过字节上限时中断请求，不自动重试', async () => {
@@ -229,7 +249,7 @@ describe('AI Responses 公网协议与正文边界', () => {
     // 只发送合成取消事件，不调用真实模型。
     const controller = new AbortController();
     // 等微任务将DoH结果传入HTTPS，再发起取消。
-    const pending = expect(new AiProvider().polish(input, '原文', controller.signal)).rejects.toMatchObject({ code: 'AI_SUBMISSION_UNKNOWN', uncertain: true });
+    const pending = expect(new AiProvider().polish(input, '原文', noteContext, controller.signal)).rejects.toMatchObject({ code: 'AI_SUBMISSION_UNKNOWN', uncertain: true });
     await Promise.resolve();
     controller.abort();
     await pending;
