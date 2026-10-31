@@ -82,7 +82,7 @@ Future<bool> _androidDeleteNote(
 class _AndroidNoteMenuHeader extends PopupMenuEntry<_AndroidNoteAction> {
   /// 菜单顶部的实际内容高度。
   @override
-  double get height => 72;
+  double get height => OmniSize.touch + OmniSpacing.xs;
 
   /// 顶部不是单个可选结果，结果由内部两个入口提供。
   @override
@@ -100,23 +100,28 @@ class _AndroidNoteMenuHeader extends PopupMenuEntry<_AndroidNoteAction> {
 class _AndroidNoteMenuHeaderState extends State<_AndroidNoteMenuHeader> {
   /// 单个图标与文字入口将动作交回菜单调用者。
   Widget _item(String label, IconData icon, _AndroidNoteAction action) =>
-      Expanded(
+      SizedBox(
+        width: OmniSize.touch + OmniSpacing.md,
         child: OmniInkWell(
           onTap: () => Navigator.pop(context, action),
           child: ConstrainedBox(
             constraints: const BoxConstraints(
-              minHeight: 72,
+              minHeight: OmniSize.touch + OmniSpacing.xs,
               minWidth: OmniSize.touch,
             ),
             child: Padding(
-              padding: const EdgeInsets.all(OmniSpacing.xs),
+              padding: const EdgeInsets.all(OmniSpacing.xxs),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(icon, size: OmniSpacing.xl),
+                  Icon(icon, size: OmniSpacing.lg),
                   const SizedBox(height: OmniSpacing.xxs),
-                  Text(label, textAlign: TextAlign.center),
+                  Text(
+                    label,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
                 ],
               ),
             ),
@@ -124,13 +129,36 @@ class _AndroidNoteMenuHeaderState extends State<_AndroidNoteMenuHeader> {
         ),
       );
 
-  /// 并排均分，不因缺少分享留下空白列。
+  /// Center two fixed-width actions without leaving a missing third column.
   @override
   Widget build(BuildContext context) => Row(
+    mainAxisAlignment: MainAxisAlignment.center,
     children: [
       _item('编辑', Icons.edit_outlined, _AndroidNoteAction.edit),
+      const SizedBox(width: OmniSpacing.xxs),
       _item('复制', Icons.copy_outlined, _AndroidNoteAction.copy),
     ],
+  );
+}
+
+/// Build one compact text action for the Android note menu.
+Widget _androidNoteMenuLabel(
+  BuildContext context,
+  String label, {
+  bool danger = false,
+}) {
+  // Resolve the semantic foreground without changing the shared menu theme.
+  final OmniColors colors = OmniColors.of(context);
+  return Padding(
+    padding: const EdgeInsets.symmetric(
+      horizontal: OmniSpacing.sm,
+      vertical: OmniSpacing.xxs,
+    ),
+    child: Text(
+      label,
+      style: Theme.of(context).textTheme.bodyMedium!
+          .copyWith(color: danger ? colors.danger : colors.ink),
+    ),
   );
 }
 
@@ -139,6 +167,11 @@ Future<_AndroidNoteAction?> _androidShowNoteMenu(
   BuildContext context,
   NoteEntryRecord note,
 ) {
+  // Adapt translucency and shadow contrast to the active brightness.
+  final bool dark = Theme.of(context).brightness == Brightness.dark;
+  // Preserve the semantic paper tone while allowing the note beneath to show.
+  final Color panelColor = OmniColors.of(context).paper
+      .withValues(alpha: dark ? 0.96 : 0.94);
   // 实际按钮和根导航覆盖层的坐标空间。
   final RenderBox anchor = context.findRenderObject()! as RenderBox;
   // 同一路由覆盖底部导航，但不模糊列表。
@@ -162,85 +195,58 @@ Future<_AndroidNoteAction?> _androidShowNoteMenu(
       Offset.zero & overlay.size,
     ),
     constraints: BoxConstraints.tightFor(
-      width: math.min(224, MediaQuery.sizeOf(context).width - OmniSpacing.xl),
+      width: math.min(200, MediaQuery.sizeOf(context).width - OmniSpacing.xl),
     ),
     menuPadding: EdgeInsets.zero,
+    panelColor: panelColor,
+    panelShadows: <BoxShadow>[
+      BoxShadow(
+        color: Colors.black.withValues(alpha: dark ? 0.30 : 0.15),
+        blurRadius: 24,
+        offset: const Offset(0, 8),
+      ),
+      BoxShadow(
+        color: Colors.black.withValues(alpha: dark ? 0.16 : 0.07),
+        blurRadius: 6,
+        offset: const Offset(0, 2),
+      ),
+    ],
     items: [
       const _AndroidNoteMenuHeader(),
-      const PopupMenuDivider(),
+      const PopupMenuDivider(height: OmniSpacing.xxs, thickness: 0.5),
       OmniPopupMenuItem.custom(
         value: note.isPinned
             ? _AndroidNoteAction.unpin
             : _AndroidNoteAction.pin,
-        height: OmniSize.touch,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: OmniSpacing.md,
-            vertical: OmniSpacing.sm,
-          ),
-          child: Text(
-            note.isPinned ? '取消置顶' : '置顶',
-            style: Theme.of(context).textTheme.bodyMedium!
-                .copyWith(color: OmniColors.of(context).ink),
-          ),
-        ),
+        height: OmniSize.controlLarge,
+        child: _androidNoteMenuLabel(context, note.isPinned ? '取消置顶' : '置顶'),
       ),
       OmniPopupMenuItem.custom(
         value: _AndroidNoteAction.details,
-        height: OmniSize.touch,
+        height: OmniSize.controlLarge,
         danger: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: OmniSpacing.md,
-            vertical: OmniSpacing.sm,
-          ),
-          child: Text(
-            '查看详情',
-            style: Theme.of(context).textTheme.bodyMedium!
-                .copyWith(color: OmniColors.of(context).ink),
-          ),
-        ),
+        child: _androidNoteMenuLabel(context, '查看详情'),
       ),
       OmniPopupMenuItem.custom(
         value: _AndroidNoteAction.versions,
-        height: OmniSize.touch,
+        height: OmniSize.controlLarge,
         danger: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: OmniSpacing.md,
-            vertical: OmniSpacing.sm,
-          ),
-          child: Text(
-            '历史版本',
-            style: Theme.of(context).textTheme.bodyMedium!
-                .copyWith(color: OmniColors.of(context).ink),
-          ),
-        ),
+        child: _androidNoteMenuLabel(context, '历史版本'),
       ),
       OmniPopupMenuItem.custom(
         value: _AndroidNoteAction.delete,
-        height: OmniSize.touch,
+        height: OmniSize.controlLarge,
         danger: true,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: OmniSpacing.md,
-            vertical: OmniSpacing.sm,
-          ),
-          child: Text(
-            '删除',
-            style: Theme.of(context).textTheme.bodyMedium!
-                .copyWith(color: OmniColors.of(context).danger),
-          ),
-        ),
+        child: _androidNoteMenuLabel(context, '删除', danger: true),
       ),
-      const PopupMenuDivider(),
+      const PopupMenuDivider(height: OmniSpacing.xs),
       OmniPopupMenuItem<_AndroidNoteAction>.custom(
         value: _AndroidNoteAction.details,
         enabled: false,
         padding: const EdgeInsets.fromLTRB(
-          OmniSpacing.md,
+          OmniSpacing.sm,
           OmniSpacing.xs,
-          OmniSpacing.md,
+          OmniSpacing.sm,
           OmniSpacing.sm,
         ),
         child: DefaultTextStyle(

@@ -307,10 +307,14 @@ class _AndroidNoteCard extends ConsumerWidget {
         : audio.isNotEmpty
         ? '语音笔记'
         : '内容已清空';
-    // 首行之后的只读正文摘要。
+    // Hide leading preview blanks while preserving the stored paragraph structure.
     final String preview = first < 0
         ? ''
-        : lines.skip(first + 1).join('\n').trimRight();
+        : lines
+              .skip(first + 1)
+              .skipWhile((line) => line.trim().isEmpty)
+              .join('\n')
+              .trimRight();
     // 记录时间保持选择时的墙钟字段。
     final NoteRecordTime recorded = note.recordTime;
     // 当前主题的语义颜色。
@@ -328,7 +332,12 @@ class _AndroidNoteCard extends ConsumerWidget {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(OmniSpacing.md),
+            padding: const EdgeInsets.fromLTRB(
+              OmniSpacing.sm,
+              0,
+              OmniSpacing.sm,
+              OmniSpacing.xs,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -361,6 +370,11 @@ class _AndroidNoteCard extends ConsumerWidget {
                       builder: (anchorContext) => OmniIconButton(
                         tooltip: '笔记操作',
                         icon: const Icon(Icons.more_horiz),
+                        constraints: const BoxConstraints.tightFor(
+                          width: OmniSize.control,
+                          height: OmniSize.control,
+                        ),
+                        padding: EdgeInsets.zero,
                         onPressed: () => _menu(anchorContext, ref),
                       ),
                     ),
@@ -378,7 +392,7 @@ class _AndroidNoteCard extends ConsumerWidget {
                         NoteMarkdownText(
                           source: title,
                           maxLines: expanded ? null : 2,
-                          style: Theme.of(context).textTheme.titleMedium,
+                          style: Theme.of(context).textTheme.titleSmall,
                         ),
                         if (preview.trim().isNotEmpty) ...[
                           const SizedBox(height: OmniSpacing.xs),
@@ -399,7 +413,7 @@ class _AndroidNoteCard extends ConsumerWidget {
                     // 标题与正文分别沿用当前字号及系统缩放。
                     final TextStyle heading = Theme.of(context)
                         .textTheme
-                        .titleMedium!;
+                        .titleSmall!;
                     // 摘要采用的正文排版样式。
                     final TextStyle body = Theme.of(context)
                         .textTheme
@@ -441,12 +455,16 @@ class _AndroidNoteCard extends ConsumerWidget {
                     return overflow
                         ? Align(
                             alignment: Alignment.centerLeft,
-                            child: OmniDisclosureToggle(
-                              expanded: expanded,
-                              child: OmniButton(
-                                label: expanded ? '收起' : '展开',
-                                variant: OmniButtonVariant.text,
-                                onPressed: onExpand,
+                            child: SizedBox(
+                              height: OmniSize.controlCompact,
+                              child: OmniDisclosureToggle(
+                                expanded: expanded,
+                                child: OmniButton(
+                                  label: expanded ? '收起' : '展开',
+                                  variant: OmniButtonVariant.text,
+                                  visualHeight: OmniSize.controlCompact,
+                                  onPressed: onExpand,
+                                ),
                               ),
                             ),
                           )

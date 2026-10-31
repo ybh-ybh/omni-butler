@@ -99,8 +99,69 @@ void androidNoteActionTests() {
     // 本机草稿归属不会被复制和详情改变。
     final String? owner = editor.draftId;
     await _androidCardMenu(tester);
+    // Read the actual routed Material rather than only checking configuration.
+    final Finder menuSurface = find.byKey(
+      const ValueKey('omni-windows-menu-surface'),
+    );
+    // The light menu keeps its paper tone with visible background translucency.
+    final Material menuMaterial = tester.widget<Material>(menuSurface);
+    expect(menuMaterial.color?.a, closeTo(0.94, 0.001));
+    expect(menuMaterial.elevation, 0);
+    // Custom shadows live on the decoration outside the clipped Material.
+    final Finder shadowSurface = find
+        .ancestor(of: menuSurface, matching: find.byType(DecoratedBox))
+        .first;
+    // Both near and far shadows must cover the complete rounded panel.
+    final BoxDecoration shadowDecoration =
+        tester.widget<DecoratedBox>(shadowSurface).decoration as BoxDecoration;
+    expect(shadowDecoration.boxShadow, hasLength(2));
+    expect(shadowDecoration.boxShadow!.first.blurRadius, 24);
     for (final String label in ['编辑', '复制', '置顶', '查看详情', '历史版本', '删除']) {
       expect(find.text(label).hitTestable(), findsOneWidget);
+    }
+    // Measure the compact header row instead of relying on screenshot pixels.
+    final Finder menuHeader = find
+        .ancestor(of: find.text('编辑'), matching: find.byType(Row))
+        .first;
+    expect(tester.getSize(menuHeader).width, closeTo(200, .01));
+    // Keep the two primary actions closer while retaining separate hit regions.
+    final Rect editRect = tester.getRect(find.text('编辑'));
+    // The copy label shares the same fixed-width action geometry.
+    final Rect copyRect = tester.getRect(find.text('复制'));
+    expect(copyRect.center.dx - editRect.center.dx, closeTo(68, .01));
+    // Header labels use the smaller 12sp action style.
+    expect(tester.widget<Text>(find.text('编辑')).style?.fontSize, 12);
+    expect(tester.widget<Text>(find.text('复制')).style?.fontSize, 12);
+    // Header icons shrink independently from the lower text actions.
+    final List<double?> headerIconSizes = tester
+        .widgetList<Icon>(
+          find.descendant(of: menuHeader, matching: find.byType(Icon)),
+        )
+        .map((icon) => icon.size)
+        .toList(growable: false);
+    expect(headerIconSizes, everyElement(20));
+    // The first divider keeps its compact slot with a thinner painted line.
+    final PopupMenuDivider headerDivider = tester
+        .widgetList<PopupMenuDivider>(find.byType(PopupMenuDivider))
+        .first;
+    expect(headerDivider.thickness, 0.5);
+    // The first text action anchors the compact four-row section.
+    final Rect pinRect = tester.getRect(find.text('置顶'));
+    // The following row exposes the actual compact row pitch.
+    final Rect detailsRect = tester.getRect(find.text('查看详情'));
+    expect(detailsRect.center.dy - pinRect.center.dy, closeTo(40, .01));
+    expect(pinRect.top - editRect.bottom, lessThan(24));
+    // Read the production card title style beneath the translucent menu.
+    final NoteMarkdownText noteTitle = tester.widget<NoteMarkdownText>(
+      _androidCardPart('target', find.byType(NoteMarkdownText)).first,
+    );
+    // The shared target size is intentionally smaller than the previous 16sp.
+    final double? noteTitleSize = noteTitle.style?.fontSize;
+    expect(noteTitleSize, 14);
+    for (final String label in ['置顶', '查看详情', '历史版本', '删除']) {
+      // All four text actions match the 14sp note-title size.
+      final Text action = tester.widget<Text>(find.text(label));
+      expect(action.style?.fontSize, noteTitleSize);
     }
     for (final String label in ['分享', '加入浮窗', 'AI 洞察', '相关笔记', '复制链接', '批注']) {
       expect(find.text(label), findsNothing);
@@ -122,6 +183,101 @@ void androidNoteActionTests() {
     expect(editor.draftId, owner);
     expect(editor.draft.body, '另一份草稿');
     await tester.tap(find.byTooltip('关闭笔记详情'));
+    await _settle(tester);
+    await _dispose(tester, app);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Android AI整理标题空行仅在卡片投影隐藏', (tester) async {
+    // Keep the AI title separator and later paragraph break in stored content.
+    const String aiBody = '标题\n\n第一段\n\n第二段';
+    // Ensure title-only content cannot derive an empty preview.
+    const String titleOnlyBody = '仅标题\n \n\t';
+    // Feed both blank-line boundaries through the production repository.
+    final _App app = await _mount(
+      tester,
+      initialLocation: '/notes',
+      prepareDatabase: (database) async {
+        // Use one repository so both records follow identical save rules.
+        final NoteRepository repository = NoteRepository(database);
+        await repository.save(
+          const NoteDraft(
+            id: 'ai-spacing',
+            body: aiBody,
+            dayKey: '2026-10-31',
+            baseRevision: '',
+          ),
+        );
+        await repository.save(
+          const NoteDraft(
+            id: 'title-only-spacing',
+            body: titleOnlyBody,
+            dayKey: '2026-10-30',
+            baseRevision: '',
+          ),
+        );
+      },
+    );
+    // Locate the AI note's production card.
+    final Finder aiCard = find.byKey(
+      const ValueKey('android-note-card-ai-spacing'),
+    );
+    // Read the card Markdown in title-then-preview order.
+    final Finder aiText = find.descendant(
+      of: aiCard,
+      matching: find.byType(NoteMarkdownText),
+    );
+    // Keep internal paragraphs without sending leading blanks to the renderer.
+    final List<String> collapsedSources = tester
+        .widgetList<NoteMarkdownText>(aiText)
+        .map((widget) => widget.source)
+        .toList(growable: false);
+    expect(collapsedSources, <String>['标题', '第一段\n\n第二段']);
+    // Preserve disclosure when the normalized preview still exceeds two lines.
+    final Finder expand = find.descendant(
+      of: aiCard,
+      matching: find.widgetWithText(OmniButton, '展开'),
+    );
+    expect(expand, findsOneWidget);
+    // Locate the title-only boundary card.
+    final Finder titleOnlyCard = find.byKey(
+      const ValueKey('android-note-card-title-only-spacing'),
+    );
+    expect(
+      tester
+          .widgetList<NoteMarkdownText>(
+            find.descendant(
+              of: titleOnlyCard,
+              matching: find.byType(NoteMarkdownText),
+            ),
+          )
+          .map((widget) => widget.source),
+      <String>['仅标题'],
+    );
+    expect(
+      find.descendant(
+        of: titleOnlyCard,
+        matching: find.widgetWithText(OmniButton, '展开'),
+      ),
+      findsNothing,
+    );
+
+    await tester.tap(expand);
+    await _settle(tester);
+    // Keep the same compact projection after disclosure.
+    final List<String> expandedSources = tester
+        .widgetList<NoteMarkdownText>(aiText)
+        .map((widget) => widget.source)
+        .toList(growable: false);
+    expect(expandedSources, collapsedSources);
+    await _androidDoubleTap(tester, aiText.first);
+    expect(
+      find.byKey(const ValueKey('android-note-history-editor')),
+      findsOneWidget,
+    );
+    // Confirm the full editor still receives the untouched stored content.
+    expect(_bodyText(tester), aiBody);
+    await tester.tap(find.byKey(const ValueKey('android-note-history-back')));
     await _settle(tester);
     await _dispose(tester, app);
     expect(tester.takeException(), isNull);

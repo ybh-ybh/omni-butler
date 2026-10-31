@@ -106,6 +106,8 @@ Future<T?> showOmniMenu<T>({
   bool wholePanelTransition = false,
   // 特定参考界面可覆盖面板阴影，未指定时保持统一菜单原样。
   List<BoxShadow>? panelShadows,
+  // Allow one menu to override its panel fill without changing shared defaults.
+  Color? panelColor,
 }) {
   assert(items.isNotEmpty);
   assert((position == null) != (positionBuilder == null));
@@ -119,6 +121,7 @@ Future<T?> showOmniMenu<T>({
       initialValue: initialValue,
       constraints: constraints,
       menuPadding: menuPadding,
+      color: panelColor,
       useRootNavigator: useRootNavigator,
       requestFocus: requestFocus,
       popUpAnimationStyle: OmniMotion.reduce(context)
@@ -150,6 +153,7 @@ Future<T?> showOmniMenu<T>({
       semanticLabel: MaterialLocalizations.of(context).popupMenuLabel,
       requestFocus: requestFocus,
       panelShadows: panelShadows,
+      panelColor: panelColor,
     ),
   );
 }
@@ -158,6 +162,9 @@ Future<T?> showOmniMenu<T>({
 class _OmniPopupMenuRoute<T> extends PopupRoute<T> {
   /// 可选的局部面板阴影，不影响其他菜单入口。
   final List<BoxShadow>? panelShadows;
+
+  /// Optional local panel fill; null preserves the shared opaque surface.
+  final Color? panelColor;
 
   /// 固定上下文菜单位置。
   final RelativeRect? position;
@@ -203,6 +210,7 @@ class _OmniPopupMenuRoute<T> extends PopupRoute<T> {
     required this.barrierLabel,
     required this.semanticLabel,
     required this.panelShadows,
+    required this.panelColor,
     super.requestFocus,
   }) : super(traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop);
 
@@ -875,7 +883,7 @@ class _OmniMenuPanelState<T> extends State<_OmniMenuPanel<T>> {
                   ? 'omni-windows-submenu-surface'
                   : 'omni-windows-menu-surface',
             ),
-            color: colors.paper,
+            color: widget.route.panelColor ?? colors.paper,
             surfaceTintColor: Colors.transparent,
             shadowColor: Colors.black.withValues(
               alpha: OmniMenuMetrics.shadowOpacity,
