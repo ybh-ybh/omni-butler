@@ -189,6 +189,149 @@ void main() {
     }
   });
 
+  for (final Brightness brightness in Brightness.values) {
+    // Cover both a changing latest-entry banner and a separate overlap banner.
+    for (final bool previousIsLater in <bool>[false, true]) {
+      testWidgets('安卓补记落库到退出逐帧不显示自身冲突（${brightness.name}/$previousIsLater）', (
+        WidgetTester tester,
+      ) async {
+        // Hold the save result after the real database commit and stream update.
+        final Completer<void> resultGate = Completer<void>();
+        // Keep a previous entry visible so its identity and color can be checked.
+        final _DialogFixture fixture = await _pumpDialog(
+          tester,
+          platform: TargetPlatform.android,
+          brightness: brightness,
+          afterSaveGate: resultGate,
+          seed: TimeEntryDraft(
+            startedAt: previousIsLater
+                ? DateTime(2026, 10, 7, 9, 20)
+                : DateTime(2026, 10, 7, 8),
+            endedAt: previousIsLater ? _now : DateTime(2026, 10, 7, 9),
+            activity: '之前的记录',
+          ),
+        );
+        try {
+          // The last-entry banner must retain its pre-submit contents until disposal.
+          final String previousLabel = previousIsLater
+              ? '上一次记录 · 10/07 09:20 - 10/07 10:20 · 之前的记录'
+              : '上一次记录 · 10/07 08:00 - 10/07 09:00 · 之前的记录';
+          // Locate the production banner rather than checking only final navigation.
+          final Finder banner = find.byKey(
+            const ValueKey<String>('time-previous-entry-banner'),
+          );
+          // Compare the banner against the active theme in both brightness modes.
+          final OmniColors colors = OmniColors.of(tester.element(banner));
+          await _enterActivity(tester, '本次补记');
+          await tester.tap(_saveControl());
+          await tester.pumpAndSettle();
+          // Confirm that persistence and the UI's subscribed stream already include the new row.
+          final List<TimeEntryRecord> records = await fixture.database
+              .select(fixture.database.timeEntries)
+              .get();
+          expect(records, hasLength(2));
+          await tester.pumpAndSettle();
+          expect(
+            fixture.container
+                .read(
+                  timeEntriesForRangeProvider((DateTime(1970), DateTime(2101))),
+                )
+                .requireValue,
+            hasLength(2),
+          );
+          // Check the committed frame and every frame of the exit transition.
+          void expectStableFrame() {
+            expect(
+              find.byKey(const ValueKey<String>('time-conflict-message')),
+              findsNothing,
+            );
+            if (banner.evaluate().isEmpty) return;
+            expect(find.text(previousLabel), findsOneWidget);
+            expect(
+              (tester.widget<Container>(banner).decoration! as BoxDecoration)
+                  .color,
+              colors.paperSubtle,
+            );
+            expect(_saveButton(tester).onPressed, isNull);
+            expect(_saveButton(tester).loading, isTrue);
+          }
+
+          expectStableFrame();
+          resultGate.complete();
+          // Include the guard-release frame before the reverse route animation starts.
+          for (int frame = 0; frame < 30; frame += 1) {
+            await tester.pump(const Duration(milliseconds: 16));
+            expectStableFrame();
+          }
+          expect(find.byType(Dialog), findsNothing);
+          expect(
+            await fixture.database.select(fixture.database.timeEntries).get(),
+            hasLength(2),
+          );
+          expect(tester.takeException(), isNull);
+        } finally {
+          if (!resultGate.isCompleted) resultGate.complete();
+          await fixture.dispose(tester);
+        }
+      });
+    }
+  }
+
+  testWidgets('安卓补记提交冲突失败后恢复实时校验和草稿', (WidgetTester tester) async {
+    // Delay submission while another writer occupies the selected interval.
+    final Completer<void> saveGate = Completer<void>();
+    // Use the real repository conflict check after releasing the gate.
+    final _DialogFixture fixture = await _pumpDialog(
+      tester,
+      platform: TargetPlatform.android,
+      saveGate: saveGate,
+    );
+    try {
+      await _enterActivity(tester, '保留当前草稿');
+      await tester.tap(_saveControl());
+      await tester.pump();
+      await tester.runAsync(
+        () => TimeEntryRepository(fixture.database).save(
+          TimeEntryDraft(
+            startedAt: DateTime(2026, 10, 7, 9, 30),
+            endedAt: DateTime(2026, 10, 7, 10),
+            activity: '其他来源的记录',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      saveGate.complete();
+      await tester.pumpAndSettle();
+      expect(find.byType(Dialog), findsOneWidget);
+      expect(find.text('保留当前草稿'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('time-entry-save-error')),
+        findsOneWidget,
+      );
+      // A rejected submission must release the frozen view and reveal real conflicts.
+      final Finder banner = find.byKey(
+        const ValueKey<String>('time-previous-entry-banner'),
+      );
+      // The other writer's interval genuinely overlaps the current draft.
+      final OmniColors colors = OmniColors.of(tester.element(banner));
+      expect(find.textContaining('其他来源的记录'), findsWidgets);
+      expect(
+        (tester.widget<Container>(banner).decoration! as BoxDecoration).color,
+        colors.danger.withValues(alpha: 0.08),
+      );
+      expect(_saveButton(tester).loading, isFalse);
+      expect(_saveButton(tester).onPressed, isNull);
+      expect(
+        await fixture.database.select(fixture.database.timeEntries).get(),
+        hasLength(1),
+      );
+      expect(tester.takeException(), isNull);
+    } finally {
+      if (!saveGate.isCompleted) saveGate.complete();
+      await fixture.dispose(tester);
+    }
+  });
+
   for (final TargetPlatform platform in <TargetPlatform>[
     TargetPlatform.android,
     TargetPlatform.windows,
@@ -1887,6 +2030,7 @@ Future<_DialogFixture> _pumpDialog(
   Completer<void>? defaultLoadGate,
   bool failFirstDefaultLoad = false,
   Completer<void>? saveGate,
+  Completer<void>? afterSaveGate,
   bool failFirstSave = false,
 }) async {
   // 当前平台的代表性窗口尺寸。
@@ -1937,6 +2081,7 @@ Future<_DialogFixture> _pumpDialog(
       if (defaultLoadGate != null ||
           failFirstDefaultLoad ||
           saveGate != null ||
+          afterSaveGate != null ||
           failFirstSave)
         timeEntryRepositoryProvider.overrideWithValue(
           _DefaultRangeTestRepository(
@@ -1944,6 +2089,7 @@ Future<_DialogFixture> _pumpDialog(
             gate: defaultLoadGate,
             failFirst: failFirstDefaultLoad,
             saveGate: saveGate,
+            afterSaveGate: afterSaveGate,
             failFirstSave: failFirstSave,
           ),
         ),
@@ -2151,6 +2297,9 @@ class _DefaultRangeTestRepository extends TimeEntryRepository {
   /// 控制一次提交等待以覆盖返回和防重复提交。
   final Completer<void>? saveGate;
 
+  /// Hold acknowledgement after persistence while the live stream has updated.
+  final Completer<void>? afterSaveGate;
+
   /// 是否在首次保存时返回可重试失败。
   final bool failFirstSave;
 
@@ -2172,6 +2321,7 @@ class _DefaultRangeTestRepository extends TimeEntryRepository {
     this.gate,
     this.failFirst = false,
     this.saveGate,
+    this.afterSaveGate,
     this.failFirstSave = false,
   });
 
@@ -2182,6 +2332,7 @@ class _DefaultRangeTestRepository extends TimeEntryRepository {
     if (saveGate != null) await saveGate!.future;
     if (failFirstSave && _saves == 1) throw StateError('测试首次保存失败');
     await super.save(draft);
+    if (afterSaveGate != null) await afterSaveGate!.future;
   }
 
   /// 只控制初始化读取的等待和一次失败。

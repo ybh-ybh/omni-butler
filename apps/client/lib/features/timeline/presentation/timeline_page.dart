@@ -2316,6 +2316,12 @@ class _AbsoluteTimeEntryDialogState
   /// 是否正在保存。
   bool _saving = false;
 
+  /// Keep the submitted occupancy snapshot stable until the route is disposed.
+  List<TimeEntryRecord>? _submissionRecords;
+
+  /// Allow the successful route to pop while keeping submission controls locked.
+  bool _closingAfterSave = false;
+
   /// 安卓滚轮当前编辑开始时间还是结束时间。
   bool _editingStart = true;
 
@@ -2475,6 +2481,13 @@ class _AbsoluteTimeEntryDialogState
     setState(() {
       _saving = true;
       _saveError = null;
+      if (widget.mode == _TimeEntryEditorMode.completed ||
+          _usesFullscreenRangeEditor) {
+        _submissionRecords = ref
+            .read(timeEntriesForRangeProvider(_recordRange))
+            .asData
+            ?.value;
+      }
     });
     // 受关闭保护的安卓编辑器须在提交成功后先解除返回拦截。
     final bool guardedEditor =
@@ -2498,8 +2511,8 @@ class _AbsoluteTimeEntryDialogState
             ),
           );
       if (mounted) {
+        setState(() => _closingAfterSave = true);
         if (guardedEditor) {
-          setState(() => _saving = false);
           await WidgetsBinding.instance.endOfFrame;
           if (!mounted) return;
         }
@@ -2515,8 +2528,11 @@ class _AbsoluteTimeEntryDialogState
       if (!guardedEditor) rethrow;
       _showError(_usesFullscreenRangeEditor ? '保存失败，请重试' : '开始记录失败，请重试');
     } finally {
-      if (mounted) {
-        setState(() => _saving = false);
+      if (mounted && !_closingAfterSave) {
+        setState(() {
+          _saving = false;
+          _submissionRecords = null;
+        });
       }
     }
   }
@@ -2868,10 +2884,13 @@ class _AbsoluteTimeEntryDialogState
         ? ref.watch(timeEntriesForRangeProvider(_recordRange))
         : const AsyncData<List<TimeEntryRecord>>(<TimeEntryRecord>[]);
     // 查询尚未准备好时不允许拖动或保存。
-    final bool recordsReady = recordsState.asData != null;
-    // 保留最新完整占用快照。
+    final bool recordsReady =
+        _submissionRecords != null || recordsState.asData != null;
+    // Freeze the visible occupancy through commit notifications and exit frames.
     final List<TimeEntryRecord> sliderRecords =
-        recordsState.asData?.value ?? const <TimeEntryRecord>[];
+        _submissionRecords ??
+        recordsState.asData?.value ??
+        const <TimeEntryRecord>[];
     // 投影到连续分钟轴的已占用区间。
     final List<TimeEntryRecord> occupiedSliderRecords = usesRangeEditor
         ? _relativeSliderRecords(
@@ -2950,7 +2969,7 @@ class _AbsoluteTimeEntryDialogState
       return OmniExpandableBottomSheetScaffold(
         key: const ValueKey<String>('time-entry-editor'),
         semanticsLabel: '开始记录面板',
-        canClose: !_saving,
+        canClose: !_saving || _closingAfterSave,
         leading: OmniButton(
           label: '取消',
           variant: OmniButtonVariant.text,
@@ -3413,7 +3432,7 @@ class _AbsoluteTimeEntryDialogState
     // 与时间区间摘要共用小时、分钟格式。
     final String duration = _formatRangeDuration();
     return PopScope(
-      canPop: !_saving,
+      canPop: !_saving || _closingAfterSave,
       child: OmniFullscreenFormScaffold(
         key: const ValueKey<String>('time-entry-editor'),
         title: widget.mode == _TimeEntryEditorMode.finish
