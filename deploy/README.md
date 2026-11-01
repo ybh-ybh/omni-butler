@@ -244,7 +244,17 @@ server {
     # 助手实时语音：五分钟录音及最终转写等待，保留完整 API 路径。
     location = /omni-butler/api/v1/assistant/speech/stream {
         proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        # 此段可单独用于已有站点，完整声明请求头，不依赖 server 层继承。
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Authorization $http_authorization;
         proxy_buffering off;
+        proxy_cache off;
         proxy_read_timeout 360s;
         proxy_send_timeout 360s;
     }
@@ -290,6 +300,25 @@ server {
 API 的 `proxy_pass` 后没有 URI，因此完整 API 路径会原样交给 NestJS。PowerSync 的 `proxy_pass` 末尾必须保留 `/`，Nginx 才会把外部 `/omni-butler/powersync/` 替换成容器能够识别的根路径 `/`。未匹配这两个前缀的请求不会进入 Omni Butler，可继续由其他 `location` 处理；没有其他匹配时由 Nginx 返回默认响应。若修改了后端映射端口，也要修改对应的 `proxy_pass` 端口。Nginx 若运行在另一个容器里，`127.0.0.1` 指向 Nginx 容器自身，不能直接照用此配置。
 
 API 路径包含助手 SSE 流，因此关闭响应缓冲和压缩。`proxy_max_temp_file_size 0` 只禁止代理响应写入临时文件，不影响上传请求体的缓冲；`proxy_read_timeout 86400s` 是连续两次上游读取之间的超时，不是模型任务执行时限。`gzip off` 只关闭 Nginx 的压缩；若上游也启用了压缩，可取消上方公共请求头中的 `Accept-Encoding` 注释。该指令与其他 `proxy_set_header` 保持在同一层，避免单独加到 `location` 后丢失原有请求头继承。详见 [Nginx 代理模块](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)。
+
+### 实时语音连接验收
+
+已有站点可单独加入上方精确匹配的语音 `location`，将示例 `3000` 改为 API 实际映射端口。该段已包含全部转发请求头，不依赖公共 `map`；只拷贝 `proxy_pass` 或关闭 SSE 缓冲不能完成 WebSocket 升级。Nginx 不会自动向上游转发 `Upgrade` 和 `Connection`，见 [WebSocket 代理文档](https://nginx.org/en/docs/http/websocket.html)。修改前备份实际生效的站点配置，先执行 `nginx -t`，通过后再 reload。
+
+替换为实际域名后，使用不带令牌的握手探针：
+
+```bash
+curl --http1.1 -i --max-time 10 \
+  -H 'Connection: Upgrade' \
+  -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' \
+  -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  https://butler.example.com/omni-butler/api/v1/assistant/speech/stream
+```
+
+正确到达语音网关后，缺少设备令牌会返回空正文 `401`，不会连接腾讯 ASR。将同一探针的地址换成服务器本机 `http://127.0.0.1:实际端口/omni-butler/api/v1/assistant/speech/stream` 对比；若直连为 `401`、公网为 `404`，应检查精确路由、路径转发及升级请求头是否生效。这里的 `401` 只验证请求到达鉴权入口，不代表 ASR 配置或识别已成功。
+
+最后通过客户端使用有效设备会话完成一次短语音验收：握手 `101` 后收到 `ready`，录音文字持续更新，手动结束后得到 `completed`。服务端须配置 `NOTE_ASR_PROVIDER=tencent`、数字 `TENCENT_ASR_APP_ID` 和有效的腾讯云密钥；不要把令牌或腾讯签名 URL 放进查询参数、命令行或日志。真实识别可能计费。
 
 ### 桌面端如何访问公网服务
 
