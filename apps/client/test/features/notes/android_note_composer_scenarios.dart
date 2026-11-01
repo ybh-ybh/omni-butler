@@ -201,39 +201,37 @@ void androidComposerTests() {
     expect(notesScroll.position.maxScrollExtent, greaterThan(180));
     notesScroll.position.jumpTo(180);
     await tester.pump();
-    // The retained timeline is offstage but still owns a real scaffold layout.
-    final Finder inactiveTimeline = find.byKey(
-      const ValueKey('primary-navigation-inactive-2'),
+    // The retained home is offstage but still owns a real scaffold layout.
+    final Finder inactiveHome = find.byKey(
+      const ValueKey('primary-navigation-inactive-0'),
       skipOffstage: false,
     );
     // Observe the branch's inherited metrics before any keyboard is visible.
     final MediaQueryData backgroundMedia = MediaQuery.of(
-      tester.element(inactiveTimeline),
+      tester.element(inactiveHome),
     );
     // Capture a laid-out descendant rather than the zero-sized Offstage wrapper.
-    final Finder timelineScaffold = find
+    final Finder homeScaffold = find
         .descendant(
-          of: inactiveTimeline,
+          of: inactiveHome,
           matching: find.byType(Scaffold, skipOffstage: false),
           skipOffstage: false,
         )
         .first;
     // The inactive page must keep the same layout during every IME frame.
-    final Size timelineSize = tester.getSize(timelineScaffold);
+    final Size homeSize = tester.getSize(homeScaffold);
     // Retain navigator identity across active/offstage transitions.
-    final Finder timelineNavigator = find
+    final Finder homeNavigator = find
         .descendant(
-          of: inactiveTimeline,
+          of: inactiveHome,
           matching: find.byType(Navigator, skipOffstage: false),
           skipOffstage: false,
         )
         .first;
     // A stable navigator key lets the assertion follow the active branch later.
-    final Key timelineNavigatorKey = tester
-        .widget<Navigator>(timelineNavigator)
-        .key!;
+    final Key homeNavigatorKey = tester.widget<Navigator>(homeNavigator).key!;
     // The actual element must survive the keyboard boundary becoming disabled.
-    final Element timelineNavigatorElement = tester.element(timelineNavigator);
+    final Element homeNavigatorElement = tester.element(homeNavigator);
     // Only the outer shell receives raw insets on non-note tabs.
     final Finder shell = find
         .ancestor(
@@ -246,11 +244,11 @@ void androidComposerTests() {
 
     // Verify all retained background geometry, not only the visible notes list.
     void expectStableBackground() {
-      expect(MediaQuery.of(tester.element(inactiveTimeline)), backgroundMedia);
-      expect(tester.getSize(timelineScaffold), timelineSize);
+      expect(MediaQuery.of(tester.element(inactiveHome)), backgroundMedia);
+      expect(tester.getSize(homeScaffold), homeSize);
       expect(
-        tester.element(find.byKey(timelineNavigatorKey, skipOffstage: false)),
-        same(timelineNavigatorElement),
+        tester.element(find.byKey(homeNavigatorKey, skipOffstage: false)),
+        same(homeNavigatorElement),
       );
       expect(notesScroll.position.pixels, 180);
     }
@@ -293,10 +291,10 @@ void androidComposerTests() {
     tester.view.viewInsets = const FakeViewPadding(bottom: 180);
     tester.view.padding = FakeViewPadding.zero;
     await tester.pump();
-    await _navigate(tester, app, '/timeline');
+    await _navigate(tester, app, '/home');
     expect(
-      tester.element(find.byKey(timelineNavigatorKey, skipOffstage: false)),
-      same(timelineNavigatorElement),
+      tester.element(find.byKey(homeNavigatorKey, skipOffstage: false)),
+      same(homeNavigatorElement),
     );
     expect(tester.element(shell), same(shellElement));
     expect(MediaQuery.viewInsetsOf(shellElement).bottom, 180);

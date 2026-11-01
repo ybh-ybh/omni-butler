@@ -185,6 +185,8 @@ Future<void> _verifyTodoGolden(
   container.read(appRouterProvider).go('/todos');
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 600));
+  // Finish secondary-page transitions before capturing the Android header.
+  if (platform == TargetPlatform.android) await tester.pumpAndSettle();
   if (showHistory) {
     await tester.tap(
       platform == TargetPlatform.android
@@ -193,6 +195,8 @@ Future<void> _verifyTodoGolden(
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
+    // History navigation can start a second animation after the route frame.
+    if (platform == TargetPlatform.android) await tester.pumpAndSettle();
   }
   if (showCompletionPopup) {
     // 用于触发浮动消息的普通主任务。
@@ -215,6 +219,15 @@ Future<void> _verifyTodoGolden(
 
   if (platform == TargetPlatform.windows) {
     await prepareBrandImageForGolden(tester);
+  }
+  // Keep the shared secondary header fully inside the captured viewport.
+  if (platform == TargetPlatform.android) {
+    // A settled page must not approve a clipped intermediate header frame.
+    final Rect header = tester.getRect(
+      find.byKey(const ValueKey<String>('android-secondary-header')),
+    );
+    expect(header.top, closeTo(0, 0.1));
+    expect(header.height, greaterThanOrEqualTo(56));
   }
   await expectLater(find.byType(OmniButlerApp), matchesGoldenFile(goldenPath));
 

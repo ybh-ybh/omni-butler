@@ -1,4 +1,8 @@
 {
+  "lib/features/notes/presentation/android_note_sidebar.dart :: Color(0xFFC8C0A8)": {
+    "count": 1,
+    "reason": "安卓笔记侧栏分区标题沿用已确认的米灰色视觉，例外仅覆盖该标题，不扩大其他控件的颜色许可。"
+  },
   "lib/features/notes/presentation/note_audio_card.dart :: Slider": {
     "count": 1,
     "reason": "原音回听进度保留Slider的连续拖动、onChangeEnd提交seek及读屏时间语义；没有对应Omni进度选择包装器，颜色和禁用态继承统一SliderTheme。"
