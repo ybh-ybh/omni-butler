@@ -2,9 +2,11 @@ import { HttpException, Injectable } from '@nestjs/common';
 import { request } from 'node:https';
 import { StringDecoder } from 'node:string_decoder';
 import type { ClientRequest } from 'node:http';
-import { TLSSocket } from 'node:tls';
 import { AiKeyStore } from './ai-key-store';
-import { AiProviderError, resolveAiEndpoint } from './ai-provider';
+import { AiProviderError } from './ai-errors';
+import { normalizeAiBaseUrl } from './ai-url';
+import { openAiConnection, type AiConnection } from './ai-transport';
+import { AiNetworkError } from './ai-network-types';
 import { AiService } from './ai.service';
 import type { AssistantFunctionCall, AssistantFunctionTool, AssistantModelCapabilities, AssistantModelRequest, AssistantModelResult, AssistantProfileSnapshot } from './assistant-model.types';
 import { AssistantModelFailure, assistantRejectionCode, assistantReportedUsage, assistantResponseMetadata, assistantTemporaryRateLimit } from './assistant-model-failure';
@@ -31,6 +33,8 @@ export class AssistantModelProvider {
     const startedAt = Date.now();
     // 本地校验阶段尚未创建模型请求，不能与已提交网络失败混淆。
     let facts: AssistantModelFailureFacts = { submission: 'notSubmitted', retryable: false };
+    // The same verified connection is disposed even when profile authorization changes.
+    let connection: AiConnection | undefined;
     try {
     await this.profiles.assertAssistantProfileAvailable(userId, snapshot);
     if (input.signal?.aborted) throw new AiProviderError('AI_CANCELLED');
@@ -51,16 +55,21 @@ export class AssistantModelProvider {
     const timeoutMs = input.timeoutMs ?? ASSISTANT_REQUEST_BUDGET_MS;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > ASSISTANT_REQUEST_BUDGET_MS) throw new AiProviderError('AI_INVALID_REQUEST');
     // 固定快照中的地址仍须经过与笔记相同的公网解析及 TLS 边界。
-    const { url, address } = await resolveAiEndpoint(snapshot.baseUrl, input.signal);
+    const url = new URL(`${normalizeAiBaseUrl(snapshot.baseUrl)}/responses`);
+    await this.profiles.assertAssistantProfileAvailable(userId, snapshot, requiresMultimodal);
+    if (input.signal?.aborted) throw new AiProviderError('AI_CANCELLED');
+    // 纯回答省略工具目录，避免供应商按工具续轮校验此阶段不需要的推理历史。
+    // 思考开关固定在任务快照中；官方OpenAI路由显式申请公开摘要，其他服务只发送已确认兼容的effort。
+    const payload = JSON.stringify({ model: snapshot.model.trim(), instructions: input.instructions, input: input.input, reasoning: { effort: snapshot.thinkingEnabled === true ? 'high' : 'none', ...(snapshot.thinkingEnabled && url.hostname === 'api.openai.com' ? { summary: 'auto' } : {}) }, ...(input.toolChoice === 'none' ? {} : { tools: input.tools.map((tool) => ({ ...tool, strict: false })) }), tool_choice: input.toolChoice ?? 'auto', max_output_tokens: maxOutputTokens, stream: true, store: false });
+    if (Buffer.byteLength(payload) > compatibility.maxRequestBytes) throw new AiProviderError('AI_INPUT_TOO_LARGE');
+    // Preflight shares the original budget and sends no model credentials or body.
+    connection = await openAiConnection(url, { signal: input.signal, deadlineAt: startedAt + timeoutMs });
+    // Recheck authorization after all asynchronous network preparation.
     await this.profiles.assertAssistantProfileAvailable(userId, snapshot, requiresMultimodal);
     if (input.signal?.aborted) throw new AiProviderError('AI_CANCELLED');
     // 解密结果只用于当前 HTTP 认证头，永不进入返回值或日志。
     const apiKey = this.keys.decrypt(snapshot.encryptedApiKey);
     if (!apiKey || /[\r\n\0]/.test(apiKey)) throw new AiProviderError('AI_KEY_INVALID');
-    // 纯回答省略工具目录，避免供应商按工具续轮校验此阶段不需要的推理历史。
-    // 思考开关固定在任务快照中；官方OpenAI路由显式申请公开摘要，其他服务只发送已确认兼容的effort。
-    const payload = JSON.stringify({ model: snapshot.model.trim(), instructions: input.instructions, input: input.input, reasoning: { effort: snapshot.thinkingEnabled === true ? 'high' : 'none', ...(snapshot.thinkingEnabled && url.hostname === 'api.openai.com' ? { summary: 'auto' } : {}) }, ...(input.toolChoice === 'none' ? {} : { tools: input.tools.map((tool) => ({ ...tool, strict: false })) }), tool_choice: input.toolChoice ?? 'auto', max_output_tokens: maxOutputTokens, stream: true, store: false });
-    if (Buffer.byteLength(payload) > compatibility.maxRequestBytes) throw new AiProviderError('AI_INPUT_TOO_LARGE');
     // 预处理耗尽预算时绝不创建可能付费的请求。
     const remainingMs = Math.floor(timeoutMs - (Date.now() - startedAt));
     if (remainingMs < 1) throw new AiProviderError('AI_RETRY_BUDGET_EXHAUSTED');
@@ -88,8 +97,6 @@ export class AssistantModelProvider {
       let settled = false;
       // HTTP 结束后不再接受新的正文，已排队交付仍需正常完成。
       let ended = false;
-      // TLS 握手前 HTTPS 不会发送应用请求，可证明尚未提交。
-      let tlsConnecting = false;
       // 请求对象允许在同步构造失败前保持为空。
       const transport: { outgoing?: ClientRequest; deadline?: ReturnType<typeof setTimeout> } = {};
       // 错误正文只暂存有限内存，用于识别明确临时限流。
@@ -101,6 +108,7 @@ export class AssistantModelProvider {
         if (failure || settled) return;
         // 固定本次错误供异步拒绝使用，不捕获可变的可空属性。
         const currentFailure = error instanceof AssistantModelFailure ? error : new AssistantModelFailure(error instanceof AiProviderError ? error.code : 'AI_SUBMISSION_UNKNOWN', { ...evidence });
+        currentFailure.traceId = connection?.traceId;
         failure = currentFailure;
         ended = true;
         if (transport.deadline) clearTimeout(transport.deadline);
@@ -155,11 +163,10 @@ export class AssistantModelProvider {
         });
       });
       // lookup 固定已验证 IP，保留原域名的 SNI 与证书检查，禁止重定向。
-      const outgoing = request(url, { method: 'POST', agent: false, headers: { 'content-type': 'application/json', accept: 'text/event-stream', 'content-length': Buffer.byteLength(payload), authorization: `Bearer ${apiKey}` }, family: address.family, lookup: (_name, options, callback) => options.all ? callback(null, [address]) : callback(null, address.address, address.family), timeout: remainingMs, signal: input.signal }, (response) => {
+      const outgoing = request(url, { method: 'POST', agent: connection!.agent, headers: { 'content-type': 'application/json', accept: 'text/event-stream', 'content-length': Buffer.byteLength(payload), authorization: `Bearer ${apiKey}` }, timeout: remainingMs, signal: input.signal }, (response) => {
         // 状态码仅分类为本地稳定错误，不包含供应商敏感正文。
         const status = response.statusCode ?? 0;
         facts = { submission: 'unknown', retryable: false, ...(status ? { httpStatus: status } : {}), ...assistantResponseMetadata(response.headers ?? {}) };
-        tlsConnecting = false;
         response.on('data', (chunk: Buffer) => {
           if (failure || ended) return;
           try {
@@ -204,23 +211,13 @@ export class AssistantModelProvider {
         });
       });
       transport.outgoing = outgoing;
-      // 只信任真实 TLS socket，不能把没有阶段证据的未知错误标记未计费。
-      outgoing.on('socket', (socket) => {
-        if (socket instanceof TLSSocket && !socket.authorized) {
-          tlsConnecting = true;
-          socket.once('secureConnect', () => { tlsConnecting = false; });
-        }
-      });
       // 独立总时限同时限制不断滴流的供应商，不依赖 socket 空闲超时。
-      const deadline = setTimeout(() => fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true), { ...facts, submission: tlsConnecting ? 'notSubmitted' : 'unknown', retryable: false }), remainingMs);
+      const deadline = setTimeout(() => fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true), { ...facts, submission: 'unknown', retryable: false }), remainingMs);
       transport.deadline = deadline;
       outgoing.on('close', () => { clearTimeout(deadline); if (!ended) fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)); });
-      outgoing.on('timeout', () => fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true), { ...facts, submission: tlsConnecting ? 'notSubmitted' : 'unknown', retryable: false }));
-      outgoing.on('error', (error: Error & { code?: string }) => {
-        // 拒绝连接或临时解析失败且 TLS 尚未建立，才确认为可重试未提交。
-        const transient = tlsConnecting && !input.signal?.aborted && ['ECONNREFUSED', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'ECONNRESET'].includes(error.code ?? '');
-        fail(new AiProviderError(transient ? 'AI_CONNECTION_FAILED' : 'AI_SUBMISSION_UNKNOWN', !tlsConnecting), { ...facts, submission: tlsConnecting ? 'notSubmitted' : 'unknown', retryable: transient });
-      });
+      outgoing.on('timeout', () => fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true), { ...facts, submission: 'unknown', retryable: false }));
+      // Any HTTP transport failure after handoff may have reached the model.
+      outgoing.on('error', () => fail(new AiProviderError('AI_SUBMISSION_UNKNOWN', true), { ...facts, submission: 'unknown', retryable: false }));
       // 请求排入传输后默认未知；只有真实 TLS 前置证据才能收窄为未提交。
       facts = { submission: 'unknown', retryable: false };
       outgoing.end(payload);
@@ -231,14 +228,21 @@ export class AssistantModelProvider {
     const result = readCompleted(completed, snapshot.provider, names);
     // 回执已包含可读内容时优先使用它，保持流和恢复的最终结果一致。
     const reasoning = assistantResponseReasoning(result.output) ?? reasoningBuffer.snapshot();
+    connection.reportHttp('success');
     return { ...result, ...(reasoning ? { reasoning } : {}) };
     } catch (error: unknown) {
+      connection?.reportHttp('failure', error instanceof AiProviderError ? error.code : 'AI_SUBMISSION_UNKNOWN', facts.submission !== 'notSubmitted');
       if (error instanceof AssistantModelFailure) throw error;
-      if (error instanceof AiProviderError) throw new AssistantModelFailure(error.code, { ...facts, retryable: facts.submission === 'notSubmitted' && error.code === 'AI_DNS_FAILED' && !input.signal?.aborted });
+      if (error instanceof AiProviderError) {
+        // Preserve the safe correlation ID when converting network facts for the runner.
+        const failure = new AssistantModelFailure(error.code, { ...facts, retryable: facts.submission === 'notSubmitted' && error instanceof AiNetworkError && error.retryable && !input.signal?.aborted });
+        failure.traceId = error.traceId ?? connection?.traceId;
+        throw failure;
+      }
       // 保留配置撤回和地址校验的既有 HTTP 语义，不把它们误判网络故障。
       if (error instanceof HttpException) throw error;
       throw new AssistantModelFailure(facts.submission === 'notSubmitted' ? 'AI_INVALID_REQUEST' : 'AI_SUBMISSION_UNKNOWN', { ...facts, retryable: false });
-    }
+    } finally { connection?.dispose(); }
   }
 
   /// 固定无业务副作用的两轮测试，验证函数参数、结果回传和真实正文流。

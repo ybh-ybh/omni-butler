@@ -1,61 +1,82 @@
 import { EventEmitter } from 'node:events';
-import { lookup } from 'node:dns/promises';
+import { getServers, Resolver } from 'node:dns/promises';
 import type { ClientRequest, IncomingMessage, RequestOptions } from 'node:http';
 import { request } from 'node:https';
+import * as packet from 'dns-packet';
 import { resolveAiAddresses } from '../src/ai/ai-dns';
+import { readAiNetworkConfig } from '../src/ai/ai-network-config';
+import type { AiNetworkConfig } from '../src/ai/ai-network-config';
+import type { AiNetworkEvent } from '../src/ai/ai-network-types';
 
 jest.mock('node:https', () => ({ request: jest.fn() }));
-jest.mock('node:dns/promises', () => ({ lookup: jest.fn() }));
+jest.mock('node:dns/promises', () => ({ getServers: jest.fn(), Resolver: jest.fn() }));
 
-describe('AI DoH解析与网络边界', () => {
-  /// 全部名称和应答为合成数据，不调用真实模型。
-  const hostname = 'model.example.test';
-  /// 本次查询实际使用的固定端点、地址和请求头。
-  let calls: { url: URL; options: RequestOptions }[];
-  /// 可控HTTP状态用于模拟拒绝与重定向。
+/// Uses only isolated fake resolvers and synthetic model hostnames.
+const hostname = 'model.example.test';
+/// Defines deterministic DoH bootstrap identities for fault injection.
+const dohConfig: AiNetworkConfig = readAiNetworkConfig({ AI_DNS_MODE: 'doh', AI_DOH_RESOLVERS: JSON.stringify([
+  { id: 'primary', url: 'https://dns-one.example.test/dns-query', bootstrapAddresses: ['8.8.8.8'] },
+  { id: 'backup', url: 'https://dns-two.example.test/dns-query', bootstrapAddresses: ['1.1.1.1'] },
+]) });
+
+/// Builds a fresh standard DNS wire response matching the observed query.
+function wireResponse(query: packet.DecodedPacket, answers?: packet.Answer[], flags = packet.RECURSION_AVAILABLE): Buffer {
+  return packet.encode({ id: query.id, type: 'response', flags, questions: query.questions, answers: answers ?? (query.questions![0]!.type === 'A' ? [{ name: hostname, type: 'A', data: '8.8.4.4', ttl: 60 }] : []) });
+}
+
+describe('deployment-aware DNS resolution', () => {
+  /// Tracks actual independent resolver instances and their cancellation.
+  let instances: { server: string; cancel: jest.Mock }[];
+  /// Supplies independent family and resolver outcomes.
+  let systemAnswer: (server: string, family: number) => Promise<string[]>;
+  /// Tracks the exact DNS-only HTTPS requests.
+  let calls: { url: URL; options: RequestOptions; query?: packet.DecodedPacket; closed: boolean }[];
+  /// Supplies bounded wire replies or injected connection failures.
+  let dohAnswer: (url: URL, query: packet.DecodedPacket) => Buffer | Error | null;
+  /// Allows transport-level response faults without changing DNS bodies.
   let status: number;
-  /// 启用时模拟握手或持续响应未完成。
-  let hanging: boolean;
-  /// 每种查询类型可独立返回应答或损坏正文。
-  let answer: (type: number) => unknown;
-  /// 观察失败与超时是否真正关闭在途请求。
-  let destroyed: number;
+  /// Defaults to the RFC 8484 response media type.
+  let contentType: string;
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    calls = []; status = 200; hanging = false; destroyed = 0;
-    answer = (type: number): unknown => ({
-      Status: 0, TC: false, Question: [{ name: `${hostname}.`, type }],
-      Answer: [{ name: hostname, type, data: type === 1 ? '8.8.8.8' : '2606:4700:4700::1111' }],
+    jest.clearAllMocks(); instances = []; calls = []; status = 200; contentType = 'application/dns-message';
+    jest.mocked(getServers).mockReturnValue(['127.0.0.11']);
+    systemAnswer = (_server, family): Promise<string[]> => Promise.resolve(family === 4 ? ['8.8.4.4'] : []);
+    jest.mocked(Resolver).mockImplementation(() => {
+      // Only methods exercised by the real adapter are replaced.
+      const instance = { server: '', cancel: jest.fn(), setServers: (servers: string[]): void => { instance.server = servers[0]!; }, resolve4: (): Promise<string[]> => systemAnswer(instance.server, 4), resolve6: (): Promise<string[]> => systemAnswer(instance.server, 6) };
+      instances.push(instance);
+      return instance as unknown as Resolver;
     });
+    dohAnswer = (_url, query): Buffer => wireResponse(query);
     jest.mocked(request).mockImplementation(((url: URL, options: RequestOptions, callback: (response: IncomingMessage) => void): ClientRequest => {
-      calls.push({ url, options });
-      // 真实请求会在AbortSignal触发时结束并产生error事件。
+      // Preserve abort ownership and emit the lifecycle used by Node HTTPS.
+      const call = { url, options, closed: false, query: undefined as packet.DecodedPacket | undefined };
+      calls.push(call);
+      // The request never opens an actual socket.
       const outgoing = new EventEmitter() as ClientRequest;
-      // 关闭标志避免重复取消产生额外错误。
-      let closed = false;
       outgoing.destroy = ((error?: Error): ClientRequest => {
-        if (!closed) { closed = true; destroyed++; outgoing.emit('error', error ?? new Error('aborted')); outgoing.emit('close'); }
+        if (!call.closed) { call.closed = true; if (error) outgoing.emit('error', error); outgoing.emit('close'); }
         return outgoing;
       }) as ClientRequest['destroy'];
-      // 显式绑定和清理取消监听，覆盖超时与调用方撤回。
-      const abort = (): void => { outgoing.destroy(new Error('aborted')); };
+      // Signal listeners must not remain after request completion.
+      const abort = (): void => { outgoing.destroy(new Error('synthetic abort')); };
       options.signal?.addEventListener('abort', abort, { once: true });
       outgoing.once('close', () => options.signal?.removeEventListener('abort', abort));
-      outgoing.end = ((): ClientRequest => {
-        if (options.signal?.aborted) { abort(); return outgoing; }
-        if (hanging) return outgoing;
-        // 只模拟响应事件，不在替身中重新实现解析规则。
-        const response = new EventEmitter() as IncomingMessage;
-        response.statusCode = status;
-        response.resume = jest.fn().mockReturnValue(response);
-        callback(response);
-        if (!closed) {
-          // 字符串夹具用于覆盖非JSON及过大的响应。
-          const result = answer(Number(url.searchParams.get('type')));
-          response.emit('data', Buffer.from(typeof result === 'string' ? result : JSON.stringify(result)));
-          if (!closed) { response.emit('end'); closed = true; outgoing.emit('close'); }
-        }
+      outgoing.end = ((body: Buffer): ClientRequest => {
+        call.query = packet.decode(body);
+        // Fault fixtures are evaluated from real encoded DNS queries.
+        const result = dohAnswer(url, call.query);
+        if (result === null) return outgoing;
+        queueMicrotask(() => {
+          if (call.closed) return;
+          if (result instanceof Error) { outgoing.destroy(result); return; }
+          // The response models only standard Node stream events.
+          const response = new EventEmitter() as IncomingMessage;
+          response.statusCode = status; response.headers = { 'content-type': contentType }; response.resume = jest.fn().mockReturnValue(response);
+          callback(response);
+          if (!call.closed) { response.emit('data', result); if (!call.closed) response.emit('end'); outgoing.destroy(); }
+        });
         return outgoing;
       }) as ClientRequest['end'];
       return outgoing;
@@ -64,121 +85,198 @@ describe('AI DoH解析与网络边界', () => {
 
   afterEach(() => { jest.useRealTimers(); });
 
-  it('绕过系统DNS，用固定引导地址查询A及AAAA且不发送模型凭据', async () => {
-    expect(await resolveAiAddresses(hostname)).toEqual([
-      { address: '8.8.8.8', family: 4 }, { address: '2606:4700:4700::1111', family: 6 },
-    ]);
-    expect(lookup).not.toHaveBeenCalled();
-    expect(calls).toHaveLength(2);
-    for (const call of calls) {
-      expect(call.url.origin).toBe('https://cloudflare-dns.com');
-      expect(call.url.pathname).toBe('/dns-query');
-      expect(call.url.searchParams.get('name')).toBe(hostname);
-      expect(call.options).toMatchObject({ method: 'GET', agent: false, family: 4, headers: { accept: 'application/dns-json' } });
-      expect(call.options.headers).not.toHaveProperty('authorization');
-      expect(call.options).not.toHaveProperty('rejectUnauthorized', false);
-      // 系统即使返回Fake-IP，实际TLS连接也只采用引导公网IP。
-      const callback = jest.fn();
-      call.options.lookup!('cloudflare-dns.com', {}, callback);
-      expect(callback).toHaveBeenCalledWith(null, '1.1.1.1', 4);
-      // Node的all模式也只能得到固定地址。
-      const allCallback = jest.fn();
-      call.options.lookup!('cloudflare-dns.com', { all: true }, allCallback);
-      expect(allCallback).toHaveBeenCalledWith(null, [{ address: '1.1.1.1', family: 4 }]);
-    }
-  });
-
-  it('IP字面量不发送DNS查询，由供应商入口继续检查公网范围', async () => {
-    expect(await resolveAiAddresses('8.8.8.8')).toEqual([{ address: '8.8.8.8', family: 4 }]);
-    expect(await resolveAiAddresses('2606:4700:4700::1111')).toEqual([{ address: '2606:4700:4700::1111', family: 6 }]);
+  it('defaults to container DNS, retrieves both families and avoids public DoH dependencies', async () => {
+    expect(await resolveAiAddresses(hostname, undefined, { config: readAiNetworkConfig({}) })).toEqual([{ address: '8.8.4.4', family: 4 }]);
+    expect(instances).toHaveLength(1); expect(instances[0]!.server).toBe('127.0.0.11'); expect(instances[0]!.cancel).toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
 
-  it.each(['open.bigmodel.cn', 'OPEN.BIGMODEL.CN.'])('智谱官方域名%s使用国内DoH节点并接受单对象问题', async (name) => {
-    answer = (type: number): unknown => ({
-      Status: 0, TC: false, Question: { name, type },
-      Answer: type === 1 ? [
-        { name, type: 5, data: 'cdn.example.test.' },
-        { name: 'cdn.example.test.', type: 1, data: '39.108.102.11' },
-      ] : [],
-    });
-    expect(await resolveAiAddresses(name)).toEqual([{ address: '39.108.102.11', family: 4 }]);
-    expect(calls).toHaveLength(2);
-    for (const call of calls) {
-      expect(call.url.origin).toBe('https://dns.alidns.com');
-      expect(call.url.pathname).toBe('/resolve');
-      expect(call.options.headers).toEqual({ accept: 'application/dns-json' });
-      expect(call.options).toMatchObject({ agent: false, family: 4 });
-      expect(call.options).not.toHaveProperty('rejectUnauthorized', false);
-      // 国内解析器也必须固定引导地址，不能退回系统Fake-IP。
-      const callback = jest.fn();
-      call.options.lookup!('dns.alidns.com', { all: true }, callback);
-      expect(callback).toHaveBeenCalledWith(null, [{ address: '223.5.5.5', family: 4 }]);
-    }
-    expect(lookup).not.toHaveBeenCalled();
+  it('permits valid AAAA NODATA while preserving all A addresses', async () => {
+    systemAnswer = (_server, family): Promise<string[]> => family === 4 ? Promise.resolve(['8.8.4.4', '1.1.1.1']) : Promise.reject(Object.assign(new Error('no record'), { code: 'ENODATA' }));
+    expect(await resolveAiAddresses(hostname)).toEqual([{ address: '8.8.4.4', family: 4 }, { address: '1.1.1.1', family: 4 }]);
   });
 
-  it.each([null, {}, { name: 'other.example.test', type: 1 }, { name: hostname, type: '1' }])('单对象问题仍严格验证名称和地址族 %#', async (question) => {
-    answer = (): unknown => ({ Status: 0, TC: false, Question: question, Answer: [] });
-    await expect(resolveAiAddresses('open.bigmodel.cn')).rejects.toThrow('AI_DNS_FAILED');
-    expect(lookup).not.toHaveBeenCalled();
+  it('switches complete family groups to an explicitly configured backup after a transient failure', async () => {
+    systemAnswer = (server, family): Promise<string[]> => server === '10.0.0.1' ? Promise.reject(Object.assign(new Error('sensitive details'), { code: 'ESERVFAIL' })) : Promise.resolve(family === 4 ? ['1.1.1.1'] : []);
+    // Safe events identify each configured infrastructure resolver.
+    const events: AiNetworkEvent[] = [];
+    expect(await resolveAiAddresses(hostname, undefined, { config: readAiNetworkConfig({ AI_DNS_SERVERS: '10.0.0.1,10.0.0.2' }), observe: (event): void => { events.push(event); }, traceId: 'test-trace' })).toEqual([{ address: '1.1.1.1', family: 4 }]);
+    expect(instances.map((instance) => instance.server)).toEqual(['10.0.0.1', '10.0.0.2']);
+    expect(events.map((event) => event.outcome)).toEqual(['failure', 'success']); expect(JSON.stringify(events)).not.toContain('sensitive details');
   });
 
-  it('接受合法CNAME链及空AAAA结果，保留A记录的全部地址', async () => {
-    answer = (type: number): unknown => ({
-      Status: 0, TC: false, Question: [{ name: hostname, type }],
-      Answer: type === 1 ? [
-        { name: 'cdn.example.test.', type: 1, data: '8.8.8.8' },
-        { name: `${hostname.toUpperCase()}.`, type: 5, data: 'cdn.example.test.' },
-        { name: 'cdn.example.test.', type: 1, data: '1.1.1.1' },
-      ] : [],
-    });
-    expect(await resolveAiAddresses(hostname)).toEqual([{ address: '8.8.8.8', family: 4 }, { address: '1.1.1.1', family: 4 }]);
+  it.each(['127.0.0.1', '198.18.0.1', '169.254.169.254', '10.0.0.1'])('rejects mixed unsafe answers %s without using a backup', async (address) => {
+    systemAnswer = (_server, family): Promise<string[]> => Promise.resolve(family === 4 ? ['8.8.8.8', address] : []);
+    await expect(resolveAiAddresses(hostname, undefined, { config: readAiNetworkConfig({ AI_DNS_SERVERS: '10.0.0.1,10.0.0.2' }) })).rejects.toMatchObject({ code: 'AI_PRIVATE_URL', reason: 'UNSAFE_ADDRESS', retryable: false });
+    expect(instances).toHaveLength(1); expect(request).not.toHaveBeenCalled();
   });
 
-  it.each(['status', 'truncated', 'wrong-question', 'unrelated-address', 'wrong-family', 'alias-loop', 'malformed', 'oversized', 'empty'])('异常应答%s失败关闭且不回退系统解析', async (scenario) => {
-    answer = (type: number): unknown => {
-      if (scenario === 'malformed') return 'not-json';
-      if (scenario === 'oversized') return 'x'.repeat(65537);
-      // 不可信应答的可控副本。
-      const result = {
-        Status: scenario === 'status' ? 3 : 0,
-        TC: scenario === 'truncated',
-        Question: [{ name: scenario === 'wrong-question' ? 'other.example.test' : hostname, type }],
-        Answer: scenario === 'empty' ? [] : [{ name: scenario === 'unrelated-address' ? 'other.example.test' : hostname, type, data: scenario === 'wrong-family' ? 'not-an-ip' : type === 1 ? '8.8.8.8' : '2606:4700:4700::1111' }],
-      };
-      if (scenario === 'alias-loop') result.Answer.push({ name: hostname, type: 5, data: `${hostname}.` });
-      return result;
-    };
-    await expect(resolveAiAddresses(hostname)).rejects.toThrow('AI_DNS_FAILED');
-    expect(lookup).not.toHaveBeenCalled();
+  it('rejects an unsafe A result even when AAAA never completes', async () => {
+    systemAnswer = (_server, family): Promise<string[]> => family === 4 ? Promise.resolve(['127.0.0.1']) : new Promise(() => {});
+    await expect(resolveAiAddresses(hostname)).rejects.toMatchObject({ code: 'AI_PRIVATE_URL' });
+    expect(instances[0]!.cancel).toHaveBeenCalled();
   });
 
-  it.each([302, 401, 500])('HTTP %s不能作为DNS结果或跟随重定向', async (httpStatus) => {
-    status = httpStatus;
-    await expect(resolveAiAddresses(hostname)).rejects.toThrow('AI_DNS_FAILED');
-    expect(request).toHaveBeenCalledTimes(2);
+  it('does not let a temporary A failure hide an unsafe AAAA response', async () => {
+    systemAnswer = (_server, family): Promise<string[]> => family === 4 ? Promise.reject(Object.assign(new Error('temporary'), { code: 'ESERVFAIL' })) : Promise.resolve(['::1']);
+    await expect(resolveAiAddresses(hostname, undefined, { config: readAiNetworkConfig({ AI_DNS_SERVERS: '10.0.0.1,10.0.0.2' }) })).rejects.toMatchObject({ code: 'AI_PRIVATE_URL' });
+    expect(instances).toHaveLength(1);
   });
 
-  it('总时限会中止两个在途查询，不能在超时后继续请求', async () => {
-    jest.useFakeTimers(); hanging = true;
-    // 先绑定拒绝观察，避免推进计时器后产生未处理拒绝。
-    const failure = expect(resolveAiAddresses(hostname)).rejects.toThrow('AI_DNS_FAILED');
-    await jest.advanceTimersByTimeAsync(5000);
-    await failure;
-    expect(destroyed).toBe(2);
-    expect(jest.getTimerCount()).toBe(0);
+  it('does not let a temporary AAAA failure hide an unsafe delayed A response', async () => {
+    systemAnswer = (_server, family): Promise<string[]> => family === 6 ? Promise.reject(Object.assign(new Error('temporary'), { code: 'ESERVFAIL' })) : Promise.resolve().then(() => ['127.0.0.1']);
+    await expect(resolveAiAddresses(hostname, undefined, { config: readAiNetworkConfig({ AI_DNS_SERVERS: '10.0.0.1,10.0.0.2' }) })).rejects.toMatchObject({ code: 'AI_PRIVATE_URL', retryable: false });
+    expect(instances).toHaveLength(1);
   });
 
-  it('调用方撤回立即中止两个查询并清理总时限', async () => {
-    jest.useFakeTimers(); hanging = true;
-    // 撤回由上层任务传入。
+  it('distinguishes NXDOMAIN from NODATA and does not hide it using another resolver', async () => {
+    systemAnswer = (): Promise<string[]> => Promise.reject(Object.assign(new Error('not found'), { code: 'ENOTFOUND' }));
+    await expect(resolveAiAddresses(hostname, undefined, { config: readAiNetworkConfig({ AI_DNS_SERVERS: '10.0.0.1,10.0.0.2' }) })).rejects.toMatchObject({ reason: 'DNS_NOT_FOUND' });
+    expect(instances).toHaveLength(1);
+  });
+
+  it('does not convert a timed-out AAAA query into empty data and respects the total deadline', async () => {
+    jest.useFakeTimers();
+    systemAnswer = (_server, family): Promise<string[]> => family === 4 ? Promise.resolve(['8.8.8.8']) : new Promise(() => {});
+    // Both resolver attempts must fit one shared three-second budget.
+    const pending = expect(resolveAiAddresses(hostname, undefined, { config: readAiNetworkConfig({ AI_DNS_SERVERS: '10.0.0.1,10.0.0.2', AI_DNS_TIMEOUT_MS: 3000 }) })).rejects.toMatchObject({ code: 'AI_DNS_FAILED', reason: 'DNS_TIMEOUT' });
+    await jest.advanceTimersByTimeAsync(3000); await pending;
+    expect(instances).toHaveLength(2); expect(instances.every((instance) => instance.cancel.mock.calls.length > 0)).toBe(true); expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('cancels its own resolver and does not start the backup', async () => {
+    jest.useFakeTimers(); systemAnswer = (): Promise<string[]> => new Promise(() => {});
+    // Caller cancellation is distinct from infrastructure failure.
     const controller = new AbortController();
-    // 撤回前开始两个查询。
-    const failure = expect(resolveAiAddresses(hostname, controller.signal)).rejects.toThrow('AI_DNS_FAILED');
-    controller.abort();
-    await failure;
-    expect(destroyed).toBe(2);
-    expect(jest.getTimerCount()).toBe(0);
+    // Attach rejection observers before cancellation.
+    const pending = expect(resolveAiAddresses(hostname, controller.signal, { config: readAiNetworkConfig({ AI_DNS_SERVERS: '10.0.0.1,10.0.0.2' }) })).rejects.toMatchObject({ code: 'AI_CANCELLED', retryable: false });
+    controller.abort(); await pending;
+    expect(instances).toHaveLength(1); expect(instances[0]!.cancel).toHaveBeenCalled(); expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('honors a shorter caller deadline without creating a fresh resolver budget', async () => {
+    jest.useFakeTimers(); systemAnswer = (): Promise<string[]> => new Promise(() => {});
+    // The caller has only fifty milliseconds left.
+    const pending = expect(resolveAiAddresses(hostname, undefined, { deadlineAt: Date.now() + 50 })).rejects.toMatchObject({ reason: 'DNS_TIMEOUT' });
+    await jest.advanceTimersByTimeAsync(50); await pending; expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('does not cancel another concurrent caller sharing the same hostname', async () => {
+    // Each family can be completed independently after one caller cancels.
+    const releases: (() => void)[] = [];
+    systemAnswer = (_server, family): Promise<string[]> => new Promise((resolve) => { releases.push(() => resolve(family === 4 ? ['8.8.8.8'] : [])); });
+    // Only the first logical resolution is cancelled.
+    const controller = new AbortController();
+    // Observe both calls before exercising cancellation.
+    const first = expect(resolveAiAddresses(hostname, controller.signal)).rejects.toMatchObject({ code: 'AI_CANCELLED' });
+    // The second call must retain its own live resolver.
+    const second = resolveAiAddresses(hostname);
+    controller.abort(); await first;
+    expect(instances[0]!.cancel).toHaveBeenCalled(); expect(instances[1]!.cancel).not.toHaveBeenCalled();
+    releases[2]!(); releases[3]!();
+    await expect(second).resolves.toEqual([{ address: '8.8.8.8', family: 4 }]);
+  });
+
+  it('validates IP literals without querying any resolver', async () => {
+    expect(await resolveAiAddresses('8.8.8.8')).toEqual([{ address: '8.8.8.8', family: 4 }]);
+    await expect(resolveAiAddresses('127.0.0.1')).rejects.toMatchObject({ code: 'AI_PRIVATE_URL' });
+    expect(Resolver).not.toHaveBeenCalled(); expect(request).not.toHaveBeenCalled();
+  });
+
+  it('uses standard DoH wire format with pinned bootstrap IP and no model credentials', async () => {
+    expect(await resolveAiAddresses(hostname, undefined, { config: dohConfig })).toEqual([{ address: '8.8.4.4', family: 4 }]);
+    expect(Resolver).not.toHaveBeenCalled(); expect(getServers).not.toHaveBeenCalled(); expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.options).toMatchObject({ method: 'POST', agent: false, headers: { accept: 'application/dns-message', 'content-type': 'application/dns-message' } });
+      expect(call.options.headers).not.toHaveProperty('authorization'); expect(call.options).not.toHaveProperty('rejectUnauthorized', false);
+      expect(call.query?.questions?.[0]?.name).toBe(hostname);
+      // The resolver hostname is never delegated to system DNS.
+      const lookup = jest.fn(); call.options.lookup!('dns-one.example.test', { all: true }, lookup);
+      expect(lookup).toHaveBeenCalledWith(null, [{ address: '8.8.8.8', family: 4 }]);
+    }
+  });
+
+  it('uses the same deployment resolver for all model domains', async () => {
+    dohAnswer = (_url, query): Buffer => wireResponse(query, query.questions![0]!.type === 'A' ? [{ name: query.questions![0]!.name, type: 'A', data: '8.8.4.4' }] : []);
+    await resolveAiAddresses('open.bigmodel.cn', undefined, { config: dohConfig });
+    await resolveAiAddresses('api.deepseek.com', undefined, { config: dohConfig });
+    expect(calls.every((call) => call.url.hostname === 'dns-one.example.test')).toBe(true);
+  });
+
+  it('supports valid CNAME chains and retains every related address', async () => {
+    dohAnswer = (_url, query): Buffer => wireResponse(query, query.questions![0]!.type === 'A' ? [
+      { name: hostname, type: 'CNAME', data: 'cdn.example.test', ttl: 20 },
+      { name: 'cdn.example.test', type: 'A', data: '8.8.4.4', ttl: 30 },
+      { name: 'cdn.example.test', type: 'A', data: '1.1.1.1', ttl: 30 },
+    ] : []);
+    expect(await resolveAiAddresses(hostname, undefined, { config: dohConfig })).toHaveLength(2);
+  });
+
+  it('uses an explicit DoH backup for temporary network failure without system fallback', async () => {
+    dohAnswer = (url, query): Buffer | Error => url.hostname === 'dns-one.example.test' ? Object.assign(new Error('private connection detail'), { code: 'ECONNRESET' }) : wireResponse(query);
+    expect(await resolveAiAddresses(hostname, undefined, { config: dohConfig })).toHaveLength(1);
+    expect(calls.map((call) => call.url.hostname)).toEqual(['dns-one.example.test', 'dns-one.example.test', 'dns-two.example.test', 'dns-two.example.test']);
+    expect(Resolver).not.toHaveBeenCalled();
+  });
+
+  it('closes a blackholed primary DoH attempt before starting the usable backup', async () => {
+    jest.useFakeTimers();
+    dohAnswer = (url, query): Buffer | null => url.hostname === 'dns-one.example.test' ? null : wireResponse(query);
+    // Backup queries receive only the remaining total budget.
+    const pending = resolveAiAddresses(hostname, undefined, { config: dohConfig });
+    await jest.advanceTimersByTimeAsync(2000);
+    await expect(pending).resolves.toEqual([{ address: '8.8.4.4', family: 4 }]);
+    expect(calls).toHaveLength(4); expect(calls.every((call) => call.closed)).toBe(true); expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('does not conceal invalid resolver certificates by switching providers', async () => {
+    dohAnswer = (): Error => Object.assign(new Error('sensitive certificate details'), { code: 'ERR_TLS_CERT_ALTNAME_INVALID' });
+    await expect(resolveAiAddresses(hostname, undefined, { config: dohConfig })).rejects.toMatchObject({ reason: 'DNS_TLS_CERTIFICATE', retryable: false });
+    expect(calls).toHaveLength(2); expect(getServers).not.toHaveBeenCalled();
+  });
+
+  it('prioritizes an unsafe DoH answer over a temporary failure of the other family', async () => {
+    dohAnswer = (_url, query): Buffer | Error => query.questions![0]!.type === 'A'
+      ? Object.assign(new Error('temporary'), { code: 'ECONNRESET' })
+      : wireResponse(query, [{ name: hostname, type: 'AAAA', data: '::1' }]);
+    await expect(resolveAiAddresses(hostname, undefined, { config: dohConfig })).rejects.toMatchObject({ code: 'AI_PRIVATE_URL', retryable: false });
+    expect(calls).toHaveLength(2);
+  });
+
+  it.each(['malformed', 'wrong-id', 'wrong-question', 'truncated', 'unrelated-address', 'alias-loop', 'trailing-bytes', 'private-address', 'oversized'])('fails closed on %s and does not try another DoH resolver', async (scenario) => {
+    dohAnswer = (_url, query): Buffer => {
+      if (scenario === 'malformed') return Buffer.from([0]);
+      if (scenario === 'oversized') return Buffer.alloc(65537);
+      if (scenario === 'wrong-id') return wireResponse({ ...query, id: (query.id! + 1) % 65536 });
+      if (scenario === 'wrong-question') return wireResponse({ ...query, questions: [{ name: 'other.example.test', type: 'A' }] });
+      if (scenario === 'truncated') return wireResponse(query, [], packet.TRUNCATED_RESPONSE);
+      if (scenario === 'trailing-bytes') return Buffer.concat([wireResponse(query), Buffer.from([0])]);
+      if (query.questions![0]!.type !== 'A') return wireResponse(query);
+      if (scenario === 'alias-loop') return wireResponse(query, [{ name: hostname, type: 'CNAME', data: hostname }]);
+      return wireResponse(query, [{ name: scenario === 'unrelated-address' ? 'other.example.test' : hostname, type: 'A', data: scenario === 'private-address' ? '127.0.0.1' : '8.8.4.4' }]);
+    };
+    await expect(resolveAiAddresses(hostname, undefined, { config: dohConfig })).rejects.toMatchObject({ retryable: false });
+    expect(calls).toHaveLength(2); expect(Resolver).not.toHaveBeenCalled();
+  });
+
+  it.each([302, 401])('does not redirect or reinterpret HTTP %s as a valid DNS response', async (httpStatus) => {
+    status = httpStatus;
+    await expect(resolveAiAddresses(hostname, undefined, { config: dohConfig })).rejects.toMatchObject({ reason: 'DNS_HTTP_STATUS', retryable: false });
+    expect(calls).toHaveLength(2);
+  });
+
+  it('rejects JSON responses rather than assuming a provider-specific schema', async () => {
+    contentType = 'application/dns-json';
+    await expect(resolveAiAddresses(hostname, undefined, { config: dohConfig })).rejects.toMatchObject({ reason: 'DNS_INVALID_RESPONSE' });
+  });
+
+  it('stops both DoH family requests on cancellation and never uses a backup', async () => {
+    jest.useFakeTimers(); dohAnswer = (): null => null;
+    // Cancellation must remain distinct from a resolver failure.
+    const controller = new AbortController();
+    // Observe rejection before sending the abort signal.
+    const pending = expect(resolveAiAddresses(hostname, controller.signal, { config: dohConfig })).rejects.toMatchObject({ code: 'AI_CANCELLED' });
+    controller.abort(); await pending;
+    expect(calls).toHaveLength(2); expect(calls.every((call) => call.closed)).toBe(true); expect(jest.getTimerCount()).toBe(0);
   });
 });

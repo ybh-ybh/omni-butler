@@ -1,7 +1,11 @@
-import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { isIP } from 'node:net';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { request } from 'node:https';
-import { resolveAiAddresses } from './ai-dns';
+import { AiProviderError } from './ai-errors';
+import { normalizeAiBaseUrl } from './ai-url';
+import { openAiConnection } from './ai-transport';
+export { AiProviderError } from './ai-errors';
+export { normalizeAiBaseUrl } from './ai-url';
+export { isPublicAiAddress } from './ai-address';
 
 /// 执行任务时记录实际使用的提示词版本，旧结果不追溯改写。
 export const AI_POLISH_PROMPT_VERSION = 3;
@@ -16,71 +20,12 @@ export interface NotePolishContext {
   utcOffsetMinutes: number;
 }
 
-/// 网络层只暴露稳定错误码，不把供应商错误正文或密钥放进日志。
-export class AiProviderError extends Error {
-  /// uncertain 表示请求可能已被计费，禁止后台自动重试。
-  constructor(readonly code: string, readonly uncertain = false) { super(code); }
-}
-
 /// 供应商预设可编辑，后端与客户端只使用同一份默认事实。
 export const AI_PRESETS = [
   { provider: 'zhipu', name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/v1', model: 'glm-5.3' },
   { provider: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' },
   { provider: 'custom', name: '自定义 Responses API 服务', baseUrl: '', model: '' },
 ];
-
-/// 只规范化 Responses 地址，保留自定义前缀并拒绝旧协议端点。
-export function normalizeAiBaseUrl(input: string): string {
-  try {
-    // URL 不允许凭据、参数、片段和反斜杠的隐式解释。
-    const url = new URL(input.trim());
-    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || input.includes('\\')) throw new Error('invalid');
-    if (/\/chat\/completions(?:\/|$)/i.test(decodeURIComponent(url.pathname))) throw new Error('invalid');
-    url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/responses$/i, '').replace(/\/+$/, '');
-    if (!url.hostname || url.hostname.toLowerCase() === 'localhost' || url.hostname.endsWith('.localhost') || url.hostname.endsWith('.local')) throw new Error('invalid');
-    if (isIP(url.hostname.replace(/^\[|\]$/g, '')) && !isPublicAiAddress(url.hostname.replace(/^\[|\]$/g, ''))) throw new Error('invalid');
-    return url.toString().replace(/\/$/, '');
-  } catch {
-    throw new BadRequestException({ code: 'AI_INVALID_URL', message: '请填写无凭据、查询参数和片段的公网 HTTPS Responses API 基址，不支持 Chat Completions 地址' });
-  }
-}
-
-/// 拒绝非全球单播、私网、文档保留地址及 IPv4 映射旁路。
-export function isPublicAiAddress(address: string): boolean {
-  if (isIP(address) === 4) {
-    // IPv4 逐字节检查，避免字符串前缀误判。
-    const octets = address.split('.').map(Number);
-    // 关键前两字节供保留网段判断。
-    const first = octets[0]!;
-    // 第二字节仍按数值处理，不做文本判断。
-    const second = octets[1]!;
-    return !(first === 0 || first === 10 || first === 127 || first >= 224 ||
-      (first === 100 && second >= 64 && second <= 127) || (first === 169 && second === 254) ||
-      (first === 172 && second >= 16 && second <= 31) || (first === 192 && (second === 168 || second === 0 || second === 2)) ||
-      (first === 198 && (second === 18 || second === 19 || second === 51)) || (first === 203 && second === 0 && octets[2] === 113));
-  }
-  if (isIP(address) === 6) {
-    // 仅全球单播 2000::/3，并额外排除文档和隧道网段。
-    const lower = new URL(`https://[${address}]/`).hostname.slice(1, -1).toLowerCase();
-    // 第二组先还原成数值，前导零不能绕过特殊用途网段校验。
-    const second = Number.parseInt(lower.split(':')[1] || '0', 16);
-    return /^[23][0-9a-f]{3}:/.test(lower) && !(lower.startsWith('2001:') && (second < 0x200 || second === 0xdb8)) && !lower.startsWith('2002:') && !(lower.startsWith('3fff:') && second < 0x1000);
-  }
-  return false;
-}
-
-/// 笔记与助手共用公网校验和 DNS 固定，禁止 SDK 绕过这条出站边界。
-export async function resolveAiEndpoint(baseUrl: string, signal?: AbortSignal): Promise<{ url: URL; address: { address: string; family: number } }> {
-  // 基址规范化保留合法路径前缀，只拼接一次 Responses 端点。
-  const url = new URL(`${normalizeAiBaseUrl(baseUrl)}/responses`);
-  // IPv6 字面量不携带 URL 中的中括号。
-  const hostname = url.hostname.replace(/^\[|\]$/g, '');
-  // DoH 必须校验所有结果，混合公网与私网地址也不能通过。
-  let addresses: { address: string; family: number }[];
-  try { addresses = await resolveAiAddresses(hostname, signal); } catch { throw new AiProviderError('AI_DNS_FAILED'); }
-  if (!addresses.length || addresses.some((entry) => !isPublicAiAddress(entry.address))) throw new BadRequestException({ code: 'AI_PRIVATE_URL', message: '模型服务必须使用公网 HTTPS 地址，不能连接本机、内网或保留网段' });
-  return { url, address: addresses[0]! };
-}
 
 /// 三种供应商只使用 Responses API，不回退其他协议。
 @Injectable()
@@ -109,37 +54,48 @@ export class AiProvider {
 
   /// 每次请求重新解析并固定 DNS 地址，TLS 仍验证原域名，禁止重定向。
   private async complete(input: { provider: string; baseUrl: string; model: string; apiKey: string; thinkingEnabled?: boolean }, instruction: string, text: string, maxTokens: number, signal?: AbortSignal): Promise<string> {
-    // 规范化后固定端点，不能接受用户自定义额外请求参数。
+    // Resolution, TLS and response reading share one model request deadline.
+    const deadlineAt = Date.now() + 60000;
+    // Preserve the configured API prefix while constructing exactly one Responses path.
     const url = new URL(`${normalizeAiBaseUrl(input.baseUrl)}/responses`);
-    // IPv6 字面量 URL 的中括号不属于 DNS 名称。
-    const hostname = url.hostname.replace(/^\[|\]$/g, '');
-    // DoH 获取全部解析结果，任一私网地址都拒绝，避免多地址绕过。
-    let addresses: { address: string; family: number }[];
-    try { addresses = await resolveAiAddresses(hostname, signal); } catch { throw new AiProviderError('AI_DNS_FAILED'); }
-    if (!addresses.length || addresses.some((entry) => !isPublicAiAddress(entry.address))) throw new BadRequestException({ code: 'AI_PRIVATE_URL', message: '模型服务必须使用公网 HTTPS 地址，不能连接本机、内网或保留网段' });
-    // 思考开关显式控制请求，输出预算仍同时约束思考和正文。
+    // Invalid header values are rejected before opening a connection.
+    if (!input.apiKey || /[\r\n\0]/.test(input.apiKey)) throw new AiProviderError('AI_KEY_INVALID');
+    // Serialize only the existing Responses contract.
     const payload = JSON.stringify({ model: input.model.trim(), instructions: instruction, input: text, max_output_tokens: maxTokens, stream: false, store: false, reasoning: { effort: input.thinkingEnabled === true ? 'high' : 'none' } });
-    // 固定解析后的首个公网地址，连接时不会再次向 DNS 查询。
-    const address = addresses[0]!;
-    // 收到完整响应前始终认为提交可能已生效。
-    const result = await new Promise<{ status: number; body: string }>((resolve, reject) => {
-      // 请求固定公网 IP，SNI 和证书验证仍使用服务商域名。
-      const outgoing = request(url, { method: 'POST', agent: false, headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload), authorization: `Bearer ${input.apiKey}` }, family: address.family, lookup: (_name, options, callback) => options.all ? callback(null, [address]) : callback(null, address.address, address.family), timeout: 60000, signal }, (response) => {
-        // 限制响应大小，拒绝服务商返回无界字节。
-        let size = 0;
-        // 只在内存保留有限响应，不输出到日志。
-        const chunks: Buffer[] = [];
-        response.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 1024 * 1024) outgoing.destroy(new AiProviderError('AI_RESPONSE_TOO_LARGE')); else chunks.push(chunk); });
-        response.on('error', () => reject(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)));
-        response.on('end', () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+    // Preflight sends no HTTP model request and selects one verified TLS socket.
+    const connection = await openAiConnection(url, { signal, deadlineAt });
+    // All response data remains bounded and private to this call.
+    let result: { status: number; body: string };
+    try {
+      if (signal?.aborted) throw new AiProviderError('AI_CANCELLED');
+      if (Date.now() >= deadlineAt) throw new AiProviderError('AI_TIMEOUT');
+      result = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        // Tracks complete HTTP framing so early close cannot be accepted as success.
+        let ended = false;
+        // Uses the already verified socket; the agent cannot reconnect or resolve again.
+        const outgoing = request(url, { method: 'POST', agent: connection.agent, headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload), authorization: `Bearer ${input.apiKey}` }, timeout: Math.max(1, deadlineAt - Date.now()), signal }, (response) => {
+          // Bound the total response size independently of individual network chunks.
+          let size = 0;
+          // Sensitive remote content is held only for protocol validation.
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 1024 * 1024) outgoing.destroy(new AiProviderError('AI_RESPONSE_TOO_LARGE', true)); else chunks.push(chunk); });
+          response.on('aborted', () => reject(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)));
+          response.on('error', () => reject(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)));
+          response.on('end', () => { ended = true; resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }); });
+        });
+        // The absolute deadline prevents slow response trickles from extending the budget.
+        const deadline = setTimeout(() => outgoing.destroy(new AiProviderError('AI_TIMEOUT', true)), Math.max(1, deadlineAt - Date.now()));
+        outgoing.on('close', () => { clearTimeout(deadline); if (!ended) reject(new AiProviderError('AI_SUBMISSION_UNKNOWN', true)); });
+        outgoing.on('timeout', () => outgoing.destroy(new AiProviderError('AI_TIMEOUT', true)));
+        outgoing.on('error', (error: Error) => reject(error instanceof AiProviderError ? error : new AiProviderError('AI_SUBMISSION_UNKNOWN', true)));
+        outgoing.end(payload);
       });
-      // 总时限覆盖持续滴流响应，不能仅依赖 socket 空闲超时。
-      const deadline = setTimeout(() => outgoing.destroy(new AiProviderError('AI_TIMEOUT', true)), 60000);
-      outgoing.on('close', () => clearTimeout(deadline));
-      outgoing.on('timeout', () => outgoing.destroy(new AiProviderError('AI_TIMEOUT', true)));
-      outgoing.on('error', (error: Error) => reject(error instanceof AiProviderError ? error : new AiProviderError('AI_SUBMISSION_UNKNOWN', true)));
-      outgoing.end(payload);
-    });
+      connection.reportHttp(result.status >= 200 && result.status < 300 ? 'success' : 'failure', `HTTP_${result.status}`);
+    } catch (error) {
+      if (error instanceof AiProviderError) error.traceId = connection.traceId;
+      connection.reportHttp('failure', error instanceof AiProviderError ? error.code : 'AI_SUBMISSION_UNKNOWN');
+      throw error;
+    } finally { connection.dispose(); }
     if (result.status === 400) {
       // 仅识别已知参数冲突，不向客户端透传可能含密钥的服务商原文。
       let rejection: unknown;
@@ -227,5 +183,19 @@ function providerRejectionCode(error: unknown): string {
 export function aiFailure(error: unknown): ServiceUnavailableException {
   // 只有本地固定错误码能够离开服务边界。
   const code = error instanceof AiProviderError ? error.code : 'AI_SERVICE_UNAVAILABLE';
-  return new ServiceUnavailableException({ code, message: code === 'AI_REASONING_UNSUPPORTED' ? '该模型始终开启思考，不支持关闭思考（reasoning.effort=none）。' : code === 'AI_AUTH_FAILED' ? 'API Key 无效或缺少模型权限' : code === 'AI_MODEL_OR_URL_INVALID' ? '模型名称或 API 地址无效' : code === 'AI_DNS_FAILED' ? '模型域名的 DoH 解析失败，请检查服务器网络后重试' : code === 'AI_TIMEOUT' ? '模型请求超时，可能已计费，请手动重试' : '模型服务连接失败，请检查配置后重试' });
+  // Only a generated UUID can become a client-visible diagnostic reference.
+  const traceId = error instanceof AiProviderError && typeof error.traceId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(error.traceId) ? error.traceId : undefined;
+  // Every public message is local text rather than a provider or network response.
+  const messages: Record<string, string> = {
+    AI_REASONING_UNSUPPORTED: '该模型始终开启思考，不支持关闭思考（reasoning.effort=none）。',
+    AI_AUTH_FAILED: 'API Key 无效或缺少模型权限',
+    AI_MODEL_OR_URL_INVALID: '模型名称或 API 地址无效',
+    AI_DNS_FAILED: '服务器无法解析模型域名，请检查 DNS 配置或查看网络诊断',
+    AI_PRIVATE_URL: '模型地址解析到不允许访问的网络，请检查服务器 DNS 配置',
+    AI_TLS_FAILED: '服务器与模型服务的 TLS 连接失败，请查看网络诊断',
+    AI_CONNECTION_FAILED: '服务器无法连接模型服务，请检查出口网络或查看网络诊断',
+    AI_CANCELLED: '请求已取消',
+    AI_TIMEOUT: '模型请求超时，可能已计费，请手动重试',
+  };
+  return new ServiceUnavailableException({ code, ...(traceId ? { traceId } : {}), message: (messages[code] ?? '模型服务连接失败，请检查配置后重试') + (traceId ? `（诊断编号：${traceId}）` : '') });
 }

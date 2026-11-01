@@ -1,4 +1,5 @@
 import { ConflictException, HttpException, UnauthorizedException } from '@nestjs/common';
+import { AiProviderError } from '../ai/ai-errors';
 
 /// 运行器的本地限制与业务数据冲突使用互不混淆的错误身份。
 export type AssistantRunFailureCode =
@@ -18,6 +19,11 @@ const failureMessages: Record<string, string> = {
   NOTE_BASE_MISSING: '笔记编辑基线已不存在，请重新读取后生成方案',
   TIME_INTERVAL_CONFLICT: '时间范围与已有记录冲突，请核对时间范围',
   TODO_STRUCTURE_CONFLICT: '数据已发生变化，请核对后重新生成方案',
+  AI_DNS_FAILED: '服务器无法解析模型域名，请检查 DNS 配置',
+  AI_CONNECTION_FAILED: '服务器无法连接模型服务，请检查出口网络',
+  AI_TLS_FAILED: '服务器与模型服务的 TLS 连接失败，请查看网络诊断',
+  AI_PRIVATE_URL: '模型地址解析到不允许访问的网络，请检查 DNS 配置',
+  AI_CANCELLED: '请求已取消',
   AI_AUTH_FAILED: '模型密钥无效或缺少权限，请检查配置',
   AI_RATE_LIMITED: '模型服务暂时限流，请稍后手动重试',
   AI_QUOTA_EXHAUSTED: '模型服务额度不足，请检查余额或配额',
@@ -51,11 +57,15 @@ export function assistantRunFailure(error: unknown): { code: string; message: st
     : error instanceof ConflictException ? 'ASSISTANT_STATE_INVALID' : 'ASSISTANT_FAILED';
   // 未知出站继续保留显式重试边界，不能进入自动回答恢复。
   const unknown = code === 'AI_SUBMISSION_UNKNOWN' || (error instanceof Error && 'uncertain' in error && error.uncertain === true);
+  // Only a generated UUID may be included in the user-visible diagnostic reference.
+  const traceId = error instanceof AiProviderError && typeof error.traceId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(error.traceId) ? error.traceId : undefined;
+  // A local correlation ID never exposes provider bodies or credentials.
+  const diagnostic = traceId ? `（诊断编号：${traceId}）` : '';
   return {
     code,
     unknown,
-    message: unknown ? '模型请求结果不确定，请核实后手动重试'
+    message: (unknown ? '模型请求结果不确定，请核实后手动重试'
       : error instanceof UnauthorizedException ? '设备授权或助手设置已失效'
-        : failureMessages[code] ?? '助手执行未完成，可查看已保存结果后重试',
+        : failureMessages[code] ?? '助手执行未完成，可查看已保存结果后重试') + diagnostic,
   };
 }

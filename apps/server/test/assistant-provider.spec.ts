@@ -1,10 +1,9 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { EventEmitter } from 'node:events';
 import type { ClientRequest, IncomingMessage, RequestOptions } from 'node:http';
-import { request } from 'node:https';
-import { TLSSocket } from 'node:tls';
-import { Socket } from 'node:net';
-import { resolveAiAddresses } from '../src/ai/ai-dns';
+import { request, type Agent } from 'node:https';
+import { openAiConnection, type AiConnection } from '../src/ai/ai-transport';
+import { AiNetworkError } from '../src/ai/ai-network-types';
 import { AiKeyStore } from '../src/ai/ai-key-store';
 import { AiProvider, AiProviderError } from '../src/ai/ai-provider';
 import { AiService } from '../src/ai/ai.service';
@@ -14,7 +13,7 @@ import type { AssistantFunctionTool, AssistantProfileSnapshot } from '../src/ai/
 import { PrismaService } from '../src/prisma/prisma.service';
 
 jest.mock('node:https', () => ({ request: jest.fn() }));
-jest.mock('../src/ai/ai-dns', () => ({ resolveAiAddresses: jest.fn() }));
+jest.mock('../src/ai/ai-transport', () => ({ openAiConnection: jest.fn() }));
 
 /// 合成文本终态，不包含任何用户记录或真实凭据。
 function textResponse(text = '已完成查询。'): Record<string, unknown> {
@@ -70,11 +69,14 @@ describe('助手模型流式 Responses 与 Function Calling', () => {
   let currentRequest: ClientRequest;
   /// 每例测试独立创建适配器。
   let provider: AssistantModelProvider;
+  /// Supplies a verified connection while every HTTP response stays synthetic.
+  let connection: AiConnection;
 
   beforeEach(() => {
     jest.clearAllMocks(); payloads = []; responses = [{ status: 200, body: sse(textResponse(), [{ type: 'response.output_text.delta', delta: '已完成查询。' }]) }];
     profiles.assertAssistantProfileAvailable.mockResolvedValue(); keys.decrypt.mockReturnValue('unit-only-key');
-    jest.mocked(resolveAiAddresses).mockResolvedValue([{ address: '8.8.8.8', family: 4 }]);
+    connection = { agent: {} as Agent, address: { address: '8.8.8.8', family: 4 }, traceId: 'unit-trace', dispose: jest.fn(), reportHttp: jest.fn() };
+    jest.mocked(openAiConnection).mockReset().mockResolvedValue(connection);
     provider = new AssistantModelProvider(profiles as unknown as AiService, keys as unknown as AiKeyStore);
     jest.mocked(request).mockImplementation(((url: URL, options: RequestOptions, callback: (response: IncomingMessage) => void): ClientRequest => {
       sentUrl = url; sentOptions = options;
@@ -109,12 +111,11 @@ describe('助手模型流式 Responses 与 Function Calling', () => {
     expect(onDelta).toHaveBeenCalledWith('已完成查询。');
     expect(payloads[0]).toEqual({ model: 'test-model', instructions: input.instructions, input: input.input, reasoning: { effort: 'none' }, tools: [{ ...tools[0], strict: false }], tool_choice: 'auto', max_output_tokens: 8192, stream: true, store: false });
     expect(sentUrl.pathname).toBe('/prefix/v1/responses');
-    expect(sentOptions).toMatchObject({ agent: false, headers: { authorization: 'Bearer unit-only-key', accept: 'text/event-stream' } });
-    // 请求解析器永远只能使用经过公网验证的唯一 IP。
-    const lookup = jest.fn();
-    sentOptions.lookup!('model.example.test', { all: true }, lookup);
-    expect(lookup).toHaveBeenCalledWith(null, [{ address: '8.8.8.8', family: 4 }]);
-    expect(profiles.assertAssistantProfileAvailable).toHaveBeenCalledTimes(3);
+    expect(sentOptions).toMatchObject({ headers: { authorization: 'Bearer unit-only-key', accept: 'text/event-stream' } });
+    expect(sentOptions.agent).toBe(connection.agent);
+    expect(openAiConnection).toHaveBeenCalledWith(sentUrl, { signal: undefined, deadlineAt: expect.any(Number) });
+    expect(connection.dispose).toHaveBeenCalledTimes(1);
+    expect(profiles.assertAssistantProfileAvailable).toHaveBeenCalledTimes(4);
     expect(profiles.assertAssistantProfileAvailable).toHaveBeenCalledWith('owner-test', snapshot);
     expect(JSON.stringify(payloads)).not.toContain(snapshot.encryptedApiKey);
   });
@@ -374,37 +375,63 @@ describe('助手模型流式 Responses 与 Function Calling', () => {
   });
 
   it('拒绝混入私网的 DNS 解析，不解密密钥或发送模型请求', async () => {
-    jest.mocked(resolveAiAddresses).mockResolvedValue([{ address: '8.8.8.8', family: 4 }, { address: '127.0.0.1', family: 4 }]);
-    await expect(provider.complete('owner-test', snapshot, input)).rejects.toMatchObject({ response: { code: 'AI_PRIVATE_URL' } });
+    jest.mocked(openAiConnection).mockRejectedValue(new AiNetworkError('AI_PRIVATE_URL', 'dns', 'UNSAFE_ADDRESS'));
+    await expect(provider.complete('owner-test', snapshot, input)).rejects.toMatchObject({ code: 'AI_PRIVATE_URL', uncertain: false, facts: { submission: 'notSubmitted', retryable: false } });
     expect(keys.decrypt).not.toHaveBeenCalled(); expect(request).not.toHaveBeenCalled();
+  });
+
+  it('预连接诊断编号经助手包装保留，敏感附加字段被丢弃', async () => {
+    // This synthetic UUID represents a trusted transport-generated diagnostic ID.
+    const traceId = '12345678-1234-4234-9234-123456789abc';
+    // Unrelated properties must not survive the stable failure projection.
+    const failure = Object.assign(new AiNetworkError('AI_TLS_FAILED', 'tls', 'CERTIFICATE_REJECTED'), { traceId, secret: 'synthetic-private-network-data' });
+    jest.mocked(openAiConnection).mockRejectedValueOnce(failure);
+    // Capturing the wrapper verifies both correlation and submission semantics.
+    const wrapped = await provider.complete('owner-test', snapshot, input).catch((error: unknown) => error);
+    expect(wrapped).toMatchObject({ code: 'AI_TLS_FAILED', traceId, uncertain: false, facts: { submission: 'notSubmitted', retryable: false } });
+    expect(JSON.stringify(wrapped)).not.toContain('synthetic-private-network-data');
+    expect(keys.decrypt).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it('配置在发送前或等待期间撤回时拒绝使用快照', async () => {
     profiles.assertAssistantProfileAvailable.mockRejectedValueOnce(new ConflictException({ code: 'AI_CONFIGURATION_UNAVAILABLE' }));
     await expect(provider.complete('owner-test', snapshot, input)).rejects.toThrow(ConflictException);
     expect(request).not.toHaveBeenCalled();
-    profiles.assertAssistantProfileAvailable.mockResolvedValueOnce().mockResolvedValueOnce().mockRejectedValueOnce(new ConflictException({ code: 'AI_CONFIGURATION_UNAVAILABLE' }));
+    profiles.assertAssistantProfileAvailable.mockResolvedValueOnce().mockResolvedValueOnce().mockResolvedValueOnce().mockRejectedValueOnce(new ConflictException({ code: 'AI_CONFIGURATION_UNAVAILABLE' }));
     await expect(provider.complete('owner-test', snapshot, input)).rejects.toThrow(ConflictException);
     expect(request).toHaveBeenCalledTimes(1);
+    expect(connection.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('预连接后配置撤回仍释放socket且不发送模型请求', async () => {
+    profiles.assertAssistantProfileAvailable.mockResolvedValueOnce().mockResolvedValueOnce().mockRejectedValueOnce(new ConflictException({ code: 'AI_CONFIGURATION_UNAVAILABLE' }));
+    await expect(provider.complete('owner-test', snapshot, input)).rejects.toThrow(ConflictException);
+    expect(openAiConnection).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
+    expect(connection.dispose).toHaveBeenCalledTimes(1);
   });
 
   it('总超时、在途取消都保留未知提交身份，不重复请求', async () => {
+    connection.traceId = '12345678-1234-4234-9234-123456789abc';
     jest.useFakeTimers();
     try {
       responses = [{ status: 200, body: '', hanging: true }];
       // 在推进时钟前观察拒绝，避免未处理 Promise。
-      const pending = expect(provider.complete('owner-test', snapshot, input)).rejects.toMatchObject({ code: 'AI_SUBMISSION_UNKNOWN', uncertain: true });
+      const pending = expect(provider.complete('owner-test', snapshot, input)).rejects.toMatchObject({ code: 'AI_SUBMISSION_UNKNOWN', uncertain: true, traceId: connection.traceId });
       await jest.advanceTimersByTimeAsync(60000); await pending;
       expect(request).toHaveBeenCalledTimes(1); expect(jest.getTimerCount()).toBe(0);
+      expect(connection.dispose).toHaveBeenCalledTimes(1);
     } finally { jest.useRealTimers(); }
     responses = [{ status: 200, body: '', hanging: true }];
     // 独立信号模拟用户停止，允许 DNS 与两次配置校验先完成。
     const controller = new AbortController();
     // 请求发送后才取消，不能声称供应商未收费。
-    const pending = expect(provider.complete('owner-test', snapshot, { ...input, signal: controller.signal })).rejects.toMatchObject({ code: 'AI_SUBMISSION_UNKNOWN', uncertain: true });
+    const pending = expect(provider.complete('owner-test', snapshot, { ...input, signal: controller.signal })).rejects.toMatchObject({ code: 'AI_SUBMISSION_UNKNOWN', uncertain: true, traceId: connection.traceId });
     await new Promise<void>((resolve) => setImmediate(resolve));
     controller.abort(); await pending;
     expect(currentRequest).toBeDefined(); expect(request).toHaveBeenCalledTimes(2);
+    expect(connection.dispose).toHaveBeenCalledTimes(2);
   });
 
   it('流字节、单事件和可见正文都有界限', async () => {
@@ -467,24 +494,44 @@ describe('助手模型流式 Responses 与 Function Calling', () => {
   });
 
   it('DNS前置失败可明确未提交，TLS前连接拒绝与握手后断线区别处理', async () => {
-    jest.mocked(resolveAiAddresses).mockRejectedValueOnce(new Error('合成 DNS 故障'));
+    jest.mocked(openAiConnection).mockRejectedValueOnce(new AiNetworkError('AI_DNS_FAILED', 'dns', 'TIMEOUT', true));
     await expect(provider.complete('owner-test', snapshot, input)).rejects.toMatchObject({ code: 'AI_DNS_FAILED', uncertain: false, facts: { submission: 'notSubmitted', retryable: true } });
     expect(request).not.toHaveBeenCalled();
-    // 未连接的 TLS 对象只用于阶段事件，从不调用 connect。
-    const socket = new TLSSocket(new Socket());
-    // 每个阶段使用相同合成网络错误，区别仅来自握手事实。
+    jest.mocked(openAiConnection).mockRejectedValueOnce(new AiNetworkError('AI_CONNECTION_FAILED', 'tcp', 'ECONNREFUSED', true));
+    await expect(provider.complete('owner-test', snapshot, input)).rejects.toMatchObject({ code: 'AI_CONNECTION_FAILED', uncertain: false, facts: { submission: 'notSubmitted', retryable: true } });
+    expect(request).not.toHaveBeenCalled();
+    // The same error code after POST cannot prove that the request was unsubmitted.
     const connectionError = Object.assign(new Error('合成拒绝'), { code: 'ECONNREFUSED' });
+    // Only the synthetic HTTP request owns this error; preflight already succeeded.
+    const outgoing = new EventEmitter() as ClientRequest;
+    outgoing.destroy = ((): ClientRequest => { outgoing.emit('close'); return outgoing; });
+    outgoing.end = ((): ClientRequest => { outgoing.emit('error', connectionError); return outgoing; }) as ClientRequest['end'];
+    jest.mocked(request).mockReturnValue(outgoing);
+    await expect(provider.complete('owner-test', snapshot, input)).rejects.toMatchObject({ code: 'AI_SUBMISSION_UNKNOWN', uncertain: true, facts: { submission: 'unknown', retryable: false } });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(connection.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('预连接取消不重试，不解密或提交模型请求', async () => {
+    jest.mocked(openAiConnection).mockRejectedValueOnce(new AiNetworkError('AI_CANCELLED', 'tls', 'CANCELLED'));
+    await expect(provider.complete('owner-test', snapshot, input)).rejects.toMatchObject({ code: 'AI_CANCELLED', uncertain: false, facts: { submission: 'notSubmitted', retryable: false } });
+    expect(keys.decrypt).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('预连接收到调用方signal与原始期限，HTTP只使用剩余预算', async () => {
+    // The caller owns cancellation across both preflight and the streamed response.
+    const controller = new AbortController();
+    // Advancing the clock simulates preprocessing without any real network delay.
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1000);
+    jest.mocked(openAiConnection).mockImplementationOnce(() => { now.mockReturnValue(4000); return Promise.resolve(connection); });
     try {
-      // 不发送响应头，模拟应用请求仍被 HTTPS 握手门禁缓冲。
-      const outgoing = new EventEmitter() as ClientRequest;
-      outgoing.destroy = ((): ClientRequest => { outgoing.emit('close'); return outgoing; });
-      outgoing.end = ((): ClientRequest => { outgoing.emit('socket', socket); outgoing.emit('error', connectionError); return outgoing; }) as ClientRequest['end'];
-      jest.mocked(request).mockReturnValue(outgoing);
-      await expect(provider.complete('owner-test', snapshot, input)).rejects.toMatchObject({ code: 'AI_CONNECTION_FAILED', uncertain: false, facts: { submission: 'notSubmitted', retryable: true } });
-      // 握手一旦完成，请求是否计费不能再从同一错误码推断。
-      outgoing.end = ((): ClientRequest => { outgoing.emit('socket', socket); socket.emit('secureConnect'); outgoing.emit('error', connectionError); return outgoing; }) as ClientRequest['end'];
-      await expect(provider.complete('owner-test', snapshot, input)).rejects.toMatchObject({ facts: { submission: 'unknown', retryable: false } });
-    } finally { socket.destroy(); }
+      await provider.complete('owner-test', snapshot, { ...input, signal: controller.signal, timeoutMs: 5000 });
+      expect(openAiConnection).toHaveBeenCalledWith(sentUrl, { signal: controller.signal, deadlineAt: 6000 });
+      expect(sentOptions.timeout).toBe(2000);
+      expect(sentOptions.signal).toBe(controller.signal);
+      expect(connection.dispose).toHaveBeenCalledTimes(1);
+    } finally { now.mockRestore(); }
   });
 
   it('完整请求预算在出站前执行，包含中文JSON字节', async () => {
@@ -497,14 +544,15 @@ describe('助手模型流式 Responses 与 Function Calling', () => {
   it('DNS和校验耗尽总预算后不创建模型HTTP请求', async () => {
     // 合成时钟只推进预处理时长，不产生任何真实等待。
     const now = jest.spyOn(Date, 'now').mockReturnValue(0);
-    jest.mocked(resolveAiAddresses).mockImplementationOnce(async () => {
+    jest.mocked(openAiConnection).mockImplementationOnce(async () => {
       now.mockReturnValue(60001);
       await Promise.resolve();
-      return [{ address: '8.8.8.8', family: 4 }];
+      return connection;
     });
     try {
       await expect(provider.complete('owner-test', snapshot, input)).rejects.toMatchObject({ code: 'AI_RETRY_BUDGET_EXHAUSTED', facts: { submission: 'notSubmitted', retryable: false } });
       expect(request).not.toHaveBeenCalled();
+      expect(connection.dispose).toHaveBeenCalledTimes(1);
     } finally { now.mockRestore(); }
   });
 

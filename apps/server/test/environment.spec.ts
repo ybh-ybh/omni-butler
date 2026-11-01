@@ -8,7 +8,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ConfigModule } from '@nestjs/config';
 import { validateEnvironment } from '../src/config/environment';
+import { readAiNetworkConfig } from '../src/ai/ai-network-config';
 
 /// 构造最小有效环境变量。
 function validEnvironment(): Record<string, unknown> {
@@ -45,6 +47,7 @@ describe('validateEnvironment', () => {
     const environment = validateEnvironment(automaticEnvironment());
 
     expect(environment.PORT).toBe(3000);
+    expect(environment.AI_NETWORK_CONFIG.mode).toBe('system');
     expect(environment.IMAGE_SYNC_ENABLED).toBe(false);
     expect(environment.MINIO_ENDPOINT).toBe('http://minio:9000');
     expect(environment.MINIO_CREDENTIALS_FILE).toBe('/app/image-storage/credentials.json');
@@ -54,6 +57,49 @@ describe('validateEnvironment', () => {
     expect(environment.POWERSYNC_AUDIENCE).toBe('omni-butler-powersync');
     expect(environment.REFRESH_TOKEN_TTL_SECONDS).toBe(2592000);
     expect(existsSync(join(keysDirectory, 'jwt-private.pem'))).toBe(true);
+  });
+
+  it('rejects invalid AI network policy before creating persistent keys', () => {
+    expect(() => validateEnvironment({ ...automaticEnvironment(), AI_DNS_MODE: 'doh' })).toThrow('AI_DOH_RESOLVERS');
+    expect(existsSync(join(keysDirectory, 'jwt-private.pem'))).toBe(false);
+  });
+
+  it.each(['system', 'doh'] as const)('preserves %s networking from an actual Nest env-file load into runtime readers', async (mode) => {
+    // Restore every process variable, including defaults exported by Nest validation.
+    const originalEnvironment = { ...process.env };
+    // These names must start absent so only the isolated env file supplies policy.
+    const networkKeys = ['AI_DNS_MODE', 'AI_DNS_SERVERS', 'AI_DOH_RESOLVERS', 'AI_DNS_TIMEOUT_MS', 'AI_DNS_ATTEMPT_TIMEOUT_MS', 'AI_CONNECT_TIMEOUT_MS', 'AI_CONNECT_ATTEMPT_TIMEOUT_MS', 'AI_CONNECT_MAX_ADDRESSES'];
+    // The temporary resolver is never contacted by this configuration-only test.
+    const dohResolvers = mode === 'doh' ? [{ id: 'isolated', url: 'https://dns.example.test/dns-query', bootstrapAddresses: ['8.8.8.8'] }] : [];
+    // Use real dotenv parsing while keeping credentials and keys entirely synthetic.
+    const envPath = join(keysDirectory, 'network.env');
+    writeFileSync(envPath, [
+      'DATABASE_URL=postgresql://user:pass@localhost:5432/app',
+      'POWERSYNC_URL=https://sync.example.com',
+      'SYNC_SECRET=synthetic-network-test-secret',
+      `JWT_KEYS_DIR=${keysDirectory}`,
+      `AI_DNS_MODE=${mode}`,
+      `AI_DNS_SERVERS=${mode === 'system' ? '10.0.0.2,127.0.0.11' : ''}`,
+      `AI_DOH_RESOLVERS='${JSON.stringify(dohResolvers)}'`,
+      'AI_DNS_TIMEOUT_MS=6000',
+      'AI_DNS_ATTEMPT_TIMEOUT_MS=1500',
+      'AI_CONNECT_TIMEOUT_MS=9000',
+      'AI_CONNECT_ATTEMPT_TIMEOUT_MS=2500',
+      'AI_CONNECT_MAX_ADDRESSES=5',
+    ].join('\n'));
+    try {
+      for (const key of networkKeys) delete process.env[key];
+      await ConfigModule.forRoot({ envFilePath: envPath, ignoreEnvVars: true, validate: validateEnvironment });
+      expect(process.env.AI_DNS_MODE).toBe(mode);
+      expect(readAiNetworkConfig()).toEqual({
+        mode, systemServers: mode === 'system' ? ['10.0.0.2', '127.0.0.11'] : [], dohResolvers,
+        dnsTimeoutMs: 6000, dnsAttemptTimeoutMs: 1500,
+        connectTimeoutMs: 9000, connectAttemptTimeoutMs: 2500, maxAddresses: 5,
+      });
+    } finally {
+      for (const key of Object.keys(process.env)) if (!(key in originalEnvironment)) delete process.env[key];
+      for (const [key, value] of Object.entries(originalEnvironment)) process.env[key] = value;
+    }
   });
 
   it('MCP可信入口规范化成明确origin，不受PowerSync独立地址影响', () => {

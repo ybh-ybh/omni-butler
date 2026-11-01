@@ -39,9 +39,11 @@ NestJS 11 + Prisma 7 + PowerSync 的个人自托管同步 API。服务不提供�
 
 供应商拒绝配置的思考模式时，测试连接和整理任务显示明确原因（`AI_REASONING_UNSUPPORTED`），保留现有参数，不自动切换思考强度或重试；供应商原始错误正文不直接透传，以免泄漏密钥。
 
-AI 域名通过 DNS over HTTPS 独立解析，不依赖宿主机或 Docker 的系统 DNS。`open.bigmodel.cn` 固定使用 AliDNS `https://dns.alidns.com/resolve`（引导 IP `223.5.5.5`），其他域名使用 Cloudflare `https://cloudflare-dns.com/dns-query`（引导 IP `1.1.1.1`），均保持端点域名的 TLS 证书验证。A/AAAA 查询共用 5 秒总时限，单响应上限 64KiB；解析失败不回退系统 DNS，也不发送模型请求。服务器需能访问相应 DoH 端点；解析器只接收模型域名，不接收 API Key、模型请求路径或笔记正文。实现见 `src/ai/ai-dns.ts`。
+测试连接、笔记整理和助手流式请求共用模型出站网络组件。`AI_DNS_MODE=system` 为默认值：使用容器/本机配置的 DNS，生产推荐云厂商 VPC DNS；`AI_DNS_SERVERS` 可显式指定逗号分隔的受信 DNS IP，仅覆盖模型解析。`AI_DNS_MODE=doh` 必须显式提供 `AI_DOH_RESOLVERS` JSON 列表，使用 RFC 8484 DNS 报文和固定引导 IP，TLS 仍验证解析器域名。两种模式不隐式互相回退，也不按模型域名选择解析服务。变量、示例与容器验收见[模型出站网络部署](../../deploy/README.md#模型出站网络)。
 
-模型服务仍必须使用公网 HTTPS；DoH 返回的全部地址继续检查内网与保留网段，模型请求固定使用通过校验的 IP、校验原域名证书且禁止重定向。IP 字面量仍按原规则校验。更新部署与模型配置后，可在客户端执行测试连接核对供应商兼容性。
+两种模式均要求 A/AAAA 完整查询结果；合法空记录允许，超时不当作无记录。返回的全部地址统一检查公网边界，任意私网、保留地址或 Fake-IP 均拒绝；解析器本身可以是管理员配置的内网基础设施。模型连接只使用通过校验的 IP，保留原域名 TLS/SNI/Host 且禁止重定向。候选 IP 仅在发送 HTTP 之前进行有限切换，最终使用同一条已验证 TLS 连接发送请求；已提交或提交结果未知的请求不由网络层自动重放。DNS、连接尝试和业务请求受共同截止时间约束，用户取消会终止在途操作。没有应用 DNS 缓存，缓存交由上游解析器。
+
+构建后可运行 `node dist/ai/ai-network-diagnose.js https://api.deepseek.com https://open.bigmodel.cn/api/v1`。命令只做与业务相同的 DNS、公网地址与 TLS 校验，不加载 `.env`、不读取模型 Key、不发送模型 HTTP 请求；从当前进程环境读取网络配置并输出单个 JSON 报告。退出码 `0` 表示所有目标的 DNS/TLS 通过，非零表示配置、地址或网络检查失败。报告含实际解析模式、解析器、阶段耗时、受控原因码和关联 ID，不输出请求路径、凭据或正文。该结果不证明模型权限、Responses 协议或工具调用可用；这些仍需客户端的最小真实调用验证。外部模型网络状态独立于 API 存活检查，避免供应商故障触发整个应用重启。
 
 API Key 只在后端以 AES-256-GCM 加密保存。首次保存模型 Key 时，独立主密钥 `ai-encryption-key-v1` 自动创建在 `JWT_KEYS_DIR`（Compose `/app/keys`，本机默认 `.local/keys`）；必须与 PostgreSQL 一起备份 `api-keys` 卷。密钥损坏或丢失时明确报错，不静默生成替代密钥解读既有配置。配置响应只返回已配置状态与掩码；明文 Key 不进入客户端偏好、PowerSync 或业务快照。
 

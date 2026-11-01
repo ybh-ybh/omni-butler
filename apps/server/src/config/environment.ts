@@ -1,4 +1,6 @@
 import { resolveJwtKeys } from './jwt-keys';
+import { readAiNetworkConfig } from '../ai/ai-network-config';
+import type { AiNetworkConfig } from '../ai/ai-network-config';
 
 /// Omni Butler PowerSync 的固定公网代理路径。
 const POWERSYNC_PUBLIC_PATH = '/omni-butler/powersync/';
@@ -34,6 +36,24 @@ function resolvePublicBaseUrl(value: unknown): string {
 
 /// 应用启动所需的环境变量结构。
 interface EnvironmentVariables {
+  /// Stores validated deployment-owned model networking policy.
+  AI_NETWORK_CONFIG: AiNetworkConfig;
+  /// Preserves the selected DNS mode when Nest loads an env file.
+  AI_DNS_MODE: AiNetworkConfig['mode'];
+  /// Serializes trusted system resolvers for runtime readers.
+  AI_DNS_SERVERS: string;
+  /// Serializes explicit DoH configuration without losing it in Nest validation.
+  AI_DOH_RESOLVERS: string;
+  /// Preserves the complete DNS stage budget.
+  AI_DNS_TIMEOUT_MS: number;
+  /// Preserves the individual DNS attempt budget.
+  AI_DNS_ATTEMPT_TIMEOUT_MS: number;
+  /// Preserves the complete model connection budget.
+  AI_CONNECT_TIMEOUT_MS: number;
+  /// Preserves the individual model connection budget.
+  AI_CONNECT_ATTEMPT_TIMEOUT_MS: number;
+  /// Preserves the bounded number of model address attempts.
+  AI_CONNECT_MAX_ADDRESSES: number;
   /// MCP 的固定部署 Origin，空值仅允许无 Origin 的本机连接。
   MCP_ALLOWED_ORIGINS: string;
   /// 保留规范化公网 Origin，供 MCP 校验代理 Host。
@@ -83,6 +103,8 @@ interface EnvironmentVariables {
 export function validateEnvironment(
   source: Record<string, unknown>,
 ): EnvironmentVariables {
+  // Reject network configuration errors before creating keys or making requests.
+  const aiNetworkConfig = readAiNetworkConfig(source);
   // 必填环境变量名称。
   const requiredKeys = ['DATABASE_URL', 'SYNC_SECRET'] as const;
   // 逐个检查部署必需的参数。
@@ -192,6 +214,15 @@ export function validateEnvironment(
   const keys = resolveJwtKeys(keysDirectory);
   return {
     ...keys,
+    AI_NETWORK_CONFIG: aiNetworkConfig,
+    AI_DNS_MODE: aiNetworkConfig.mode,
+    AI_DNS_SERVERS: aiNetworkConfig.systemServers.join(','),
+    AI_DOH_RESOLVERS: JSON.stringify(aiNetworkConfig.dohResolvers),
+    AI_DNS_TIMEOUT_MS: aiNetworkConfig.dnsTimeoutMs,
+    AI_DNS_ATTEMPT_TIMEOUT_MS: aiNetworkConfig.dnsAttemptTimeoutMs,
+    AI_CONNECT_TIMEOUT_MS: aiNetworkConfig.connectTimeoutMs,
+    AI_CONNECT_ATTEMPT_TIMEOUT_MS: aiNetworkConfig.connectAttemptTimeoutMs,
+    AI_CONNECT_MAX_ADDRESSES: aiNetworkConfig.maxAddresses,
     MCP_ALLOWED_ORIGINS: normalizedMcpOrigins,
     PUBLIC_BASE_URL: publicBaseUrl,
     JWT_KEYS_DIR: keysDirectory,

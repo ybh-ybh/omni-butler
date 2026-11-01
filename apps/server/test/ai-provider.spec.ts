@@ -4,15 +4,16 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { request } from 'node:https';
+import { request, type Agent } from 'node:https';
 import type { ClientRequest, IncomingMessage, RequestOptions } from 'node:http';
-import { resolveAiAddresses } from '../src/ai/ai-dns';
+import { openAiConnection, type AiConnection } from '../src/ai/ai-transport';
+import { AiNetworkError } from '../src/ai/ai-network-types';
 import { AiKeyStore } from '../src/ai/ai-key-store';
 import { AI_PRESETS, AiProvider, aiFailure, isPublicAiAddress, normalizeAiBaseUrl } from '../src/ai/ai-provider';
 import type { NotePolishContext } from '../src/ai/ai-provider';
 
 jest.mock('node:https', () => ({ request: jest.fn() }));
-jest.mock('../src/ai/ai-dns', () => ({ resolveAiAddresses: jest.fn() }));
+jest.mock('../src/ai/ai-transport', () => ({ openAiConnection: jest.fn() }));
 
 /// 生成标准非流式 Responses 助手消息，全部正文均为合成数据。
 function completedResponse(content: unknown = [{ type: 'output_text', text: '今天记录了 3 件事情，不确定是否完成。' }]): Record<string, unknown> {
@@ -38,10 +39,13 @@ describe('AI Responses 公网协议与正文边界', () => {
   let rawBody: string | undefined;
   /// 未完成响应用于验证总超时与取消，不连接真实供应商。
   let hanging: boolean;
+  /// Provides a preverified connection without opening a real socket.
+  let connection: AiConnection;
 
   beforeEach(() => {
     jest.clearAllMocks(); status = 200; body = completedResponse(); rawBody = undefined; hanging = false;
-    jest.mocked(resolveAiAddresses).mockResolvedValue([{ address: '8.8.8.8', family: 4 }]);
+    connection = { agent: {} as Agent, address: { address: '8.8.8.8', family: 4 }, traceId: 'unit-trace', dispose: jest.fn(), reportHttp: jest.fn() };
+    jest.mocked(openAiConnection).mockReset().mockResolvedValue(connection);
     jest.mocked(request).mockImplementation(((url: URL, options: RequestOptions, callback: (response: IncomingMessage) => void): ClientRequest => {
       sentOptions = options;
       sentUrl = url;
@@ -99,14 +103,9 @@ describe('AI Responses 公网协议与正文边界', () => {
     expect(instructions).toContain('标题后空一行');
     expect(instructions).toContain('日报 - 2026年10月31日');
     expect(instructions).toContain('一般的当日工作记录不得推测为日报');
-    // 验证 lookup 不使用未校验的新 DNS 结果。
-    const callback = jest.fn();
-    sentOptions.lookup!('model.example.test', {}, callback);
-    expect(callback).toHaveBeenCalledWith(null, '8.8.8.8', 4);
-    // Node 新版本可能请求全部地址，仍只能得到已固定的唯一公网地址。
-    const allCallback = jest.fn();
-    sentOptions.lookup!('model.example.test', { all: true }, allCallback);
-    expect(allCallback).toHaveBeenCalledWith(null, [{ address: '8.8.8.8', family: 4 }]);
+    expect(openAiConnection).toHaveBeenCalledWith(sentUrl, { signal: undefined, deadlineAt: expect.any(Number) });
+    expect(sentOptions.agent).toBe(connection.agent);
+    expect(connection.dispose).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledTimes(1);
   });
 
@@ -167,23 +166,59 @@ describe('AI Responses 公网协议与正文边界', () => {
   });
 
   it('同一域名出现任意私网解析时拒绝发送', async () => {
-    jest.mocked(resolveAiAddresses).mockResolvedValue([{ address: '8.8.8.8', family: 4 }, { address: '127.0.0.1', family: 4 }]);
-    await expect(new AiProvider().polish(input, '文本', noteContext)).rejects.toThrow(BadRequestException);
+    jest.mocked(openAiConnection).mockRejectedValue(new AiNetworkError('AI_PRIVATE_URL', 'dns', 'UNSAFE_ADDRESS'));
+    await expect(new AiProvider().polish(input, '文本', noteContext)).rejects.toMatchObject({ code: 'AI_PRIVATE_URL', uncertain: false });
     expect(request).not.toHaveBeenCalled();
   });
 
-  it('DoH失败时不发送模型Key，也不将解析失败标记为已计费', async () => {
-    jest.mocked(resolveAiAddresses).mockRejectedValue(new Error('敏感网络详情'));
+  it('DNS失败时不发送模型Key，也不将解析失败标记为已计费', async () => {
+    jest.mocked(openAiConnection).mockRejectedValue(new AiNetworkError('AI_DNS_FAILED', 'dns', 'TIMEOUT', true));
     await expect(new AiProvider().test(input)).rejects.toMatchObject({ code: 'AI_DNS_FAILED', uncertain: false });
     expect(request).not.toHaveBeenCalled();
   });
 
-  it('上层取消信号传入DoH解析，模型连接禁用全局连接池', async () => {
+  it('预连接诊断编号保留到公开错误，不泄漏网络异常附加字段', async () => {
+    // This synthetic UUID models the transport-generated correlation ID.
+    const traceId = '12345678-1234-4234-9234-123456789abc';
+    // Only controlled failure facts may leave the provider boundary.
+    const failure = Object.assign(new AiNetworkError('AI_DNS_FAILED', 'dns', 'TIMEOUT', true), { traceId, secret: input.apiKey });
+    jest.mocked(openAiConnection).mockRejectedValueOnce(failure);
+    await expect(new AiProvider().test(input)).rejects.toMatchObject({ code: 'AI_DNS_FAILED', traceId, uncertain: false });
+    // The API projection retains correlation while discarding arbitrary properties.
+    const response = aiFailure(failure).getResponse();
+    expect(response).toMatchObject({ code: 'AI_DNS_FAILED', traceId, message: expect.stringContaining(`诊断编号：${traceId}`) });
+    expect(JSON.stringify(response)).not.toContain(input.apiKey);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('上层取消信号和绝对期限传入统一预连接，使用独立agent并释放连接', async () => {
     // 独立取消控制器只用于测试。
     const controller = new AbortController();
-    await new AiProvider().polish(input, '文本', noteContext, controller.signal);
-    expect(resolveAiAddresses).toHaveBeenCalledWith('model.example.test', controller.signal);
-    expect(sentOptions.agent).toBe(false);
+    // Freeze the budget origin without waiting on a real network.
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1000);
+    try {
+      await new AiProvider().polish(input, '文本', noteContext, controller.signal);
+      expect(openAiConnection).toHaveBeenCalledWith(sentUrl, { signal: controller.signal, deadlineAt: 61000 });
+      expect(sentOptions.agent).toBe(connection.agent);
+      expect(connection.dispose).toHaveBeenCalledTimes(1);
+    } finally { now.mockRestore(); }
+  });
+
+  it('预连接取消属于未提交，不能创建HTTP请求', async () => {
+    jest.mocked(openAiConnection).mockRejectedValue(new AiNetworkError('AI_CANCELLED', 'dns', 'CANCELLED'));
+    await expect(new AiProvider().test(input)).rejects.toMatchObject({ code: 'AI_CANCELLED', uncertain: false });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('预连接时间计入HTTP剩余预算，不能重新获得一分钟', async () => {
+    // Advance only the synthetic preflight duration.
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1000);
+    jest.mocked(openAiConnection).mockImplementationOnce(() => { now.mockReturnValue(60000); return Promise.resolve(connection); });
+    try {
+      await new AiProvider().test(input);
+      expect(sentOptions.timeout).toBe(1000);
+      expect(connection.dispose).toHaveBeenCalledTimes(1);
+    } finally { now.mockRestore(); }
   });
 
   it.each([
@@ -218,6 +253,7 @@ describe('AI Responses 公网协议与正文边界', () => {
     rawBody = `损坏的JSON ${input.apiKey}`;
     await expect(new AiProvider().test(input)).rejects.toMatchObject({ code: 'AI_INVALID_RESPONSE', message: 'AI_INVALID_RESPONSE' });
     expect(JSON.stringify(aiFailure(new Error(input.apiKey)).getResponse())).not.toContain(input.apiKey);
+    expect(connection.dispose).toHaveBeenCalledTimes(1);
   });
 
   it('达到正文长度边界的完整内容仍可采用', async () => {
@@ -235,11 +271,13 @@ describe('AI Responses 公网协议与正文边界', () => {
     jest.useFakeTimers();
     try {
       hanging = true;
+      connection.traceId = '12345678-1234-4234-9234-123456789abc';
       // 在推进时间前观察拒绝，避免测试制造未处理异常。
-      const pending = expect(new AiProvider().test(input)).rejects.toMatchObject({ code: 'AI_TIMEOUT', uncertain: true });
+      const pending = expect(new AiProvider().test(input)).rejects.toMatchObject({ code: 'AI_TIMEOUT', uncertain: true, traceId: connection.traceId });
       await jest.advanceTimersByTimeAsync(60000);
       await pending;
       expect(request).toHaveBeenCalledTimes(1);
+      expect(connection.dispose).toHaveBeenCalledTimes(1);
       expect(jest.getTimerCount()).toBe(0);
     } finally { jest.useRealTimers(); }
   });
@@ -248,12 +286,13 @@ describe('AI Responses 公网协议与正文边界', () => {
     hanging = true;
     // 只发送合成取消事件，不调用真实模型。
     const controller = new AbortController();
-    // 等微任务将DoH结果传入HTTPS，再发起取消。
+    // Let preflight finish and submit the HTTP request before cancellation.
     const pending = expect(new AiProvider().polish(input, '原文', noteContext, controller.signal)).rejects.toMatchObject({ code: 'AI_SUBMISSION_UNKNOWN', uncertain: true });
     await Promise.resolve();
     controller.abort();
     await pending;
     expect(request).toHaveBeenCalledTimes(1);
+    expect(connection.dispose).toHaveBeenCalledTimes(1);
   });
 
   it('不跟随重定向，也不回显供应商错误正文', async () => {

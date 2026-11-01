@@ -17,6 +17,7 @@
 | `PUBLIC_BASE_URL` | 同域名 HTTPS 公网根地址，例如 `https://butler.example.com`；后端自动推导同步与取音地址 |
 | `ASSISTANT_ATTACHMENTS_ENABLED` | 助手文件附件开关，默认 `false`；升级附件迁移及API后按需开启 |
 | `IMAGE_SYNC_ENABLED` | 图片业务开关，默认 `false`；MinIO 始终运行，供笔记原音使用 |
+| `AI_DNS_MODE` | 模型解析模式，默认 `system` 使用容器/VPC DNS；`doh` 需显式配置解析器 |
 
 Compose 自动读取当前目录的 `.env`，容器内部端口固定为 `3000`、`8080`。已有 `.env` 时补上 `API_HOST_PORT=3000`、`POWERSYNC_HOST_PORT=8080`，或填写自己的映射端口。
 
@@ -70,6 +71,86 @@ POWERSYNC_PUBLIC_URL=http://192.168.1.10:9080
 - 笔记图片、记录时间和置顶需要配套的数据库迁移及 PowerSync 下行字段，包括 `note_images`、`record_time_seconds`、`record_utc_offset_minutes` 和 `is_pinned`。笔记正文仍保存在 `note_entries.body`，不批量改写历史 Markdown。
 - 本机草稿和原件属于设备备份，不进入换服的业务请求；选择使用服务器数据时，旧草稿保留在旧数据源和备份中。
 - 同步门禁拒绝旧客户端时，保留离线数据和上传队列，升级客户端与服务端后再连接。
+
+## 模型出站网络
+
+大陆云服务器推荐保留 `AI_DNS_MODE=system`，使模型域名沿用容器配置的 DNS，上游使用云厂商推荐的 VPC DNS。Docker 自定义网络通常通过 `127.0.0.11` 转发外部查询；这个地址是容器内的解析入口，实际可用性仍取决于宿主机/云网络的上游配置。不要在服务器上照搬开发机的代理 DNS 或 Fake-IP 配置。相关行为见 [Docker DNS 文档](https://docs.docker.com/engine/network/#dns-services)。
+
+配置在 API 启动时校验，只有以下两种显式模式；不会因为一个模式失败而偷偷切换到另一个模式：
+
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `AI_DNS_MODE` | `system` | `system` 或 `doh`，不按智谱/DeepSeek 等模型供应商分支 |
+| `AI_DNS_SERVERS` | 空 | `system` 下可填最多四个逗号分隔的 DNS IP；空值读取容器 DNS；可使用受信 VPC 内网 IP |
+| `AI_DOH_RESOLVERS` | 空 | `doh` 下必填 JSON 列表，最多四个；每项包含 `id`、`url`、`bootstrapAddresses` |
+| `AI_DNS_TIMEOUT_MS` | `5000` | 整个解析过程的总预算，范围 1–30000 毫秒 |
+| `AI_DNS_ATTEMPT_TIMEOUT_MS` | `2000` | 单次解析器尝试预算，不得超过解析总预算 |
+| `AI_CONNECT_TIMEOUT_MS` | `8000` | 全部候选 IP 的建连总预算，范围 1–60000 毫秒 |
+| `AI_CONNECT_ATTEMPT_TIMEOUT_MS` | `2000` | 单个 IP 的建连预算，不得超过建连总预算 |
+| `AI_CONNECT_MAX_ADDRESSES` | `8` | 最多尝试的候选 IP 数，范围 1–32；公网校验仍覆盖全部返回地址 |
+
+显式配置 `AI_DNS_SERVERS` 只影响模型解析，不改变 PostgreSQL、MinIO 等容器服务名解析。填写云厂商实际提供的 DNS 地址，不能把另一家云的私网 DNS 当作通用地址。`doh` 模式要求 `AI_DNS_SERVERS` 为空；`system` 模式要求 `AI_DOH_RESOLVERS` 为空。
+
+本地存在 Fake-IP 或部署明确要求加密 DNS 时，可在 `.env` 中选择 DoH。例如下面使用 AliDNS 的两个引导地址；它们属于同一解析服务，并不等于两个独立供应商：
+
+```dotenv
+AI_DNS_MODE=doh
+AI_DNS_SERVERS=
+AI_DOH_RESOLVERS='[{"id":"alidns","url":"https://dns.alidns.com/dns-query","bootstrapAddresses":["223.5.5.5","223.6.6.6"]}]'
+```
+
+DoH 使用标准 `application/dns-message` 报文，不使用不同供应商的 JSON 方言。端点必须是无凭据、查询参数和片段的 HTTPS 地址；引导 IP 必须为公网地址且保留端点域名的 TLS 验证。添加备用服务前，应在实际容器网络中验证其可达性；Cloudflare 仅适合作为已验证可达的显式选项，大陆生产默认配置不依赖它。配置发生超时或临时网络错误才会尝试后备路径，私网答案、证书错误、损坏应答与用户取消不会通过切换路径绕过。
+
+测试连接、笔记整理和助手流式请求使用同一套地址校验及安全连接：解析完成后检查全部 A/AAAA 地址，合法空 AAAA 允许，查询超时不视为空记录；混入任何内网、保留地址或 Fake-IP 时整体拒绝。模型连接固定到已验证的 IP，同时验证原主机名证书并保留 SNI/Host，禁止重定向。首 IP 不可达时可以在 HTTP 发送前尝试下一 IP，最终复用已建立的同一条 TLS 连接发送模型请求；发送开始后断线、超时或断流不会由网络层自动重发。配置中的各阶段预算仍受业务请求的剩余总时间限制，不会因切换而重新获得完整预算。
+
+### 在 API 容器内诊断
+
+构建产物包含无凭据诊断命令。对正在运行的 API，执行：
+
+```text
+docker compose exec -T api node dist/ai/ai-network-diagnose.js https://api.deepseek.com https://open.bigmodel.cn/api/v1
+```
+
+命令读取容器当前的网络环境变量，只执行 DNS、公网校验和 TLS 握手，随后关闭连接；不读取模型 Key、不发送模型 HTTP 请求、不修改模型设置或业务数据。可传 1–8 个模型基址，单个地址最长 2048 字符。输出是一个 JSON 报告，`scope` 固定为 `dns-tls-only`；退出码 `0` 表示全部目标通过，非零表示至少一项失败。
+
+报告展示实际 DNS 模式、解析器地址、阶段耗时、候选 IP、受控原因码及 `traceId`。`systemDnsSource=container` 表示使用容器提供的 DNS；若显示 `127.0.0.11`，进一步核对 Docker/宿主机的云 DNS 上游。无效 URL 只报告参数序号，不回显其中的凭据；模型请求路径、Key 和正文不会进入报告。排查时不要整份输出容器环境变量或已展开的 Compose 配置，以免暴露其他服务凭据。
+
+确认容器到所选 DNS 的 UDP/TCP 53（system）或 TCP 443（DoH）出口、到模型服务的 HTTPS 出口、容器 CA 证书与宿主机时间均正常。模型连接采用固定 IP 直连；设置 `HTTPS_PROXY` 不等于已经支持代理出站。若网络必须经过代理，应先明确代理的目标 IP 与 TLS 校验边界，再实现和验收代理模式。
+
+这项诊断成功不代表 Key 有效、模型支持 Responses 或工具调用可用。网络通过后，再在客户端执行最小连接测试、用合成短文本测试笔记整理，并验证助手完整流式回答。真实模型调用可能计费。外部解析器/模型故障不直接使 API 存活检查失败，避免无效重启影响同步和笔记功能。
+
+### 更新、验收与回退
+
+网络改造本身不增加数据库迁移。上线前先核对运行镜像对应的代码版本和已有迁移状态；跨版本升级仍执行本文件的备份与升级流程。保存旧 API 镜像的不可变标签、原 Compose 配置和 `.env`，不要在构建候选镜像时覆盖唯一的回退镜像。
+
+先构建候选 API 镜像，通过候选配置运行相同的只读诊断命令。使用当前 Compose 构建时，下列命令只启动一次诊断容器，覆盖镜像默认启动命令，不运行数据库迁移或 API worker：
+
+```text
+docker compose build api
+docker compose run --rm --no-deps api node dist/ai/ai-network-diagnose.js https://api.deepseek.com https://open.bigmodel.cn/api/v1
+```
+
+自动化测试与候选容器验收通过后，仅更新 API：
+
+```text
+docker compose up -d --no-deps --wait api
+```
+
+切换后重新执行运行容器诊断，再验证三个业务入口。若失败，恢复旧网络配置，通过临时 Compose override 将 `api.image` 指向保存的旧镜像标签，并使用 `up -d --no-deps --no-build --wait api` 恢复；再次核对健康状态和业务行为。不要使用 `down -v`，也不要为网络故障清理业务数据卷。
+
+发布门禁包含以下故障注入；只在隔离测试或候选容器执行网络阻断，不在运行中的业务容器临时改防火墙：
+
+| 场景 | 必须观察到的结果 |
+| --- | --- |
+| Cloudflare 不可达，默认 system 模式 | 沿用容器/VPC DNS，正常完成连接 |
+| 主解析器超时、备用可用 | 在总预算内恢复，没有重复模型 POST |
+| 所有解析器不可达 | 有界失败、阶段原因明确、模型请求为零 |
+| A 有记录、AAAA 无记录或超时 | 无记录可继续；超时按配置恢复或明确失败，不吞掉不完整结果 |
+| 首模型 IP 建连失败，下一 IP 正常 | 仅在成功连接上发送一次模型请求 |
+| 混合公网/私网、Fake-IP、非法 CNAME 或证书 | 拒绝出站，不发送凭据 |
+| DNS/TLS 期间取消 | 关闭在途资源，不产生迟到请求 |
+| 模型 POST 后断线或 SSE 中断 | 保留未知提交事实，不由网络层自动重发 |
+| 测试连接、笔记整理、助手 SSE | 共同使用相同的安全网络规则 |
 
 ## 可选图片同步
 
@@ -157,6 +238,8 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $omni_connection_upgrade;
+    # 如果上游启用了响应压缩，可取消注释以请求未压缩内容。
+    # proxy_set_header Accept-Encoding "";
 
     # 助手实时语音：五分钟录音及最终转写等待，保留完整 API 路径。
     location = /omni-butler/api/v1/assistant/speech/stream {
@@ -169,6 +252,23 @@ server {
     # API：保留客户端已经拼接的完整接口路径。
     location ^~ /omni-butler/api/v1/ {
         proxy_pass http://127.0.0.1:3000;
+
+        # SSE：关闭响应缓冲、缓存及临时响应文件。
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_max_temp_file_size 0;
+
+        # 保留 HTTP/1.1 分块传输，并减少小包延迟。
+        chunked_transfer_encoding on;
+        tcp_nodelay on;
+
+        # 关闭 Nginx 响应压缩，避免额外的压缩缓冲延迟。
+        gzip off;
+
+        # 为上游连接、请求发送和 SSE 响应读取分别设置超时。
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 86400s;
     }
 
     # PowerSync 基础路径缺少末尾斜杠时，保留请求方法并补上斜杠。
@@ -188,6 +288,8 @@ server {
 ```
 
 API 的 `proxy_pass` 后没有 URI，因此完整 API 路径会原样交给 NestJS。PowerSync 的 `proxy_pass` 末尾必须保留 `/`，Nginx 才会把外部 `/omni-butler/powersync/` 替换成容器能够识别的根路径 `/`。未匹配这两个前缀的请求不会进入 Omni Butler，可继续由其他 `location` 处理；没有其他匹配时由 Nginx 返回默认响应。若修改了后端映射端口，也要修改对应的 `proxy_pass` 端口。Nginx 若运行在另一个容器里，`127.0.0.1` 指向 Nginx 容器自身，不能直接照用此配置。
+
+API 路径包含助手 SSE 流，因此关闭响应缓冲和压缩。`proxy_max_temp_file_size 0` 只禁止代理响应写入临时文件，不影响上传请求体的缓冲；`proxy_read_timeout 86400s` 是连续两次上游读取之间的超时，不是模型任务执行时限。`gzip off` 只关闭 Nginx 的压缩；若上游也启用了压缩，可取消上方公共请求头中的 `Accept-Encoding` 注释。该指令与其他 `proxy_set_header` 保持在同一层，避免单独加到 `location` 后丢失原有请求头继承。详见 [Nginx 代理模块](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)。
 
 ### 桌面端如何访问公网服务
 
@@ -345,7 +447,7 @@ AI 助手的麦克风输入使用腾讯云[实时语音识别 WebSocket](https:/
 
 每次录音最多五分钟，同设备最多一路、同 owner 最多两路（单 API 实例计数）；只有收到厂商最终完成回执才结束识别。网络中断或取消会关闭两端连接，不自动新建付费识别；原音只在连接中流转，不落盘、不生成笔记或助手消息。是否自动发送识别文字是客户端本机设置，默认关闭。升级顺序为先更新 API 和代理配置，再更新客户端；首次实际验收分别检查 Windows、Android 麦克风权限、实时文字、手动结束、断网以及自动发送开关。仓库测试只连接本地模拟厂商，不验证真实腾讯云额度或设备录音。
 
-长录音识别使用 `PUBLIC_BASE_URL=https://自己的域名` 推导的 API 地址，或高级覆盖 `NOTE_ASR_PUBLIC_URL=https://自己的域名/omni-butler/api/v1`，该 HTTPS 地址必须能被腾讯访问。服务器签发绑定任务的短期私有原音链接；腾讯本地文件方式上限为 5MB，超过该大小且未配置公网地址时会明确提示。Nginx 的 API `location` 需设置 `client_max_body_size 128m;` 和 `proxy_read_timeout 120s;`，允许完整原音与迁移暂存上传。
+长录音识别使用 `PUBLIC_BASE_URL=https://自己的域名` 推导的 API 地址，或高级覆盖 `NOTE_ASR_PUBLIC_URL=https://自己的域名/omni-butler/api/v1`，该 HTTPS 地址必须能被腾讯访问。服务器签发绑定任务的短期私有原音链接；腾讯本地文件方式上限为 5MB，超过该大小且未配置公网地址时会明确提示。Nginx 的 API `location` 需设置 `client_max_body_size 128m;`，允许完整原音与迁移暂存上传；`proxy_read_timeout` 沿用上方 SSE 示例的 `86400s`。
 
 笔记新增原音及迁移暂存音频统一进入 MinIO 私有桶 `omni-butler-note-audio`，不再使用服务器音频目录或 `note-audio-data` 挂载。存储失败保留重试和清理回执，不回退写磁盘。客户端继续保留本机录音及缓存，支持离线使用。完整迁移先以部署同步密钥暂存原音，服务器迁移协议 v3 在同一事务验证并接管正式原音资产；只有用户明确确认缺失文件后才能使用省略清单。回收站保留 30 天，永久删除经持久文件清理队列执行。参见[原音接口与识别说明](../apps/server/src/notes/README.md)。
 
