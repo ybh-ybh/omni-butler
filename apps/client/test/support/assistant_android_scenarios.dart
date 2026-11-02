@@ -47,6 +47,7 @@ class _AndroidAssistantFixture {
     double textScale = 1,
     Brightness brightness = Brightness.light,
     bool disableAnimations = false,
+    bool settle = true,
     Map<String, dynamic>? snapshot,
     GoRouter? router,
   }) async {
@@ -144,7 +145,11 @@ class _AndroidAssistantFixture {
         child: app,
       ),
     );
-    await tester.pumpAndSettle();
+    if (settle) {
+      await tester.pumpAndSettle();
+    } else {
+      await drain(tester);
+    }
   }
 
   /// Enter speech mode and hold the actual pointer target.

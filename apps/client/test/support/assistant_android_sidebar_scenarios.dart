@@ -300,12 +300,25 @@ void _registerAndroidSidebarScenarios(
     await tester.ensureVisible(more);
     await tester.pumpAndSettle();
     expect(more.hitTestable(), findsOneWidget);
+    // Compare the full panel against the unchanged more button.
+    final Rect moreBounds = tester.getRect(more);
     await tester.tap(more);
     await tester.pumpAndSettle();
     expect(find.text('AI 设置'), findsOneWidget);
     expect(find.text('助手记忆'), findsOneWidget);
     expect(find.text('返回首页'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    // The full panel, including padding, must stay above the anchor.
+    final Finder lastItem = find.text('返回首页');
+    final Finder panel = find
+        .ancestor(of: lastItem, matching: find.byType(Material))
+        .first;
+    final Rect panelBounds = tester.getRect(panel);
+    expect(panelBounds.bottom, closeTo(moreBounds.top - 8, .1));
+    expect(panelBounds.overlaps(moreBounds), isFalse);
+    await tester.ensureVisible(lastItem);
+    await tester.pumpAndSettle();
+    expect(lastItem.hitTestable(), findsOneWidget);
     // The first back dismisses the menu without navigating the application.
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();

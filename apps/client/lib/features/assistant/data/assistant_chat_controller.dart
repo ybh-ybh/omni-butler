@@ -99,6 +99,9 @@ class AssistantChatController extends ChangeNotifier {
   /// 当前操作错误。
   String? error;
 
+  /// Transient run error identity for presentation before the final snapshot.
+  Map<String, dynamic>? streamFailure;
+
   /// 页面正在执行按钮操作。
   bool busy = false;
 
@@ -687,8 +690,14 @@ class AssistantChatController extends ChangeNotifier {
     };
   }
 
-  /// 服务端运行变更同步显示时钟和执行步骤，不把提交阶段归到旧回答。
+  /// Synchronize authoritative execution facts without reassigning submissions.
   void _acceptRun(Map<String, dynamic>? next, {int? submissionElapsedMs}) {
+    // Authoritative errors take over transient events without changing status.
+    if (next?['id'] != streamFailure?['runId'] ||
+        next?['errorMessage'] is String ||
+        <String>{'succeeded', 'cancelled'}.contains(next?['status'])) {
+      streamFailure = null;
+    }
     // 同一运行的步骤只补充或前进，不因兼容旧接口而被清空。
     final List<Map<String, dynamic>> steps = _executionSteps(
       run?['id'] == next?['id'] ? (run?['executionSteps']) : null,
@@ -839,6 +848,7 @@ class AssistantChatController extends ChangeNotifier {
     _viewGeneration++;
     _resetElapsed();
     _settlementRefreshPending = false;
+    streamFailure = null;
     conversationId = id;
     // 先显示此前打开过的只读缓存，再查询最新服务器事实。
     final Map<String, dynamic> saved = assistantMap(_histories[id]);
@@ -868,6 +878,7 @@ class AssistantChatController extends ChangeNotifier {
     _viewGeneration++;
     _resetElapsed();
     _settlementRefreshPending = false;
+    streamFailure = null;
     conversationId = null;
     // 未发送草稿可在切换历史后恢复，永远不出现在会话列表。
     final Map<String, dynamic> saved = assistantMap(_histories['__new__']);
@@ -950,6 +961,7 @@ class AssistantChatController extends ChangeNotifier {
       _viewGeneration++;
       _resetElapsed();
       _settlementRefreshPending = false;
+      streamFailure = null;
       conversationId = null;
       messages = <Map<String, dynamic>>[];
       _completedMessages.clear();
@@ -1467,6 +1479,11 @@ class AssistantChatController extends ChangeNotifier {
               plan = assistantMap(event.data['plan']);
             } else if (event.type == 'error') {
               error = event.data['message'] as String? ?? '助手执行失败';
+              streamFailure = <String, dynamic>{
+                'runId': runId,
+                'message': error,
+                'code': event.data['code'],
+              };
             }
             messages = messages
                 .map(

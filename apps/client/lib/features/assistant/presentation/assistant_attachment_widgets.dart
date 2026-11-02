@@ -27,11 +27,15 @@ class AssistantAttachmentButton extends StatefulWidget {
   /// Platform-specific glyph without changing the picker lifecycle.
   final IconData icon;
 
+  /// Keep the Android entry visible before attachment capability is available.
+  final bool alwaysVisible;
+
   /// 创建附件选择入口。
   const AssistantAttachmentButton({
     required this.attachments,
     required this.enabled,
     this.icon = Icons.attach_file,
+    this.alwaysVisible = false,
     super.key,
   });
 
@@ -95,9 +99,10 @@ class _AssistantAttachmentButtonState extends State<AssistantAttachmentButton> {
     }
   }
 
-  /// 旧服务端能力关闭时完全隐藏入口。
+  /// Preserve visibility independently from the original attachment permission gates.
   @override
-  Widget build(BuildContext context) => !widget.attachments.enabled
+  Widget build(BuildContext context) =>
+      !widget.alwaysVisible && !widget.attachments.enabled
       ? const SizedBox.shrink()
       : OmniIconButton(
           key: const ValueKey<String>('assistant-attach-button'),
@@ -105,6 +110,7 @@ class _AssistantAttachmentButtonState extends State<AssistantAttachmentButton> {
           icon: Icon(widget.icon),
           onPressed:
               widget.enabled &&
+                  widget.attachments.enabled &&
                   widget.attachments.editable &&
                   !widget.attachments.transferring &&
                   !_picking

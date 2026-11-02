@@ -15,6 +15,7 @@ import 'package:omni_butler/features/assistant/presentation/assistant_android_si
 import 'package:omni_butler/features/assistant/presentation/assistant_attachment_widgets.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_cards.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_execution_progress.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_loading_indicator.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_windows_tokens.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
@@ -57,7 +58,12 @@ class AssistantAndroidView extends ConsumerStatefulWidget {
   final Future<void> Function(String id) onRename;
 
   /// Retains existing message cards and business interactions.
-  final Widget Function(Map<String, dynamic> message, bool enabled)
+  final Widget Function(
+    Map<String, dynamic> message,
+    bool enabled, {
+    Widget? leading,
+    Widget? footer,
+  })
   messageBuilder;
 
   /// Creates the Android workspace without replacing its data controllers.
@@ -92,6 +98,9 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
 
   /// Requested drawer destination keeps the main page inaccessible in transit.
   bool _drawerOpen = false;
+
+  /// Manual connection refresh owns only its local presentation state.
+  bool _refreshing = false;
 
   /// Text and hold-to-talk are local input presentation modes.
   bool _voiceMode = false;
@@ -440,71 +449,228 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
     ),
   );
 
+  /// Raw errors remain intact; only task failures receive a short projection.
+  String? get _failureMessage {
+    if (widget.chat.run == null) return null;
+    if (widget.chat.streamFailure?['runId'] == widget.chat.run?['id']) {
+      return widget.chat.streamFailure?['message'] as String?;
+    }
+    if (<String>{
+      'failed',
+      'submissionUnknown',
+    }.contains(widget.chat.run?['status'])) {
+      return widget.chat.run?['errorMessage'] as String? ?? '';
+    }
+    return null;
+  }
+
+  /// Only the identical task error is suppressed above the conversation.
+  bool get _showOperationError =>
+      widget.chat.error != null &&
+      (_failureMessage == null || widget.chat.error != _failureMessage);
+
+  /// Attach failed-turn feedback to its user bubble before any partial answer.
+  String? get _failureTargetId {
+    if (_failureMessage == null) return null;
+    // All candidates belong to the currently displayed conversation.
+    final List<Map<String, dynamic>> messages = widget.chat.displayMessages;
+    // Missing legacy identities fall back to the run placeholder.
+    final String? taskId = widget.chat.run?['taskId'] as String?;
+    for (final Map<String, dynamic> message in messages.reversed) {
+      if (taskId != null &&
+          message['role'] == 'user' &&
+          message['taskId'] == taskId &&
+          (message['conversationId'] ?? widget.chat.conversationId) ==
+              (widget.chat.run?['conversationId'] ??
+                  widget.chat.conversationId)) {
+        return message['id'] as String?;
+      }
+    }
+    // A partially delivered answer keeps its own failure feedback.
+    final String? answerId = widget.chat.run?['answerMessageId'] as String?;
+    if (answerId != null &&
+        messages.any((message) => message['id'] == answerId)) {
+      return answerId;
+    }
+    return null;
+  }
+
+  /// One explicit retry preserves the existing run and submission boundaries.
+  Widget _retryButton() {
+    // Capture identity so an old row cannot retry a newer run.
+    final String? runId = widget.chat.run?['id'] as String?;
+    // A stream error alone never grants permission to retry a running task.
+    final bool canRetry =
+        <String>{
+          'failed',
+          'submissionUnknown',
+        }.contains(widget.chat.run?['status']) &&
+        runId != null &&
+        !widget.chat.busy &&
+        widget.enabled &&
+        widget.chat.connected &&
+        !widget.chat.offline &&
+        !widget.voice.busy &&
+        widget.chat.pending == null;
+    return OmniIconButton(
+      key: ValueKey<String>('assistant-android-retry-$runId'),
+      tooltip: '重试任务',
+      // A small yellow disc sits inside the standard Android touch target.
+      icon: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.amber.shade700,
+          shape: BoxShape.circle,
+        ),
+        child: const SizedBox.square(
+          dimension: 24,
+          child: Icon(Icons.refresh_rounded, size: 17, color: Colors.white),
+        ),
+      ),
+      onPressed: canRetry
+          ? () {
+              if (widget.chat.run?['id'] == runId &&
+                  widget.chat.pending == null) {
+                unawaited(widget.chat.retry());
+              }
+            }
+          : null,
+    );
+  }
+
+  /// Neutral failure text occupies one compact line beneath the user bubble.
+  Widget _failureCaption() {
+    // Unknown outcomes retain a distinct, neutral message.
+    final bool unknown =
+        widget.chat.run?['status'] == 'submissionUnknown' ||
+        widget.chat.streamFailure?['code'] == 'AI_SUBMISSION_UNKNOWN';
+    return Text(
+      unknown ? '结果待确认' : '处理失败，请重试',
+      key: ValueKey<String>(
+        'assistant-android-failure-${widget.chat.run?['id']}',
+      ),
+      textAlign: TextAlign.right,
+      style: Theme.of(context).textTheme.bodySmall
+          ?.copyWith(color: AssistantWindowsPalette.of(context).muted),
+    );
+  }
+
+  /// Legacy records without a user bubble still retain one recovery action.
+  Widget _failureNotice() => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: <Widget>[
+        _retryButton(),
+        Flexible(child: _failureCaption()),
+      ],
+    ),
+  );
+
   /// Existing plan and progress components preserve business authorization.
-  Widget _messages() => widget.chat.loading
-      ? const Center(child: CircularProgressIndicator())
-      : widget.chat.displayMessages.isEmpty && widget.chat.plan == null
-      ? _welcome()
-      : ListView(
-          key: const ValueKey<String>('assistant-android-messages'),
-          controller: widget.scroll,
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          padding: const EdgeInsets.symmetric(
-            horizontal: OmniSpacing.lg,
-            vertical: OmniSpacing.lg,
-          ),
-          children: <Widget>[
-            for (final Map<String, dynamic> message
-                in widget.chat.displayMessages)
-              widget.messageBuilder(message, widget.enabled),
-            if (widget.chat.run != null &&
-                !widget.chat.messages.any(
-                  (message) =>
-                      message['role'] == 'assistant' &&
-                      message['id'] == widget.chat.run?['answerMessageId'],
-                ))
-              AssistantExecutionProgress(
-                key: ValueKey<String>(
-                  'assistant-progress-${widget.chat.run?['answerMessageId'] ?? widget.chat.run?['id']}',
+  Widget _messages() {
+    // Resolve the matching message once rather than scanning for every row.
+    final String? failureTargetId = _failureTargetId;
+    return widget.chat.loading && widget.chat.displayMessages.isEmpty
+        ? const Center(child: AssistantLoadingIndicator(animating: true))
+        : widget.chat.displayMessages.isEmpty &&
+              widget.chat.plan == null &&
+              _failureMessage == null
+        ? _welcome()
+        : ListView(
+            key: const ValueKey<String>('assistant-android-messages'),
+            controller: widget.scroll,
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.symmetric(
+              horizontal: OmniSpacing.lg,
+              vertical: OmniSpacing.lg,
+            ),
+            children: <Widget>[
+              for (final Map<String, dynamic> message
+                  in widget.chat.displayMessages)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    widget.messageBuilder(
+                      message,
+                      widget.enabled,
+                      leading:
+                          failureTargetId == message['id'] &&
+                              message['role'] == 'user'
+                          ? _retryButton()
+                          : null,
+                      footer:
+                          failureTargetId == message['id'] &&
+                              message['role'] == 'user'
+                          ? _failureCaption()
+                          : null,
+                    ),
+                    if (_failureMessage != null &&
+                        failureTargetId == message['id'] &&
+                        message['role'] != 'user')
+                      _failureNotice(),
+                  ],
                 ),
-                elapsedMs: widget.chat.liveElapsedMs,
-                running: widget.chat.processing,
-                steps: assistantItems(widget.chat.run?['executionSteps']),
-                colors: AssistantWindowsPalette.of(context),
-              ),
-            if (widget.chat.plan != null &&
-                widget.chat.run?['status'] == 'waitingConfirmation')
-              AssistantPlanCard(
-                plan: widget.chat.plan!,
-                enabled:
-                    widget.enabled &&
-                    !widget.voice.busy &&
-                    !widget.chat.busy &&
-                    !widget.chat.offline &&
-                    widget.chat.pending == null &&
-                    widget.chat.draft.trim().isEmpty &&
-                    widget.chat.run?['timingPending'] != true &&
-                    widget.chat.run?['requiresTakeover'] != true,
-                onDecision: (value) => unawaited(widget.chat.decide(value)),
-                onEdit: () {
-                  setState(() => _voiceMode = false);
-                  widget.input.text = '修改方案：';
-                  widget.chat.setDraft(widget.input.text, clearReference: true);
-                  widget.inputFocus.requestFocus();
-                },
-              ),
-          ],
-        );
+              if (widget.chat.run != null &&
+                  !widget.chat.messages.any(
+                    (message) =>
+                        message['role'] == 'assistant' &&
+                        message['id'] == widget.chat.run?['answerMessageId'],
+                  ))
+                AssistantExecutionProgress(
+                  compact: true,
+                  key: ValueKey<String>(
+                    'assistant-progress-${widget.chat.run?['answerMessageId'] ?? widget.chat.run?['id']}',
+                  ),
+                  elapsedMs: widget.chat.liveElapsedMs,
+                  running: widget.chat.processing,
+                  steps: assistantItems(widget.chat.run?['executionSteps']),
+                  colors: AssistantWindowsPalette.of(context),
+                ),
+              if (_failureMessage != null && failureTargetId == null)
+                _failureNotice(),
+              if (widget.chat.plan != null &&
+                  widget.chat.run?['status'] == 'waitingConfirmation')
+                AssistantPlanCard(
+                  plan: widget.chat.plan!,
+                  enabled:
+                      widget.enabled &&
+                      !widget.voice.busy &&
+                      !widget.chat.busy &&
+                      !widget.chat.offline &&
+                      widget.chat.pending == null &&
+                      widget.chat.draft.trim().isEmpty &&
+                      widget.chat.run?['timingPending'] != true &&
+                      widget.chat.run?['requiresTakeover'] != true,
+                  onDecision: (value) => unawaited(widget.chat.decide(value)),
+                  onEdit: () {
+                    setState(() => _voiceMode = false);
+                    widget.input.text = '修改方案：';
+                    widget.chat.setDraft(
+                      widget.input.text,
+                      clearReference: true,
+                    );
+                    widget.inputFocus.requestFocus();
+                  },
+                ),
+            ],
+          );
+  }
 
   /// Settings and network failures stay outside the reverse-scrolled composer.
-  Widget _notices(AsyncValue<Map<String, dynamic>?> settings) => Column(
+  Widget _notices(
+    AsyncValue<Map<String, dynamic>?> settings, {
+    bool centered = true,
+  }) => Column(
     mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.stretch,
+    crossAxisAlignment: centered
+        ? CrossAxisAlignment.center
+        : CrossAxisAlignment.stretch,
     children: <Widget>[
       if (widget.chat.connected &&
           !settings.isLoading &&
           (settings.hasError || settings.value?['enabled'] != true))
         Wrap(
+          alignment: centered ? WrapAlignment.center : WrapAlignment.start,
           spacing: OmniSpacing.xs,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: <Widget>[
@@ -522,14 +688,20 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
               ),
           ],
         ),
-      if (widget.chat.error != null)
+      if (_showOperationError)
         Wrap(
+          alignment: centered ? WrapAlignment.center : WrapAlignment.start,
           spacing: OmniSpacing.xs,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: <Widget>[
             Text(
               widget.chat.error!,
-              style: TextStyle(color: OmniColors.of(context).danger),
+              textAlign: centered ? TextAlign.center : TextAlign.start,
+              style: TextStyle(
+                color: centered
+                    ? AssistantWindowsPalette.of(context).muted
+                    : OmniColors.of(context).danger,
+              ),
             ),
             if (widget.chat.attachments.imageInputBlockReason(settings.value) !=
                 null)
@@ -543,13 +715,16 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
             OmniButton(
               label: '刷新状态',
               variant: OmniButtonVariant.text,
-              onPressed: widget.chat.connected ? widget.chat.refresh : null,
+              onPressed: widget.chat.connected && !_refreshing
+                  ? _refreshConnection
+                  : null,
             ),
           ],
         ),
       if (widget.chat.offline)
         Text(
           '当前仅显示本机缓存；恢复连接后核实服务器状态。',
+          textAlign: centered ? TextAlign.center : TextAlign.start,
           style: Theme.of(context).textTheme.bodySmall,
         ),
     ],
@@ -732,12 +907,9 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
             ),
           ],
         ),
-      if (widget.chat.run?['errorMessage'] is String)
-        Text(
-          widget.chat.run!['errorMessage'] as String,
-          style: TextStyle(color: OmniColors.of(context).danger),
-        ),
       if (widget.chat.run != null &&
+          (_failureMessage == null ||
+              widget.chat.run?['requiresTakeover'] == true) &&
           widget.chat.run?['status'] != 'succeeded' &&
           (!widget.chat.processing ||
               widget.chat.run?['requiresTakeover'] == true))
@@ -745,11 +917,15 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
           spacing: OmniSpacing.xs,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: <Widget>[
-            Text(
-              widget.chat.run?['requiresTakeover'] == true && widget.chat.active
-                  ? '任务由其他设备处理，请先接管'
-                  : assistantStatusLabel(widget.chat.run!['status'] as String?),
-            ),
+            if (_failureMessage == null)
+              Text(
+                widget.chat.run?['requiresTakeover'] == true &&
+                        widget.chat.active
+                    ? '任务由其他设备处理，请先接管'
+                    : assistantStatusLabel(
+                        widget.chat.run!['status'] as String?,
+                      ),
+              ),
             if (widget.chat.run?['requiresTakeover'] == true &&
                 widget.chat.run?['status'] != 'cancelled')
               OmniButton(
@@ -761,18 +937,6 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
                         !widget.chat.offline &&
                         !widget.voice.busy
                     ? widget.chat.takeover
-                    : null,
-              ),
-            if (<String>{
-              'failed',
-              'submissionUnknown',
-            }.contains(widget.chat.run!['status']))
-              OmniButton(
-                label: '重试任务',
-                variant: OmniButtonVariant.text,
-                onPressed:
-                    !widget.chat.busy && widget.enabled && !widget.voice.busy
-                    ? widget.chat.retry
                     : null,
               ),
           ],
@@ -819,6 +983,7 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
               crossAxisAlignment: CrossAxisAlignment.end,
               children: <Widget>[
                 AssistantAttachmentButton(
+                  alwaysVisible: true,
                   attachments: widget.chat.attachments,
                   enabled: widget.enabled && !widget.voice.busy,
                   icon: Icons.add,
@@ -882,46 +1047,148 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
     );
   }
 
-  /// The outer route performs keyboard avoidance once for the whole workspace.
-  Widget _workspace(
-    AsyncValue<Map<String, dynamic>?> settings,
-  ) => LayoutBuilder(
-    builder: (context, constraints) {
-      // Only exceptional state takes space above the conversation content.
-      final bool notices =
-          widget.chat.error != null ||
-          widget.chat.offline ||
-          (widget.chat.connected &&
-              !settings.isLoading &&
-              (settings.hasError || settings.value?['enabled'] != true));
-      return Column(
-        children: <Widget>[
-          _header(),
-          if (widget.chat.connected && settings.isLoading)
-            const LinearProgressIndicator(),
-          if (notices)
-            ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: constraints.maxHeight * .24,
-              ),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.lg),
-                child: _notices(settings),
-              ),
-            ),
-          Expanded(child: _messages()),
-          if (widget.chat.busy) const LinearProgressIndicator(),
-          ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: constraints.maxHeight * .5),
-            child: SingleChildScrollView(
-              reverse: true,
-              child: _composer(settings.value),
-            ),
-          ),
-        ],
+  /// Retry reads server facts without resubmitting a chat message.
+  Future<void> _refreshConnection() async {
+    if (_refreshing || !mounted) return;
+    setState(() => _refreshing = true);
+    try {
+      await widget.chat.refresh();
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  /// Center the loading mark while keeping errors directly below its position.
+  Widget _connectionStatus(AsyncValue<Map<String, dynamic>?> settings) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          // Requests stop animating once a failure is known; retry starts them again.
+          final bool animating =
+              widget.chat.loading ||
+              _refreshing ||
+              (widget.chat.connected && settings.isLoading);
+          // Short keyboard windows use a scrollable group instead of clipping notices.
+          final bool short = constraints.maxHeight < 420;
+          // Read the same notices and recovery actions without repeating a top banner.
+          final Widget notices = Padding(
+            padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.lg),
+            child: _notices(settings),
+          );
+          return short
+              ? Center(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      top: math.min(56, constraints.maxHeight * .2),
+                      bottom: math.min(112, constraints.maxHeight * .25),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          AssistantLoadingIndicator(
+                            key: const ValueKey<String>(
+                              'assistant-connection-spinner',
+                            ),
+                            animating: animating,
+                          ),
+                          const SizedBox(height: 16),
+                          notices,
+                        ],
+                      ),
+                    ),
+                  ),
+                )
+              : Stack(
+                  children: <Widget>[
+                    Center(
+                      child: AssistantLoadingIndicator(
+                        key: const ValueKey<String>(
+                          'assistant-connection-spinner',
+                        ),
+                        animating: animating,
+                      ),
+                    ),
+                    Positioned(
+                      top: constraints.maxHeight / 2 + 48,
+                      left: 0,
+                      right: 0,
+                      bottom: 112,
+                      child: SingleChildScrollView(child: notices),
+                    ),
+                  ],
+                );
+        },
       );
-    },
-  );
+
+  /// The outer route performs keyboard avoidance once for the whole workspace.
+  Widget _workspace(AsyncValue<Map<String, dynamic>?> settings) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          // Existing messages and business results remain visible during reconnects.
+          final bool empty =
+              widget.chat.displayMessages.isEmpty &&
+              widget.chat.run == null &&
+              widget.chat.plan == null;
+          // Initialization and empty-page connection failures share one status surface.
+          final bool connectionStatus =
+              empty &&
+              (widget.chat.loading ||
+                  _refreshing ||
+                  (widget.chat.connected && settings.isLoading) ||
+                  _showOperationError ||
+                  widget.chat.offline);
+          // Only exceptional state takes space above the conversation content.
+          final bool notices =
+              _showOperationError ||
+              widget.chat.offline ||
+              (widget.chat.connected &&
+                  !settings.isLoading &&
+                  (settings.hasError || settings.value?['enabled'] != true));
+          return Stack(
+            children: <Widget>[
+              Column(
+                children: <Widget>[
+                  _header(),
+                  if (!connectionStatus &&
+                      widget.chat.connected &&
+                      settings.isLoading)
+                    const LinearProgressIndicator(),
+                  if (notices && !connectionStatus)
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: constraints.maxHeight * .24,
+                      ),
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: OmniSpacing.lg,
+                        ),
+                        child: _notices(settings, centered: false),
+                      ),
+                    ),
+                  Expanded(
+                    child: connectionStatus
+                        ? const SizedBox.expand()
+                        : _messages(),
+                  ),
+                  if (widget.chat.busy && !connectionStatus)
+                    const LinearProgressIndicator(),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: constraints.maxHeight * .5,
+                    ),
+                    child: SingleChildScrollView(
+                      reverse: true,
+                      child: _composer(settings.value),
+                    ),
+                  ),
+                ],
+              ),
+              if (connectionStatus)
+                Positioned.fill(child: _connectionStatus(settings)),
+            ],
+          );
+        },
+      );
 
   /// Main content is pushed aside instead of being covered by a modal sheet.
   @override

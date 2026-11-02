@@ -769,7 +769,12 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
   );
 
   /// Render assistant Markdown and platform-specific user bubble surfaces.
-  Widget _message(Map<String, dynamic> message, bool enabled) {
+  Widget _message(
+    Map<String, dynamic> message,
+    bool enabled, {
+    Widget? leading,
+    Widget? footer,
+  }) {
     enabled = enabled && !_voice.busy;
     // Android uses the reference's unboxed assistant answer layout.
     final bool android = Theme.of(context).platform == TargetPlatform.android;
@@ -788,7 +793,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
         .toList();
     if (user) {
       return Padding(
-        padding: const EdgeInsets.only(bottom: OmniSpacing.lg),
+        padding: EdgeInsets.only(bottom: android ? 8 : OmniSpacing.lg),
         child: FractionallySizedBox(
           widthFactor: .85,
           alignment: Alignment.centerRight,
@@ -801,39 +806,56 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
                 enabled: _chat.connected && !_chat.offline,
                 localPreview: message['_localOutgoing'] == true,
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: android
-                      ? OmniColors.of(context).brand.withValues(alpha: .08)
-                      : Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: android
-                      ? const BorderRadius.only(
-                          topLeft: Radius.circular(OmniRadius.dialog),
-                          topRight: Radius.circular(OmniRadius.dialog),
-                          bottomLeft: Radius.circular(OmniRadius.dialog),
-                          bottomRight: Radius.circular(OmniRadius.tiny),
-                        )
-                      : BorderRadius.circular(OmniRadius.control),
-                ),
-                child: SelectableText.rich(
-                  NoteMarkdownText.span(
-                    message['content'] as String? ?? '',
-                    style: Theme.of(context).textTheme.bodyMedium,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: <Widget>[
+                  ?leading,
+                  Flexible(
+                    child: Container(
+                      key: ValueKey<String>('assistant-user-bubble-$id'),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: android
+                            ? OmniColors.of(context).brand
+                                  .withValues(alpha: .08)
+                            : Theme.of(context)
+                                  .colorScheme
+                                  .surfaceContainerHighest,
+                        borderRadius: android
+                            ? const BorderRadius.only(
+                                topLeft: Radius.circular(OmniRadius.dialog),
+                                topRight: Radius.circular(OmniRadius.dialog),
+                                bottomLeft: Radius.circular(OmniRadius.dialog),
+                                bottomRight: Radius.circular(OmniRadius.tiny),
+                              )
+                            : BorderRadius.circular(OmniRadius.control),
+                      ),
+                      child: SelectableText.rich(
+                        NoteMarkdownText.span(
+                          message['content'] as String? ?? '',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        textWidthBasis: TextWidthBasis.longestLine,
+                      ),
+                    ),
                   ),
-                  textWidthBasis: TextWidthBasis.longestLine,
-                ),
+                ],
               ),
+              if (footer != null) ...<Widget>[
+                const SizedBox(height: 6),
+                footer,
+              ],
             ],
           ),
         ),
       );
     }
     return Padding(
-      padding: const EdgeInsets.only(bottom: OmniSpacing.lg),
+      padding: EdgeInsets.only(bottom: android ? 8 : OmniSpacing.lg),
       child: Align(
         alignment: user ? Alignment.centerRight : Alignment.centerLeft,
         child: Container(
@@ -874,6 +896,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
                 ],
                 if (!user)
                   AssistantExecutionProgress(
+                    compact: android,
                     key: ValueKey<String>(
                       'assistant-progress-${message['id']}',
                     ),

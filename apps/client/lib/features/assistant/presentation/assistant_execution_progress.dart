@@ -19,12 +19,16 @@ class AssistantExecutionProgress extends StatefulWidget {
   /// 继承Windows助手局部颜色。
   final AssistantWindowsPalette colors;
 
+  /// Android uses tighter spacing without changing desktop defaults.
+  final bool compact;
+
   /// 创建单条回答的进度头。
   const AssistantExecutionProgress({
     required this.elapsedMs,
     required this.running,
     required this.steps,
     required this.colors,
+    this.compact = false,
     super.key,
   });
 
@@ -359,7 +363,7 @@ class _AssistantExecutionProgressState
         ? Colors.black
         : widget.colors.ink;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
+      padding: EdgeInsets.only(bottom: widget.compact ? 6 : 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -428,7 +432,10 @@ class _AssistantExecutionProgressState
           OmniDisclosure(
             expanded: _expanded && widget.steps.isNotEmpty,
             child: Padding(
-              padding: const EdgeInsets.only(top: 9, bottom: 10),
+              padding: EdgeInsets.only(
+                top: widget.compact ? 3 : 9,
+                bottom: widget.compact ? 4 : 10,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
@@ -438,7 +445,7 @@ class _AssistantExecutionProgressState
               ),
             ),
           ),
-          const SizedBox(height: 9),
+          SizedBox(height: widget.compact ? 3 : 9),
           Divider(height: 1, color: widget.colors.line),
         ],
       ),

@@ -39,6 +39,8 @@ import 'package:omni_butler/features/assistant/data/assistant_repository.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_cards.dart';
 
 part 'support/assistant_android_scenarios.dart';
+part 'support/assistant_android_feedback_scenarios.dart';
+part 'support/assistant_android_loading_scenarios.dart';
 part 'support/assistant_android_sidebar_scenarios.dart';
 part 'support/assistant_tab_scenarios.dart';
 
@@ -212,6 +214,8 @@ void main() {
 
   // Android exercises hold-to-talk independently from desktop preferences.
   _registerAndroidAssistantScenarios(() => testPreferences);
+  _registerAndroidFeedbackScenarios(() => testPreferences);
+  _registerAndroidLoadingScenarios(() => testPreferences);
   _registerAndroidSidebarScenarios(() => testPreferences);
   _registerAssistantTabScenarios(() => testPreferences);
 
@@ -1504,7 +1508,7 @@ void main() {
       find.byKey(const ValueKey<String>('assistant-input')),
       findsOneWidget,
     );
-    expect(find.text('重试任务'), findsOneWidget);
+    expect(find.byTooltip('重试任务'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox());

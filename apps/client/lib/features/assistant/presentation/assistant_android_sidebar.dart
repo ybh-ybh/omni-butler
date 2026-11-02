@@ -482,6 +482,7 @@ class _AssistantAndroidSidebarState
       context: context,
       useRootNavigator: true,
       position: position,
+      aboveAnchor: true,
       items: <PopupMenuEntry<String>>[
         OmniPopupMenuItem<String>(
           value: '/settings?section=ai',
