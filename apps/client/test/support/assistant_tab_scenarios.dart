@@ -175,7 +175,16 @@ void _registerAssistantTabScenarios(SharedPreferences Function() preferences) {
         }
         // Capture the controller before the branch becomes offstage.
         final AssistantVoiceController voice = fixture.view(tester).voice;
-        await fixture.selectTab(tester, 'home');
+        // The modal voice preview blocks new background touches.
+        await tester.tap(
+          find.byKey(const ValueKey<String>('assistant-test-tab-home')),
+          warnIfMissed: false,
+        );
+        await tester.pump();
+        expect(fixture.router.state.uri.path, '/assistant');
+        // External navigation still invalidates capture and any waiting final result.
+        fixture.router.go('/home');
+        await tester.pumpAndSettle();
         await fixture.drain(tester);
         expect(voice.phase, AssistantVoicePhase.idle);
         expect(fixture.recorder.disposals, 1);

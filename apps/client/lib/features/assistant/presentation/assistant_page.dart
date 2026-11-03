@@ -1030,6 +1030,7 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
         scroll: _scroll,
         voice: _voice,
         canVoiceInput: _canVoiceInput,
+        voiceContextCurrent: _voiceContextCurrent,
         enabled: enabled,
         onSend: _send,
         onContinue: _continueConversation,

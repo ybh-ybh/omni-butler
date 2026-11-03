@@ -249,8 +249,14 @@ NoteAudioLocalFileRecord _local(
 );
 
 /// 测试使用产品主题，窄屏溢出由布局异常直接发现。
-Widget _app(Widget child, {double scale = 1}) => MaterialApp(
-  theme: AppTheme.build(brightness: Brightness.light),
+Widget _app(
+  Widget child, {
+  double scale = 1,
+  TargetPlatform? platform,
+  Brightness brightness = Brightness.light,
+}) => MaterialApp(
+  debugShowCheckedModeBanner: false,
+  theme: AppTheme.build(brightness: brightness).copyWith(platform: platform),
   home: Builder(
     builder: (context) => MediaQuery(
       data: MediaQuery.of(context)
@@ -274,6 +280,35 @@ Future<void> _settle(WidgetTester tester) async {
 
 /// 覆盖原音真实缺失、共享回听与明确插入/授权语义。
 void main() {
+  if (const bool.fromEnvironment('NOTE_AUDIO_INLINE_PREVIEW')) {
+    setUpAll(() async {
+      // Load actual Chinese glyphs only for optional visual inspection.
+      final ByteData font = ByteData.sublistView(
+        await File('C:/Windows/Fonts/msyh.ttc').readAsBytes(),
+      );
+      for (final String family in <String>[
+        'Microsoft YaHei UI',
+        'Microsoft YaHei',
+        'Roboto',
+        'Noto Sans CJK SC',
+        'Ahem',
+      ]) {
+        // Production and fallback font families use the same real glyph metrics.
+        final FontLoader loader = FontLoader(family)
+          ..addFont(Future<ByteData>.value(font));
+        await loader.load();
+      }
+      // Render playback and disclosure glyphs with the installed Flutter icon font.
+      final ByteData icons = ByteData.sublistView(
+        await File(
+          'D:/program/code/flutter/bin/cache/artifacts/material_fonts/materialicons-regular.otf',
+        ).readAsBytes(),
+      );
+      await (FontLoader(
+        'MaterialIcons',
+      )..addFont(Future<ByteData>.value(icons))).load();
+    });
+  }
   // 每例隔离的原音目录。
   late Directory directory;
   // 应用共享播放器替身。
@@ -773,6 +808,118 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  for (final double width in <double>[320, 390]) {
+    for (final double scale in <double>[1, 2]) {
+      for (final Brightness brightness in Brightness.values) {
+        testWidgets('Android音频更多单行 $width $scale ${brightness.name}', (
+          tester,
+        ) async {
+          tester.view.physicalSize = Size(width, 800);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          // Real nested note-card insets reproduce the less-than-300dp bar width.
+          await tester.pumpWidget(
+            _app(
+              RepaintBoundary(
+                key: const ValueKey<String>('audio-inline-preview'),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 34),
+                  child: NoteAudioCard(
+                    compact: true,
+                    segment: _segment(
+                      'inline',
+                      transcript: '原始录音文字',
+                    ).copyWith(durationMs: 375000),
+                    local: _local('inline'),
+                    player: player,
+                    recordingActive: false,
+                    onRecognize: () {},
+                    onCancel: () {},
+                    onInsert: (_) {},
+                  ),
+                ),
+              ),
+              scale: scale,
+              platform: TargetPlatform.android,
+              brightness: brightness,
+            ),
+          );
+          await _settle(tester);
+          // Measure real controls rather than checking which layout branch was built.
+          final Rect play = tester.getRect(
+            find.byKey(const ValueKey('note-audio-play-inline')),
+          );
+          // Slider width is the flexible part of the row.
+          final Rect progress = tester.getRect(
+            find.byKey(const ValueKey('note-audio-progress-inline')),
+          );
+          // The existing duration format and font scale are retained.
+          final Rect duration = tester.getRect(find.text('06:15'));
+          // Disclosure must stay on the right in both collapsed and expanded states.
+          final Rect more = tester.getRect(
+            find.byKey(const ValueKey('note-audio-expand-inline')),
+          );
+          for (final Rect control in <Rect>[progress, duration, more]) {
+            expect(control.center.dy, closeTo(play.center.dy, .1));
+          }
+          expect(progress.width, greaterThan(0));
+          expect(progress.right, lessThanOrEqualTo(duration.left));
+          expect(duration.right, lessThanOrEqualTo(more.left));
+          expect(
+            more.right,
+            closeTo(
+              tester
+                      .getRect(
+                        find.byKey(const ValueKey('note-audio-bar-inline')),
+                      )
+                      .right -
+                  12,
+              .1,
+            ),
+          );
+          expect(tester.takeException(), isNull);
+          if (const bool.fromEnvironment('NOTE_AUDIO_INLINE_PREVIEW')) {
+            // Capture production rendering with the configured Chinese font.
+            final RenderRepaintBoundary boundary = tester.renderObject(
+              find.byKey(const ValueKey<String>('audio-inline-preview')),
+            );
+            await tester.runAsync(() async {
+              // Match phone density without modifying the layout being tested.
+              final ui.Image image = await boundary.toImage(pixelRatio: 2);
+              // Keep previews in the ignored output directory.
+              final ByteData? bytes = await image.toByteData(
+                format: ui.ImageByteFormat.png,
+              );
+              await File(
+                '../../output/note-audio-inline-$width-$scale-${brightness.name}.png',
+              ).writeAsBytes(bytes!.buffer.asUint8List());
+              image.dispose();
+            });
+          }
+          await tester.tap(
+            find.byKey(const ValueKey('note-audio-expand-inline')),
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('收起'), findsOneWidget);
+          expect(
+            tester
+                .getRect(find.byKey(const ValueKey('note-audio-expand-inline')))
+                .center
+                .dy,
+            closeTo(play.center.dy, .1),
+          );
+          await tester.tap(
+            find.byKey(const ValueKey('note-audio-expand-inline')),
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('更多'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+        });
+      }
+    }
+  }
 
   testWidgets('紧凑音频在窄窗和大字号不溢出，缺失原音禁用下载', (tester) async {
     tester.view.physicalSize = const Size(320, 640);

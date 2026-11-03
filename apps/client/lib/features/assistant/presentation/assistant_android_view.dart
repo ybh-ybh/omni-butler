@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -16,6 +17,8 @@ import 'package:omni_butler/features/assistant/presentation/assistant_attachment
 import 'package:omni_butler/features/assistant/presentation/assistant_cards.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_execution_progress.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_loading_indicator.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_recording_overlay.dart';
+import 'package:omni_butler/features/assistant/presentation/assistant_voice_input_target.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_windows_tokens.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
@@ -35,6 +38,9 @@ class AssistantAndroidView extends ConsumerStatefulWidget {
 
   /// Existing bounded speech session controller.
   final AssistantVoiceController voice;
+
+  /// Route, lifecycle and source ownership remain separate from send eligibility.
+  final bool voiceContextCurrent;
 
   /// Current permission and task gates for starting speech.
   final bool canVoiceInput;
@@ -74,6 +80,7 @@ class AssistantAndroidView extends ConsumerStatefulWidget {
     required this.scroll,
     required this.voice,
     required this.canVoiceInput,
+    required this.voiceContextCurrent,
     required this.enabled,
     required this.onSend,
     required this.onContinue,
@@ -105,6 +112,17 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
   /// Text and hold-to-talk are local input presentation modes.
   bool _voiceMode = false;
 
+  /// Anchor the root overlay to the actual keyboard-safe composer geometry.
+  final GlobalKey _composerAnchor = GlobalKey(
+    debugLabel: 'assistant-composer-anchor',
+  );
+
+  /// The overlay is presentation-only and never creates a second speech session.
+  OverlayEntry? _recordingEntry;
+
+  /// Cancelled sessions must not recreate an overlay while cleanup is in flight.
+  bool _overlaySuppressed = false;
+
   /// Only the original finger can finish this recording.
   int? _pointer;
 
@@ -128,6 +146,7 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
   void initState() {
     super.initState();
     widget.input.addListener(_inputChanged);
+    widget.inputFocus.addListener(_focusChanged);
     widget.voice.addListener(_voiceChanged);
     widget.chat.addListener(_chatChanged);
     WidgetsBinding.instance.addObserver(this);
@@ -141,12 +160,34 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
       oldWidget.input.removeListener(_inputChanged);
       widget.input.addListener(_inputChanged);
     }
+    if (oldWidget.inputFocus != widget.inputFocus) {
+      oldWidget.inputFocus.removeListener(_focusChanged);
+      widget.inputFocus.addListener(_focusChanged);
+    }
     if (oldWidget.voice != widget.voice) {
+      _removeRecordingOverlay();
       oldWidget.voice.removeListener(_voiceChanged);
       widget.voice.addListener(_voiceChanged);
       _pointer = null;
       _gestureGeneration++;
       _awaitingVoiceResult = false;
+    }
+    if (!widget.voiceContextCurrent && widget.voice.busy) {
+      _overlaySuppressed = true;
+      _removeRecordingOverlay();
+      // Guard delayed cleanup against a later gesture or controller replacement.
+      final int generation = ++_gestureGeneration;
+      // Fix the controller whose source or route became unavailable.
+      final AssistantVoiceController voice = widget.voice;
+      _pointer = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            generation == _gestureGeneration &&
+            identical(widget.voice, voice) &&
+            !widget.voiceContextCurrent) {
+          unawaited(voice.cancel());
+        }
+      });
     }
     if (oldWidget.chat != widget.chat) {
       oldWidget.chat.removeListener(_chatChanged);
@@ -158,10 +199,12 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
   @override
   void dispose() {
     _gestureGeneration++;
+    _removeRecordingOverlay();
     _pointer = null;
     _awaitingVoiceResult = false;
     _cancelOnRelease = false;
     widget.input.removeListener(_inputChanged);
+    widget.inputFocus.removeListener(_focusChanged);
     widget.voice.removeListener(_voiceChanged);
     widget.chat.removeListener(_chatChanged);
     WidgetsBinding.instance.removeObserver(this);
@@ -177,13 +220,65 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
       unawaited(_cancelPress());
     } else if (_awaitingVoiceResult && widget.voice.busy) {
       _awaitingVoiceResult = false;
+      _overlaySuppressed = true;
+      _removeRecordingOverlay();
       unawaited(widget.voice.cancel());
     }
   }
 
   /// Draft changes may reveal a send action without replacing the voice target.
   void _inputChanged() {
+    _recordingEntry?.markNeedsBuild();
     if (mounted) setState(() {});
+  }
+
+  /// Reopen a hidden IME even when an empty field still owns native focus.
+  void _focusInput() {
+    // A focused field may keep its connection after the keyboard was dismissed.
+    final bool alreadyFocused = widget.inputFocus.hasFocus;
+    widget.inputFocus.requestFocus();
+    if (alreadyFocused) {
+      unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.show'));
+    }
+  }
+
+  /// Native selection remains available while a nonempty field has focus.
+  void _focusChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Root overlays cover bottom navigation without pushing or cancelling a route.
+  void _syncRecordingOverlay() {
+    if (!mounted) return;
+    if (!widget.voice.busy || _overlaySuppressed) {
+      _removeRecordingOverlay();
+      return;
+    }
+    if (_recordingEntry != null) {
+      _recordingEntry!.markNeedsBuild();
+      return;
+    }
+    _recordingEntry = OverlayEntry(
+      builder: (_) => InheritedTheme.captureAll(
+        context,
+        AssistantRecordingOverlay(
+          input: widget.input,
+          voice: widget.voice,
+          anchorKey: _composerAnchor,
+          cancelOnRelease: _cancelOnRelease,
+          onFinish: _semanticVoice,
+          onCancel: () => unawaited(_cancelPress()),
+        ),
+      ),
+    );
+    Overlay.of(context, rootOverlay: true).insert(_recordingEntry!);
+  }
+
+  /// Explicit cleanup also handles a route leaving before final transcription.
+  void _removeRecordingOverlay() {
+    _recordingEntry?.remove();
+    _recordingEntry?.dispose();
+    _recordingEntry = null;
   }
 
   /// Chat failures return hidden speech text to the editable surface.
@@ -204,6 +299,7 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
       _pointer = null;
       _cancelOnRelease = false;
       _awaitingVoiceResult = false;
+      _overlaySuppressed = false;
     }
     // Submission may fail after the controller has already entered idle.
     if (widget.voice.phase == AssistantVoicePhase.idle &&
@@ -211,22 +307,30 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
       _voiceMode = false;
     }
     _previousVoicePhase = widget.voice.phase;
+    _syncRecordingOverlay();
     setState(() {});
   }
 
-  /// A press starts immediately, including permission and transport preparation.
+  /// The explicit microphone mode retains its original immediate hold behavior.
   void _pointerDown(PointerDownEvent event) {
+    if (_voiceMode) {
+      _beginHold(event.pointer, event.position);
+    }
+  }
+
+  /// Both hold surfaces share one original pointer and one speech generation.
+  void _beginHold(int pointer, Offset origin) {
     if (!mounted ||
         _pointer != null ||
         widget.voice.busy ||
-        !widget.canVoiceInput ||
-        !_voiceMode) {
+        !widget.canVoiceInput) {
       return;
     }
-    _pointer = event.pointer;
-    _pointerStartY = event.position.dy;
+    _pointer = pointer;
+    _pointerStartY = origin.dy;
     _cancelOnRelease = false;
     _awaitingVoiceResult = true;
+    _overlaySuppressed = false;
     // Completion from an older press must not reset a newer pointer.
     final int generation = ++_gestureGeneration;
     setState(() {});
@@ -254,6 +358,7 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
     final bool cancel = _pointerStartY - event.position.dy >= 64;
     if (cancel != _cancelOnRelease) {
       setState(() => _cancelOnRelease = cancel);
+      _recordingEntry?.markNeedsBuild();
     }
   }
 
@@ -277,6 +382,8 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
   /// Gesture cancellation restores exactly the snapshot captured by the session.
   Future<void> _cancelPress() async {
     if (!mounted) return;
+    _overlaySuppressed = true;
+    _removeRecordingOverlay();
     _gestureGeneration++;
     _pointer = null;
     _cancelOnRelease = false;
@@ -355,6 +462,10 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
 
   /// Android back closes local surfaces before returning to the existing home.
   Future<void> _back() async {
+    if (_recordingEntry != null || _pointer != null || widget.voice.busy) {
+      await _cancelPress();
+      return;
+    }
     if (MediaQuery.viewInsetsOf(context).bottom > 0 ||
         widget.inputFocus.hasFocus) {
       FocusManager.instance.primaryFocus?.unfocus();
@@ -745,6 +856,7 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
       unawaited(widget.voice.finish());
     } else if (!widget.voice.busy && widget.canVoiceInput) {
       _awaitingVoiceResult = true;
+      _overlaySuppressed = false;
       unawaited(widget.onStartVoice());
     }
   }
@@ -877,7 +989,7 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
   Widget _composerNotices() => Column(
     mainAxisSize: MainAxisSize.min,
     children: <Widget>[
-      if (_voiceStatus != null)
+      if (_voiceStatus != null && !widget.voice.busy)
         Padding(
           padding: const EdgeInsets.only(bottom: OmniSpacing.xs),
           child: Text(
@@ -974,72 +1086,90 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
               attachments: widget.chat.attachments,
               settings: settings,
             ),
-          Material(
-            key: const ValueKey<String>('assistant-android-composer'),
-            color: colors.paper,
-            elevation: 2,
-            borderRadius: BorderRadius.circular(OmniRadius.pill),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: <Widget>[
-                AssistantAttachmentButton(
-                  alwaysVisible: true,
-                  attachments: widget.chat.attachments,
-                  enabled: widget.enabled && !widget.voice.busy,
-                  icon: Icons.add,
-                ),
-                Expanded(
-                  child: speaking
-                      ? _holdSurface()
-                      : OmniTextField(
-                          key: const ValueKey<String>('assistant-input'),
-                          controller: widget.input,
-                          focusNode: widget.inputFocus,
-                          minLines: 1,
-                          maxLines: 5,
-                          maxLength: 20000,
-                          style: Theme.of(context).textTheme.bodyLarge,
-                          textAlignVertical: TextAlignVertical.center,
-                          keyboardType: TextInputType.multiline,
-                          textInputAction: TextInputAction.newline,
-                          enabled: widget.enabled && !widget.chat.loading,
-                          readOnly:
-                              widget.chat.busy || widget.chat.pending != null,
-                          onChanged: widget.chat.setDraft,
-                          decoration: InputDecoration(
-                            hintText: '发消息',
-                            hintStyle: TextStyle(color: colors.muted),
-                            counterText: '',
-                            isDense: true,
-                            filled: false,
-                            border: InputBorder.none,
-                            enabledBorder: InputBorder.none,
-                            focusedBorder: InputBorder.none,
-                            disabledBorder: InputBorder.none,
-                            visualDensity: VisualDensity.standard,
-                            contentPadding: const EdgeInsets.symmetric(
-                              vertical: OmniSpacing.sm,
-                            ),
-                            constraints: const BoxConstraints(
-                              minHeight: OmniSize.touch,
-                            ),
-                          ),
-                        ),
-                ),
-                OmniIconButton(
-                  key: const ValueKey<String>('assistant-voice-button'),
-                  tooltip: speaking ? '键盘输入' : '语音输入',
-                  icon: Icon(
-                    speaking ? Icons.keyboard_outlined : Icons.mic_none,
+          KeyedSubtree(
+            key: _composerAnchor,
+            child: Material(
+              key: const ValueKey<String>('assistant-android-composer'),
+              color: colors.paper,
+              elevation: 2,
+              borderRadius: BorderRadius.circular(OmniRadius.pill),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: <Widget>[
+                  AssistantAttachmentButton(
+                    alwaysVisible: true,
+                    attachments: widget.chat.attachments,
+                    enabled: widget.enabled && !widget.voice.busy,
+                    icon: Icons.add,
                   ),
-                  onPressed: widget.voice.busy
-                      ? null
-                      : (speaking || widget.canVoiceInput)
-                      ? _toggleInputMode
-                      : null,
-                ),
-                if (showSend) _sendAction(settings),
-              ],
+                  Expanded(
+                    child: AssistantVoiceInputTarget(
+                      active: _pointer != null,
+                      enabled:
+                          !_voiceMode &&
+                          !widget.voice.busy &&
+                          widget.canVoiceInput &&
+                          (!widget.inputFocus.hasFocus ||
+                              widget.input.text.isEmpty),
+                      onTap: _focusInput,
+                      onStart: _beginHold,
+                      onMove: _pointerMove,
+                      onEnd: _pointerUp,
+                      onCancel: () => unawaited(_cancelPress()),
+                      child: speaking
+                          ? _holdSurface()
+                          : OmniTextField(
+                              key: const ValueKey<String>('assistant-input'),
+                              controller: widget.input,
+                              focusNode: widget.inputFocus,
+                              minLines: 1,
+                              maxLines: 5,
+                              maxLength: 20000,
+                              style: Theme.of(context).textTheme.bodyLarge,
+                              textAlignVertical: TextAlignVertical.center,
+                              keyboardType: TextInputType.multiline,
+                              textInputAction: TextInputAction.newline,
+                              enabled: widget.enabled && !widget.chat.loading,
+                              readOnly:
+                                  widget.chat.busy ||
+                                  widget.chat.pending != null,
+                              onChanged: widget.chat.setDraft,
+                              decoration: InputDecoration(
+                                hintText: '发消息',
+                                hintStyle: TextStyle(color: colors.muted),
+                                counterText: '',
+                                isDense: true,
+                                filled: false,
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                disabledBorder: InputBorder.none,
+                                visualDensity: VisualDensity.standard,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  vertical: OmniSpacing.sm,
+                                ),
+                                constraints: const BoxConstraints(
+                                  minHeight: OmniSize.touch,
+                                ),
+                              ),
+                            ),
+                    ),
+                  ),
+                  OmniIconButton(
+                    key: const ValueKey<String>('assistant-voice-button'),
+                    tooltip: speaking ? '键盘输入' : '语音输入',
+                    icon: Icon(
+                      speaking ? Icons.keyboard_outlined : Icons.mic_none,
+                    ),
+                    onPressed: widget.voice.busy
+                        ? null
+                        : (speaking || widget.canVoiceInput)
+                        ? _toggleInputMode
+                        : null,
+                  ),
+                  if (showSend) _sendAction(settings),
+                ],
+              ),
             ),
           ),
         ],

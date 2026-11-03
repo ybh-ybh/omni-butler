@@ -39,6 +39,86 @@ class _FailingQuoteChangeDatabase extends AppDatabase {
 
 /// 验证安卓首页真实业务模块的分页、手势隔离与本次运行状态。
 void main() {
+  // Exercise real saves so clipped day segments cannot become edit baselines.
+  for (final String scenario in <String>['completed', 'cross-day', 'ongoing']) {
+    testWidgets('安卓首页时间条目长按编辑并保存原记录 $scenario', (WidgetTester tester) async {
+      // Keep each gesture and save isolated from other business records.
+      final AppDatabase database = AppDatabase.forTesting(
+        NativeDatabase.memory(),
+      );
+      // Use the production repository to preserve baseline and time semantics.
+      final TimeEntryRepository repository = TimeEntryRepository(database);
+      await repository.save(
+        TimeEntryDraft(
+          startedAt: scenario == 'cross-day'
+              ? DateTime(2026, 10, 7, 23)
+              : DateTime(2026, 10, 8, 9),
+          endedAt: scenario == 'ongoing'
+              ? null
+              : scenario == 'cross-day'
+              ? DateTime(2026, 10, 8, 1)
+              : DateTime(2026, 10, 8, 10),
+          activity: '原来的活动',
+          category: '工作',
+          notes: '保留备注',
+        ),
+      );
+      // Capture the full persisted record before the home card clips its day.
+      final TimeEntryRecord original = await database
+          .select(database.timeEntries)
+          .getSingle();
+      // Drive the real home pager and root navigator.
+      final _HomeTestApp app = await _pumpHome(tester, database: database);
+      await _selectModule(tester, 'timeStatus');
+      // Target the selected row rather than the card or category legend.
+      final Finder row = _key('home-time-entry-${original.id}');
+      await tester.ensureVisible(row);
+      await tester.pumpAndSettle();
+      await tester.longPress(row);
+      await tester.pumpAndSettle();
+      expect(_key('time-entry-editor'), findsOneWidget);
+      expect(_currentPath(app), '/home');
+      expect(
+        find.text(scenario == 'ongoing' ? '编辑进行中记录' : '编辑时间记录'),
+        findsOneWidget,
+      );
+      if (scenario != 'ongoing') {
+        expect(tester.getSize(find.byType(Dialog)), const Size(390, 844));
+      }
+      await tester.enterText(_key('time-entry-activity'), '修改后的活动');
+      await tester.tap(
+        scenario == 'ongoing'
+            ? find.text('保存修改')
+            : _key('time-entry-backfill-submit'),
+      );
+      await tester.pumpAndSettle();
+      expect(_key('time-entry-editor'), findsNothing);
+      expect(_currentPath(app), '/home');
+      _expectPage(tester, 1);
+      // A successful edit updates one identity without truncating midnight spans.
+      final TimeEntryRecord saved = await database
+          .select(database.timeEntries)
+          .getSingle();
+      expect(saved.id, original.id);
+      expect(saved.activity, '修改后的活动');
+      expect(saved.startedAt, original.startedAt);
+      expect(saved.endedAt, original.endedAt);
+      expect(saved.category, original.category);
+      expect(saved.notes, original.notes);
+      expect(find.text('修改后的活动'), findsOneWidget);
+      // System back closes an untouched edit and retains the current home module.
+      await tester.longPress(row);
+      await tester.pumpAndSettle();
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(_key('time-entry-editor'), findsNothing);
+      expect(_currentPath(app), '/home');
+      _expectPage(tester, 1);
+      expect(tester.takeException(), isNull);
+      await _disposeHome(tester, app);
+    });
+  }
+
   testWidgets('首页快捷入口同排且名言单击轮换长按打开全屏库', (WidgetTester tester) async {
     // Use the real mobile page to verify touch targets and header placement.
     final _HomeTestApp app = await _pumpHome(tester);

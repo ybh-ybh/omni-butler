@@ -101,9 +101,12 @@ class _HomeTimeStatusCardState extends ConsumerState<HomeTimeStatusCard> {
       for (final TaxonomyEntry category in categories)
         category.name: Color(category.colorValue ?? 0xFF3370FF),
     };
+    // Preserve original records for editing and optimistic concurrency checks.
+    final List<TimeEntryRecord> todayRecords =
+        todayRecordsAsync.asData?.value ?? const <TimeEntryRecord>[];
     // 裁切到今天的自然日分段。
     final List<TimeEntryRecord> todaySegments = splitTimeEntriesForRange(
-      records: todayRecordsAsync.asData?.value ?? const <TimeEntryRecord>[],
+      records: todayRecords,
       rangeStart: today,
       rangeEnd: tomorrow,
       now: now,
@@ -281,6 +284,17 @@ class _HomeTimeStatusCardState extends ConsumerState<HomeTimeStatusCard> {
                         categoryColors[sortedTodaySegments[index].category] ??
                         colors.time,
                     onTap: () => context.go('/timeline'),
+                    onLongPress:
+                        Theme.of(context).platform == TargetPlatform.android
+                        ? () => showTimeEntryEditorDialog(
+                            context,
+                            day: today,
+                            record: todayRecords.firstWhere(
+                              (TimeEntryRecord record) =>
+                                  record.id == sortedTodaySegments[index].id,
+                            ),
+                          )
+                        : null,
                   ),
                 ],
             ],
@@ -877,11 +891,15 @@ class _TimeEntryRow extends StatelessWidget {
   /// 打开时间管理回调。
   final VoidCallback onTap;
 
+  /// Opens the selected Android record in the shared editor.
+  final VoidCallback? onLongPress;
+
   /// 创建今日时间记录行。
   const _TimeEntryRow({
     required this.record,
     required this.color,
     required this.onTap,
+    this.onLongPress,
     super.key,
   });
 
@@ -896,6 +914,7 @@ class _TimeEntryRow extends StatelessWidget {
         : '${_formatMinute(record.startMinute)}–${_formatMinute(record.endMinute)}';
     return OmniListRow(
       onTap: onTap,
+      onLongPress: onLongPress,
       borderRadius: BorderRadius.circular(OmniRadius.control),
       padding: const EdgeInsets.symmetric(
         horizontal: OmniSpacing.sm,

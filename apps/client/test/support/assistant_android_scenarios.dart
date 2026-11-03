@@ -91,6 +91,7 @@ class _AndroidAssistantFixture {
     // A supplied router exercises real offstage branches without platform I/O.
     final Widget app = router == null
         ? MaterialApp(
+            debugShowCheckedModeBanner: false,
             theme: theme,
             builder: configureMedia,
             home: const RepaintBoundary(
@@ -99,6 +100,7 @@ class _AndroidAssistantFixture {
             ),
           )
         : MaterialApp.router(
+            debugShowCheckedModeBanner: false,
             theme: theme,
             builder: configureMedia,
             routerConfig: router,
@@ -142,7 +144,10 @@ class _AndroidAssistantFixture {
             (_, _) async => speech,
           ),
         ],
-        child: app,
+        child: RepaintBoundary(
+          key: const ValueKey<String>('android-assistant-root-preview'),
+          child: app,
+        ),
       ),
     );
     if (settle) {

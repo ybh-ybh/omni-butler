@@ -80,6 +80,35 @@ Future<void> showFinishTimeEntryDialog(
   );
 }
 
+/// Opens the shared editor from a timeline or home entry point.
+Future<void> showTimeEntryEditorDialog(
+  BuildContext context, {
+  required DateTime day,
+  TimeEntryRecord? record,
+  int? initialStartMinute,
+}) async {
+  // Keep the editor anchored to the original record's start date.
+  final DateTime editorDay = DateUtils.dateOnly(record?.startedAt ?? day);
+  // Completed Android entries use the existing fullscreen form.
+  final bool fullscreen =
+      (record == null || record.endedAt != null) &&
+      Theme.of(context).platform == TargetPlatform.android;
+  await showOmniDialog<void>(
+    context: context,
+    useSafeArea: !fullscreen,
+    fullscreenDialog: fullscreen,
+    barrierDismissible: !fullscreen,
+    builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
+      mode: record?.endedAt == null && record != null
+          ? _TimeEntryEditorMode.ongoing
+          : _TimeEntryEditorMode.completed,
+      day: editorDay,
+      record: record,
+      initialStartMinute: initialStartMinute,
+    ),
+  );
+}
+
 /// 24 小时时间记录页面。
 class TimelinePage extends ConsumerStatefulWidget {
   /// 创建时间记录页面。
@@ -138,27 +167,11 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     DateTime? day,
     int? initialStartMinute,
   }) async {
-    // 编辑器实际使用的自然日。
-    final DateTime editorDay = DateUtils.dateOnly(
-      record?.startedAt ?? day ?? _selectedDay,
-    );
-    // 安卓补记和已完成记录编辑共用全屏路由。
-    final bool fullscreen =
-        (record == null || record.endedAt != null) &&
-        Theme.of(context).platform == TargetPlatform.android;
-    await showOmniDialog<void>(
-      context: context,
-      useSafeArea: !fullscreen,
-      fullscreenDialog: fullscreen,
-      barrierDismissible: !fullscreen,
-      builder: (BuildContext context) => _AbsoluteTimeEntryDialog(
-        mode: record?.endedAt == null && record != null
-            ? _TimeEntryEditorMode.ongoing
-            : _TimeEntryEditorMode.completed,
-        day: editorDay,
-        record: record,
-        initialStartMinute: initialStartMinute,
-      ),
+    await showTimeEntryEditorDialog(
+      context,
+      day: day ?? _selectedDay,
+      record: record,
+      initialStartMinute: initialStartMinute,
     );
   }
 

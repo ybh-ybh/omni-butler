@@ -39,6 +39,7 @@ import 'package:omni_butler/features/assistant/data/assistant_repository.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_cards.dart';
 
 part 'support/assistant_android_scenarios.dart';
+part 'support/assistant_android_voice_gesture_scenarios.dart';
 part 'support/assistant_android_feedback_scenarios.dart';
 part 'support/assistant_android_loading_scenarios.dart';
 part 'support/assistant_android_sidebar_scenarios.dart';
@@ -214,6 +215,7 @@ void main() {
 
   // Android exercises hold-to-talk independently from desktop preferences.
   _registerAndroidAssistantScenarios(() => testPreferences);
+  _registerAndroidVoiceGestureScenarios(() => testPreferences);
   _registerAndroidFeedbackScenarios(() => testPreferences);
   _registerAndroidLoadingScenarios(() => testPreferences);
   _registerAndroidSidebarScenarios(() => testPreferences);

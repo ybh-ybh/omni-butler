@@ -412,6 +412,9 @@ class OmniListRow extends StatelessWidget {
   /// 点击回调。
   final VoidCallback? onTap;
 
+  /// Optional long press action for the entire row.
+  final VoidCallback? onLongPress;
+
   /// 行内边距。
   final EdgeInsetsGeometry padding;
 
@@ -429,6 +432,7 @@ class OmniListRow extends StatelessWidget {
     this.subtitle,
     this.trailing,
     this.onTap,
+    this.onLongPress,
     this.padding = const EdgeInsets.symmetric(
       horizontal: OmniSpacing.md,
       vertical: OmniSpacing.sm,
@@ -487,6 +491,7 @@ class OmniListRow extends StatelessWidget {
       clipBehavior: borderRadius == null ? Clip.none : Clip.antiAlias,
       child: OmniInkWell(
         onTap: onTap,
+        onLongPress: onLongPress,
         borderRadius: borderRadius,
         hoverColor: colors.ink.withValues(alpha: 0.04),
         highlightColor: highlightColor ?? colors.ink.withValues(alpha: 0.08),

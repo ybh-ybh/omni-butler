@@ -29,7 +29,7 @@ extension _CompactNoteAudioCard on _NoteAudioCardState {
     }
   }
 
-  /// 播放按钮、细进度线、时长和展开入口始终位于同一浅灰表面。
+  /// Keep playback and disclosure on one Android row without changing audio state.
   Widget _compactAudioCard({
     required bool playing,
     required bool paused,
@@ -206,10 +206,14 @@ extension _CompactNoteAudioCard on _NoteAudioCardState {
           children: [
             LayoutBuilder(
               builder: (context, constraints) {
-                // 窄窗或大字号时只将更多入口换行，进度条继续占用剩余宽度。
+                // Android reserves the trailing action and lets the seek bar shrink.
+                final bool android =
+                    Theme.of(context).platform == TargetPlatform.android;
+                // Other platforms retain their existing narrow-window layout.
                 final bool stacked =
-                    constraints.maxWidth < 300 ||
-                    MediaQuery.textScalerOf(context).scale(12) > 18;
+                    !android &&
+                    (constraints.maxWidth < 300 ||
+                        MediaQuery.textScalerOf(context).scale(12) > 18);
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
@@ -256,10 +260,20 @@ extension _CompactNoteAudioCard on _NoteAudioCardState {
                           ),
                         ),
                         const SizedBox(width: OmniSpacing.xs),
-                        Text(
-                          _compactDuration(_duration),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(fontSize: 12, color: muted),
+                        ConstrainedBox(
+                          // Large text or long durations cannot displace the action.
+                          constraints: BoxConstraints(
+                            maxWidth: android
+                                ? constraints.maxWidth * .35
+                                : double.infinity,
+                          ),
+                          child: Text(
+                            _compactDuration(_duration),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(fontSize: 12, color: muted),
+                          ),
                         ),
                         if (!stacked) ...[
                           const SizedBox(width: OmniSpacing.xxs),
