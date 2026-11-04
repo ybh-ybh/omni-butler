@@ -173,6 +173,36 @@ Future<void> _pump(
 
 /// 管理和审批界面与认证代次保护的定向回归。
 void main() {
+  testWidgets('Android MCP 主页面按钮视觉32dp且触控区域至少48dp', (
+    WidgetTester tester,
+  ) async {
+    // Include a live connection and an action so all list controls are rendered.
+    final _Auth auth = _Auth()
+      ..handler = (String path) async => _snapshot(
+        action: true,
+        connections: <Map<String, dynamic>>[_connection('active', '日常 Codex')],
+      );
+    await _pump(tester, auth, platform: TargetPlatform.android, width: 360);
+    // Check the painted surface separately from the full interactive region.
+    for (final String label in <String>['新增连接', '刷新状态', '撤销连接', '查看操作']) {
+      // Locate each action by its existing visible label.
+      final Finder button = find.widgetWithText(OmniButton, label);
+      expect(tester.getSize(button).height, greaterThanOrEqualTo(48));
+      expect(tester.getSize(button).width, greaterThanOrEqualTo(48));
+      expect(
+        tester
+            .getSize(
+              find
+                  .descendant(of: button, matching: find.byType(Material))
+                  .first,
+            )
+            .height,
+        closeTo(32, 0.1),
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   for (final TargetPlatform platform in <TargetPlatform>[
     TargetPlatform.windows,
     TargetPlatform.android,

@@ -146,8 +146,11 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
     return profile.provider;
   }
 
-  /// 每套配置仅展示厂商与模型，宽屏操作靠右，窄屏与大字号时在行内下方靠右换行。
+  /// Keep desktop rows intact and use stacked details with compact Android actions.
   Widget _profileRow(AiSettingsSnapshot snapshot, AiModelProfile profile) {
+    if (Theme.of(context).platform == TargetPlatform.android) {
+      return _androidProfileRow(snapshot, profile);
+    }
     // 当前配置只展示无边框的禁用状态。
     final bool current = snapshot.activeProfileId == profile.id;
     // 列表不公开地址和密钥状态，只显示用户识别模型所需的两个字段。
@@ -233,9 +236,147 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
     );
   }
 
+  /// Reserve touch targets beside two detail lines, wrapping only when necessary.
+  Widget _androidProfileRow(
+    AiSettingsSnapshot snapshot,
+    AiModelProfile profile,
+  ) {
+    // The active profile remains a disabled, borderless status.
+    final bool current = snapshot.activeProfileId == profile.id;
+    // Keep the status wording identical across platforms.
+    final String status = current ? '当前使用' : '设为当前';
+    // Measure the same scaled typography used by the compact text button.
+    final TextPainter statusPainter = TextPainter(
+      text: TextSpan(
+        text: status,
+        style: Theme.of(context).textTheme.labelLarge
+            ?.copyWith(fontSize: 12, fontWeight: FontWeight.w500),
+      ),
+      textScaler: MediaQuery.textScalerOf(context),
+      textDirection: Directionality.of(context),
+    )..layout();
+    // Include horizontal padding and the minimum accessible touch width.
+    final double statusWidth =
+        (statusPainter.width.ceilToDouble() + OmniSpacing.xs * 2).clamp(
+          OmniSize.touch,
+          double.infinity,
+        );
+    statusPainter.dispose();
+    // Icon actions keep a small visual surface inside a full touch target.
+    const ButtonStyle iconStyle = ButtonStyle(
+      padding: WidgetStatePropertyAll<EdgeInsetsGeometry>(EdgeInsets.zero),
+      tapTargetSize: MaterialTapTargetSize.padded,
+    );
+    // Explicit embedded constraints override the shared default minimum size.
+    const BoxConstraints iconConstraints = BoxConstraints.tightFor(
+      width: OmniSize.control,
+      height: OmniSize.control,
+    );
+    // Each field retains its complete text for long press and accessibility.
+    final Widget details = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Tooltip(
+          message: _providerName(snapshot, profile),
+          child: Text(
+            _providerName(snapshot, profile),
+            key: ValueKey<String>('ai-profile-provider-${profile.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+        ),
+        const SizedBox(height: OmniSpacing.xxs),
+        Tooltip(
+          message: profile.model,
+          child: Text(
+            profile.model,
+            key: ValueKey<String>('ai-profile-model-${profile.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodyMedium
+                ?.copyWith(color: OmniColors.of(context).muted),
+          ),
+        ),
+      ],
+    );
+    // Actions stay bound to profile identity through edits and list refreshes.
+    final Widget actions = Wrap(
+      key: ValueKey<String>('ai-profile-actions-${profile.id}'),
+      alignment: WrapAlignment.end,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: OmniSpacing.xxs,
+      runSpacing: OmniSpacing.xxs,
+      children: <Widget>[
+        OmniButton(
+          key: ValueKey<String>('ai-profile-select-${profile.id}'),
+          label: status,
+          compact: true,
+          visualHeight: OmniSize.control,
+          variant: current
+              ? OmniButtonVariant.text
+              : OmniButtonVariant.secondary,
+          onPressed: _busy || current || !profile.isComplete
+              ? null
+              : () => _update(snapshot, activeProfileId: profile.id),
+        ),
+        OmniIconButton(
+          key: ValueKey<String>('ai-profile-edit-${profile.id}'),
+          tooltip: '编辑',
+          icon: const Icon(Icons.edit_outlined),
+          iconSize: OmniSize.icon,
+          constraints: iconConstraints,
+          style: iconStyle,
+          onPressed: _busy ? null : () => _edit(snapshot, profile),
+        ),
+        OmniIconButton(
+          key: ValueKey<String>('ai-profile-delete-${profile.id}'),
+          tooltip: '删除',
+          icon: const Icon(Icons.delete_outline),
+          iconSize: OmniSize.icon,
+          constraints: iconConstraints,
+          color: OmniColors.of(context).danger,
+          style: iconStyle,
+          onPressed: _busy ? null : () => _delete(snapshot, profile),
+        ),
+      ],
+    );
+    return LayoutBuilder(
+      key: ValueKey<String>('ai-profile-row-${profile.id}'),
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // Leave a readable text column after accounting for all action hit areas.
+        final double minimumWidth =
+            72 * MediaQuery.textScalerOf(context).scale(14) / 14 +
+            OmniSpacing.xs +
+            statusWidth +
+            OmniSize.touch * 2 +
+            OmniSpacing.xxs * 2;
+        if (constraints.maxWidth >= minimumWidth) {
+          return Row(
+            children: <Widget>[
+              Expanded(child: details),
+              const SizedBox(width: OmniSpacing.xs),
+              actions,
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            details,
+            const SizedBox(height: OmniSpacing.xxs),
+            Align(alignment: Alignment.centerRight, child: actions),
+          ],
+        );
+      },
+    );
+  }
+
   /// 构建连接、加载、错误或完整配置，读取失败不展示空白写表单。
   @override
   Widget build(BuildContext context) {
+    // Apply compact visual heights only to this Android settings surface.
+    final bool android = Theme.of(context).platform == TargetPlatform.android;
     // 当前认证状态，用于展示离线与未连接说明。
     final AsyncValue<SyncSession?> session = ref.watch(authControllerProvider);
     // 由后端返回的版本化快照。
@@ -260,6 +401,7 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
             const SizedBox(height: OmniSpacing.md),
             OmniButton(
               label: '重试',
+              visualHeight: android ? OmniSize.control : null,
               onPressed: () => ref.invalidate(aiSettingsControllerProvider),
             ),
           ],
@@ -291,21 +433,47 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                 children: <Widget>[
                   Padding(
                     padding: const EdgeInsets.all(OmniSpacing.md),
-                    child: Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: Text(
-                            '模型服务',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                        ),
-                        const SizedBox(width: OmniSpacing.sm),
-                        OmniButton(
-                          label: '新增模型配置',
-                          icon: Icons.add,
-                          onPressed: _busy ? null : () => _edit(snapshot),
-                        ),
-                      ],
+                    child: LayoutBuilder(
+                      builder:
+                          (BuildContext context, BoxConstraints constraints) {
+                            // Keep the group title readable when system text is enlarged.
+                            final Widget title = Text(
+                              '模型服务',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            );
+                            // Reuse the normal action label with a separate touch target.
+                            final Widget add = OmniButton(
+                              label: '新增模型配置',
+                              icon: Icons.add,
+                              visualHeight: android ? OmniSize.control : null,
+                              onPressed: _busy ? null : () => _edit(snapshot),
+                            );
+                            if (android &&
+                                constraints.maxWidth <
+                                    240 *
+                                        MediaQuery.textScalerOf(context)
+                                            .scale(14) /
+                                        14) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  title,
+                                  const SizedBox(height: OmniSpacing.xxs),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: add,
+                                  ),
+                                ],
+                              );
+                            }
+                            return Row(
+                              children: <Widget>[
+                                Expanded(child: title),
+                                const SizedBox(width: OmniSpacing.sm),
+                                add,
+                              ],
+                            );
+                          },
                     ),
                   ),
                   if (snapshot.profiles.isEmpty)

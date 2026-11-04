@@ -273,6 +273,11 @@ class _McpSettingsSectionState extends ConsumerState<McpSettingsSection> {
   /// 用流式布局容纳窄屏和大字号，不固定连接行高度。
   @override
   Widget build(BuildContext context) {
+    // Separate Android button visuals from their minimum touch targets.
+    final double? buttonHeight =
+        Theme.of(context).platform == TargetPlatform.android
+        ? OmniSize.control
+        : null;
     // 仓储和快照都随认证边界重建。
     final McpRepository repository = ref.watch(mcpRepositoryProvider);
     // 无连接/加载/错误分别展示，不将读取失败当空配置。
@@ -287,6 +292,7 @@ class _McpSettingsSectionState extends ConsumerState<McpSettingsSection> {
           Text(error is ApiFailure ? error.message : '无法读取 MCP 设置'),
           OmniButton(
             label: '重新加载',
+            visualHeight: buttonHeight,
             onPressed: () => ref.invalidate(mcpSettingsProvider),
           ),
         ],
@@ -336,12 +342,14 @@ class _McpSettingsSectionState extends ConsumerState<McpSettingsSection> {
                             children: <Widget>[
                               OmniButton(
                                 label: '新增连接',
+                                visualHeight: buttonHeight,
                                 onPressed: _busy
                                     ? null
                                     : () => _create(repository),
                               ),
                               OmniButton(
                                 label: '刷新状态',
+                                visualHeight: buttonHeight,
                                 variant: OmniButtonVariant.secondary,
                                 onPressed: _busy
                                     ? null
@@ -408,6 +416,7 @@ class _McpSettingsSectionState extends ConsumerState<McpSettingsSection> {
                               const SizedBox(width: OmniSpacing.sm),
                               OmniButton(
                                 label: '撤销连接',
+                                visualHeight: buttonHeight,
                                 variant: OmniButtonVariant.secondary,
                                 onPressed: _busy
                                     ? null
@@ -472,6 +481,7 @@ class _McpSettingsSectionState extends ConsumerState<McpSettingsSection> {
                               'mcp-action-review-${action['id']}',
                             ),
                             label: '查看操作',
+                            visualHeight: buttonHeight,
                             variant: OmniButtonVariant.secondary,
                             onPressed: _busy
                                 ? null

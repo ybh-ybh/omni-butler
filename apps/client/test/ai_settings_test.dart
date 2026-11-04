@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
+import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:omni_butler/core/auth/auth_models.dart';
@@ -16,6 +17,7 @@ import 'package:omni_butler/core/auth/auth_providers.dart';
 import 'package:omni_butler/core/auth/auth_repository.dart';
 import 'package:omni_butler/features/settings/data/ai_settings_repository.dart';
 import 'package:omni_butler/features/settings/presentation/ai_settings_section.dart';
+import 'package:omni_butler/features/settings/presentation/mcp_settings_section.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 请求调用记录，不记录真实供应商密钥。
@@ -103,6 +105,7 @@ Map<String, dynamic> _snapshot({
   bool enabled = false,
   bool profile = true,
   bool secondProfile = false,
+  String secondModel = 'deepseek-flash',
   bool multimodal = false,
   bool thinkingEnabled = false,
 }) => <String, dynamic>{
@@ -128,14 +131,14 @@ Map<String, dynamic> _snapshot({
         'name': '测试 DeepSeek',
         'provider': 'deepseek',
         'baseUrl': 'https://api.deepseek.com',
-        'model': 'deepseek-flash',
+        'model': secondModel,
         'hasApiKey': true,
         'maskedApiKey': '••••next',
       },
   ],
 };
 
-/// 只替换认证边界，仓储、控制器与页面使用正式实现。
+/// Exercise real settings with optional page padding, theme, and MCP content.
 Future<void> _pump(
   WidgetTester tester,
   _AiAuth auth, {
@@ -143,8 +146,12 @@ Future<void> _pump(
   TargetPlatform platform = TargetPlatform.windows,
   double width = 960,
   double scale = 1,
+  Brightness brightness = Brightness.light,
+  double pagePadding = 0,
+  double height = 844,
+  bool includeMcp = false,
 }) async {
-  tester.view.physicalSize = Size(width, 844);
+  tester.view.physicalSize = Size(width, height);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
@@ -161,7 +168,7 @@ Future<void> _pump(
         ),
       ],
       child: MaterialApp(
-        theme: AppTheme.build(brightness: Brightness.light)
+        theme: AppTheme.build(brightness: brightness)
             .copyWith(platform: platform),
         builder: (BuildContext context, Widget? child) => MediaQuery(
           data: MediaQuery.of(context)
@@ -171,13 +178,45 @@ Future<void> _pump(
             child: child!,
           ),
         ),
-        home: const Scaffold(
-          body: SingleChildScrollView(child: AiSettingsSection()),
+        home: Scaffold(
+          body: SingleChildScrollView(
+            padding: EdgeInsets.all(pagePadding),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                const AiSettingsSection(),
+                if (includeMcp) ...<Widget>[
+                  const SizedBox(height: 28),
+                  const McpSettingsSection(),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     ),
   );
   await tester.pumpAndSettle();
+}
+
+/// Locate each platform's edit control without relying on visible icon labels.
+Finder _editButton(TargetPlatform platform) =>
+    platform == TargetPlatform.android
+    ? find.byTooltip('编辑')
+    : find.widgetWithText(OmniButton, '编辑');
+
+/// Measure the painted button separately from its accessible interaction bounds.
+void _expectCompactTarget(WidgetTester tester, Finder button) {
+  expect(tester.getSize(button).height, greaterThanOrEqualTo(OmniSize.touch));
+  expect(tester.getSize(button).width, greaterThanOrEqualTo(OmniSize.touch));
+  expect(
+    tester
+        .getSize(
+          find.descendant(of: button, matching: find.byType(Material)).first,
+        )
+        .height,
+    closeTo(OmniSize.control, 0.1),
+  );
 }
 
 /// 显式导出中文表单供人工核对，不改写既有视觉基线。
@@ -336,8 +375,8 @@ void main() {
     );
     expect(find.text('新增模型配置'), findsOneWidget);
     expect(find.textContaining('保存多套服务配置'), findsNothing);
-    expect(find.text('编辑'), findsNWidgets(2));
-    expect(find.text('删除'), findsNWidgets(2));
+    expect(find.byTooltip('编辑'), findsNWidgets(2));
+    expect(find.byTooltip('删除'), findsNWidgets(2));
     expect(find.text('智谱'), findsOneWidget);
     expect(find.text('glm-5.3'), findsOneWidget);
     expect(find.text('DeepSeek'), findsOneWidget);
@@ -345,10 +384,284 @@ void main() {
     expect(find.textContaining('API Key'), findsNothing);
     expect(find.textContaining('https://'), findsNothing);
     expect(tester.takeException(), isNull);
-    await tester.ensureVisible(find.text('编辑').last);
-    await tester.tap(find.text('编辑').last);
+    await tester.ensureVisible(find.byTooltip('编辑').last);
+    await tester.tap(find.byTooltip('编辑').last);
     await tester.pumpAndSettle();
     expect(find.widgetWithText(TextFormField, '测试 DeepSeek'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  // Cover real page margins, normal phone widths, both themes, and long names.
+  for (final double width in <double>[320, 360, 390]) {
+    // Both themes must preserve the same geometry and semantic controls.
+    for (final Brightness brightness in Brightness.values) {
+      testWidgets(
+        'Android AI 设置 ${width.toInt()}dp ${brightness.name} 两行信息与紧凑操作并排',
+        (WidgetTester tester) async {
+          // Long identifiers must not push any action outside the panel.
+          const String longModel =
+              'deepseek-flash-custom-model-with-a-long-name';
+          // Render the full settings body using synthetic, non-secret responses.
+          final _AiAuth auth = _AiAuth()
+            ..handler = (_Request request) async {
+              if (request.path == '/mcp-management') {
+                return <String, dynamic>{
+                  'connections': <Object>[],
+                  'actions': <Object>[],
+                };
+              }
+              return _snapshot(secondProfile: true, secondModel: longModel);
+            };
+          await _pump(
+            tester,
+            auth,
+            platform: TargetPlatform.android,
+            width: width,
+            brightness: brightness,
+            pagePadding: 16,
+            height: 1280,
+            includeMcp: true,
+          );
+          // Keep semantics alive only for this test's assertions.
+          final SemanticsHandle semantics = tester.ensureSemantics();
+          try {
+            await tester.pump();
+            // Every row must retain two text lines beside its own action group.
+            for (final String id in <String>['profile-1', 'profile-2']) {
+              // The two text bounds identify the intended vertical hierarchy.
+              final Rect provider = tester.getRect(
+                find.byKey(ValueKey<String>('ai-profile-provider-$id')),
+              );
+              // Model text remains below the provider, even when ellipsized.
+              final Rect model = tester.getRect(
+                find.byKey(ValueKey<String>('ai-profile-model-$id')),
+              );
+              // Action geometry includes the complete touch targets.
+              final Rect actions = tester.getRect(
+                find.byKey(ValueKey<String>('ai-profile-actions-$id')),
+              );
+              // The panel's inner row defines the trailing alignment boundary.
+              final Rect row = tester.getRect(
+                find.byKey(ValueKey<String>('ai-profile-row-$id')),
+              );
+              expect(model.top - provider.bottom, closeTo(4, 0.1));
+              expect(provider.left, model.left);
+              expect(actions.left, greaterThan(model.right));
+              expect(
+                actions.center.dy,
+                closeTo((provider.top + model.bottom) / 2, 0.1),
+              );
+              expect(actions.right, closeTo(row.right, 0.1));
+              // Each control keeps a 32dp visual surface and a 48dp touch area.
+              for (final String action in <String>[
+                'select',
+                'edit',
+                'delete',
+              ]) {
+                _expectCompactTarget(
+                  tester,
+                  find.byKey(ValueKey<String>('ai-profile-$action-$id')),
+                );
+              }
+              // Icon-only actions remain discoverable by assistive technologies.
+              expect(
+                tester
+                    .getSemantics(
+                      find.byKey(ValueKey<String>('ai-profile-edit-$id')),
+                    )
+                    .getSemanticsData()
+                    .tooltip,
+                contains('编辑'),
+              );
+              expect(
+                tester
+                    .getSemantics(
+                      find.byKey(ValueKey<String>('ai-profile-delete-$id')),
+                    )
+                    .getSemanticsData()
+                    .tooltip,
+                contains('删除'),
+              );
+            }
+            // Standard actions share the same compact visual height.
+            for (final String label in <String>['新增模型配置', '新增连接', '刷新状态']) {
+              _expectCompactTarget(
+                tester,
+                find.widgetWithText(OmniButton, label),
+              );
+            }
+            expect(
+              tester
+                  .widget<OmniButton>(find.widgetWithText(OmniButton, '当前使用'))
+                  .onPressed,
+              isNull,
+            );
+            expect(find.byTooltip(longModel), findsOneWidget);
+            expect(tester.takeException(), isNull);
+            await _captureMultimodal(
+              tester,
+              'android_ai_settings_${width.toInt()}_${brightness.name}',
+            );
+            await tester.longPress(
+              find.byKey(const ValueKey<String>('ai-profile-model-profile-2')),
+            );
+            await tester.pumpAndSettle();
+            expect(find.text(longModel), findsNWidgets(2));
+          } finally {
+            semantics.dispose();
+          }
+        },
+      );
+    }
+  }
+
+  // Enlarged fonts may stack actions, but must not clip text or touch targets.
+  for (final Brightness brightness in Brightness.values) {
+    testWidgets('Android AI 设置双倍字号 ${brightness.name} 操作换行靠右', (
+      WidgetTester tester,
+    ) async {
+      // Use two complete profiles to exercise both active and inactive rows.
+      final _AiAuth auth = _AiAuth()
+        ..handler = (_Request request) async => _snapshot(secondProfile: true);
+      await _pump(
+        tester,
+        auth,
+        platform: TargetPlatform.android,
+        width: 320,
+        scale: 2,
+        brightness: brightness,
+        pagePadding: 16,
+        height: 1280,
+      );
+      // Check each row independently so controls cannot drift to another profile.
+      for (final String id in <String>['profile-1', 'profile-2']) {
+        // The model baseline precedes the wrapped actions.
+        final Rect model = tester.getRect(
+          find.byKey(ValueKey<String>('ai-profile-model-$id')),
+        );
+        // The full action group remains aligned with the row edge.
+        final Rect actions = tester.getRect(
+          find.byKey(ValueKey<String>('ai-profile-actions-$id')),
+        );
+        // Row width excludes the panel padding just as in the application.
+        final Rect row = tester.getRect(
+          find.byKey(ValueKey<String>('ai-profile-row-$id')),
+        );
+        expect(actions.top, greaterThan(model.bottom));
+        expect(actions.right, closeTo(row.right, 0.1));
+        expect(actions.left, greaterThanOrEqualTo(row.left));
+      }
+      expect(tester.takeException(), isNull);
+      await _captureMultimodal(
+        tester,
+        'android_ai_settings_320_2x_${brightness.name}',
+      );
+      await tester.tap(find.byTooltip('编辑').last);
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextFormField, '测试 DeepSeek'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('Android AI 模型图标热区、删除确认及切换期间禁用均绑定正确配置', (
+    WidgetTester tester,
+  ) async {
+    // Delay the selection response to exercise duplicate-submit protection.
+    final Completer<Map<String, dynamic>> gate =
+        Completer<Map<String, dynamic>>();
+    // Persist only the requested fixture changes, never any real model settings.
+    final Map<String, dynamic> snapshot = _snapshot(secondProfile: true);
+    // Real repository requests are captured at the authenticated HTTP boundary.
+    final _AiAuth auth = _AiAuth()
+      ..handler = (_Request request) async {
+        if (request.method == 'PUT') return gate.future;
+        if (request.method == 'DELETE') {
+          (snapshot['profiles'] as List).removeWhere(
+            (dynamic profile) => profile['id'] == 'profile-1',
+          );
+        }
+        return snapshot;
+      };
+    await _pump(
+      tester,
+      auth,
+      platform: TargetPlatform.android,
+      width: 360,
+      pagePadding: 16,
+    );
+    // Tap above the painted icon, inside the larger transparent target.
+    final Rect edit = tester.getRect(
+      find.byKey(const ValueKey<String>('ai-profile-edit-profile-2')),
+    );
+    await tester.tapAt(Offset(edit.center.dx, edit.top + 1));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextFormField, '测试 DeepSeek'), findsOneWidget);
+    await tester.tap(find.text('取消').first);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('ai-profile-delete-profile-2')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('确认删除“测试 DeepSeek”'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(
+      auth.requests.where((_Request request) => request.method == 'DELETE'),
+      isEmpty,
+    );
+    // Touching the compact button's outer target must still select the model.
+    final Rect select = tester.getRect(
+      find.byKey(const ValueKey<String>('ai-profile-select-profile-2')),
+    );
+    await tester.tapAt(Offset(select.center.dx, select.top + 1));
+    await tester.pump();
+    expect(
+      auth.requests.where((_Request request) => request.method == 'PUT'),
+      hasLength(1),
+    );
+    expect((auth.requests.last.data! as Map)['activeProfileId'], 'profile-2');
+    // All row actions are disabled until the server acknowledges the selection.
+    for (final OmniIconButton button in tester.widgetList<OmniIconButton>(
+      find.byType(OmniIconButton),
+    )) {
+      expect(button.onPressed, isNull);
+    }
+    expect(
+      tester
+          .widget<OmniButton>(
+            find.byKey(const ValueKey<String>('ai-profile-select-profile-2')),
+          )
+          .onPressed,
+      isNull,
+    );
+    snapshot['activeProfileId'] = 'profile-2';
+    snapshot['revision'] = 2;
+    gate.complete(snapshot);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<OmniButton>(
+            find.byKey(const ValueKey<String>('ai-profile-select-profile-2')),
+          )
+          .label,
+      '当前使用',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('ai-profile-delete-profile-1')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(OmniButton, '删除'));
+    await tester.pumpAndSettle();
+    expect(
+      auth.requests
+          .singleWhere((_Request request) => request.method == 'DELETE')
+          .path,
+      '/ai/profiles/profile-1',
+    );
+    expect(
+      find.byKey(const ValueKey<String>('ai-profile-row-profile-1')),
+      findsNothing,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -422,7 +735,7 @@ void main() {
         width: platform == TargetPlatform.android ? 320 : 960,
         scale: platform == TargetPlatform.android ? 2 : 1,
       );
-      await tester.tap(find.text('编辑'));
+      await tester.tap(_editButton(platform));
       await tester.pumpAndSettle();
       // 当前配置的真实回填值。
       final Finder toggle = find.byKey(
@@ -438,7 +751,7 @@ void main() {
         auth.requests.where((request) => request.method != 'GET'),
         isEmpty,
       );
-      await tester.tap(find.text('编辑'));
+      await tester.tap(_editButton(platform));
       await tester.pumpAndSettle();
       expect(tester.widget<OmniSwitch>(toggle).value, isTrue);
       await tester.ensureVisible(toggle);
@@ -446,7 +759,7 @@ void main() {
       await tester.tap(find.text('保存').last);
       await tester.pumpAndSettle();
       expect(multimodal, isFalse);
-      await tester.tap(find.text('编辑'));
+      await tester.tap(_editButton(platform));
       await tester.pumpAndSettle();
       expect(tester.widget<OmniSwitch>(toggle).value, isFalse);
       await tester.tap(find.text('取消').first);
@@ -514,7 +827,7 @@ void main() {
         width: platform == TargetPlatform.android ? 320 : 960,
         scale: platform == TargetPlatform.android ? 2 : 1,
       );
-      await tester.tap(find.text('编辑'));
+      await tester.tap(_editButton(platform));
       await tester.pumpAndSettle();
       // 思考控制具有独立身份，不能误点击多模态开关。
       final Finder thinking = find.byKey(
@@ -553,7 +866,7 @@ void main() {
             as Map)['multimodal'],
         isTrue,
       );
-      await tester.tap(find.text('编辑'));
+      await tester.tap(_editButton(platform));
       await tester.pumpAndSettle();
       expect(tester.widget<OmniSwitch>(thinking).value, isFalse);
       await tester.tap(find.text('取消').first);
@@ -657,7 +970,7 @@ void main() {
       // 正式页面使用的受控认证边界。
       final _AiAuth auth = _AiAuth();
       await _pump(tester, auth, platform: platform, width: width, scale: scale);
-      await tester.tap(find.text('编辑'));
+      await tester.tap(_editButton(platform));
       await tester.pumpAndSettle();
       // 真实 API Key 编辑框，掩码只出现在说明中。
       final TextFormField field = tester.widget<TextFormField>(

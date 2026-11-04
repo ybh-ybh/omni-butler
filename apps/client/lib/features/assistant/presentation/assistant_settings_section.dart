@@ -111,6 +111,10 @@ class _AssistantSettingsSectionState
                 Text(error is ApiFailure ? error.message : '无法读取助手设置'),
                 OmniButton(
                   label: '重试读取助手设置',
+                  visualHeight:
+                      Theme.of(context).platform == TargetPlatform.android
+                      ? OmniSize.control
+                      : null,
                   onPressed: () => ref.invalidate(assistantSettingsProvider),
                 ),
               ],
