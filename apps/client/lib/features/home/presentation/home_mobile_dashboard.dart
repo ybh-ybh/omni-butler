@@ -26,6 +26,9 @@ class HomeMobileDashboard extends StatefulWidget {
   /// Optional feature shortcuts that scroll away with the quote.
   final Widget? shortcuts;
 
+  /// Total actionable events and memberships in the context module.
+  final int contextAttentionCount;
+
   /// 创建安卓首页分页布局。
   const HomeMobileDashboard({
     required this.visibleCards,
@@ -33,6 +36,7 @@ class HomeMobileDashboard extends StatefulWidget {
     required this.onManageCards,
     required this.bottomPadding,
     this.shortcuts,
+    this.contextAttentionCount = 0,
     super.key,
   });
 
@@ -213,6 +217,8 @@ class _HomeMobileDashboardState extends State<HomeMobileDashboard> {
                                 pageController: _pageController,
                                 pendingPage: _pendingPage,
                                 height: tabHeight,
+                                contextAttentionCount:
+                                    widget.contextAttentionCount,
                                 onSelected: _selectPage,
                               ),
                             Expanded(
@@ -321,6 +327,9 @@ class _HomeModuleTabs extends StatefulWidget {
   /// 点按标签后的选择回调。
   final ValueChanged<int> onSelected;
 
+  /// Keeps the reminder count independent of the selected page.
+  final int contextAttentionCount;
+
   /// 创建首页胶囊导航。
   const _HomeModuleTabs({
     required this.pages,
@@ -329,6 +338,7 @@ class _HomeModuleTabs extends StatefulWidget {
     required this.pendingPage,
     required this.height,
     required this.onSelected,
+    required this.contextAttentionCount,
   });
 
   /// 创建标签独立滚动状态。
@@ -416,6 +426,29 @@ class _HomeModuleTabsState extends State<_HomeModuleTabs> {
     super.dispose();
   }
 
+  /// Reserves the scaled badge width beyond its icon to avoid label overlap.
+  double _contextBadgeOverflow() {
+    if (widget.contextAttentionCount <= 0) return 0;
+    // Match Badge.count's capped label, theme typography, and system text scale.
+    final TextPainter painter = TextPainter(
+      text: TextSpan(
+        text: widget.contextAttentionCount > 99
+            ? '99+'
+            : '${widget.contextAttentionCount}',
+        style: Theme.of(context).textTheme.labelSmall,
+      ),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    // The badge uses a 16dp anchor and 4dp padding on each side.
+    final double badgeWidth = math.max(
+      OmniSpacing.md,
+      painter.width + OmniSpacing.xxs * 2,
+    );
+    painter.dispose();
+    return badgeWidth - OmniSpacing.md + OmniSpacing.xxs;
+  }
+
   /// 构建常驻图标及随正文进度展开的标签。
   Widget _buildLabel(
     HomeCardId card,
@@ -424,6 +457,7 @@ class _HomeModuleTabsState extends State<_HomeModuleTabs> {
     double labelWidth,
     double expansion,
     OmniColors colors,
+    double badgeOverflow,
   ) {
     // 前景色与背景移动共享连续分页进度。
     final Color color = Color.lerp(
@@ -434,7 +468,31 @@ class _HomeModuleTabsState extends State<_HomeModuleTabs> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        Icon(_icon(card), size: OmniSize.navigationIcon, color: color),
+        Padding(
+          padding: EdgeInsetsDirectional.only(
+            end: card == HomeCardId.todayContext ? badgeOverflow : 0,
+          ),
+          child: Badge.count(
+            key: ValueKey<String>('home-mobile-badge-${card.name}'),
+            count: card == HomeCardId.todayContext
+                ? widget.contextAttentionCount
+                : 0,
+            maxCount: 99,
+            isLabelVisible:
+                card == HomeCardId.todayContext &&
+                widget.contextAttentionCount > 0,
+            backgroundColor: Theme.of(context).colorScheme.error,
+            textColor: Theme.of(context).colorScheme.onError,
+            textStyle: Theme.of(context).textTheme.labelSmall,
+            largeSize: OmniSpacing.md,
+            padding: const EdgeInsets.symmetric(horizontal: OmniSpacing.xxs),
+            child: Icon(
+              _icon(card),
+              size: OmniSize.navigationIcon,
+              color: color,
+            ),
+          ),
+        ),
         if (expansion > 0)
           ClipRect(
             child: SizedBox(
@@ -476,6 +534,8 @@ class _HomeModuleTabsState extends State<_HomeModuleTabs> {
         .copyWith(fontWeight: FontWeight.w600);
     // 保留系统字号，不缩小文字来强行适配。
     final TextScaler scaler = MediaQuery.textScalerOf(context);
+    // Include multi-digit reminders in both tab sizing and icon-label spacing.
+    final double badgeOverflow = _contextBadgeOverflow();
     // 导航外边距内的完整触控高度。
     final double height = widget.height - OmniSpacing.xxs * 2;
     // 胶囊视觉高度与触控高度分开计算。
@@ -535,6 +595,9 @@ class _HomeModuleTabsState extends State<_HomeModuleTabs> {
                       position++
                     )
                       OmniSize.touch +
+                          (widget.pages[position] == HomeCardId.todayContext
+                              ? badgeOverflow
+                              : 0) +
                           (labelWidths[position] + OmniSpacing.xs) *
                               expansions[position],
                   ];
@@ -603,6 +666,12 @@ class _HomeModuleTabsState extends State<_HomeModuleTabs> {
                                 Semantics(
                                   button: true,
                                   label: _label(widget.pages[position]),
+                                  value:
+                                      widget.pages[position] ==
+                                              HomeCardId.todayContext &&
+                                          widget.contextAttentionCount > 0
+                                      ? '${widget.contextAttentionCount} 项待处理事项'
+                                      : null,
                                   excludeSemantics: true,
                                   onTap: () => widget.onSelected(position),
                                   selected:
@@ -629,6 +698,7 @@ class _HomeModuleTabsState extends State<_HomeModuleTabs> {
                                             labelWidths[position],
                                             expansions[position],
                                             colors,
+                                            badgeOverflow,
                                           ),
                                         ),
                                       ),

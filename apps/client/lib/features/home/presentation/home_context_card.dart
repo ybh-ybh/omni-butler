@@ -15,6 +15,50 @@ import 'package:omni_butler/features/memberships/presentation/memberships_page.d
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
+/// Counts actionable rows across the enabled context sections.
+final homeContextAttentionCountProvider = Provider.autoDispose<int>((Ref ref) {
+  // Use the same feature switches and clock as the context card.
+  final FeaturePreference preference = ref.watch(featurePreferenceProvider);
+  // Reevaluate date windows as the application clock advances.
+  final DateTime now = ref.watch(nowProvider);
+  // Match the event list's data, loading, and error presentation.
+  final int eventCount = preference.isEnabled(AppFeature.events)
+      ? (ref
+                .watch(activeEventsProvider)
+                .whenOrNull(
+                  data: (List<EventRecord> events) => selectHomeAttentionEvents(
+                    events: events,
+                    repository: ref.watch(eventRepositoryProvider),
+                    now: now,
+                  ).length,
+                ) ??
+            0)
+      : 0;
+  // Count both sections so completing one item preserves the remaining total.
+  final int membershipCount = preference.isEnabled(AppFeature.memberships)
+      ? (ref
+                .watch(membershipsProvider)
+                .whenOrNull(
+                  data: (List<MembershipRecord> memberships) {
+                    // Share the list's status rules instead of counting all records.
+                    final MembershipRepository repository = ref.watch(
+                      membershipRepositoryProvider,
+                    );
+                    return memberships
+                        .where(
+                          (MembershipRecord membership) =>
+                              _isMembershipAttention(
+                                repository.statusFor(membership, now),
+                              ),
+                        )
+                        .length;
+                  },
+                ) ??
+            0)
+      : 0;
+  return eventCount + membershipCount;
+});
+
 /// 首页临近事件与会员到期提醒卡片。
 class HomeTodayContextCard extends ConsumerWidget {
   /// 当前时间。
@@ -359,9 +403,7 @@ class _MembershipContextRowState extends ConsumerState<_MembershipContextRow> {
                 membership,
                 widget.now,
               );
-              return status == MembershipStatus.expired ||
-                  status == MembershipStatus.upcoming ||
-                  status == MembershipStatus.renewalDue;
+              return _isMembershipAttention(status);
             }).toList()..sort((MembershipRecord left, MembershipRecord right) {
               // 排序日期与每一行实际展示的到期或续费日期保持一致。
               final DateTime leftDate =
@@ -773,6 +815,12 @@ String _relativeDate(DateTime date, DateTime now, {required bool overdue}) {
   }
   return days == 1 ? '明天' : '$days 天后';
 }
+
+/// Keeps membership badge eligibility identical to the visible reminder list.
+bool _isMembershipAttention(MembershipStatus status) =>
+    status == MembershipStatus.expired ||
+    status == MembershipStatus.upcoming ||
+    status == MembershipStatus.renewalDue;
 
 /// 返回与会员当前提示状态相匹配的日期。
 DateTime? _membershipAttentionDate(

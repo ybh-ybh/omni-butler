@@ -7,6 +7,44 @@ import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 检查顶部滚动边界、极短视口和动态分页的真实布局。
 void main() {
+  // Cover one digit, multiple digits, and the compact overflow label.
+  for (final int count in <int>[1, 12, 100]) {
+    testWidgets('320宽双倍字号下数字角标 $count 完整显示且不覆盖脉络标签', (
+      WidgetTester tester,
+    ) async {
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await _pumpDashboard(
+        tester,
+        size: const Size(320, 844),
+        contextAttentionCount: count,
+      );
+      // Scope the label to the icon badge, excluding module content.
+      final Finder badge = _key('home-mobile-badge-todayContext');
+      expect(
+        find.descendant(
+          of: badge,
+          matching: find.text(count > 99 ? '99+' : '$count'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(_key('home-mobile-tab-todayContext'));
+      await tester.pumpAndSettle();
+      // Measure the painted pill rather than Badge's smaller icon bounds.
+      final Rect badgeBounds = tester.getRect(
+        find.descendant(of: badge, matching: find.byType(Container)),
+      );
+      // The expanded module label must start after the whole count pill.
+      final Rect label = tester.getRect(_key('home-mobile-label-todayContext'));
+      // Both corners must remain inside the scrollable navigation viewport.
+      final Rect viewport = tester.getRect(_key('home-mobile-tabs-scroll'));
+      expect(badgeBounds.right, lessThan(label.left));
+      expect(viewport.contains(badgeBounds.topLeft), isTrue);
+      expect(viewport.contains(badgeBounds.bottomRight), isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('正文横拖时胶囊连续移动并由反向手势接管', (WidgetTester tester) async {
     await _pumpDashboard(tester);
     // 初始胶囊边界用于比较中间帧。
@@ -214,6 +252,7 @@ Future<ValueNotifier<List<HomeCardId>>> _pumpDashboard(
   WidgetTester tester, {
   Size size = const Size(390, 844),
   double quoteHeight = 180,
+  int contextAttentionCount = 0,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -243,6 +282,7 @@ Future<ValueNotifier<List<HomeCardId>>> _pumpDashboard(
                 Widget? child,
               ) => HomeMobileDashboard(
                 visibleCards: cards,
+                contextAttentionCount: contextAttentionCount,
                 bottomPadding: 80,
                 onManageCards: () {},
                 cards: <HomeCardId, Widget>{

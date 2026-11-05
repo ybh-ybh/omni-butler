@@ -208,6 +208,10 @@ class HomePage extends ConsumerWidget {
         ? HomeMobileDashboard(
             visibleCards: visibleCards,
             cards: cards,
+            contextAttentionCount:
+                visibleCards.contains(HomeCardId.todayContext)
+                ? ref.watch(homeContextAttentionCountProvider)
+                : 0,
             onManageCards: () => showHomeCardManager(context),
             shortcuts: const HomeMobileShortcuts(),
             bottomPadding: featurePreference.isEnabled(AppFeature.timeline)

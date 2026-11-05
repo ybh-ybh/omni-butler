@@ -9,7 +9,9 @@ import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
+import 'package:omni_butler/features/events/data/event_repository.dart';
 import 'package:omni_butler/features/home/data/home_card_preferences.dart';
+import 'package:omni_butler/features/memberships/data/membership_repository.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
@@ -39,6 +41,232 @@ class _FailingQuoteChangeDatabase extends AppDatabase {
 
 /// 验证安卓首页真实业务模块的分页、手势隔离与本次运行状态。
 void main() {
+  testWidgets('脉络角标仅跟随可处理事件，切页保留且完成后自动消失', (WidgetTester tester) async {
+    // Start on the todo page before the context module has been opened.
+    final _HomeTestApp app = await _pumpHome(tester);
+    // Exercise real database notifications instead of overriding the badge.
+    final EventRepository repository = EventRepository(app.database);
+    // Read the status exposed by the complete tab semantics.
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    try {
+      _expectContextBadge(tester, count: 0);
+      await repository.save(
+        const EventDraft(
+          name: '尚未首次记录',
+          intervalValue: 30,
+          intervalUnit: EventIntervalUnit.day,
+        ),
+      );
+      await repository.save(
+        EventDraft(
+          name: '下个月检查',
+          intervalValue: 30,
+          intervalUnit: EventIntervalUnit.day,
+          lastCompletedAt: DateTime(2026, 10, 8, 9),
+        ),
+      );
+      await MembershipRepository(app.database).save(
+        MembershipDraft(
+          name: '尚无需处理的会员',
+          priceCents: 1000,
+          purchaseDate: DateTime(2026, 10, 1),
+          expirationDate: DateTime(2027, 10, 1),
+          isPermanent: false,
+          autoRenew: false,
+        ),
+      );
+      await tester.pumpAndSettle();
+      _expectContextBadge(tester, count: 0);
+
+      await repository.save(
+        EventDraft(
+          name: '本周更换滤芯',
+          intervalValue: 30,
+          intervalUnit: EventIntervalUnit.day,
+          lastCompletedAt: DateTime(2026, 9, 10, 9),
+        ),
+      );
+      await tester.pumpAndSettle();
+      _expectPage(tester, 0);
+      _expectContextBadge(tester, count: 1);
+      expect(
+        tester.getSemantics(find.bySemanticsLabel('脉络')).value,
+        '1 项待处理事项',
+      );
+      // Disabled sections must not contribute hidden reminders.
+      final FeaturePreferenceController features = app.container.read(
+        featurePreferenceProvider.notifier,
+      );
+      await features.setFeatureEnabled(AppFeature.events, false);
+      await tester.pumpAndSettle();
+      _expectContextBadge(tester, count: 0);
+      await features.setFeatureEnabled(AppFeature.events, true);
+      await tester.pumpAndSettle();
+      _expectContextBadge(tester, count: 1);
+
+      await _selectModule(tester, 'todayContext');
+      expect(find.text('本周更换滤芯'), findsOneWidget);
+      _expectContextBadge(tester, count: 1);
+      // Completing the only actionable event moves its next date out of range.
+      final EventRecord event =
+          (await app.database.select(app.database.events).get()).singleWhere(
+            (EventRecord event) => event.name == '本周更换滤芯',
+          );
+      await repository.addHistory(
+        eventId: event.id,
+        completedAt: DateTime(2026, 10, 8, 14),
+      );
+      await tester.pumpAndSettle();
+      expect(_key('home-context-event-item-${event.id}'), findsNothing);
+      _expectContextBadge(tester, count: 0);
+      expect(tester.getSemantics(find.bySemanticsLabel('脉络')).value, isEmpty);
+      expect(tester.takeException(), isNull);
+    } finally {
+      semantics.dispose();
+      await _disposeHome(tester, app);
+    }
+  });
+
+  testWidgets('脉络角标合计事件与会员，关闭功能、完成和删除逐项更新数量', (WidgetTester tester) async {
+    // Seed several reminders through the same repositories used by the card.
+    final _HomeTestApp app = await _pumpHome(tester);
+    // Event completion must decrease the total without hiding other reminders.
+    final EventRepository events = EventRepository(app.database);
+    // Membership reminders contribute to the same visible count.
+    final MembershipRepository memberships = MembershipRepository(app.database);
+    // Both events fall within the existing seven-day context window.
+    for (int index = 0; index < 2; index++) {
+      await events.save(
+        EventDraft(
+          name: '本周事件 $index',
+          intervalValue: 30,
+          intervalUnit: EventIntervalUnit.day,
+          lastCompletedAt: DateTime(2026, 9, 10 + index, 9),
+        ),
+      );
+    }
+    await memberships.save(
+      MembershipDraft(
+        name: '明天到期的会员',
+        priceCents: 1000,
+        purchaseDate: DateTime(2026, 9, 9),
+        expirationDate: DateTime(2026, 10, 9),
+        isPermanent: false,
+        autoRenew: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+    _expectContextBadge(tester, count: 3);
+    // Hidden sections must stop contributing while retaining their records.
+    final FeaturePreferenceController features = app.container.read(
+      featurePreferenceProvider.notifier,
+    );
+    await features.setFeatureEnabled(AppFeature.events, false);
+    await tester.pumpAndSettle();
+    _expectContextBadge(tester, count: 1);
+    await features.setFeatureEnabled(AppFeature.events, true);
+    await tester.pumpAndSettle();
+    _expectContextBadge(tester, count: 3);
+    await features.setFeatureEnabled(AppFeature.memberships, false);
+    await tester.pumpAndSettle();
+    _expectContextBadge(tester, count: 2);
+    await features.setFeatureEnabled(AppFeature.memberships, true);
+    await tester.pumpAndSettle();
+    await _selectModule(tester, 'todayContext');
+    _expectContextBadge(tester, count: 3);
+    // Complete one event, then remove each remaining reminder independently.
+    final List<EventRecord> records = await app.database
+        .select(app.database.events)
+        .get();
+    await events.addHistory(
+      eventId: records.first.id,
+      completedAt: DateTime(2026, 10, 8, 14),
+    );
+    await tester.pumpAndSettle();
+    _expectContextBadge(tester, count: 2);
+    // Deleting the membership must leave the other event's badge visible.
+    final MembershipRecord membership = await app.database
+        .select(app.database.memberships)
+        .getSingle();
+    await memberships.delete(membership.id);
+    await tester.pumpAndSettle();
+    _expectContextBadge(tester, count: 1);
+    await events.setArchived(records.last.id, true);
+    await tester.pumpAndSettle();
+    _expectContextBadge(tester, count: 0);
+    expect(tester.takeException(), isNull);
+    await _disposeHome(tester, app);
+  });
+
+  // Each actionable membership status must work without any pending event.
+  for (final MembershipStatus status in <MembershipStatus>[
+    MembershipStatus.expired,
+    MembershipStatus.upcoming,
+    MembershipStatus.renewalDue,
+  ]) {
+    testWidgets('会员 ${status.name} 触发脉络角标，关闭功能或删除后消失', (
+      WidgetTester tester,
+    ) async {
+      // Include a narrow dark viewport with enlarged text in the real app.
+      final _HomeTestApp app = await _pumpHome(
+        tester,
+        size: const Size(360, 844),
+        themeMode: 'dark',
+        textScale: 2,
+      );
+      // Use membership persistence and the production reminder rules.
+      final MembershipRepository repository = MembershipRepository(
+        app.database,
+      );
+      await repository.save(
+        MembershipDraft(
+          name: '需要关注的会员',
+          priceCents: 1000,
+          purchaseDate: DateTime(2026, 9, 1),
+          expirationDate: switch (status) {
+            MembershipStatus.expired => DateTime(2026, 10, 7),
+            MembershipStatus.upcoming => DateTime(2026, 10, 9),
+            _ => DateTime(2027, 10, 1),
+          },
+          isPermanent: false,
+          autoRenew: false,
+          needsRenewal: status == MembershipStatus.renewalDue,
+          expirationReminderDays: 1,
+        ),
+      );
+      await tester.pumpAndSettle();
+      _expectContextBadge(tester, count: 1);
+      await _selectModule(tester, 'todayContext');
+      expect(find.text('需要关注的会员'), findsOneWidget);
+      _expectContextBadge(tester, count: 1);
+      // The indicator fits inside the tab even when its text expands.
+      final Rect tab = tester.getRect(_key('home-mobile-tab-todayContext'));
+      // Badge layout retains the icon's bounds and the original touch target.
+      final Rect icon = tester.getRect(_key('home-mobile-badge-todayContext'));
+      expect(tab.contains(icon.topRight), isTrue);
+      expect(tab.height, greaterThanOrEqualTo(OmniSize.touch));
+      // Turning off memberships must keep the enabled event section usable.
+      final FeaturePreferenceController features = app.container.read(
+        featurePreferenceProvider.notifier,
+      );
+      await features.setFeatureEnabled(AppFeature.memberships, false);
+      await tester.pumpAndSettle();
+      _expectContextBadge(tester, count: 0);
+      await features.setFeatureEnabled(AppFeature.memberships, true);
+      await tester.pumpAndSettle();
+      _expectContextBadge(tester, count: 1);
+      // Deleting the sole reminder clears the count through the watched stream.
+      final MembershipRecord membership = await app.database
+          .select(app.database.memberships)
+          .getSingle();
+      await repository.delete(membership.id);
+      await tester.pumpAndSettle();
+      _expectContextBadge(tester, count: 0);
+      expect(tester.takeException(), isNull);
+      await _disposeHome(tester, app);
+    });
+  }
+
   // Exercise real saves so clipped day segments cannot become edit baselines.
   for (final String scenario in <String>['completed', 'cross-day', 'ongoing']) {
     testWidgets('安卓首页时间条目长按编辑并保存原记录 $scenario', (WidgetTester tester) async {
@@ -1081,6 +1309,17 @@ class _HomeTestApp {
 
 /// 返回首页稳定标识对应的控件。
 Finder _key(String key) => find.byKey(ValueKey<String>(key));
+
+/// Checks the rendered count while retaining the icon when no reminders remain.
+void _expectContextBadge(WidgetTester tester, {required int count}) {
+  // Scope text assertions to the badge instead of matching numbers in the card.
+  final Finder badge = _key('home-mobile-badge-todayContext');
+  expect(tester.widget<Badge>(badge).isLabelVisible, count > 0);
+  expect(
+    find.descendant(of: badge, matching: find.text('$count')),
+    count > 0 ? findsOneWidget : findsNothing,
+  );
+}
 
 /// 读取真实分页控件，使用其实际滚动位置验证落位。
 PageView _pager(WidgetTester tester) =>
