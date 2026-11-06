@@ -852,13 +852,22 @@ class _CompactNavigation extends StatelessWidget {
   /// 构建飞书式五入口底部导航。
   @override
   Widget build(BuildContext context) {
-    // 当前主题语义色。
+    // Resolve the current theme colors for the navigation surface and border.
     final OmniColors colors = OmniColors.of(context);
-    return SafeArea(
+    // Only Android uses a continuous surface behind the bottom safe area.
+    final bool androidPlatform =
+        Theme.of(context).platform == TargetPlatform.android;
+    // Match the reference gray in light mode and use the theme in dark mode.
+    final Color androidBackground =
+        Theme.of(context).brightness == Brightness.light
+        ? const Color(0xFFF7F7F7)
+        : colors.paper;
+    // Keep the navigation items and top divider inside the safe area.
+    final Widget navigation = SafeArea(
       top: false,
       child: Container(
         key: const ValueKey<String>('compact-navigation'),
-        height: Theme.of(context).platform == TargetPlatform.android
+        height: androidPlatform
             ? math.max(
                 60,
                 OmniSize.navigationIcon +
@@ -868,7 +877,7 @@ class _CompactNavigation extends StatelessWidget {
               )
             : 60,
         decoration: BoxDecoration(
-          color: colors.paper,
+          color: androidPlatform ? null : colors.paper,
           border: Border(top: BorderSide(color: colors.line)),
         ),
         child: Row(
@@ -900,6 +909,9 @@ class _CompactNavigation extends StatelessWidget {
         ),
       ),
     );
+    return androidPlatform
+        ? ColoredBox(color: androidBackground, child: navigation)
+        : navigation;
   }
 }
 
