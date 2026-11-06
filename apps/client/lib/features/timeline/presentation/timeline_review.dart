@@ -33,6 +33,9 @@ enum TimelineStatsPeriod {
 
 /// 时间复盘主体。
 class TimelineReviewContent extends ConsumerWidget {
+  /// Scrolls optional date controls with the review panels.
+  final Widget? header;
+
   /// 当前统计周期记录。
   final List<TimeEntryRecord> records;
 
@@ -67,6 +70,7 @@ class TimelineReviewContent extends ConsumerWidget {
     required this.onOpenDay,
     required this.onEdit,
     this.safeBottomPadding = 0,
+    this.header,
     super.key,
   });
 
@@ -130,6 +134,7 @@ class TimelineReviewContent extends ConsumerWidget {
         final Widget scrollView = CustomScrollView(
           key: const ValueKey<String>('timeline-review-content'),
           slivers: <Widget>[
+            if (header != null) SliverToBoxAdapter(child: header),
             SliverToBoxAdapter(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1175,6 +1180,9 @@ class _TimeTrendPanel extends StatelessWidget {
 
 /// 单日记录明细主体。
 class TimelineDetailsContent extends ConsumerWidget {
+  /// Scrolls optional date controls with the daily timeline.
+  final Widget? header;
+
   /// 当前自然日。
   final DateTime day;
 
@@ -1201,6 +1209,7 @@ class TimelineDetailsContent extends ConsumerWidget {
     required this.onEdit,
     required this.onDelete,
     this.safeBottomPadding = 0,
+    this.header,
     super.key,
   });
 
@@ -1265,10 +1274,12 @@ class TimelineDetailsContent extends ConsumerWidget {
           );
         }
         return ListView(
+          key: const PageStorageKey<String>('timeline-details-scroll'),
           padding: EdgeInsets.only(
             bottom: safeBottomPadding > 0 ? safeBottomPadding : OmniSpacing.md,
           ),
           children: <Widget>[
+            ?header,
             _DayDetailSummary(day: day, records: records),
             const SizedBox(height: OmniSpacing.xs),
             SizedBox(
@@ -1487,9 +1498,10 @@ class _DayTimelineBoard extends StatelessWidget {
                       top: 0,
                       bottom: 0,
                       child: GestureDetector(
+                        key: const ValueKey<String>('timeline-day-empty-track'),
                         behavior: HitTestBehavior.opaque,
-                        onTapDown: (TapDownDetails details) {
-                          // 点击位置换算出的分钟数。
+                        onTapUp: (TapUpDetails details) {
+                          // Resolve the minute only after a tap wins the gesture.
                           final int minute =
                               ((details.localPosition.dy / trackHeight * 1440) /
                                       5)

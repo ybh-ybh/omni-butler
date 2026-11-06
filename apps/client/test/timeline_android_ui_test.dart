@@ -13,6 +13,7 @@ import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
 import 'package:omni_butler/features/timeline/presentation/timeline_review.dart';
 import 'package:omni_butler/features/timeline/presentation/timeline_page.dart';
+import 'package:omni_butler/shared/layout/android_secondary_page.dart';
 import 'package:omni_butler/shared/ui/omni_date_time_picker.dart';
 import 'package:omni_butler/shared/ui/omni_dropdown.dart';
 import 'package:omni_butler/shared/ui/omni_page_header.dart';
@@ -47,12 +48,22 @@ void main() {
 
     expect(find.byType(OmniPageHeader), findsNothing);
     expect(find.text('时间管理'), findsNothing);
+    expect(find.text('时间记录'), findsNothing);
     expect(
       find.byType(OmniSlidingSegmentedControl<TimelineViewMode>),
       findsOneWidget,
     );
     expect(tester.getSize(viewControl).height, OmniSize.touch);
-    expect(tester.getSize(viewControl).width, closeTo(374, 0.1));
+    expect(tester.getSize(viewControl).width, closeTo(326, 0.1));
+    // The switch occupies the title row beside the existing return action.
+    final Rect backRect = tester.getRect(
+      find.byKey(const ValueKey<String>('android-secondary-back')),
+    );
+    expect(tester.getRect(viewControl).center.dy, backRect.center.dy);
+    expect(
+      tester.getRect(viewControl).left,
+      greaterThanOrEqualTo(backRect.right),
+    );
     expect(
       find.descendant(
         of: viewControl,
@@ -171,6 +182,261 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 
+    await tester.tap(
+      find.byKey(const ValueKey<String>('android-secondary-back')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      testContext.container.read(appRouterProvider).state.uri.path,
+      '/home',
+    );
+    await testContext.dispose(tester);
+  });
+
+  testWidgets('Android 日期导航随内容滚动且顶部模式保持可达', (WidgetTester tester) async {
+    // A short phone viewport makes both content sections independently scrollable.
+    final _TimelineAndroidTestContext testContext = await _pumpAndroidTimeline(
+      tester,
+      viewport: const Size(390, 680),
+    );
+    // The fixed mode control must keep its geometry while content moves.
+    final Finder viewControl = find.byKey(
+      const ValueKey<String>('timeline-view-mode'),
+    );
+    // Capture the fixed navigation position before either vertical drag.
+    final Rect initialControlRect = tester.getRect(viewControl);
+    // Review dates belong to the same scrollable content as the panels.
+    final Finder review = find.byKey(
+      const ValueKey<String>('timeline-review-content'),
+    );
+    await tester.drag(review, const Offset(0, -1000));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('timeline-period-menu')).hitTestable(),
+      findsNothing,
+    );
+    expect(tester.getRect(viewControl), initialControlRect);
+    expect(viewControl.hitTestable(), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('timeline-view-mode-details')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('timeline-date-picker')).hitTestable(),
+      findsOneWidget,
+    );
+    await tester.drag(
+      find.byKey(const ValueKey<String>('timeline-details-content')),
+      const Offset(0, -700),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('timeline-date-picker')).hitTestable(),
+      findsNothing,
+    );
+    expect(tester.getRect(viewControl), initialControlRect);
+    await tester.tap(
+      find.byKey(const ValueKey<String>('timeline-view-mode-review')),
+    );
+    await tester.pumpAndSettle();
+    // Returning to review restores its own scroll position.
+    expect(
+      find.byKey(const ValueKey<String>('timeline-period-menu')).hitTestable(),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+    await testContext.dispose(tester);
+  });
+
+  testWidgets('Android 左右滑动与模式按钮同步且保留日期和统计周期', (WidgetTester tester) async {
+    // The real route exercises the header and pager with shared selection state.
+    final _TimelineAndroidTestContext testContext = await _pumpAndroidTimeline(
+      tester,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('timeline-period-menu')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('月').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('上一周期'));
+    await tester.pumpAndSettle();
+    // The pager, rather than an individual chart, owns horizontal navigation.
+    final Finder pages = find.byKey(
+      const ValueKey<String>('timeline-mobile-pages'),
+    );
+    await tester.drag(pages, const Offset(-300, 0));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<OmniSlidingSegmentedControl<TimelineViewMode>>(
+            find.byKey(const ValueKey<String>('timeline-view-mode')),
+          )
+          .selected,
+      TimelineViewMode.details,
+    );
+    expect(find.text('已记录').hitTestable(), findsOneWidget);
+    expect(
+      tester
+          .widget<OmniDatePickerButton>(
+            find
+                .byKey(const ValueKey<String>('timeline-date-picker'))
+                .hitTestable(),
+          )
+          .value,
+      DateTime(2026, 8, 1),
+    );
+
+    await tester.drag(pages, const Offset(300, 0));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<OmniSlidingSegmentedControl<TimelineViewMode>>(
+            find.byKey(const ValueKey<String>('timeline-view-mode')),
+          )
+          .selected,
+      TimelineViewMode.review,
+    );
+    expect(
+      find
+          .byKey(const ValueKey<String>('timeline-month-fingerprint'))
+          .hitTestable(),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<OmniDatePickerButton>(
+            find
+                .byKey(const ValueKey<String>('timeline-date-picker'))
+                .hitTestable(),
+          )
+          .value,
+      DateTime(2026, 8, 1),
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('timeline-view-mode-details')),
+    );
+    await tester.pumpAndSettle();
+    await tester.drag(pages, const Offset(300, 0));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<OmniSlidingSegmentedControl<TimelineViewMode>>(
+            find.byKey(const ValueKey<String>('timeline-view-mode')),
+          )
+          .selected,
+      TimelineViewMode.review,
+    );
+    // Drilling into a calendar day must also update the pager and selected tab.
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey<String>('timeline-month-fingerprint')),
+        matching: find.text('5'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<OmniSlidingSegmentedControl<TimelineViewMode>>(
+            find.byKey(const ValueKey<String>('timeline-view-mode')),
+          )
+          .selected,
+      TimelineViewMode.details,
+    );
+    expect(
+      tester
+          .widget<OmniDatePickerButton>(
+            find
+                .byKey(const ValueKey<String>('timeline-date-picker'))
+                .hitTestable(),
+          )
+          .value,
+      DateTime(2026, 8, 5),
+    );
+    expect(
+      testContext.container.read(appRouterProvider).state.uri.path,
+      '/timeline',
+    );
+    expect(tester.takeException(), isNull);
+    await testContext.dispose(tester);
+  });
+
+  testWidgets('Android 未完成横滑回到原模式且时间轴横滑不会触发补记', (WidgetTester tester) async {
+    // Empty entries expose a blank track for distinguishing taps from drags.
+    final _TimelineAndroidTestContext testContext = await _pumpAndroidTimeline(
+      tester,
+    );
+    // Cancel a short drag before crossing the halfway point.
+    final TestGesture cancelled = await tester.startGesture(
+      tester.getCenter(
+        find.byKey(const ValueKey<String>('timeline-mobile-pages')),
+      ),
+    );
+    await cancelled.moveBy(const Offset(-40, 0));
+    await tester.pump(const Duration(milliseconds: 120));
+    await cancelled.cancel();
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<OmniSlidingSegmentedControl<TimelineViewMode>>(
+            find.byKey(const ValueKey<String>('timeline-view-mode')),
+          )
+          .selected,
+      TimelineViewMode.review,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('timeline-view-mode-details')),
+    );
+    await tester.pumpAndSettle();
+    // Waiting past the tap-down deadline must not open the entry editor.
+    final Finder emptyTrack = find.byKey(
+      const ValueKey<String>('timeline-day-empty-track'),
+    );
+    // Start near the left edge so the return swipe fits inside the viewport.
+    final TestGesture heldSwipe = await tester.startGesture(
+      tester.getTopLeft(emptyTrack) + const Offset(25, 90),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      find.byKey(const ValueKey<String>('time-entry-editor')),
+      findsNothing,
+    );
+    // Cross touch slop before sending the actual page displacement.
+    await heldSwipe.moveBy(const Offset(30, 0));
+    await tester.pump(const Duration(milliseconds: 16));
+    await heldSwipe.moveBy(const Offset(220, 0));
+    await tester.pump(const Duration(milliseconds: 16));
+    await heldSwipe.up();
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('time-entry-editor')),
+      findsNothing,
+    );
+    expect(
+      tester
+          .widget<OmniSlidingSegmentedControl<TimelineViewMode>>(
+            find.byKey(const ValueKey<String>('timeline-view-mode')),
+          )
+          .selected,
+      TimelineViewMode.review,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('timeline-view-mode-details')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tapAt(tester.getTopLeft(emptyTrack) + const Offset(25, 90));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('time-entry-editor')),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
     await testContext.dispose(tester);
   });
 
@@ -490,6 +756,25 @@ void main() {
             findsOneWidget,
           );
         } else {
+          // The actual compact header keeps both tabs and the return action reachable.
+          expect(
+            find
+                .byKey(const ValueKey<String>('android-secondary-back'))
+                .hitTestable(),
+            findsOneWidget,
+          );
+          expect(
+            find
+                .byKey(const ValueKey<String>('timeline-view-mode-review'))
+                .hitTestable(),
+            findsOneWidget,
+          );
+          expect(
+            find
+                .byKey(const ValueKey<String>('timeline-view-mode-details'))
+                .hitTestable(),
+            findsOneWidget,
+          );
           // 窄屏与大字号仍能展开补记和分类菜单。
           await tester.tap(
             find.byKey(ValueKey<String>('$prefix-more-actions')),
@@ -551,6 +836,9 @@ void main() {
           expect(trendRect.bottom, lessThanOrEqualTo(actionRect.top));
           // 极窄大字号同时覆盖月历和单日明细的自然排版。
           if (scenario.$3 == 2) {
+            // The date toolbar now returns with the content instead of pinning.
+            await tester.drag(scrollView, const Offset(0, 3000));
+            await tester.pumpAndSettle();
             await tester.tap(
               find.byKey(const ValueKey<String>('timeline-period-menu')),
             );
@@ -600,6 +888,36 @@ void main() {
       expect(
         find.byKey(const ValueKey<String>('timeline-week-fingerprint')),
         findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    }
+    await tester.tap(
+      find.byKey(const ValueKey<String>('timeline-view-mode-details')),
+    );
+    await tester.pumpAndSettle();
+    // Recreating the mobile pager must use the retained details selection.
+    for (final double width in <double>[720, 390]) {
+      tester.view.physicalSize = Size(width, 844);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<OmniSlidingSegmentedControl<TimelineViewMode>>(
+              find.byKey(const ValueKey<String>('timeline-view-mode')),
+            )
+            .selected,
+        TimelineViewMode.details,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('timeline-details-content')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<OmniDatePickerButton>(
+              find.byKey(const ValueKey<String>('timeline-date-picker')),
+            )
+            .value,
+        selected,
       );
       expect(tester.takeException(), isNull);
     }
@@ -657,7 +975,11 @@ Future<_TimelineAndroidTestContext> _pumpAndroidTimeline(
           ? MaterialApp(
               theme: AppTheme.build(brightness: Brightness.light)
                   .copyWith(platform: platform),
-              home: const TimelinePage(),
+              home: AndroidSecondaryPageScope(
+                enabled: true,
+                onBack: () {},
+                child: const TimelinePage(),
+              ),
             )
           : const OmniButlerApp(),
     ),

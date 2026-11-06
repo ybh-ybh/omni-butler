@@ -145,7 +145,6 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((Ref ref) {
                 builder: (context, state) => _PrimaryRouteSurface(
                   child: const AndroidSecondaryPage(
                     location: '/timeline',
-                    title: '时间记录',
                     child: TimelinePage(),
                   ),
                 ),

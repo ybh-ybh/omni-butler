@@ -14,6 +14,7 @@ import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
 import 'package:omni_butler/features/timeline/presentation/time_entry_time_picker.dart';
 import 'package:omni_butler/features/timeline/presentation/timeline_review.dart';
+import 'package:omni_butler/shared/layout/android_secondary_page.dart';
 import 'package:omni_butler/shared/taxonomy/taxonomy_manager_dialog.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
@@ -120,7 +121,11 @@ class TimelinePage extends ConsumerStatefulWidget {
 }
 
 /// 24 小时时间记录页面状态。
-class _TimelinePageState extends ConsumerState<TimelinePage> {
+class _TimelinePageState extends ConsumerState<TimelinePage>
+    with SingleTickerProviderStateMixin {
+  /// Coordinates segment taps and native horizontal page gestures.
+  late final TabController _viewController;
+
   /// Android 悬浮操作组的实际布局高度。
   double _mobileActionHeight = OmniSize.touch;
 
@@ -138,12 +143,40 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
   void initState() {
     super.initState();
     _selectedDay = DateUtils.dateOnly(ref.read(nowProvider));
+    _viewController = TabController(
+      length: TimelineViewMode.values.length,
+      vsync: this,
+    )..addListener(_syncViewMode);
   }
 
-  /// 切换到相邻日期或统计周期。
-  void _moveSelection(int direction) {
+  /// Releases the tab animation when the timeline leaves the tree.
+  @override
+  void dispose() {
+    _viewController.dispose();
+    super.dispose();
+  }
+
+  /// Reflects completed or in-progress page selection in the segment control.
+  void _syncViewMode() {
+    // The framework owns gesture direction and interrupted transitions.
+    final TimelineViewMode mode =
+        TimelineViewMode.values[_viewController.index];
+    if (_viewMode != mode) setState(() => _viewMode = mode);
+  }
+
+  /// Uses the same controller for segment taps and day-detail drill-down.
+  void _selectViewMode(TimelineViewMode mode) {
+    _viewController.animateTo(
+      mode.index,
+      duration: OmniMotion.duration(context, OmniMotion.normal),
+      curve: OmniMotion.standardCurve,
+    );
+  }
+
+  /// Moves by the owning page's day or review period.
+  void _moveSelection(int direction, {TimelineViewMode? mode}) {
     // 当前模式对应的日期位移。
-    final DateTime nextDay = switch ((_viewMode, _statsPeriod)) {
+    final DateTime nextDay = switch ((mode ?? _viewMode, _statsPeriod)) {
       (TimelineViewMode.details, _) ||
       (
         TimelineViewMode.review,
@@ -194,12 +227,12 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     );
   }
 
-  /// 打开指定日期的记录明细。
+  /// Opens a selected day through the shared tab controller.
   void _openDayDetails(DateTime day) {
     setState(() {
       _selectedDay = DateUtils.dateOnly(day);
-      _viewMode = TimelineViewMode.details;
     });
+    _selectViewMode(TimelineViewMode.details);
   }
 
   /// 删除时间记录。
@@ -260,6 +293,74 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
         OmniSpacing.md +
         OmniSpacing.xs +
         MediaQuery.paddingOf(context).bottom;
+    // Each mobile page owns its date controls and vertical scroll position.
+    final Widget? reviewHeader = androidCompact
+        ? _buildMobileScrollHeader(
+            context,
+            TimelineViewMode.review,
+            ongoingEntries,
+          )
+        : null;
+    // Daily navigation must stay daily even while the adjacent page is visible.
+    final Widget? detailsHeader = androidCompact
+        ? _buildMobileScrollHeader(
+            context,
+            TimelineViewMode.details,
+            ongoingEntries,
+          )
+        : null;
+    // Review data remains mounted independently from the selected mobile tab.
+    final Widget reviewContent = statsEntries.when(
+      data: (List<TimeEntryRecord> records) => TimelineReviewContent(
+        key: const PageStorageKey<String>('timeline-review-page'),
+        header: reviewHeader,
+        records: splitTimeEntriesForRange(
+          records: records,
+          rangeStart: statsRange.$1,
+          rangeEnd: statsRange.$2,
+          now: now,
+        ),
+        previousRecords: splitTimeEntriesForRange(
+          records:
+              previousStatsEntries.asData?.value ?? const <TimeEntryRecord>[],
+          rangeStart: previousStatsRange.$1,
+          rangeEnd: previousStatsRange.$2,
+          now: now,
+        ),
+        rangeStart: statsRange.$1,
+        rangeEnd: statsRange.$2,
+        period: _statsPeriod,
+        safeBottomPadding: androidCompact ? mobileActionClearance : 0,
+        onOpenDay: _openDayDetails,
+        onEdit: (TimeEntryRecord record) => _openEditor(record: record),
+      ),
+      loading: () =>
+          _buildLoadState(reviewHeader, const CircularProgressIndicator()),
+      error: (Object error, StackTrace stackTrace) =>
+          _buildLoadState(reviewHeader, Text('时间复盘读取失败：$error')),
+    );
+    // Details retain the selected day and their own scroll restoration key.
+    final Widget detailsContent = dayEntries.when(
+      data: (List<TimeEntryRecord> records) => TimelineDetailsContent(
+        header: detailsHeader,
+        day: _selectedDay,
+        safeBottomPadding: androidCompact ? mobileActionClearance : 0,
+        records: splitTimeEntriesForRange(
+          records: records,
+          rangeStart: _selectedDay,
+          rangeEnd: _selectedDay.add(const Duration(days: 1)),
+          now: now,
+        ),
+        onAddAtMinute: (int minute) =>
+            _openEditor(day: _selectedDay, initialStartMinute: minute),
+        onEdit: (TimeEntryRecord record) => _openEditor(record: record),
+        onDelete: _delete,
+      ),
+      loading: () =>
+          _buildLoadState(detailsHeader, const CircularProgressIndicator()),
+      error: (Object error, StackTrace stackTrace) =>
+          _buildLoadState(detailsHeader, Text('时间明细读取失败：$error')),
+    );
     // 按导航、时间范围和内容组织的时间页主体。
     final Widget pageContent = Padding(
       padding: compact
@@ -276,12 +377,11 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          _buildToolbar(
-            context,
-            androidCompact: androidCompact,
-            ongoingEntries: ongoingEntries,
-          ),
-          if (ongoingEntries.isNotEmpty) ...<Widget>[
+          if (androidCompact)
+            _buildMobileHeader(context)
+          else
+            _buildToolbar(context, ongoingEntries: ongoingEntries),
+          if (!androidCompact && ongoingEntries.isNotEmpty) ...<Widget>[
             const SizedBox(height: OmniSpacing.xs),
             _OngoingTimeEntryBanner(
               records: ongoingEntries,
@@ -291,65 +391,15 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
           ],
           const SizedBox(height: OmniSpacing.xs),
           Expanded(
-            child: _viewMode == TimelineViewMode.review
-                ? statsEntries.when(
-                    data: (List<TimeEntryRecord> records) =>
-                        TimelineReviewContent(
-                          records: splitTimeEntriesForRange(
-                            records: records,
-                            rangeStart: statsRange.$1,
-                            rangeEnd: statsRange.$2,
-                            now: now,
-                          ),
-                          previousRecords: splitTimeEntriesForRange(
-                            records:
-                                previousStatsEntries.asData?.value ??
-                                const <TimeEntryRecord>[],
-                            rangeStart: previousStatsRange.$1,
-                            rangeEnd: previousStatsRange.$2,
-                            now: now,
-                          ),
-                          rangeStart: statsRange.$1,
-                          rangeEnd: statsRange.$2,
-                          period: _statsPeriod,
-                          safeBottomPadding: androidCompact
-                              ? mobileActionClearance
-                              : 0,
-                          onOpenDay: _openDayDetails,
-                          onEdit: (TimeEntryRecord record) =>
-                              _openEditor(record: record),
-                        ),
-                    loading: () =>
-                        const Center(child: CircularProgressIndicator()),
-                    error: (Object error, StackTrace stackTrace) =>
-                        Center(child: Text('时间复盘读取失败：$error')),
+            child: androidCompact
+                ? TabBarView(
+                    key: const ValueKey<String>('timeline-mobile-pages'),
+                    controller: _viewController,
+                    children: <Widget>[reviewContent, detailsContent],
                   )
-                : dayEntries.when(
-                    data: (List<TimeEntryRecord> records) =>
-                        TimelineDetailsContent(
-                          day: _selectedDay,
-                          safeBottomPadding: androidCompact
-                              ? mobileActionClearance
-                              : 0,
-                          records: splitTimeEntriesForRange(
-                            records: records,
-                            rangeStart: _selectedDay,
-                            rangeEnd: _selectedDay.add(const Duration(days: 1)),
-                            now: now,
-                          ),
-                          onAddAtMinute: (int minute) => _openEditor(
-                            day: _selectedDay,
-                            initialStartMinute: minute,
-                          ),
-                          onEdit: (TimeEntryRecord record) =>
-                              _openEditor(record: record),
-                          onDelete: _delete,
-                        ),
-                    loading: () =>
-                        const Center(child: CircularProgressIndicator()),
-                    error: (Object error, StackTrace stackTrace) =>
-                        Center(child: Text('时间明细读取失败：$error')),
-                  ),
+                : _viewMode == TimelineViewMode.review
+                ? reviewContent
+                : detailsContent,
           ),
         ],
       ),
@@ -376,6 +426,73 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: pageContent,
+    );
+  }
+
+  /// Keeps date navigation available while data is loading or unavailable.
+  Widget _buildLoadState(Widget? header, Widget status) {
+    return Column(
+      children: <Widget>[
+        ?header,
+        Expanded(child: Center(child: status)),
+      ],
+    );
+  }
+
+  /// Places the existing return action beside the view selector.
+  Widget _buildMobileHeader(BuildContext context) {
+    // The shared route scope preserves keyboard, dialog, and system back guards.
+    final AndroidSecondaryPageScope? scope = AndroidSecondaryPageScope.maybeOf(
+      context,
+    );
+    return Row(
+      key: const ValueKey<String>('android-secondary-header'),
+      children: <Widget>[
+        if (scope != null)
+          OmniIconButton(
+            key: const ValueKey<String>('android-secondary-back'),
+            tooltip: '返回',
+            icon: const Icon(Icons.arrow_back_rounded),
+            onPressed: scope.onBack,
+          ),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) =>
+                _buildViewControl(context, constraints.maxWidth),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Inserts the range and ongoing record banner into each mobile scroll view.
+  Widget _buildMobileScrollHeader(
+    BuildContext context,
+    TimelineViewMode mode,
+    List<TimeEntryRecord> ongoingEntries,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) =>
+              _buildRangeControls(
+                context,
+                width: constraints.maxWidth,
+                androidCompact: true,
+                mode: mode,
+              ),
+        ),
+        if (ongoingEntries.isNotEmpty) ...<Widget>[
+          const SizedBox(height: OmniSpacing.xs),
+          _OngoingTimeEntryBanner(
+            records: ongoingEntries,
+            onFinish: _openFinishEditor,
+            onEdit: (TimeEntryRecord record) => _openEditor(record: record),
+          ),
+        ],
+        const SizedBox(height: OmniSpacing.xs),
+      ],
     );
   }
 
@@ -476,7 +593,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     );
   }
 
-  /// 构建独立的页面模式导航，并按文字大小提高高度。
+  /// Builds the view selector with labels that fit beside the back button.
   Widget _buildViewControl(BuildContext context, double width) {
     // 模式控件的文字样式。
     final TextStyle? style = Theme.of(context).textTheme.labelMedium;
@@ -484,6 +601,16 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     final double textHeight =
         MediaQuery.textScalerOf(context).scale(style?.fontSize ?? 12) *
         (style?.height ?? 1.3);
+    // Prefer full labels over decorative icons when accessibility text is large.
+    final bool showIcons =
+        (width - 6) / 2 >=
+        _textWidth(
+              context,
+              '时间复盘',
+              style?.copyWith(fontWeight: FontWeight.w600),
+            ) +
+            OmniSize.icon +
+            OmniSpacing.xs;
     return OmniSlidingSegmentedControl<TimelineViewMode>(
       key: const ValueKey<String>('timeline-view-mode'),
       options: TimelineViewMode.values,
@@ -509,14 +636,16 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
             return Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Icon(
-                  mode == TimelineViewMode.review
-                      ? Icons.insights_outlined
-                      : Icons.view_timeline_outlined,
-                  size: OmniSize.icon,
-                  color: foreground,
-                ),
-                const SizedBox(width: OmniSpacing.xxs),
+                if (showIcons) ...<Widget>[
+                  Icon(
+                    mode == TimelineViewMode.review
+                        ? Icons.insights_outlined
+                        : Icons.view_timeline_outlined,
+                    size: OmniSize.icon,
+                    color: foreground,
+                  ),
+                  const SizedBox(width: OmniSpacing.xxs),
+                ],
                 Flexible(
                   child: Text(
                     mode == TimelineViewMode.review ? '时间复盘' : '记录明细',
@@ -529,14 +658,13 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
               ],
             );
           },
-      onChanged: (TimelineViewMode mode) => setState(() => _viewMode = mode),
+      onChanged: _selectViewMode,
     );
   }
 
-  /// 按平台组织导航和记录操作，不因窄窗口隐藏入口。
+  /// Keeps desktop and wide-screen navigation beside the record actions.
   Widget _buildToolbar(
     BuildContext context, {
-    required bool androidCompact,
     required List<TimeEntryRecord> ongoingEntries,
   }) {
     return LayoutBuilder(
@@ -569,10 +697,8 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
                 2 +
             OmniDensity.controlHeight(context) +
             OmniSpacing.xs * 2;
-        // Android 紧凑页将操作放在底部，其余平台与模式分列。
-        final Widget header = androidCompact
-            ? _buildViewControl(context, width)
-            : width >= modeWidth + actionWidth + OmniSpacing.md
+        // Wrap complete action groups when a desktop window becomes narrow.
+        final Widget header = width >= modeWidth + actionWidth + OmniSpacing.md
             ? Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: <Widget>[
@@ -596,22 +722,21 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
           children: <Widget>[
             header,
             const SizedBox(height: OmniSpacing.xs),
-            _buildRangeControls(
-              context,
-              width: width,
-              androidCompact: androidCompact,
-            ),
+            _buildRangeControls(context, width: width, androidCompact: false),
           ],
         );
       },
     );
   }
 
-  /// 返回短日期；极窄或大字号时按自然边界分行并保留完整语义。
-  String _shortSelectionLabel({bool multiline = false}) {
+  /// Formats the owning page's date without truncating narrow-screen labels.
+  String _shortSelectionLabel({
+    bool multiline = false,
+    TimelineViewMode? mode,
+  }) {
     // 明细与日复盘使用单日。
     final bool daily =
-        _viewMode == TimelineViewMode.details ||
+        (mode ?? _viewMode) == TimelineViewMode.details ||
         _statsPeriod == TimelineStatsPeriod.day;
     // 跨年查询保留年份，避免短日期歧义。
     final bool showYear = _selectedDay.year != ref.read(nowProvider).year;
@@ -638,11 +763,12 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     return '$start${multiline ? '\n–' : '–'}$end';
   }
 
-  /// 构建箭头和日期组成的完整导航组。
+  /// Builds date navigation with callbacks scoped to its owning tab.
   Widget _buildDateNavigation(
     BuildContext context, {
     required double width,
     required bool shortLabel,
+    TimelineViewMode? mode,
   }) {
     // 平台箭头热区的标准尺寸。
     final double extent = OmniDensity.controlHeight(context);
@@ -652,10 +778,12 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
       width - extent * 2 - OmniSpacing.xs * 2,
     );
     // 首先尝试当前平台的日期格式。
-    String label = shortLabel ? _shortSelectionLabel() : _selectionLabel();
+    String label = shortLabel
+        ? _shortSelectionLabel(mode: mode)
+        : _selectionLabel(mode: mode);
     if (_textWidth(context, label, Theme.of(context).textTheme.labelLarge) >
         labelWidth) {
-      label = _shortSelectionLabel(multiline: true);
+      label = _shortSelectionLabel(multiline: true, mode: mode);
     }
     return SizedBox(
       key: const ValueKey<String>('timeline-date-navigation'),
@@ -664,12 +792,12 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
         children: <Widget>[
           OmniIconButton(
             tooltip: '上一周期',
-            onPressed: () => _moveSelection(-1),
+            onPressed: () => _moveSelection(-1, mode: mode),
             icon: const Icon(Icons.chevron_left_rounded),
           ),
           Expanded(
             child: Tooltip(
-              message: _selectionLabel(),
+              message: _selectionLabel(mode: mode),
               child: OmniDatePickerButton(
                 key: const ValueKey<String>('timeline-date-picker'),
                 value: _selectedDay,
@@ -698,7 +826,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
           ),
           OmniIconButton(
             tooltip: '下一周期',
-            onPressed: () => _moveSelection(1),
+            onPressed: () => _moveSelection(1, mode: mode),
             icon: const Icon(Icons.chevron_right_rounded),
           ),
         ],
@@ -706,11 +834,12 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     );
   }
 
-  /// 将统计周期、日期巡航和回当前组合为独立的范围带。
+  /// Groups period, date, and current-range actions for a specific tab.
   Widget _buildRangeControls(
     BuildContext context, {
     required double width,
     required bool androidCompact,
+    TimelineViewMode? mode,
   }) {
     // 当前文字样式用于自然宽度测量。
     final TextStyle? style = Theme.of(context).textTheme.labelLarge;
@@ -719,7 +848,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     // 回当前周期的直接入口。
     final Widget shortcut = OmniButton(
       key: const ValueKey<String>('timeline-current-shortcut'),
-      label: _currentShortcutLabel(),
+      label: _currentShortcutLabel(mode: mode),
       variant: OmniButtonVariant.text,
       visualHeight: OmniDensity.isTouch(context) ? OmniSize.control : null,
       onPressed: () => setState(
@@ -736,7 +865,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
                 3,
           );
     // 只有复盘模式提供统计周期切换。
-    final Widget? period = _viewMode == TimelineViewMode.details
+    final Widget? period = (mode ?? _viewMode) == TimelineViewMode.details
         ? null
         : androidCompact
         ? OmniPopupMenuButton<TimelineStatsPeriod>(
@@ -798,7 +927,9 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     final double dateWidth =
         _textWidth(
           context,
-          androidCompact ? _shortSelectionLabel() : _selectionLabel(),
+          androidCompact
+              ? _shortSelectionLabel(mode: mode)
+              : _selectionLabel(mode: mode),
           style,
         ) +
         extent * 2 +
@@ -806,7 +937,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
         OmniSpacing.xs;
     // 回当前按钮的自然占位。
     final double shortcutWidth =
-        _textWidth(context, _currentShortcutLabel(), style) +
+        _textWidth(context, _currentShortcutLabel(mode: mode), style) +
         OmniSpacing.lg * 2;
     // 组合在同一行需要的最小宽度。
     final double totalWidth =
@@ -823,7 +954,12 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: <Widget>[?period, shortcut],
           ),
-          _buildDateNavigation(context, width: width, shortLabel: true),
+          _buildDateNavigation(
+            context,
+            width: width,
+            shortLabel: true,
+            mode: mode,
+          ),
         ],
       );
     }
@@ -838,6 +974,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
           context,
           width: math.min(width, dateWidth),
           shortLabel: androidCompact,
+          mode: mode,
         ),
         shortcut,
       ],
@@ -884,9 +1021,9 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     return (currentRange.$1.subtract(duration), currentRange.$1);
   }
 
-  /// 返回当前选择范围的按钮文案。
-  String _selectionLabel() {
-    if (_viewMode == TimelineViewMode.details ||
+  /// Describes the owning tab's complete date range.
+  String _selectionLabel({TimelineViewMode? mode}) {
+    if ((mode ?? _viewMode) == TimelineViewMode.details ||
         _statsPeriod == TimelineStatsPeriod.day) {
       return DateFormat('yyyy 年 M 月 d 日').format(_selectedDay);
     }
@@ -903,9 +1040,9 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
     return '${DateFormat('M 月 d 日').format(range.$1)}—${DateFormat('M 月 d 日').format(lastDay)}';
   }
 
-  /// 返回回到当前周期的操作文案。
-  String _currentShortcutLabel() {
-    if (_viewMode == TimelineViewMode.details ||
+  /// Labels the current-range shortcut for its owning tab.
+  String _currentShortcutLabel({TimelineViewMode? mode}) {
+    if ((mode ?? _viewMode) == TimelineViewMode.details ||
         _statsPeriod == TimelineStatsPeriod.day) {
       return '今天';
     }
