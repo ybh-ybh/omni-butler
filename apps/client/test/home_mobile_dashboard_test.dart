@@ -344,6 +344,15 @@ void main() {
       expect(_key('time-entry-editor'), findsNothing);
       expect(_currentPath(app), '/home');
       _expectPage(tester, 1);
+      if (scenario == 'completed') {
+        // A normal tap still opens the time page after editing the same row.
+        await tester.ensureVisible(row);
+        await tester.pumpAndSettle();
+        await tester.tap(row);
+        await tester.pumpAndSettle();
+        expect(_currentPath(app), '/timeline');
+        expect(_key('time-entry-editor'), findsNothing);
+      }
       expect(tester.takeException(), isNull);
       await _disposeHome(tester, app);
     });

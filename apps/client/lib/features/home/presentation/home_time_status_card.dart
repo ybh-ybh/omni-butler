@@ -903,11 +903,14 @@ class _TimeEntryRow extends StatelessWidget {
     super.key,
   });
 
-  /// 构建时间段、活动名称、类别和时长。
+  /// Build the platform-specific row without changing its actions or data.
   @override
   Widget build(BuildContext context) {
-    // 当前分段持续分钟数。
+    // Preserve the duration of today's clipped segment.
     final int minutes = record.endMinute - record.startMinute;
+    if (Theme.of(context).platform == TargetPlatform.android) {
+      return _buildAndroidRow(context, minutes);
+    }
     // 当前记录时间范围。
     final String range = record.endedAt == null
         ? '${_formatMinute(record.startMinute)}–进行中'
@@ -944,6 +947,220 @@ class _TimeEntryRow extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Keep the Android time, title, category, and duration in adjacent columns.
+  Widget _buildAndroidRow(BuildContext context, int minutes) {
+    // Reuse the existing secondary typography and tabular time digits.
+    final TextStyle detailStyle = Theme.of(context).textTheme.bodySmall!
+        .copyWith(
+          fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+        );
+    // Preserve the main title's readable system-scaled typography.
+    final TextStyle titleStyle = Theme.of(context).textTheme.bodyMedium!;
+    // Format the current day's segment rather than the full editing baseline.
+    final String start = _formatMinute(record.startMinute);
+    // An active record has no actual ending timestamp yet.
+    final String end = record.endedAt == null
+        ? '进行中'
+        : _formatMinute(record.endMinute);
+    // Keep the existing category fallback and complete accessible name.
+    final String category = record.category ?? '未分类';
+    // Keep the existing Chinese duration wording for visual and spoken output.
+    final String duration = _formatDuration(minutes);
+    // Break a compound duration only between complete hour and minute units.
+    final List<String> durationParts = minutes >= 60 && minutes % 60 != 0
+        ? <String>['${minutes ~/ 60}小时', '${minutes % 60}分']
+        : <String>[duration];
+    // Fit both time labels without shrinking the user's selected text scale.
+    final double timeWidth = math.max(
+      _measureText(context, start, detailStyle),
+      _measureText(context, end, detailStyle),
+    );
+    // Measure complete duration units before deciding whether to wrap them.
+    final double unitWidth = durationParts
+        .map((String part) => _measureText(context, part, detailStyle))
+        .reduce(math.max);
+    // Prefer a single line whenever the neighboring content still fits.
+    final double durationWidth = _measureText(context, duration, detailStyle);
+    // Reserve space for the title before expanding the category column.
+    final double preferredTitleWidth = _measureText(context, '标题', titleStyle);
+    // Wide Android windows can show the complete category when space permits.
+    final double categoryWidth = _measureText(context, category, detailStyle);
+    // Keep short categories readable, or retain a prefix for longer names.
+    final double readableCategoryWidth = math.min(
+      categoryWidth,
+      math.max(
+        _measureText(context, '分类', detailStyle),
+        _measureText(
+          context,
+          '${category.characters.firstOrNull ?? ''}…',
+          detailStyle,
+        ),
+      ),
+    );
+
+    return MergeSemantics(
+      child: Stack(
+        children: <Widget>[
+          OmniListRow(
+            onTap: onTap,
+            onLongPress: onLongPress,
+            borderRadius: BorderRadius.circular(OmniRadius.control),
+            padding: const EdgeInsets.fromLTRB(11, 8, 8, 8),
+            title: LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints constraints) {
+                // Tight rows reduce gaps before shortening their text columns.
+                final double gap =
+                    constraints.maxWidth >=
+                        timeWidth +
+                            unitWidth +
+                            preferredTitleWidth +
+                            readableCategoryWidth +
+                            OmniSpacing.xs * 3
+                    ? OmniSpacing.xs
+                    : OmniSpacing.xxs;
+                // The three content columns share the space after the times.
+                final double available = math.max(
+                  0,
+                  constraints.maxWidth - timeWidth - gap * 3,
+                );
+                // Keep a compound duration together only when the title fits.
+                final double trailingWidth =
+                    available >=
+                        durationWidth +
+                            preferredTitleWidth +
+                            readableCategoryWidth
+                    ? durationWidth
+                    : unitWidth;
+                // Share the remaining width without letting metadata hide titles.
+                final double remaining = math.max(0, available - trailingWidth);
+                // Prefer a readable category prefix while preserving half for titles.
+                final double limitedCategoryWidth = math.min(
+                  categoryWidth,
+                  math.min(
+                    remaining * 0.5,
+                    math.max(readableCategoryWidth, remaining * 0.3),
+                  ),
+                );
+                return Row(
+                  children: <Widget>[
+                    SizedBox(
+                      width: timeWidth,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            start,
+                            key: ValueKey<String>(
+                              'home-time-entry-start-${record.id}',
+                            ),
+                            style: detailStyle,
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                          Text(
+                            end,
+                            key: ValueKey<String>(
+                              'home-time-entry-end-${record.id}',
+                            ),
+                            style: detailStyle,
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(width: gap),
+                    Expanded(
+                      child: Text(
+                        timeEntryDisplayActivity(record),
+                        key: ValueKey<String>(
+                          'home-time-entry-title-${record.id}',
+                        ),
+                        style: titleStyle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    SizedBox(width: gap),
+                    SizedBox(
+                      width: limitedCategoryWidth,
+                      child: Text(
+                        category,
+                        key: ValueKey<String>(
+                          'home-time-entry-category-${record.id}',
+                        ),
+                        style: detailStyle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    SizedBox(width: gap),
+                    SizedBox(
+                      key: ValueKey<String>(
+                        'home-time-entry-trailing-${record.id}',
+                      ),
+                      width: trailingWidth,
+                      child: Semantics(
+                        label: duration,
+                        excludeSemantics: true,
+                        child: Wrap(
+                          alignment: WrapAlignment.end,
+                          children: <Widget>[
+                            // Keep each number attached to its duration unit.
+                            for (final String part in durationParts)
+                              Text(part, style: detailStyle, softWrap: false),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+          Positioned(
+            left: 0,
+            top: OmniSpacing.xs,
+            bottom: OmniSpacing.xs,
+            width: 3,
+            child: IgnorePointer(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(OmniRadius.pill),
+                child: ColoredBox(
+                  key: ValueKey<String>('home-time-entry-leading-${record.id}'),
+                  color: color,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Measure the actual theme font and accessibility scale for fixed columns.
+  double _measureText(BuildContext context, String text, TextStyle style) {
+    // Use the same text environment as the labels rendered inside this row.
+    final TextPainter painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: MediaQuery.boldTextOf(context)
+            ? style.merge(const TextStyle(fontWeight: FontWeight.bold))
+            : style,
+      ),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      locale: Localizations.maybeLocaleOf(context),
+      maxLines: 1,
+    )..layout();
+    // Round up so fractional glyph advances never wrap a complete time label.
+    final double width = painter.width.ceilToDouble();
+    painter.dispose();
+    return width;
   }
 }
 

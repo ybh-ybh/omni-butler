@@ -145,12 +145,21 @@ void main() {
     // 目标帧右侧将属于学习，但起始帧仍是已隐藏的工作；不得提前选中学习。
     await tester.tapAt(center + const Offset(45, 0));
     await tester.pump();
-    expect(find.text('学习'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey<String>('home-time-legend-item-学习')),
+        matching: find.text('学习'),
+      ),
+      findsOneWidget,
+    );
     await tester.pumpAndSettle();
     await tester.tap(work);
     await tester.pumpAndSettle();
     expect(_donutDuration(tester, '今日'), '1h30m');
-    expect(find.text('工作'), findsOneWidget);
+    expect(
+      find.descendant(of: work, matching: find.text('工作')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -608,10 +617,19 @@ void main() {
       todayRecords: records,
       weekRecords: records,
     );
-    // 每行文字的真实中心位置，直接验证上下间距。
+    // Scope labels to the legend because Android rows also show categories.
+    final Finder legend = find.byKey(
+      const ValueKey<String>('home-time-category-legend'),
+    );
+    // Measure legend rows without matching the record category labels.
     final Set<double> rowCenters = {
+      // Locate each category only inside the shared legend.
       for (final String category in categories)
-        tester.getCenter(find.text(category)).dy,
+        tester
+            .getCenter(
+              find.descendant(of: legend, matching: find.text(category)),
+            )
+            .dy,
     };
     expect(rowCenters.length, 2);
     expect(rowCenters.last - rowCenters.first, lessThanOrEqualTo(32));
@@ -634,7 +652,10 @@ void main() {
       8,
     );
     expect(
-      tester.getRect(ink).right - tester.getRect(find.text('开发')).right,
+      tester.getRect(ink).right -
+          tester
+              .getRect(find.descendant(of: item, matching: find.text('开发')))
+              .right,
       8,
     );
     // 鼠标进入时不会改变换行或图例大小。
