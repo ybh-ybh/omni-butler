@@ -8,6 +8,7 @@ import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
+import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// 时间管理页面的工作模式。
@@ -644,7 +645,7 @@ class _FingerprintCategoryLabel extends StatelessWidget {
 }
 
 /// 月度时间指纹日历。
-class _MonthFingerprint extends StatelessWidget {
+class _MonthFingerprint extends ConsumerWidget {
   /// 当前月记录。
   final List<TimeEntryRecord> records;
 
@@ -669,15 +670,42 @@ class _MonthFingerprint extends StatelessWidget {
     required this.onOpenDay,
   });
 
-  /// 构建带日内微缩条的月历。
+  /// Builds readable Windows cards when the measured column width allows them.
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     // 当前月第一天前的空白格数量。
     final int leadingCount = rangeStart.weekday - 1;
     // 当前月自然日数量。
     final int dayCount = rangeEnd.difference(rangeStart).inDays;
     // 补齐整周后的总格数。
     final int itemCount = ((leadingCount + dayCount + 6) ~/ 7) * 7;
+    // Use the same clock as the daily projections for ongoing labels and today.
+    final DateTime now = ref.watch(nowProvider).toLocal();
+    // Keep the original miniature presentation and ordering on other platforms.
+    final bool windows = Theme.of(context).platform == TargetPlatform.windows;
+    // Group once without changing or merging the caller's daily segments.
+    final Map<DateTime, List<TimeEntryRecord>> recordsByDay =
+        <DateTime, List<TimeEntryRecord>>{};
+    for (final TimeEntryRecord record in records) {
+      recordsByDay
+          .putIfAbsent(DateUtils.dateOnly(record.entryDate), () => [])
+          .add(record);
+    }
+    // Keep the four visible records deterministic even for unordered input.
+    if (windows) {
+      // Sorting copied groups leaves non-Windows overlap painting unchanged.
+      for (final List<TimeEntryRecord> dayRecords in recordsByDay.values) {
+        dayRecords.sort((TimeEntryRecord left, TimeEntryRecord right) {
+          // Prefer the original chronology, using identity only to break ties.
+          final int startOrder = left.startMinute.compareTo(right.startMinute);
+          return startOrder != 0 ? startOrder : left.id.compareTo(right.id);
+        });
+      }
+    }
+    // Other platforms retain the original miniature calendar presentation.
+    final _MonthCardMetrics? cardMetrics = windows
+        ? _MonthCardMetrics.measure(context, recordsByDay.values, now)
+        : null;
     return Column(
       key: const ValueKey<String>('timeline-month-fingerprint'),
       children: <Widget>[
@@ -709,6 +737,9 @@ class _MonthFingerprint extends StatelessWidget {
             final double spacing = constraints.maxWidth < 560 ? 3 : 6;
             // 单个月历格宽度。
             final double cellWidth = (constraints.maxWidth - spacing * 6) / 7;
+            // Include both cell and card padding in the measured breakpoint.
+            final bool showCards =
+                cardMetrics != null && cellWidth >= cardMetrics.minimumWidth;
             // 是否显示完整时长文字。
             final bool showDuration = cellWidth >= 58;
             // 按单元格实际宽度测量双位日期，文字放大后允许自然增高。
@@ -716,8 +747,10 @@ class _MonthFingerprint extends StatelessWidget {
                 TextPainter(
                   text: TextSpan(
                     text: '28',
-                    style: Theme.of(context).textTheme.labelMedium
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                    style:
+                        cardMetrics?.dateStyle ??
+                        Theme.of(context).textTheme.labelMedium
+                            ?.copyWith(fontWeight: FontWeight.w700),
                   ),
                   textDirection: Directionality.of(context),
                   textScaler: MediaQuery.textScalerOf(context),
@@ -732,17 +765,20 @@ class _MonthFingerprint extends StatelessWidget {
             final double contentHeight =
                 datePainter.height +
                 (showDuration
-                    ? MediaQuery.textScalerOf(context).scale(14) +
+                    ? (cardMetrics?.footerHeight ??
+                              MediaQuery.textScalerOf(context).scale(14)) +
                           OmniSpacing.xxs
                     : 0) +
                 5 +
                 (showDuration ? OmniSpacing.xs : OmniSpacing.xxs) * 2;
             datePainter.dispose();
             // 常规字号沿用原比例，大字号只增加纵向阅读空间。
-            final double cellHeight = math.max(
-              cellWidth / (showDuration ? 1.2 : 0.78),
-              contentHeight,
-            );
+            final double cellHeight = showCards
+                ? cardMetrics.cellHeight
+                : math.max(
+                    cellWidth / (showDuration ? 1.2 : 0.78),
+                    contentHeight,
+                  );
             return GridView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -762,13 +798,24 @@ class _MonthFingerprint extends StatelessWidget {
                 // 当前格对应的自然日。
                 final DateTime day = rangeStart.add(Duration(days: dayIndex));
                 // 当前自然日记录。
-                final List<TimeEntryRecord> dayRecords = records
-                    .where(
-                      (TimeEntryRecord record) =>
-                          DateUtils.isSameDay(record.entryDate, day),
-                    )
-                    .toList(growable: false);
+                final List<TimeEntryRecord> dayRecords =
+                    recordsByDay[day] ?? const <TimeEntryRecord>[];
+                // Stable date identity survives narrow/wide presentation changes.
+                final String dateKey = DateFormat('yyyy-MM-dd').format(day);
+                if (showCards) {
+                  return _MonthCardsCell(
+                    key: ValueKey<String>('timeline-month-cell-$dateKey'),
+                    day: day,
+                    dateKey: dateKey,
+                    records: dayRecords,
+                    categoryColors: categoryColors,
+                    metrics: cardMetrics,
+                    now: now,
+                    onTap: () => onOpenDay(day),
+                  );
+                }
                 return _MonthFingerprintCell(
+                  key: ValueKey<String>('timeline-month-cell-$dateKey'),
                   day: day,
                   records: dayRecords,
                   categoryColors: categoryColors,
@@ -780,6 +827,419 @@ class _MonthFingerprint extends StatelessWidget {
           },
         ),
       ],
+    );
+  }
+}
+
+/// Formats a daily segment without treating historical ongoing slices as live.
+String _monthRecordRange(TimeEntryRecord record, DateTime now) {
+  // Only the current day's open segment is still running.
+  final String end =
+      record.endedAt == null && DateUtils.isSameDay(record.entryDate, now)
+      ? '进行中'
+      : _formatClock(record.endMinute);
+  return '${_formatClock(record.startMinute)}–$end · '
+      '${_formatDuration(record.endMinute - record.startMinute)}';
+}
+
+/// Measures one shared calendar geometry using the effective text settings.
+class _MonthCardMetrics {
+  /// Limits the overview while keeping every record reachable in day details.
+  static const int visibleCount = 4;
+
+  /// Styles the activity name independently of its category color.
+  final TextStyle titleStyle;
+
+  /// Styles times, totals, and the overflow link consistently.
+  final TextStyle detailStyle;
+
+  /// Keeps the day number visually prominent.
+  final TextStyle dateStyle;
+
+  /// Includes both outer and inner horizontal padding.
+  final double minimumWidth;
+
+  /// Reserves enough height for dates and complete daily totals.
+  final double headerHeight;
+
+  /// Gives every record the same readable height regardless of duration.
+  final double recordHeight;
+
+  /// Reserves a stable final row even when there are no hidden records.
+  final double footerHeight;
+
+  /// Creates immutable measurements shared by every date in the month.
+  const _MonthCardMetrics({
+    required this.titleStyle,
+    required this.detailStyle,
+    required this.dateStyle,
+    required this.minimumWidth,
+    required this.headerHeight,
+    required this.recordHeight,
+    required this.footerHeight,
+  });
+
+  /// Includes the date row, four cards, overflow row, and all vertical spacing.
+  double get cellHeight =>
+      OmniSpacing.xs * 2 +
+      headerHeight +
+      OmniSpacing.xs +
+      recordHeight * visibleCount +
+      OmniSpacing.xxs * (visibleCount - 1) +
+      OmniSpacing.xs +
+      footerHeight;
+
+  /// Measures real text rather than assuming a fixed desktop breakpoint.
+  factory _MonthCardMetrics.measure(
+    BuildContext context,
+    Iterable<List<TimeEntryRecord>> days,
+    DateTime now,
+  ) {
+    // Theme styles keep the calendar aligned with the existing daily blocks.
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    // Semantic colors preserve contrast in both appearance modes.
+    final OmniColors colors = OmniColors.of(context);
+    // Apply accessibility bold exactly as Text does before measuring.
+    TextStyle effectiveStyle(TextStyle style) {
+      // Inherited defaults supply any missing font family or line metrics.
+      final TextStyle merged = DefaultTextStyle.of(context).style.merge(style);
+      return MediaQuery.boldTextOf(context)
+          ? merged.merge(const TextStyle(fontWeight: FontWeight.bold))
+          : merged;
+    }
+
+    // Names get a modest emphasis without adding category badges.
+    final TextStyle titleStyle = effectiveStyle(
+      textTheme.labelSmall!.copyWith(
+        color: colors.ink,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+    // All secondary values use a readable neutral foreground.
+    final TextStyle detailStyle = effectiveStyle(
+      textTheme.labelSmall!.copyWith(color: colors.muted),
+    );
+    // Dates use the same size and weight as the existing miniature calendar.
+    final TextStyle dateStyle = effectiveStyle(
+      textTheme.labelMedium!.copyWith(
+        color: colors.ink,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+
+    // Use the same direction, locale, scale, and style as the rendered Text.
+    Size measure(String text, TextStyle style) {
+      // Dispose the paragraph after retaining its actual layout bounds.
+      final TextPainter painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+        locale: Localizations.maybeLocaleOf(context),
+        maxLines: 1,
+      )..layout();
+      // Round up to avoid clipping fractional glyph bounds.
+      final Size size = Size(
+        painter.width.ceilToDouble(),
+        painter.height.ceilToDouble(),
+      );
+      painter.dispose();
+      return size;
+    }
+
+    // Reserve the full common time format even in an empty or sparse month.
+    final Size sampleRange = measure('00:00–24:00 · 23h59m', detailStyle);
+    // Keep blank months ready for Chinese names and empty-state text.
+    double titleHeight = measure('未命名记录', titleStyle).height;
+    // Values may mix Chinese running labels with Latin numerals.
+    double detailHeight = math.max(
+      sampleRange.height,
+      measure('还有 1 条', detailStyle).height,
+    );
+    // Track actual visible ranges too, including a live end label.
+    double rangeWidth = sampleRange.width;
+    // The header must fit a two-digit day and a complete daily total.
+    final Size dateSize = measure('28', dateStyle);
+    // Extra records can produce totals beyond 24 hours without being discarded.
+    double totalWidth = measure('23h59m', detailStyle).width;
+    // The overflow text shares the full inner cell width.
+    double footerWidth = measure('还有 1 条', detailStyle).width;
+    for (final List<TimeEntryRecord> records in days) {
+      totalWidth = math.max(
+        totalWidth,
+        measure(_formatDuration(_sumMinutes(records)), detailStyle).width,
+      );
+      if (records.length > visibleCount) {
+        footerWidth = math.max(
+          footerWidth,
+          measure('还有 ${records.length - visibleCount} 条', detailStyle).width,
+        );
+      }
+      for (final TimeEntryRecord record in records.take(visibleCount)) {
+        titleHeight = math.max(
+          titleHeight,
+          measure(timeEntryDisplayActivity(record), titleStyle).height,
+        );
+        // Use the exact range displayed by this record's card.
+        final Size rangeSize = measure(
+          _monthRecordRange(record, now),
+          detailStyle,
+        );
+        rangeWidth = math.max(rangeWidth, rangeSize.width);
+        detailHeight = math.max(detailHeight, rangeSize.height);
+      }
+    }
+    return _MonthCardMetrics(
+      titleStyle: titleStyle,
+      detailStyle: detailStyle,
+      dateStyle: dateStyle,
+      minimumWidth:
+          OmniSpacing.xs * 2 +
+          math.max(
+            rangeWidth + 3 + OmniSpacing.xs * 2,
+            math.max(dateSize.width + OmniSpacing.xs + totalWidth, footerWidth),
+          ),
+      headerHeight: math.max(dateSize.height, detailHeight),
+      recordHeight: math.max(
+        OmniSize.controlLarge,
+        titleHeight + detailHeight + OmniSpacing.xxs * 3,
+      ),
+      footerHeight: detailHeight,
+    );
+  }
+}
+
+/// Shows a readable four-record overview while keeping a single day action.
+class _MonthCardsCell extends StatelessWidget {
+  /// Identifies the natural date opened by every point within the cell.
+  final DateTime day;
+
+  /// Supplies stable keys for this date across window size changes.
+  final String dateKey;
+
+  /// Contains every daily segment, including those hidden from the overview.
+  final List<TimeEntryRecord> records;
+
+  /// Maps category names to the user's existing colors.
+  final Map<String, Color> categoryColors;
+
+  /// Shares readable row heights and effective text styles across the month.
+  final _MonthCardMetrics metrics;
+
+  /// Matches the clock used to project running records.
+  final DateTime now;
+
+  /// Opens daily details without editing or changing any record.
+  final VoidCallback onTap;
+
+  /// Creates one Windows calendar date with its compact activity overview.
+  const _MonthCardsCell({
+    required this.day,
+    required this.dateKey,
+    required this.records,
+    required this.categoryColors,
+    required this.metrics,
+    required this.now,
+    required this.onTap,
+    super.key,
+  });
+
+  /// Builds one focusable day target with descriptive, non-actionable cards.
+  @override
+  Widget build(BuildContext context) {
+    // Surfaces remain neutral so category colors carry the useful information.
+    final OmniColors colors = OmniColors.of(context);
+    // Highlight today using the shared application clock.
+    final bool isToday = DateUtils.isSameDay(day, now);
+    // Hide only visual rows; totals and day navigation still use all records.
+    final List<TimeEntryRecord> visible = records
+        .take(_MonthCardMetrics.visibleCount)
+        .toList(growable: false);
+    return Semantics(
+      label: '${DateFormat('yyyy年M月d日').format(day)}，查看当天明细',
+      button: true,
+      child: Material(
+        color: records.isEmpty ? colors.paperSubtle : colors.paper,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(OmniRadius.control),
+          side: BorderSide(color: isToday ? colors.brand : colors.line),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: OmniInkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(OmniSpacing.xs),
+            child: Column(
+              key: ValueKey<String>('timeline-month-cards-$dateKey'),
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                SizedBox(
+                  height: metrics.headerHeight,
+                  child: Row(
+                    children: <Widget>[
+                      Text(
+                        '${day.day}',
+                        style: metrics.dateStyle.copyWith(
+                          color: isToday ? colors.brand : colors.ink,
+                        ),
+                      ),
+                      const SizedBox(width: OmniSpacing.xs),
+                      if (records.isNotEmpty)
+                        Expanded(
+                          child: Text(
+                            _formatDuration(_sumMinutes(records)),
+                            key: ValueKey<String>(
+                              'timeline-month-total-$dateKey',
+                            ),
+                            textAlign: TextAlign.end,
+                            maxLines: 1,
+                            softWrap: false,
+                            style: metrics.detailStyle,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: OmniSpacing.xs),
+                if (records.isEmpty)
+                  Text('无记录', style: metrics.detailStyle)
+                else
+                  for (final TimeEntryRecord record in visible) ...<Widget>[
+                    _MonthRecordCard(
+                      key: ValueKey<String>(
+                        'timeline-month-record-$dateKey-${record.id}',
+                      ),
+                      record: record,
+                      color: categoryColors[record.category] ?? colors.time,
+                      metrics: metrics,
+                      now: now,
+                    ),
+                    if (record != visible.last)
+                      const SizedBox(height: OmniSpacing.xxs),
+                  ],
+                const Spacer(),
+                const SizedBox(height: OmniSpacing.xs),
+                SizedBox(
+                  height: metrics.footerHeight,
+                  child: records.length > visible.length
+                      ? Text(
+                          '还有 ${records.length - visible.length} 条',
+                          key: ValueKey<String>('timeline-month-more-$dateKey'),
+                          maxLines: 1,
+                          softWrap: false,
+                          style: metrics.detailStyle,
+                        )
+                      : null,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Presents a daily segment using the existing daily timeline's color language.
+class _MonthRecordCard extends StatelessWidget {
+  /// Retains the original identity and the projected daily time bounds.
+  final TimeEntryRecord record;
+
+  /// Uses the category's original color for the narrow side marker.
+  final Color color;
+
+  /// Keeps card geometry consistent across short and long activities.
+  final _MonthCardMetrics metrics;
+
+  /// Resolves the live label using the same clock as the daily projection.
+  final DateTime now;
+
+  /// Creates a passive card whose pointer action belongs to the containing day.
+  const _MonthRecordCard({
+    required this.record,
+    required this.color,
+    required this.metrics,
+    required this.now,
+    super.key,
+  });
+
+  /// Keeps complete metadata available through hover and accessibility output.
+  @override
+  Widget build(BuildContext context) {
+    // Preserve existing empty-activity handling across timeline entry points.
+    final String activity = timeEntryDisplayActivity(record);
+    // Daily ranges intentionally describe the slice rather than the whole entry.
+    final String range = _monthRecordRange(record, now);
+    // Normalize optional category labels only for presentation.
+    final String category = record.category?.trim() ?? '';
+    // A single description avoids duplicate screen-reader announcements.
+    final String description =
+        '$activity · $range · ${category.isEmpty ? '未分类' : category}';
+    // Blend against the active paper surface as the existing daily blocks do.
+    final Color background = Color.alphaBlend(
+      color.withValues(alpha: 0.12),
+      OmniColors.of(context).paper,
+    );
+    return Semantics(
+      label: description,
+      excludeSemantics: true,
+      child: Tooltip(
+        message: description,
+        excludeFromSemantics: true,
+        child: SizedBox(
+          height: metrics.recordHeight,
+          child: Ink(
+            decoration: BoxDecoration(
+              color: background,
+              borderRadius: BorderRadius.circular(OmniRadius.tiny),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                SizedBox(
+                  width: 3,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(OmniRadius.tiny),
+                        bottomLeft: Radius.circular(OmniRadius.tiny),
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: OmniSpacing.xs,
+                      vertical: OmniSpacing.xxs,
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          activity,
+                          maxLines: 1,
+                          softWrap: false,
+                          overflow: TextOverflow.ellipsis,
+                          style: metrics.titleStyle,
+                        ),
+                        const SizedBox(height: OmniSpacing.xxs),
+                        Text(
+                          range,
+                          maxLines: 1,
+                          softWrap: false,
+                          style: metrics.detailStyle,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -808,6 +1268,7 @@ class _MonthFingerprintCell extends StatelessWidget {
     required this.categoryColors,
     required this.showDuration,
     required this.onTap,
+    super.key,
   });
 
   /// 构建日期、记录时长与微缩时间条。
