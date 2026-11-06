@@ -120,34 +120,45 @@ class _AssistantMemoriesPageState extends ConsumerState<AssistantMemoriesPage> {
     }
   }
 
-  /// 单条删除或清空均明确展示影响。
+  /// Confirm single or bulk memory deletion against the captured server.
   Future<void> _delete([Map<String, dynamic>? memory]) async {
     // 弹窗不能跨服务器继续授权。
     final AssistantRepository? repository = _repository;
-    // 明确删除已保存记忆，不只是隐藏卡片。
-    final bool confirmed =
-        await showOmniDialog<bool>(
-          context: context,
-          builder: (BuildContext dialogContext) => OmniDialogScaffold(
+    // Only an explicit confirmation authorizes deletion.
+    final bool confirmed = Theme.of(context).platform == TargetPlatform.android
+        ? await showOmniConfirmDialog(
+            context,
             title: memory == null ? '清空全部记忆' : '删除记忆',
-            actions: <Widget>[
-              OmniButton(
-                label: '取消',
-                variant: OmniButtonVariant.secondary,
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-              ),
-              OmniButton(
-                label: '删除',
-                variant: OmniButtonVariant.danger,
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-              ),
-            ],
-            child: Text(
-              memory == null ? '删除当前服务器的全部助手记忆，后续对话不再使用。' : '删除这条记忆，后续对话不再使用。',
-            ),
-          ),
-        ) ??
-        false;
+            message: memory == null
+                ? '删除当前服务器的全部助手记忆，后续对话不再使用。'
+                : '删除这条记忆，后续对话不再使用。',
+            confirmLabel: '删除',
+            danger: true,
+          )
+        : (await showOmniDialog<bool>(
+                context: context,
+                builder: (BuildContext dialogContext) => OmniDialogScaffold(
+                  title: memory == null ? '清空全部记忆' : '删除记忆',
+                  actions: <Widget>[
+                    OmniButton(
+                      label: '取消',
+                      variant: OmniButtonVariant.secondary,
+                      onPressed: () => Navigator.of(dialogContext).pop(false),
+                    ),
+                    OmniButton(
+                      label: '删除',
+                      variant: OmniButtonVariant.danger,
+                      onPressed: () => Navigator.of(dialogContext).pop(true),
+                    ),
+                  ],
+                  child: Text(
+                    memory == null
+                        ? '删除当前服务器的全部助手记忆，后续对话不再使用。'
+                        : '删除这条记忆，后续对话不再使用。',
+                  ),
+                ),
+              ) ??
+              false);
     if (confirmed &&
         mounted &&
         identical(repository, _repository) &&

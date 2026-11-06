@@ -64,40 +64,48 @@ class _SyncBackupDialogState extends ConsumerState<_SyncBackupDialog> {
     }
   }
 
-  /// 用户确认后只清理指定旧库及快照，共享图片文件始终保留。
+  /// Confirm removal of this backup without deleting shared attachments.
   Future<void> _delete(Map<String, dynamic> backup) async {
-    // 二次确认清理范围。
-    final bool? confirmed = await showOmniDialog<bool>(
-      context: context,
-      builder: (BuildContext dialogContext) => OmniDialogScaffold(
-        title: '删除这份迁移备份？',
-        width: 460,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text('将删除这份旧数据库和迁移快照，无法撤销。当前数据库、服务器数据和本机图片文件不会删除。'),
-            const SizedBox(height: 16),
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              children: [
-                OmniButton(
-                  label: '取消',
-                  variant: OmniButtonVariant.secondary,
-                  onPressed: () => Navigator.pop(dialogContext, false),
-                ),
-                OmniButton(
-                  label: '删除备份',
-                  variant: OmniButtonVariant.danger,
-                  onPressed: () => Navigator.pop(dialogContext, true),
-                ),
-              ],
+    // Require explicit consent before deleting the selected backup.
+    final bool? confirmed = Theme.of(context).platform == TargetPlatform.android
+        ? await showOmniConfirmDialog(
+            context,
+            title: '删除这份迁移备份？',
+            message: '将删除这份旧数据库和迁移快照，无法撤销。当前数据库、服务器数据和本机图片文件不会删除。',
+            confirmLabel: '删除备份',
+            danger: true,
+          )
+        : (await showOmniDialog<bool>(
+            context: context,
+            builder: (BuildContext dialogContext) => OmniDialogScaffold(
+              title: '删除这份迁移备份？',
+              width: 460,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('将删除这份旧数据库和迁移快照，无法撤销。当前数据库、服务器数据和本机图片文件不会删除。'),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 8,
+                    children: [
+                      OmniButton(
+                        label: '取消',
+                        variant: OmniButtonVariant.secondary,
+                        onPressed: () => Navigator.pop(dialogContext, false),
+                      ),
+                      OmniButton(
+                        label: '删除备份',
+                        variant: OmniButtonVariant.danger,
+                        onPressed: () => Navigator.pop(dialogContext, true),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
-      ),
-    );
+          ));
     if (confirmed != true || !mounted) return;
     setState(() {
       _busy = true;

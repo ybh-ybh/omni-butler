@@ -308,7 +308,7 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
     }
   }
 
-  /// 删除分类标签并提供撤销入口。
+  /// Confirms taxonomy deletion while keeping its target visible on Android.
   Future<void> _delete(TaxonomyEntry entry) async {
     // 本模块标签采用解除关联语义，删除前给出影响数量。
     final int? affectedNotes =
@@ -316,15 +316,18 @@ class _TaxonomyManagerDialogState extends ConsumerState<TaxonomyManagerDialog> {
         ? await ref.read(taxonomyRepositoryProvider).affectedNoteCount(entry.id)
         : null;
     if (!mounted) return;
-    // 用户是否确认删除。
+    // Describe consequences independently of the platform's visible title.
+    final String message =
+        widget.module == TaxonomyModule.notes && widget.kind == TaxonomyKind.tag
+        ? '将解除 $affectedNotes 篇笔记中的标签关联，保留全部正文和原音。'
+        : '删除后不能再为新记录选择它，已有记录中的$_typeName名称会继续保留。';
+    // Only an explicit selection authorizes the existing repository operation.
     final bool confirmed = await showOmniConfirmDialog(
       context,
       title: '删除“${entry.name}”？',
-      message:
-          widget.module == TaxonomyModule.notes &&
-              widget.kind == TaxonomyKind.tag
-          ? '将解除 $affectedNotes 篇笔记中的标签关联，保留全部正文和原音。'
-          : '删除后不能再为新记录选择它，已有记录中的$_typeName名称会继续保留。',
+      message: Theme.of(context).platform == TargetPlatform.android
+          ? '删除“${entry.name}”。$message'
+          : message,
       confirmLabel: '删除',
       danger: true,
     );

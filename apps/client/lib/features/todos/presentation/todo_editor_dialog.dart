@@ -1912,12 +1912,29 @@ class _TodoEditorDialogState extends ConsumerState<TodoEditorDialog> {
     }
   }
 
-  /// 在编辑重复实例时选择影响范围。
+  /// Choose the recurrence scope without changing the editor lifecycle.
   Future<TodoSeriesScope?> _chooseSeriesScope() async {
-    // 当前待办记录。
+    // Preserve the current task identity while confirming the edit scope.
     final TodoRecord? record = widget.record;
     if (record?.repeatSeriesId == null) {
       return TodoSeriesScope.single;
+    }
+    if (Theme.of(context).platform == TargetPlatform.android) {
+      return showOmniActionSheet<TodoSeriesScope>(
+        context: context,
+        title: '修改重复待办',
+        message: '这条待办属于一个重复系列，请选择本次修改的范围。',
+        actions: const <OmniActionSheetAction<TodoSeriesScope>>[
+          OmniActionSheetAction<TodoSeriesScope>(
+            label: '仅本次',
+            value: TodoSeriesScope.single,
+          ),
+          OmniActionSheetAction<TodoSeriesScope>(
+            label: '本次及以后',
+            value: TodoSeriesScope.future,
+          ),
+        ],
+      );
     }
     return showOmniDialog<TodoSeriesScope>(
       context: context,

@@ -1224,46 +1224,75 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     }
   }
 
-  /// 确认将待办树移入回收站。
+  /// Confirm recycling while retaining the selected recurrence scope.
   Future<void> _confirmDelete(TodoRecord todo) async {
-    // 用户选择的删除范围。
-    final TodoSeriesScope? scope = await showOmniDialog<TodoSeriesScope>(
-      context: context,
-      builder: (BuildContext context) => AlertDialog(
-        title: const Text('移入回收站？'),
-        content: Text(
-          todo.taskType == 'progress'
-              ? '“${todo.title}”及其进度步骤会一起进入回收站。'
-              : todo.parentId == null
-              ? '“${todo.title}”及其子任务会一起进入回收站。'
-              : '“${todo.title}”会进入回收站。',
-        ),
-        actions: <Widget>[
-          OmniButton(
-            key: const ValueKey<String>('todo-recycle-cancel-button'),
-            label: '取消',
-            variant: OmniButtonVariant.secondary,
-            onPressed: () => Navigator.pop(context),
-          ),
-          if (todo.repeatSeriesId != null)
-            OmniTextButton(
-              onPressed: () => Navigator.pop(context, TodoSeriesScope.single),
-              child: const Text('仅本次'),
+    // Only a selected action returns an authorized deletion scope.
+    final TodoSeriesScope? scope =
+        Theme.of(context).platform == TargetPlatform.android
+        ? await showOmniActionSheet<TodoSeriesScope>(
+            context: context,
+            title: '移入回收站？',
+            message: todo.taskType == 'progress'
+                ? '“${todo.title}”及其进度步骤会一起进入回收站。'
+                : todo.parentId == null
+                ? '“${todo.title}”及其子任务会一起进入回收站。'
+                : '“${todo.title}”会进入回收站。',
+            cancelKey: const ValueKey<String>('todo-recycle-cancel-button'),
+            actions: <OmniActionSheetAction<TodoSeriesScope>>[
+              if (todo.repeatSeriesId != null)
+                const OmniActionSheetAction<TodoSeriesScope>(
+                  label: '仅本次',
+                  value: TodoSeriesScope.single,
+                  danger: true,
+                ),
+              OmniActionSheetAction<TodoSeriesScope>(
+                key: const ValueKey<String>('todo-recycle-confirm-button'),
+                label: todo.repeatSeriesId == null ? '移入回收站' : '本次及以后',
+                value: todo.repeatSeriesId == null
+                    ? TodoSeriesScope.single
+                    : TodoSeriesScope.future,
+                danger: true,
+              ),
+            ],
+          )
+        : (await showOmniDialog<TodoSeriesScope>(
+            context: context,
+            builder: (BuildContext context) => AlertDialog(
+              title: const Text('移入回收站？'),
+              content: Text(
+                todo.taskType == 'progress'
+                    ? '“${todo.title}”及其进度步骤会一起进入回收站。'
+                    : todo.parentId == null
+                    ? '“${todo.title}”及其子任务会一起进入回收站。'
+                    : '“${todo.title}”会进入回收站。',
+              ),
+              actions: <Widget>[
+                OmniButton(
+                  key: const ValueKey<String>('todo-recycle-cancel-button'),
+                  label: '取消',
+                  variant: OmniButtonVariant.secondary,
+                  onPressed: () => Navigator.pop(context),
+                ),
+                if (todo.repeatSeriesId != null)
+                  OmniTextButton(
+                    onPressed: () =>
+                        Navigator.pop(context, TodoSeriesScope.single),
+                    child: const Text('仅本次'),
+                  ),
+                OmniButton(
+                  key: const ValueKey<String>('todo-recycle-confirm-button'),
+                  label: todo.repeatSeriesId == null ? '移入回收站' : '本次及以后',
+                  variant: OmniButtonVariant.danger,
+                  onPressed: () => Navigator.pop(
+                    context,
+                    todo.repeatSeriesId == null
+                        ? TodoSeriesScope.single
+                        : TodoSeriesScope.future,
+                  ),
+                ),
+              ],
             ),
-          OmniButton(
-            key: const ValueKey<String>('todo-recycle-confirm-button'),
-            label: todo.repeatSeriesId == null ? '移入回收站' : '本次及以后',
-            variant: OmniButtonVariant.danger,
-            onPressed: () => Navigator.pop(
-              context,
-              todo.repeatSeriesId == null
-                  ? TodoSeriesScope.single
-                  : TodoSeriesScope.future,
-            ),
-          ),
-        ],
-      ),
-    );
+          ));
     if (scope == null) {
       return;
     }

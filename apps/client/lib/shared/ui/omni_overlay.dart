@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
+import 'package:omni_butler/shared/ui/omni_action_sheet.dart';
 import 'package:omni_butler/shared/ui/omni_button.dart';
 import 'package:omni_butler/shared/ui/omni_icon_button.dart';
 import 'package:omni_butler/shared/ui/omni_modal_transition.dart';
@@ -440,7 +441,7 @@ class _OmniDialogActions extends StatelessWidget {
   }
 }
 
-/// 显示统一的短确认弹窗。
+/// Shows a bottom confirmation on Android and the existing desktop dialog.
 Future<bool> showOmniConfirmDialog(
   BuildContext context, {
   required String title,
@@ -448,7 +449,22 @@ Future<bool> showOmniConfirmDialog(
   String confirmLabel = '确认',
   bool danger = false,
 }) async {
-  // 用户最终确认结果。
+  if (Theme.of(context).platform == TargetPlatform.android) {
+    return await showOmniActionSheet<bool>(
+          context: context,
+          title: title,
+          message: message,
+          actions: <OmniActionSheetAction<bool>>[
+            OmniActionSheetAction<bool>(
+              label: confirmLabel,
+              value: true,
+              danger: danger,
+            ),
+          ],
+        ) ??
+        false;
+  }
+  // Preserve desktop presentation and its existing cancellation contract.
   final bool? confirmed = await showOmniDialog<bool>(
     context: context,
     builder: (BuildContext dialogContext) => OmniDialogScaffold(

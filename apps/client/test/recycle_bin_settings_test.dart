@@ -241,7 +241,26 @@ void main() {
               find.byKey(const ValueKey<String>('recycle-empty')),
             );
             await tester.pumpAndSettle();
-            expect(find.text('清空回收站？'), findsOneWidget);
+            // Android exposes the consequences and actions without a title bar.
+            final Finder confirmation = find.byKey(
+              const ValueKey<String>('omni-action-sheet-surface'),
+            );
+            if (platform == TargetPlatform.android) {
+              expect(confirmation, findsOneWidget);
+              expect(
+                find.descendant(
+                  of: confirmation,
+                  matching: find.text('将永久删除当前回收站中的全部记录及其从属数据，删除后无法恢复。'),
+                ),
+                findsOneWidget,
+              );
+              expect(
+                find.descendant(of: confirmation, matching: find.text('清空回收站')),
+                findsOneWidget,
+              );
+            } else {
+              expect(find.text('清空回收站？'), findsOneWidget);
+            }
             // 确认期间全局和单行按钮都不可重复提交。
             expect(
               tester
@@ -251,7 +270,11 @@ void main() {
                   .onPressed,
               isNull,
             );
-            await tester.tap(find.text('取消'));
+            await tester.tap(
+              platform == TargetPlatform.android
+                  ? find.descendant(of: confirmation, matching: find.text('取消'))
+                  : find.text('取消'),
+            );
             await tester.pumpAndSettle();
             expect(
               await fixture.container
@@ -263,7 +286,14 @@ void main() {
               find.byKey(const ValueKey<String>('recycle-empty')),
             );
             await tester.pumpAndSettle();
-            await tester.tap(find.text('清空回收站'));
+            await tester.tap(
+              platform == TargetPlatform.android
+                  ? find.descendant(
+                      of: confirmation,
+                      matching: find.text('清空回收站'),
+                    )
+                  : find.text('清空回收站'),
+            );
             await tester.pumpAndSettle();
             expect(find.text('回收站为空'), findsOneWidget);
             expect(

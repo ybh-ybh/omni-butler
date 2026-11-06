@@ -602,8 +602,21 @@ void main() {
       find.byKey(const ValueKey<String>('ai-profile-delete-profile-2')),
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('确认删除“测试 DeepSeek”'), findsOneWidget);
-    await tester.tap(find.text('取消'));
+    // Scope destructive consent to the Android confirmation surface.
+    final Finder confirmation = find.byKey(
+      const ValueKey<String>('omni-action-sheet-surface'),
+    );
+    expect(confirmation, findsOneWidget);
+    expect(
+      find.descendant(
+        of: confirmation,
+        matching: find.textContaining('确认删除“测试 DeepSeek”'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.descendant(of: confirmation, matching: find.text('取消')),
+    );
     await tester.pumpAndSettle();
     expect(
       auth.requests.where((_Request request) => request.method == 'DELETE'),
@@ -650,7 +663,10 @@ void main() {
       find.byKey(const ValueKey<String>('ai-profile-delete-profile-1')),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(OmniButton, '删除'));
+    expect(confirmation, findsOneWidget);
+    await tester.tap(
+      find.descendant(of: confirmation, matching: find.text('删除')),
+    );
     await tester.pumpAndSettle();
     expect(
       auth.requests

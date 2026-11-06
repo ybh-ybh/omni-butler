@@ -445,30 +445,37 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
     if (value != null && mounted) await _chat.rename(value, id: id);
   }
 
-  /// 会话删除需要明确说明仅删除聊天。
+  /// Confirm chat deletion without changing saved business records.
   Future<void> _deleteConversation({String? id}) async {
-    // 明确删除聊天不会撤销业务数据。
-    final bool confirmed =
-        await showOmniDialog<bool>(
-          context: context,
-          builder: (BuildContext dialogContext) => OmniDialogScaffold(
+    // Only an explicit confirmation authorizes deletion.
+    final bool confirmed = Theme.of(context).platform == TargetPlatform.android
+        ? await showOmniConfirmDialog(
+            context,
             title: '删除对话',
-            actions: <Widget>[
-              OmniButton(
-                label: '取消',
-                variant: OmniButtonVariant.secondary,
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-              ),
-              OmniButton(
-                label: '删除',
-                variant: OmniButtonVariant.danger,
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-              ),
-            ],
-            child: const Text('删除本次聊天记录，停止尚未执行的计划。已保存的业务记录会保留。'),
-          ),
-        ) ??
-        false;
+            message: '删除本次聊天记录，停止尚未执行的计划。已保存的业务记录会保留。',
+            confirmLabel: '确认删除',
+            danger: true,
+          )
+        : (await showOmniDialog<bool>(
+                context: context,
+                builder: (BuildContext dialogContext) => OmniDialogScaffold(
+                  title: '删除对话',
+                  actions: <Widget>[
+                    OmniButton(
+                      label: '取消',
+                      variant: OmniButtonVariant.secondary,
+                      onPressed: () => Navigator.of(dialogContext).pop(false),
+                    ),
+                    OmniButton(
+                      label: '删除',
+                      variant: OmniButtonVariant.danger,
+                      onPressed: () => Navigator.of(dialogContext).pop(true),
+                    ),
+                  ],
+                  child: const Text('删除本次聊天记录，停止尚未执行的计划。已保存的业务记录会保留。'),
+                ),
+              ) ??
+              false);
     if (confirmed) await _chat.delete(id: id);
   }
 

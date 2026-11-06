@@ -412,18 +412,32 @@ void main() {
       save();
       save();
       await _pumpConfirmation(tester);
-      expect(find.text('修改重复待办'), findsOneWidget);
+      expect(_confirmation(), findsOneWidget);
+      expect(
+        find.descendant(
+          of: _confirmation(),
+          matching: find.text('这条待办属于一个重复系列，请选择本次修改的范围。'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('仅本次'), findsOneWidget);
+      expect(find.text('本次及以后'), findsOneWidget);
       expect(tester.widget<OmniButton>(_submit()).onPressed, isNull);
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
-      expect(find.text('修改重复待办'), findsNothing);
+      expect(_confirmation(), findsNothing);
       expect(find.byType(TodoEditorDialog), findsOneWidget);
       expect(find.text('修改后的重复待办'), findsOneWidget);
       expect(fixture.repository.calls, 0);
       await tester.tap(_submit());
       await _pumpConfirmation(tester);
       await tester.tap(
-        find.text(scope == TodoSeriesScope.single ? '仅本次' : '本次及以后'),
+        find.descendant(
+          of: _confirmation(),
+          matching: find.text(
+            scope == TodoSeriesScope.single ? '仅本次' : '本次及以后',
+          ),
+        ),
       );
       await tester.pumpAndSettle();
       expect(fixture.repository.calls, 1);
@@ -457,10 +471,21 @@ void main() {
     );
     await tester.tap(_submit());
     await _pumpConfirmation(tester);
-    expect(find.text('删除这些步骤？'), findsOneWidget);
+    expect(_confirmation(), findsOneWidget);
+    expect(
+      find.descendant(
+        of: _confirmation(),
+        matching: find.textContaining('将删除 1 个步骤'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: _confirmation(), matching: find.text('删除步骤')),
+      findsOneWidget,
+    );
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(find.text('删除这些步骤？'), findsNothing);
+    expect(_confirmation(), findsNothing);
     expect(find.text('保留第二章'), findsOneWidget);
     expect(fixture.repository.calls, 0);
     await _capture(tester, 'android-progress');
@@ -681,6 +706,10 @@ Future<_EditorFixture> _openEditor(
 
 /// 定位固定顶栏的保存操作，排除嵌套确认动作。
 Finder _submit() => find.byKey(const ValueKey<String>('todo-android-submit'));
+
+/// Finds the Android confirmation surface independently of its route label.
+Finder _confirmation() =>
+    find.byKey(const ValueKey<String>('omni-action-sheet-surface'));
 
 /// 父表单保存指示器持续动画，确认阶段只推进路由所需帧数。
 Future<void> _pumpConfirmation(WidgetTester tester) async {

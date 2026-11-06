@@ -263,8 +263,8 @@ extension _AndroidSidebarTags on _AndroidNoteSidebarState {
         context,
         title: withNotes ? '删除“${tag.name}”和笔记？' : '移除“${tag.name}”？',
         message: withNotes
-            ? '将删除此标签，并将 $count 篇笔记移入回收站，包含同时有其他标签的笔记。正文、图片和原音保留 30 天，未发布修改保留在本机草稿中。'
-            : '将解除 $count 篇笔记中的标签关联，保留全部正文、图片和原音。',
+            ? '将删除标签“${tag.name}”，并将 $count 篇笔记移入回收站，包含同时有其他标签的笔记。正文、图片和原音保留 30 天，未发布修改保留在本机草稿中。'
+            : '将解除 $count 篇笔记与标签“${tag.name}”的关联，保留全部正文、图片和原音。',
         confirmLabel: withNotes ? '删除标签并移入回收站' : '仅移除标签',
         danger: true,
       );

@@ -1794,47 +1794,69 @@ class _SyncSettingsCard extends ConsumerWidget {
     );
   }
 
-  /// 确认断开服务器并说明本机数据保留规则。
+  /// Confirm disconnect and preserve the selected local-data policy.
   Future<void> _confirmDisconnect(BuildContext context, WidgetRef ref) async {
-    // 用户选择的本机数据处理方式。
-    final _DisconnectChoice? choice = await showOmniDialog<_DisconnectChoice>(
-      context: context,
-      builder: (BuildContext dialogContext) => OmniDialogScaffold(
-        title: '断开当前服务器？',
-        width: 480,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            const Text('请明确选择这台设备上的数据处理方式。“删除本机数据”不会删除云端数据，且无法撤销。'),
-            const SizedBox(height: OmniSpacing.lg),
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: OmniSpacing.xs,
-              runSpacing: OmniSpacing.xs,
-              children: <Widget>[
-                OmniButton(
-                  label: '取消',
-                  variant: OmniButtonVariant.secondary,
-                  onPressed: () => Navigator.pop(dialogContext),
-                ),
-                OmniButton(
-                  label: '断开并删除本机数据',
-                  variant: OmniButtonVariant.danger,
-                  onPressed: () =>
-                      Navigator.pop(dialogContext, _DisconnectChoice.delete),
-                ),
-                OmniButton(
-                  label: '断开并保留本机数据',
-                  onPressed: () =>
-                      Navigator.pop(dialogContext, _DisconnectChoice.keep),
-                ),
-              ],
+    // Keep the original typed result for each data-handling choice.
+    final _DisconnectChoice? choice =
+        Theme.of(context).platform == TargetPlatform.android
+        ? await showOmniActionSheet<_DisconnectChoice>(
+            context: context,
+            title: '断开当前服务器？',
+            message: '请明确选择这台设备上的数据处理方式。“删除本机数据”不会删除云端数据，且无法撤销。',
+            actions: const <OmniActionSheetAction<_DisconnectChoice>>[
+              OmniActionSheetAction<_DisconnectChoice>(
+                label: '断开并删除本机数据',
+                value: _DisconnectChoice.delete,
+                danger: true,
+              ),
+              OmniActionSheetAction<_DisconnectChoice>(
+                label: '断开并保留本机数据',
+                value: _DisconnectChoice.keep,
+              ),
+            ],
+          )
+        : (await showOmniDialog<_DisconnectChoice>(
+            context: context,
+            builder: (BuildContext dialogContext) => OmniDialogScaffold(
+              title: '断开当前服务器？',
+              width: 480,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  const Text('请明确选择这台设备上的数据处理方式。“删除本机数据”不会删除云端数据，且无法撤销。'),
+                  const SizedBox(height: OmniSpacing.lg),
+                  Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: OmniSpacing.xs,
+                    runSpacing: OmniSpacing.xs,
+                    children: <Widget>[
+                      OmniButton(
+                        label: '取消',
+                        variant: OmniButtonVariant.secondary,
+                        onPressed: () => Navigator.pop(dialogContext),
+                      ),
+                      OmniButton(
+                        label: '断开并删除本机数据',
+                        variant: OmniButtonVariant.danger,
+                        onPressed: () => Navigator.pop(
+                          dialogContext,
+                          _DisconnectChoice.delete,
+                        ),
+                      ),
+                      OmniButton(
+                        label: '断开并保留本机数据',
+                        onPressed: () => Navigator.pop(
+                          dialogContext,
+                          _DisconnectChoice.keep,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
-      ),
-    );
+          ));
     if (choice == null) {
       return;
     }

@@ -46,35 +46,42 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
     }
   }
 
-  /// 删除配置前确认操作影响。
+  /// Confirm configuration changes using platform-specific presentation.
   Future<bool> _confirm(
     String title,
     String message,
     String label, {
     bool danger = false,
-  }) async =>
-      await showOmniDialog<bool>(
-        context: context,
-        builder: (BuildContext dialogContext) => OmniDialogScaffold(
+  }) async => Theme.of(context).platform == TargetPlatform.android
+      ? await showOmniConfirmDialog(
+          context,
           title: title,
-          actions: <Widget>[
-            OmniButton(
-              label: '取消',
-              variant: OmniButtonVariant.secondary,
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-            ),
-            OmniButton(
-              label: label,
-              variant: danger
-                  ? OmniButtonVariant.danger
-                  : OmniButtonVariant.primary,
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-            ),
-          ],
-          child: SingleChildScrollView(child: Text(message)),
-        ),
-      ) ??
-      false;
+          message: message,
+          confirmLabel: label,
+          danger: danger,
+        )
+      : (await showOmniDialog<bool>(
+              context: context,
+              builder: (BuildContext dialogContext) => OmniDialogScaffold(
+                title: title,
+                actions: <Widget>[
+                  OmniButton(
+                    label: '取消',
+                    variant: OmniButtonVariant.secondary,
+                    onPressed: () => Navigator.of(dialogContext).pop(false),
+                  ),
+                  OmniButton(
+                    label: label,
+                    variant: danger
+                        ? OmniButtonVariant.danger
+                        : OmniButtonVariant.primary,
+                    onPressed: () => Navigator.of(dialogContext).pop(true),
+                  ),
+                ],
+                child: SingleChildScrollView(child: Text(message)),
+              ),
+            ) ??
+            false);
 
   /// 打开独立草稿表单，关闭时销毁明文密钥控制器。
   Future<void> _edit(

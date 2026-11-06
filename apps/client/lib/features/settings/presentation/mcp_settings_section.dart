@@ -146,33 +146,43 @@ class _McpSettingsSectionState extends ConsumerState<McpSettingsSection> {
     });
   }
 
-  /// 撤销前说明未执行操作和令牌会一起失效。
+  /// Confirm revocation while preserving the captured connection identity.
   Future<void> _revoke(
     McpRepository repository,
     Map<String, dynamic> connection,
   ) async {
-    // 确认窗口绑定打开时的服务器与连接身份。
-    final bool confirmed =
-        await showOmniDialog<bool>(
-          context: context,
-          builder: (BuildContext dialogContext) => OmniDialogScaffold(
+    // Bind consent to the server and connection captured before opening.
+    final bool confirmed = Theme.of(context).platform == TargetPlatform.android
+        ? await showOmniConfirmDialog(
+            context,
             title: '撤销 ${connection['name']}？',
-            actions: <Widget>[
-              OmniButton(
-                label: '返回',
-                variant: OmniButtonVariant.secondary,
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-              ),
-              OmniButton(
-                label: '撤销连接',
-                variant: OmniButtonVariant.danger,
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-              ),
-            ],
-            child: const Text('撤销后 Codex 不能继续访问数据，尚未执行的操作也会取消。已保存的业务记录保留。'),
-          ),
-        ) ??
-        false;
+            message:
+                '撤销“${connection['name']}”后 Codex 不能继续访问数据，尚未执行的操作也会取消。已保存的业务记录保留。',
+            confirmLabel: '撤销连接',
+            danger: true,
+          )
+        : (await showOmniDialog<bool>(
+                context: context,
+                builder: (BuildContext dialogContext) => OmniDialogScaffold(
+                  title: '撤销 ${connection['name']}？',
+                  actions: <Widget>[
+                    OmniButton(
+                      label: '返回',
+                      variant: OmniButtonVariant.secondary,
+                      onPressed: () => Navigator.of(dialogContext).pop(false),
+                    ),
+                    OmniButton(
+                      label: '撤销连接',
+                      variant: OmniButtonVariant.danger,
+                      onPressed: () => Navigator.of(dialogContext).pop(true),
+                    ),
+                  ],
+                  child: const Text(
+                    '撤销后 Codex 不能继续访问数据，尚未执行的操作也会取消。已保存的业务记录保留。',
+                  ),
+                ),
+              ) ??
+              false);
     if (!confirmed || !mounted) return;
     await _run(repository, () async {
       await repository.revoke(connection['id'] as String);

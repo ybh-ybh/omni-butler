@@ -152,7 +152,12 @@ void _registerAndroidSidebarScenarios(
     await tester.pumpAndSettle();
     await tester.tap(find.text('删除聊天'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(OmniButton, '删除'));
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey<String>('omni-action-sheet-surface')),
+        matching: find.text('确认删除'),
+      ),
+    );
     await fixture.drain(tester);
     await tester.pumpAndSettle();
     expect(

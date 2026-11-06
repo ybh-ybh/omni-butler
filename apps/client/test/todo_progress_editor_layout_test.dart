@@ -144,8 +144,14 @@ void main() {
     await _chooseStepAction(tester, 1, '下移');
     await _chooseStepAction(tester, 3, '上移');
     await _chooseStepAction(tester, 2, '删除');
-    expect(find.text('删除这些步骤？'), findsOneWidget);
-    await tester.tap(find.widgetWithText(OmniButton, '删除步骤'));
+    // Android confirmation exposes its choices on the bottom action surface.
+    final Finder confirmation = find.byKey(
+      const ValueKey<String>('omni-action-sheet-surface'),
+    );
+    expect(confirmation, findsOneWidget);
+    await tester.tap(
+      find.descendant(of: confirmation, matching: find.text('删除步骤')),
+    );
     await tester.pumpAndSettle();
     expect(find.text('步骤列表 · 2 项'), findsOneWidget);
     await _saveEditor(tester);
