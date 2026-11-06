@@ -2,17 +2,19 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/features/management/presentation/management_navigation.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
-/// Opens secondary features from the compact Android home header.
-class HomeMobileShortcuts extends ConsumerWidget {
+/// Lists enabled secondary features inside the Android navigation panel.
+class AndroidMoreShortcuts extends ConsumerWidget {
   /// Creates shortcuts that respect the existing feature preferences.
-  const HomeMobileShortcuts({super.key});
+  const AndroidMoreShortcuts({required this.onSelected, super.key});
+
+  /// Delegates guarded navigation to the owning menu host.
+  final ValueChanged<String> onSelected;
 
   /// Measures labels before choosing a single row or a two-column layout.
   @override
@@ -25,36 +27,20 @@ class HomeMobileShortcuts extends ConsumerWidget {
       ref.watch(managementSectionProvider),
     );
     // Stable identifiers are separate from the current management route.
-    final List<({String id, String label, IconData icon, String path})>
-    entries = <({String id, String label, IconData icon, String path})>[
-      if (preference.isEnabled(AppFeature.todos))
-        (
-          id: 'todos',
-          label: '全部待办',
-          icon: Icons.check_box_outlined,
-          path: '/todos',
-        ),
-      if (preference.isEnabled(AppFeature.timeline))
-        (
-          id: 'timeline',
-          label: '时间记录',
-          icon: Icons.access_time_outlined,
-          path: '/timeline',
-        ),
-      if (management != null)
-        (
-          id: 'management',
-          label: '管理',
-          icon: Icons.dashboard_customize_outlined,
-          path: management.route,
-        ),
-      (
-        id: 'settings',
-        label: '设置',
-        icon: Icons.settings_outlined,
-        path: '/settings',
-      ),
-    ];
+    final List<({String id, String label, IconData icon})> entries =
+        <({String id, String label, IconData icon})>[
+          if (preference.isEnabled(AppFeature.todos))
+            (id: 'todos', label: '全部待办', icon: Icons.check_box_outlined),
+          if (preference.isEnabled(AppFeature.timeline))
+            (id: 'timeline', label: '时间记录', icon: Icons.access_time_outlined),
+          if (management != null)
+            (
+              id: 'management',
+              label: '管理',
+              icon: Icons.dashboard_customize_outlined,
+            ),
+          (id: 'settings', label: '设置', icon: Icons.settings_outlined),
+        ];
     // Reuse the current theme rather than adding a new shortcut palette.
     final OmniColors colors = OmniColors.of(context);
     // The measured and painted labels use identical font metrics.
@@ -87,16 +73,16 @@ class HomeMobileShortcuts extends ConsumerWidget {
         // The available width includes each shortcut's own horizontal padding.
         final double width = constraints.maxWidth / columns;
         return Wrap(
-          key: const ValueKey<String>('home-mobile-shortcuts'),
+          key: const ValueKey<String>('android-more-shortcuts'),
           children: <Widget>[
             for (final entry in entries)
               SizedBox(
-                key: ValueKey<String>('home-shortcut-${entry.id}'),
+                key: ValueKey<String>('more-shortcut-${entry.id}'),
                 width: width,
                 child: Material(
                   color: Colors.transparent,
                   child: OmniInkWell(
-                    onTap: () => context.push(entry.path),
+                    onTap: () => onSelected(entry.id),
                     borderRadius: BorderRadius.circular(OmniRadius.control),
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(

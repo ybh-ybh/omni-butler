@@ -23,6 +23,7 @@ import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/core/sync/sync_preferences.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_repository.dart';
 import 'package:omni_butler/features/settings/presentation/recycle_bin_section.dart';
+import 'package:omni_butler/shared/layout/android_sidebar_swipe_target.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:omni_butler/shared/ui/omni_modal_bottom_sheet.dart';
 
@@ -99,6 +100,9 @@ class _AndroidNotesViewState extends ConsumerState<AndroidNotesView>
 
   /// 编辑器异步加载阶段禁止重复请求。
   bool _opening = false;
+
+  /// Prevents a button and a completed swipe from pushing duplicate sidebars.
+  bool _sidebarOpen = false;
 
   /// 外部请求只在参数变化时消费。
   String? _openedId;
@@ -426,7 +430,7 @@ class _AndroidNotesViewState extends ConsumerState<AndroidNotesView>
     }
   }
 
-  /// 构建正式列表、独立回收站和常驻输入入口。
+  /// Keeps the composer outside the sidebar gesture's main-list surface.
   @override
   Widget build(BuildContext context) {
     // 监听替换后的采集器，不把旧数据源通知发给新资料库。
@@ -533,26 +537,35 @@ class _AndroidNotesViewState extends ConsumerState<AndroidNotesView>
             child: Stack(
               children: [
                 Positioned.fill(
-                  child: _recycle
-                      ? const SingleChildScrollView(
-                          padding: EdgeInsets.all(OmniSpacing.md),
-                          child: RecycleBinSection(
-                            scope: RecycleBinScope.notes,
+                  child: AndroidSidebarSwipeTarget(
+                    key: const ValueKey('android-notes-sidebar-swipe'),
+                    sidebarWidth: math.min(
+                      MediaQuery.sizeOf(context).width * .82,
+                      360,
+                    ),
+                    enabled: !_editorOpen && !_opening && !_sidebarOpen,
+                    onOpen: () => unawaited(_showSidebar()),
+                    child: _recycle
+                        ? const SingleChildScrollView(
+                            padding: EdgeInsets.all(OmniSpacing.md),
+                            child: RecycleBinSection(
+                              scope: RecycleBinScope.notes,
+                            ),
+                          )
+                        : _AndroidNoteList(
+                            notes: notes,
+                            filter: _filter,
+                            selectedDay: _day,
+                            controller: _scroll,
+                            expandedId: _expanded,
+                            bottomPadding: 100,
+                            onExpand: (id) => setState(
+                              () => _expanded = _expanded == id ? null : id,
+                            ),
+                            onEdit: (id, {version}) =>
+                                _openEditor(noteId: id, version: version),
                           ),
-                        )
-                      : _AndroidNoteList(
-                          notes: notes,
-                          filter: _filter,
-                          selectedDay: _day,
-                          controller: _scroll,
-                          expandedId: _expanded,
-                          bottomPadding: 100,
-                          onExpand: (id) => setState(
-                            () => _expanded = _expanded == id ? null : id,
-                          ),
-                          onEdit: (id, {version}) =>
-                              _openEditor(noteId: id, version: version),
-                        ),
+                  ),
                 ),
                 if (!_recycle)
                   Positioned(

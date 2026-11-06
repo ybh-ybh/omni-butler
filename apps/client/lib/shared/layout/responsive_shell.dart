@@ -16,6 +16,7 @@ import 'package:omni_butler/features/management/presentation/android_management_
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
+import 'package:omni_butler/shared/layout/android_more_navigation.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/features/notes/presentation/note_search_focus.dart';
 import 'package:omni_butler/shared/search/global_search_dialog.dart';
@@ -165,7 +166,7 @@ const List<_AppDestination> _compactDestinations = <_AppDestination>[
   ),
 ];
 
-/// Shows the three frequent destinations on compact Android screens.
+/// Lists primary pages; the compact More action is appended separately.
 const List<_AppDestination> _androidCompactDestinations = <_AppDestination>[
   _AppDestination(
     path: '/home',
@@ -334,6 +335,36 @@ class ResponsiveShell extends ConsumerWidget {
                         }.contains(location) ||
                         (location == '/assistant' &&
                             MediaQuery.viewInsetsOf(context).bottom > 0));
+                if (androidPlatform) {
+                  return _AndroidNotesBackground(
+                    enabled: androidNotes,
+                    child: AndroidMoreNavigation(
+                      location: location,
+                      showNavigation: !hideBottomNavigation,
+                      resizeToAvoidBottomInset: !androidNotes,
+                      coordinator: primaryNavigationCoordinator,
+                      navigationBuilder: (selected, toggle, close) =>
+                          _CompactNavigation(
+                            location: location,
+                            destinations: compactDestinations,
+                            moreSelected: selected,
+                            onMore: toggle,
+                            onSelected: (destination) async {
+                              if (!await close() || !context.mounted) return;
+                              _selectDestination(
+                                context,
+                                ref,
+                                destination,
+                                featurePreference,
+                                managementSection,
+                                navigationShell,
+                              );
+                            },
+                          ),
+                      child: child,
+                    ),
+                  );
+                }
                 return _AndroidNotesBackground(
                   enabled: androidNotes,
                   child: Scaffold(
@@ -803,11 +834,19 @@ class _CompactNavigation extends StatelessWidget {
   /// 选择回调。
   final ValueChanged<_AppDestination> onSelected;
 
+  /// Supplies an action instead of a new navigation branch on Android.
+  final VoidCallback? onMore;
+
+  /// Highlights only the menu while its modal surface is present.
+  final bool moreSelected;
+
   /// 创建紧凑底部导航。
   const _CompactNavigation({
     required this.location,
     required this.destinations,
     required this.onSelected,
+    this.onMore,
+    this.moreSelected = false,
   });
 
   /// 构建飞书式五入口底部导航。
@@ -838,8 +877,23 @@ class _CompactNavigation extends StatelessWidget {
               Expanded(
                 child: _CompactDestination(
                   destination: destination,
-                  selected: _isDestinationSelected(destination, location),
+                  selected:
+                      !moreSelected &&
+                      _isDestinationSelected(destination, location),
                   onTap: () => onSelected(destination),
+                ),
+              ),
+            if (onMore != null)
+              Expanded(
+                child: _CompactDestination(
+                  destination: const _AppDestination(
+                    path: 'more',
+                    label: '更多',
+                    icon: Icons.apps_outlined,
+                    selectedIcon: Icons.apps_rounded,
+                  ),
+                  selected: moreSelected,
+                  onTap: onMore!,
                 ),
               ),
           ],

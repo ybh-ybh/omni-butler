@@ -268,6 +268,132 @@ Future<void> _androidAssistantPreview(WidgetTester tester, String name) async {
 void _registerAndroidAssistantScenarios(
   SharedPreferences Function() preferences,
 ) {
+  testWidgets('Android AI 静态主体连续开关侧栏后仍可右滑打开', (WidgetTester tester) async {
+    // No input or connection changes may accidentally refresh the cached workspace.
+    final _AndroidAssistantFixture fixture = _AndroidAssistantFixture();
+    await fixture.mount(tester, preferences());
+    await fixture.drain(tester);
+    await tester.pumpAndSettle();
+    await tester.dragFrom(const Offset(70, 250), const Offset(170, 0));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('assistant-android-sidebar')),
+      findsOneWidget,
+    );
+    // Exercise every existing dismissal before immediately starting another swipe.
+    for (final String dismissal in <String>['drag', 'tap', 'back', 'drag']) {
+      switch (dismissal) {
+        case 'drag':
+          await tester.dragFrom(const Offset(375, 200), const Offset(-180, 0));
+        case 'tap':
+          await tester.tapAt(const Offset(375, 200));
+        case 'back':
+          await tester.binding.handlePopRoute();
+      }
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('assistant-android-sidebar')),
+        findsNothing,
+        reason: 'The $dismissal action must finish closing.',
+      );
+      await tester.dragFrom(const Offset(70, 250), const Offset(170, 0));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('assistant-android-sidebar')),
+        findsOneWidget,
+        reason: 'A settled $dismissal must restore swipe opening immediately.',
+      );
+    }
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('assistant-history-button')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(375, 200));
+    await tester.pumpAndSettle();
+    await tester.dragFrom(const Offset(70, 250), const Offset(170, 0));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('assistant-android-sidebar')),
+      findsOneWidget,
+      reason: 'The header-button flow must also restore the swipe recognizer.',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Android AI 主体右滑打开历史且遮罩左滑关闭，输入区不接管', (WidgetTester tester) async {
+    // The production view retains its input controller across both drawer actions.
+    final _AndroidAssistantFixture fixture = _AndroidAssistantFixture();
+    await fixture.mount(tester, preferences());
+    await tester.enterText(
+      find.byKey(const ValueKey<String>('assistant-input')),
+      '保留我的草稿',
+    );
+    await tester.dragFrom(const Offset(70, 250), const Offset(170, 0));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('assistant-android-sidebar')),
+      findsOneWidget,
+    );
+    expect(fixture.view(tester).inputFocus.hasFocus, isFalse);
+    await _androidAssistantPreview(tester, 'sidebar-body-swipe-open');
+    await tester.dragFrom(const Offset(375, 200), const Offset(-180, 0));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('assistant-android-sidebar')),
+      findsNothing,
+    );
+    expect(fixture.view(tester).input.text, '保留我的草稿');
+    await tester.drag(
+      find.byKey(const ValueKey<String>('assistant-input-voice-target')),
+      const Offset(150, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('assistant-android-sidebar')),
+      findsNothing,
+    );
+    expect(fixture.view(tester).input.text, '保留我的草稿');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Android AI 录音覆盖阻止横滑穿透且取消后可打开历史', (WidgetTester tester) async {
+    // The existing recording modal must retain ownership over a second finger.
+    final _AndroidAssistantFixture fixture = _AndroidAssistantFixture();
+    await fixture.mount(tester, preferences());
+    await tester.enterText(
+      find.byKey(const ValueKey<String>('assistant-input')),
+      '原有文字',
+    );
+    // The fake recognizer follows the same production microphone and draft owners.
+    final TestGesture held = await fixture.hold(tester);
+    fixture.speech.text('临时语音');
+    await fixture.drain(tester);
+    await tester.dragFrom(const Offset(70, 220), const Offset(170, 0));
+    await fixture.drain(tester);
+    expect(
+      find.byKey(const ValueKey<String>('assistant-android-sidebar')),
+      findsNothing,
+    );
+    expect(fixture.view(tester).voice.busy, isTrue);
+    await tester.binding.handlePopRoute();
+    await fixture.drain(tester);
+    await held.up();
+    fixture.speech.complete('迟到语音');
+    await fixture.drain(tester);
+    expect(fixture.submissions, isEmpty);
+    expect(fixture.view(tester).input.text, '原有文字');
+    expect(fixture.view(tester).voice.busy, isFalse);
+    await tester.dragFrom(const Offset(70, 220), const Offset(170, 0));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('assistant-android-sidebar')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   for (final Brightness brightness in Brightness.values) {
     testWidgets('Android改版 ${brightness.name} 原位键盘、草稿和侧栏关闭', (
       WidgetTester tester,

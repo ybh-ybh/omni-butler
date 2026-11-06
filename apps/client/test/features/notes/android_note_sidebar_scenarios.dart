@@ -46,6 +46,71 @@ Future<TaxonomyEntry> _sidebarTag(
 
 /// 五处安卓呈现与标签事务的生产路径回归。
 void androidSidebarTests() {
+  testWidgets('安卓笔记主体右滑打开侧栏且遮罩左滑关闭，输入入口不接管', (WidgetTester tester) async {
+    // Use the real retained note page and its original root sidebar route.
+    final _App app = await _mount(
+      tester,
+      seed: true,
+      initialLocation: '/notes',
+    );
+    await tester.dragFrom(const Offset(70, 400), const Offset(170, 0));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('android-notes-sidebar')), findsOneWidget);
+    expect(app.routerPath, '/notes');
+    await _capture(tester, app, 'sidebar-phone-body-swipe-open');
+    // The narrow uncovered strip must close the drawer without changing tabs.
+    await tester.dragFrom(const Offset(375, 200), const Offset(-180, 0));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('android-notes-sidebar')), findsNothing);
+    expect(app.routerPath, '/notes');
+    // The composer stays outside the gesture surface and preserves its tap/hold use.
+    await tester.drag(
+      find.byKey(const ValueKey('android-note-input-touch')),
+      const Offset(150, 0),
+    );
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('android-notes-sidebar')), findsNothing);
+    expect(app.routerPath, '/notes');
+    // Existing tap-to-close behavior still works after the scrim gains drag support.
+    await tester.dragFrom(const Offset(70, 400), const Offset(170, 0));
+    await _settle(tester);
+    await tester.tapAt(const Offset(375, 200));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('android-notes-sidebar')), findsNothing);
+    expect(tester.takeException(), isNull);
+    await _dispose(tester, app);
+  });
+
+  testWidgets('安卓笔记侧栏打开方式保留筛选且搜索覆盖时不穿透', (WidgetTester tester) async {
+    // Selecting a tag establishes state that opening gestures must not reset.
+    final _App app = await _mount(
+      tester,
+      seed: true,
+      initialLocation: '/notes',
+    );
+    await _sidebarOpen(tester);
+    await _sidebarTap(tester, find.byKey(const ValueKey('notes-tag-work')));
+    expect(
+      find.byKey(const ValueKey('android-note-card-weekly-note')),
+      findsNothing,
+    );
+    await tester.dragFrom(const Offset(70, 400), const Offset(170, 0));
+    await _settle(tester);
+    await tester.binding.handlePopRoute();
+    await _settle(tester);
+    expect(
+      find.byKey(const ValueKey('android-note-card-weekly-note')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const ValueKey('android-notes-search')));
+    await _settle(tester);
+    await tester.dragFrom(const Offset(70, 400), const Offset(170, 0));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('android-notes-sidebar')), findsNothing);
+    expect(tester.takeException(), isNull);
+    await _dispose(tester, app);
+  });
+
   testWidgets('安卓侧栏全部笔记分类展开、紧凑样式与快捷筛选', (tester) async {
     // The fixture covers one untagged note, one image note, and seeded audio.
     final _App app = await _mount(
@@ -892,13 +957,18 @@ void androidSidebarTests() {
   });
 
   testWidgets('Android侧栏改版 统计仅有记录月份、跨年闰日、月年位置与选日', (tester) async {
-    // 月统计从正式归档键聚合，不从创建时间或侧栏筛选推导。
+    // Fix all archive dates so the expected months never drift with the system date.
     final _App app = await _mount(
       tester,
-      seed: true,
       initialLocation: '/notes',
       prepareDatabase: (database) async {
-        for (final String day in ['2026-01-03', '2026-07-08', '2024-02-29']) {
+        // Cover a missing month, retained scrolling, and the cross-year leap day.
+        for (final String day in [
+          '2026-10-06',
+          '2026-01-03',
+          '2026-07-08',
+          '2024-02-29',
+        ]) {
           await NoteRepository(database).save(
             NoteDraft(
               id: day,

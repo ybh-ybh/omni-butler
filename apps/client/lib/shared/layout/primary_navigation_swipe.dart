@@ -34,7 +34,7 @@ enum PrimaryNavigationDestination {
   assistant,
 }
 
-/// 返回当前功能开关下可通过底栏和横滑访问的一级分支。
+/// Returns the enabled destinations available through bottom-tab selection.
 List<int> enabledPrimaryBranchIndices(FeaturePreference preference) {
   return <int>[
     PrimaryNavigationDestination.home.index,
@@ -44,80 +44,48 @@ List<int> enabledPrimaryBranchIndices(FeaturePreference preference) {
   ];
 }
 
-/// 子页面在内部横滑边界处使用的一级导航手势控制器。
-abstract interface class PrimaryNavigationSwipeController {
-  /// 由底部导航请求切换到指定一级分支。
+/// Coordinates guarded bottom-tab transitions without accepting drag gestures.
+abstract interface class PrimaryNavigationController {
+  /// Reports a pending exit guard or visual navigation transition.
+  bool get isTransitioning;
+
+  /// Requests a primary destination from the bottom navigation bar.
   void navigateToPrimaryDestination(PrimaryNavigationDestination destination);
 
-  /// 开始一级页面横滑。
-  void beginPrimarySwipe();
-
-  /// 使用本次手势的累计横向距离更新卡片位置。
-  void updatePrimarySwipe(double distance);
-
-  /// 根据离手速度完成切页或回弹。
-  void endPrimarySwipe(double velocity);
-
-  /// 取消当前一级页面横滑并回弹。
-  void cancelPrimarySwipe();
-
-  /// Restore the actual branch when a route exit guard rejects navigation.
+  /// Restores the actual branch after a route exit rejects navigation.
   void rejectPendingNavigation();
 }
 
-/// 在路由壳层与底部导航之间转发一级页面切换请求。
+/// Connects the route shell and bottom navigation without gesture ownership.
 class PrimaryNavigationCoordinator {
-  /// 当前已挂载的卡片导航控制器。
-  PrimaryNavigationSwipeController? _controller;
+  /// The currently mounted navigation controller.
+  PrimaryNavigationController? _controller;
 
-  /// 当前是否已有可接收底栏请求的导航控制器。
+  /// Reports whether a branch container can receive a navigation request.
   bool get isAttached => _controller != null;
 
-  /// 登记当前已挂载的一级导航控制器。
-  void attach(PrimaryNavigationSwipeController controller) {
+  /// Prevents an overlay from racing a guarded tab transition.
+  bool get isTransitioning => _controller?.isTransitioning ?? false;
+
+  /// Registers the mounted primary branch controller.
+  void attach(PrimaryNavigationController controller) {
     _controller = controller;
   }
 
-  /// 仅移除与当前登记值相同的一级导航控制器。
-  void detach(PrimaryNavigationSwipeController controller) {
-    if (identical(_controller, controller)) {
-      _controller = null;
-    }
+  /// Removes only the controller owned by the departing container.
+  void detach(PrimaryNavigationController controller) {
+    if (identical(_controller, controller)) _controller = null;
   }
 
-  /// 将底栏选择转发给当前卡片导航控制器。
+  /// Forwards an explicit bottom-tab selection.
   void navigateTo(PrimaryNavigationDestination destination) {
     _controller?.navigateToPrimaryDestination(destination);
   }
 
-  /// Reconcile a rejected asynchronous route exit with the visible branch.
+  /// Reconciles a rejected route exit with the retained visible branch.
   void rejectPendingNavigation() {
     _controller?.rejectPendingNavigation();
   }
-}
-
-/// 向待办和管理等内部分页提供一级横滑边界接力能力。
-class PrimaryNavigationSwipeScope extends InheritedWidget {
-  /// 当前一级导航手势控制器。
-  final PrimaryNavigationSwipeController controller;
-
-  /// 创建一级导航横滑作用域。
-  const PrimaryNavigationSwipeScope({
-    required this.controller,
-    required super.child,
-    super.key,
-  });
-
-  /// 返回当前上下文中的一级导航手势控制器。
-  static PrimaryNavigationSwipeController? maybeOf(BuildContext context) {
-    return context
-        .dependOnInheritedWidgetOfExactType<PrimaryNavigationSwipeScope>()
-        ?.controller;
-  }
-
-  /// 控制器在容器生命周期内保持稳定，无需通知依赖组件重建。
-  @override
-  bool updateShouldNotify(PrimaryNavigationSwipeScope oldWidget) => false;
 }
 
 /// 与统计卡片共用原生分页的目标判定与弹簧落位。
@@ -225,7 +193,7 @@ class _BoundedPageSwipeSimulation extends Simulation {
   }
 }
 
-/// 为待办象限和管理分区提供与一级导航一致的跟手卡片横滑。
+/// Provides local card paging without handing edge gestures to primary tabs.
 class NestedPageSwipeSurface extends StatefulWidget {
   /// 当前启用的内部页面数量。
   final int pageCount;
@@ -245,7 +213,7 @@ class NestedPageSwipeSurface extends StatefulWidget {
   /// 手势命中表面的测试标识。
   final Key surfaceKey;
 
-  /// 创建支持边界接力的内部卡片分页表面。
+  /// Creates a local pager whose first and last pages remain bounded.
   const NestedPageSwipeSurface({
     required this.pageCount,
     required this.pageBuilder,
@@ -261,7 +229,7 @@ class NestedPageSwipeSurface extends StatefulWidget {
   State<NestedPageSwipeSurface> createState() => _NestedPageSwipeSurfaceState();
 }
 
-/// 管理内部页面的跟手位移、吸附回弹与一级导航边界接力。
+/// Owns local page dragging and settling without changing primary routes.
 class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
     with SingleTickerProviderStateMixin {
   /// 卡片拖动时的最大缩小比例。
@@ -287,9 +255,6 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
 
   /// 内部目标页面方向，后一页为 1，前一页为 -1。
   int _targetDirection = 0;
-
-  /// 当前横滑是否已经接力给一级导航。
-  bool _delegatingToPrimary = false;
 
   /// 当前是否正在执行自动落位动画。
   bool _animating = false;
@@ -323,7 +288,6 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
       _dragOffset = 0;
       _rawDragDistance = 0;
       _targetDirection = 0;
-      _delegatingToPrimary = false;
       _gestureActive = false;
       _animating = false;
       // 外部切页在构建中发生，帧后再清除父导航偏移，避免构建期间更新祖先。
@@ -358,7 +322,7 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
 
   /// 将当前卡片位移转换为导航滑块使用的连续页偏移。
   void _notifyPageOffset() {
-    if (_delegatingToPrimary || _viewportWidth <= 0) {
+    if (_viewportWidth <= 0) {
       widget.onPageOffsetChanged?.call(null);
       return;
     }
@@ -396,51 +360,30 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
     }
     setState(() {
       _gestureActive = true;
-      _delegatingToPrimary = false;
       // 连续拖动从当前弹簧位置接手，避免吸附中途重新按下时跳回原位。
       _rawDragDistance = _dragOffset;
     });
     _notifyPageOffset();
   }
 
-  /// 累计横向拖动并更新内部卡片或一级导航卡片。
+  /// Updates only an existing neighboring local page, clamping at both ends.
   void _updateHorizontalDrag(DragUpdateDetails details) {
-    if (_animating || !_gestureActive || _viewportWidth <= 0) {
-      return;
-    }
+    if (_animating || !_gestureActive || _viewportWidth <= 0) return;
     _rawDragDistance += details.primaryDelta ?? 0;
-    if (_rawDragDistance == 0) {
-      if (_delegatingToPrimary) {
-        PrimaryNavigationSwipeScope.maybeOf(context)?.updatePrimarySwipe(0);
-      } else {
-        setState(() {
-          _dragOffset = 0;
-          _targetDirection = 0;
-        });
-        _notifyPageOffset();
-      }
-      return;
-    }
-    // 当前拖动指向的页面方向。
+    // The desired local direction never becomes a primary navigation request.
     final int direction = _rawDragDistance < 0 ? 1 : -1;
-    if (!_delegatingToPrimary && _targetDirection != direction) {
-      if (_targetChildForDirection(direction) == null) {
-        _targetDirection = 0;
-        _dragOffset = 0;
-        _delegatingToPrimary = true;
-        widget.onPageOffsetChanged?.call(null);
-        PrimaryNavigationSwipeScope.maybeOf(context)?.beginPrimarySwipe();
-      } else {
-        _targetDirection = direction;
-      }
-    }
-    if (_delegatingToPrimary) {
-      PrimaryNavigationSwipeScope.maybeOf(context)
-          ?.updatePrimarySwipe(_rawDragDistance);
-      return;
-    }
+    // Inspect the local index without constructing a hidden page on every move.
+    final int targetIndex = _displayedIndex + direction;
+    // An unavailable neighbor leaves the page stationary at its boundary.
+    final bool hasTarget =
+        _rawDragDistance != 0 &&
+        targetIndex >= 0 &&
+        targetIndex < widget.pageCount;
     setState(() {
-      _dragOffset = _targetDirection > 0
+      _targetDirection = hasTarget ? direction : 0;
+      _dragOffset = !hasTarget
+          ? 0
+          : direction > 0
           ? _rawDragDistance.clamp(-_viewportWidth, 0)
           : _rawDragDistance.clamp(0, _viewportWidth);
     });
@@ -455,11 +398,6 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
     // 手指离开时的横向速度，向右为正。
     final double velocity = details.primaryVelocity ?? 0;
     _gestureActive = false;
-    if (_delegatingToPrimary) {
-      PrimaryNavigationSwipeScope.maybeOf(context)?.endPrimarySwipe(velocity);
-      _resetSwipeState();
-      return;
-    }
     // 当前手势是否达到原生分页风格的提交条件。
     final bool shouldCommit = OmniPageSwipePhysics.shouldCommit(
       distance: _dragOffset,
@@ -479,17 +417,12 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
     unawaited(_animateBack(velocity: velocity));
   }
 
-  /// 取消当前横滑并让内部或一级导航卡片回弹。
+  /// Cancels the local drag and restores its current page.
   void _cancelHorizontalDrag() {
     if (_animating || !_gestureActive) {
       return;
     }
     _gestureActive = false;
-    if (_delegatingToPrimary) {
-      PrimaryNavigationSwipeScope.maybeOf(context)?.cancelPrimarySwipe();
-      _resetSwipeState();
-      return;
-    }
     unawaited(_animateBack());
   }
 
@@ -571,7 +504,6 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
       _dragOffset = 0;
       _rawDragDistance = 0;
       _targetDirection = 0;
-      _delegatingToPrimary = false;
       _gestureActive = false;
       _animating = false;
     });
@@ -643,7 +575,7 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
     );
   }
 
-  /// 构建带内部卡片动效和一级导航边界接力的手势表面。
+  /// Builds a local gesture surface with bounded card transitions.
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -687,7 +619,7 @@ class _NestedPageSwipeSurfaceState extends State<NestedPageSwipeSurface>
   }
 }
 
-/// Retained branch container with Android primary navigation gestures.
+/// Retains branch state while animating explicit Android bottom-tab choices.
 class PrimaryNavigationBranchContainer extends ConsumerStatefulWidget {
   /// 当前有状态导航壳层。
   final StatefulNavigationShell navigationShell;
@@ -698,7 +630,7 @@ class PrimaryNavigationBranchContainer extends ConsumerStatefulWidget {
   /// 与底栏共享的一级导航协调器。
   final PrimaryNavigationCoordinator coordinator;
 
-  /// Secondary pages retain their navigator without primary swipe handling.
+  /// Allows explicit tab navigation only while a primary destination is active.
   final bool primaryNavigationEnabled;
 
   /// 创建一级分支导航容器。
@@ -716,12 +648,12 @@ class PrimaryNavigationBranchContainer extends ConsumerStatefulWidget {
       _PrimaryNavigationBranchContainerState();
 }
 
-/// 管理 Android 跟手卡片动画与其他平台静态分支布局。
+/// Animates explicit Android tab selections while retaining inactive branches.
 class _PrimaryNavigationBranchContainerState
     extends ConsumerState<PrimaryNavigationBranchContainer>
     with SingleTickerProviderStateMixin
-    implements PrimaryNavigationSwipeController {
-  /// 卡片拖动时的最大缩小比例。
+    implements PrimaryNavigationController {
+  /// Maximum card scale change during a bottom-tab transition.
   static const double _cardScaleDelta = 0.015;
 
   /// 卡片拖动时的最大圆角。
@@ -742,35 +674,20 @@ class _PrimaryNavigationBranchContainerState
   /// 当前页面卡片的横向位移。
   double _dragOffset = 0;
 
-  /// 本次手势接手时的卡片位移，用于连续打断吸附时保持位置。
-  double _dragStartOffset = 0;
-
   /// 当前页面区域的可用宽度。
   double _viewportWidth = 0;
-
-  /// 外层通用横滑累计距离。
-  double _outerDragDistance = 0;
 
   /// 当前是否正在执行自动落位动画。
   bool _animating = false;
 
-  /// 当前是否已有一级横滑手势在进行。
-  bool _gestureActive = false;
-
   /// 当前容器主动触发且等待路由壳层确认的分支索引。
   int? _ownedNavigationTarget;
 
-  /// 用于忽略已被新手势打断的旧动画回调。
+  /// Invalidates animation callbacks superseded by newer route changes.
   int _animationEpoch = 0;
 
   /// Serialize draft saves and voice cancellation before changing branches.
   bool _exitGuardPending = false;
-
-  /// Only a successful save permits adopting a target midway through settling.
-  bool _noteExitApproved = false;
-
-  /// Mid-animation adoption cannot bypass assistant voice cancellation.
-  bool _assistantExitApproved = false;
 
   /// Invalidate pending saves after external navigation or route rejection.
   int _exitGuardEpoch = 0;
@@ -840,34 +757,16 @@ class _PrimaryNavigationBranchContainerState
     return enabledPrimaryBranchIndices(preference);
   }
 
-  /// 返回当前视觉分支指定方向上的相邻可见分支。
-  int? _adjacentBranch(int direction) {
-    // 当前可见一级分支索引。
-    final List<int> visibleIndices = _visibleBranchIndices;
-    // 当前视觉分支在可见顺序中的位置。
-    final int currentPosition = visibleIndices.indexOf(_displayedIndex);
-    if (currentPosition < 0) {
-      return null;
-    }
-    // 指定方向上的目标位置。
-    final int targetPosition = currentPosition + direction;
-    if (targetPosition < 0 || targetPosition >= visibleIndices.length) {
-      return null;
-    }
-    return visibleIndices[targetPosition];
-  }
+  /// Reports the complete save-and-animation interval to navigation controls.
+  @override
+  bool get isTransitioning =>
+      _exitGuardPending || _ownedNavigationTarget != null || _animating;
 
-  /// 由底栏请求目标分支，并在动画落位后统一更新路由与选中态。
+  /// Animates an explicit tab selection after preserving the outgoing draft.
   @override
   void navigateToPrimaryDestination(PrimaryNavigationDestination destination) {
-    if (!widget.primaryNavigationEnabled ||
-        _exitGuardPending ||
-        _ownedNavigationTarget != null ||
-        _animating ||
-        _gestureActive) {
-      return;
-    }
-    // 底栏请求进入的分支索引。
+    if (!widget.primaryNavigationEnabled || isTransitioning) return;
+    // The stable branch identity is independent of hidden optional tabs.
     final int targetIndex = destination.index;
     if (targetIndex == _displayedIndex ||
         !_visibleBranchIndices.contains(targetIndex)) {
@@ -876,131 +775,12 @@ class _PrimaryNavigationBranchContainerState
     unawaited(_animateRequestedBranchChange(targetIndex));
   }
 
-  /// 开始记录一级页面横滑。
-  @override
-  void beginPrimarySwipe() {
-    if (!widget.primaryNavigationEnabled ||
-        _exitGuardPending ||
-        _ownedNavigationTarget != null) {
-      return;
-    }
-    if (_animating) {
-      _animationEpoch += 1;
-      _settleController.stop();
-      _animating = false;
-      // A failed note save may still be animating back from beyond half a page.
-      final bool canAdoptTarget =
-          (_displayedIndex != PrimaryNavigationDestination.notes.index ||
-              (_noteExitApproved && !ref.read(noteEditorProvider).dirty)) &&
-          (_displayedIndex != PrimaryNavigationDestination.assistant.index ||
-              _assistantExitApproved);
-      if (canAdoptTarget &&
-          _targetIndex != null &&
-          _dragOffset.abs() > _viewportWidth / 2) {
-        // 交换逻辑基准而非重置画面，让后一次手势可以越过新页面继续前进。
-        final int previousIndex = _displayedIndex;
-        _displayedIndex = _targetIndex!;
-        _targetIndex = previousIndex;
-        _dragOffset += _targetDirection * _viewportWidth;
-        _targetDirection = -_targetDirection;
-        _ownedNavigationTarget = _displayedIndex;
-        _navigateToBranch(_displayedIndex);
-      }
-    }
-    setState(() {
-      _gestureActive = true;
-      // 边界阻尼将可见位移换回原始距离，避免下一帧重复施加阻尼。
-      _dragStartOffset = _targetIndex == null
-          ? _dragOffset / 0.12
-          : _dragOffset;
-    });
-  }
-
-  /// 使用累计距离更新当前卡片与真实相邻页面。
-  @override
-  void updatePrimarySwipe(double distance) {
-    if (!widget.primaryNavigationEnabled ||
-        _exitGuardPending ||
-        _animating ||
-        !_gestureActive ||
-        _viewportWidth <= 0) {
-      return;
-    }
-    // 累计距离基于接手位置，吸附期间重新拖动不会重置页面。
-    final double cumulativeDistance = _dragStartOffset + distance;
-    // 当前拖动指向的可见分支方向。
-    final int direction = cumulativeDistance < 0 ? 1 : -1;
-    // 当前拖动方向上的相邻一级分支。
-    final int? targetIndex = cumulativeDistance == 0
-        ? null
-        : _targetDirection == direction && _targetIndex != null
-        ? _targetIndex
-        : _adjacentBranch(direction);
-    setState(() {
-      _targetIndex = targetIndex;
-      _targetDirection = targetIndex == null ? 0 : direction;
-      if (targetIndex == null) {
-        // 一级导航首尾只提供轻微阻尼，不循环到另一端。
-        _dragOffset = (cumulativeDistance * 0.12).clamp(
-          -_viewportWidth * 0.08,
-          _viewportWidth * 0.08,
-        );
-      } else if (direction > 0) {
-        _dragOffset = cumulativeDistance.clamp(-_viewportWidth, 0);
-      } else {
-        _dragOffset = cumulativeDistance.clamp(0, _viewportWidth);
-      }
-    });
-  }
-
-  /// 根据离手速度提交一级切页或让卡片回弹。
-  @override
-  void endPrimarySwipe(double velocity) {
-    if (!widget.primaryNavigationEnabled ||
-        _exitGuardPending ||
-        _animating ||
-        !_gestureActive) {
-      return;
-    }
-    // 当前是否存在可以进入的真实相邻分支。
-    final bool canCommit = _targetIndex != null;
-    // 当前手势是否达到原生分页风格的提交条件。
-    final bool shouldCommit = OmniPageSwipePhysics.shouldCommit(
-      distance: _dragOffset,
-      velocity: velocity,
-      viewportWidth: _viewportWidth,
-      targetDirection: _targetDirection,
-      devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
-    );
-    _gestureActive = false;
-    if (canCommit && shouldCommit) {
-      unawaited(_commitPrimarySwipe(velocity));
-      return;
-    }
-    unawaited(_animateBack(velocity: canCommit ? velocity : 0));
-  }
-
-  /// 取消一级页面横滑并让卡片返回原位。
-  @override
-  void cancelPrimarySwipe() {
-    if (!widget.primaryNavigationEnabled ||
-        _exitGuardPending ||
-        _animating ||
-        !_gestureActive) {
-      return;
-    }
-    _gestureActive = false;
-    unawaited(_animateBack());
-  }
-
   /// Cancel stale animation callbacks while preserving navigator identities.
   void _resetTransition(int index) {
     _animationEpoch++;
     _exitGuardEpoch++;
     _settleController.stop();
     _exitGuardPending = false;
-    _noteExitApproved = false;
-    _assistantExitApproved = false;
     _ownedNavigationTarget = null;
     _completeTransition(index);
   }
@@ -1029,8 +809,6 @@ class _PrimaryNavigationBranchContainerState
     FocusManager.instance.primaryFocus?.unfocus();
     // This request owns the save gate until navigation invalidates its epoch.
     final int epoch = ++_exitGuardEpoch;
-    _noteExitApproved = false;
-    _assistantExitApproved = false;
     setState(() => _exitGuardPending = true);
     try {
       if (leavingAssistant) {
@@ -1047,10 +825,6 @@ class _PrimaryNavigationBranchContainerState
           mounted &&
           widget.primaryNavigationEnabled &&
           epoch == _exitGuardEpoch;
-      if (approved) {
-        _noteExitApproved = leavingNotes;
-        _assistantExitApproved = leavingAssistant;
-      }
       return approved;
     } catch (_) {
       if (mounted && leavingAssistant && epoch == _exitGuardEpoch) {
@@ -1065,45 +839,7 @@ class _PrimaryNavigationBranchContainerState
     }
   }
 
-  /// 提交当前手势目标并完成两张真实页面卡片的落位。
-  Future<void> _commitPrimarySwipe(double velocity) async {
-    // 当前手势已经解析出的目标分支。
-    final int? targetIndex = _targetIndex;
-    if (targetIndex == null || _targetDirection == 0) {
-      await _animateBack();
-      return;
-    }
-    // Only this visual transition may roll back after asynchronous exit work.
-    final int sourceIndex = _displayedIndex;
-    // External navigation or a reset invalidates the old gesture's ownership.
-    final int transitionEpoch = _animationEpoch;
-    // A denied guard differs from a request superseded by another route.
-    final bool approved = await _prepareBranchChange();
-    if (!mounted ||
-        !widget.primaryNavigationEnabled ||
-        sourceIndex != _displayedIndex ||
-        targetIndex != _targetIndex ||
-        transitionEpoch != _animationEpoch) {
-      return;
-    }
-    if (!approved) {
-      await _animateBack();
-      return;
-    }
-    // 一级目标页面落位动画是否完整结束。
-    final bool completed = await _animateOffsetTo(
-      -_targetDirection * _viewportWidth,
-      velocity: velocity,
-    );
-    if (!mounted || !completed) {
-      return;
-    }
-    _ownedNavigationTarget = targetIndex;
-    _navigateToBranch(targetIndex);
-    _completeTransition(targetIndex);
-  }
-
-  /// 为底栏请求播放卡片动画，并在落位后执行真实分支导航。
+  /// Plays the bottom-tab transition before committing the requested branch.
   Future<void> _animateRequestedBranchChange(int targetIndex) async {
     if (!await _prepareBranchChange() || !mounted) return;
     // 当前与目标分支在可见入口中的位置。
@@ -1119,7 +855,6 @@ class _PrimaryNavigationBranchContainerState
       _targetIndex = targetIndex;
       _targetDirection = targetPosition > currentPosition ? 1 : -1;
       _dragOffset = 0;
-      _dragStartOffset = 0;
     });
     // 底栏请求的目标页面落位动画是否完整结束。
     final bool completed = await _animateOffsetTo(
@@ -1133,7 +868,7 @@ class _PrimaryNavigationBranchContainerState
     _completeTransition(targetIndex);
   }
 
-  /// 为底栏点击或程序化跳转播放相同的卡片切换动画。
+  /// Reconciles external route changes using the existing tab animation.
   Future<void> _animateExternalBranchChange(int targetIndex) async {
     if (_ownedNavigationTarget == targetIndex) {
       _ownedNavigationTarget = null;
@@ -1141,8 +876,6 @@ class _PrimaryNavigationBranchContainerState
     }
     _exitGuardEpoch++;
     _exitGuardPending = false;
-    _noteExitApproved = false;
-    _assistantExitApproved = false;
     // 当前与目标分支在可见入口中的位置。
     final List<int> visibleIndices = _visibleBranchIndices;
     // 当前视觉分支的位置。
@@ -1160,7 +893,6 @@ class _PrimaryNavigationBranchContainerState
       _targetIndex = targetIndex;
       _targetDirection = targetPosition > currentPosition ? 1 : -1;
       _dragOffset = 0;
-      _dragStartOffset = 0;
     });
     // 外部路由目标页面落位动画是否完整结束。
     final bool completed = await _animateOffsetTo(
@@ -1196,69 +928,34 @@ class _PrimaryNavigationBranchContainerState
     context.go(resolvedSection.route);
   }
 
-  /// 将当前卡片平滑恢复到原位。
-  Future<void> _animateBack({double velocity = 0}) async {
-    // 一级页面回弹动画是否完整结束。
-    final bool completed = await _animateOffsetTo(0, velocity: velocity);
-    if (!mounted || !completed) {
-      return;
-    }
-    setState(() {
-      _targetIndex = null;
-      _targetDirection = 0;
-      _dragStartOffset = 0;
-    });
-  }
-
-  /// 将当前卡片位移动画到指定位置。
-  Future<bool> _animateOffsetTo(double targetOffset, {double? velocity}) async {
-    if (!mounted) {
-      return false;
-    }
+  /// Animates only explicit tab requests using the existing panel timing.
+  Future<bool> _animateOffsetTo(double targetOffset) async {
+    if (!mounted) return false;
     if (_reduceMotion || _dragOffset == targetOffset) {
       setState(() => _dragOffset = targetOffset);
       return true;
     }
-    // 本轮动画的唯一序号。
+    // Late animation completion cannot override a newer external route.
     final int animationEpoch = ++_animationEpoch;
     _animating = true;
     try {
-      if (velocity == null) {
-        // 底栏点击没有离手速度，保留原有程序化切换时长。
-        _settleController.value = _dragOffset;
-        await _settleController
-            .animateTo(
-              targetOffset,
-              duration: OmniMotion.panel,
-              curve: OmniMotion.standardCurve,
-            )
-            .orCancel;
-      } else {
-        // 手势松手直接承接当前位移与速度，不再套用固定时长缓动。
-        await _settleController
-            .animateWith(
-              OmniPageSwipePhysics.createSettlingSimulation(
-                offset: _dragOffset,
-                targetOffset: targetOffset,
-                velocity: velocity,
-                viewportWidth: _viewportWidth,
-                targetDirection: _targetDirection,
-                devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
-              ),
-            )
-            .orCancel;
-      }
+      _settleController.value = _dragOffset;
+      await _settleController
+          .animateTo(
+            targetOffset,
+            duration: OmniMotion.panel,
+            curve: OmniMotion.standardCurve,
+          )
+          .orCancel;
       return animationEpoch == _animationEpoch;
     } on TickerCanceled {
       return false;
     } finally {
-      if (animationEpoch == _animationEpoch) {
-        _animating = false;
-      }
+      if (animationEpoch == _animationEpoch) _animating = false;
     }
   }
 
-  /// 清理切换状态并让目标分支成为完整展示页面。
+  /// Clears the completed transition while retaining the target navigator.
   void _completeTransition(int targetIndex) {
     if (!mounted) {
       return;
@@ -1268,39 +965,11 @@ class _PrimaryNavigationBranchContainerState
       _targetIndex = null;
       _targetDirection = 0;
       _dragOffset = 0;
-      _dragStartOffset = 0;
-      _gestureActive = false;
       _animating = false;
-      _noteExitApproved = false;
-      _assistantExitApproved = false;
       if (widget.navigationShell.currentIndex == targetIndex) {
         _ownedNavigationTarget = null;
       }
     });
-  }
-
-  /// 开始外层页面的通用横向拖动。
-  void _startOuterDrag(DragStartDetails details) {
-    _outerDragDistance = 0;
-    beginPrimarySwipe();
-  }
-
-  /// 累计外层页面横向拖动并刷新卡片。
-  void _updateOuterDrag(DragUpdateDetails details) {
-    _outerDragDistance += details.primaryDelta ?? 0;
-    updatePrimarySwipe(_outerDragDistance);
-  }
-
-  /// 根据外层页面离手速度完成切换。
-  void _finishOuterDrag(DragEndDetails details) {
-    endPrimarySwipe(details.primaryVelocity ?? 0);
-    _outerDragDistance = 0;
-  }
-
-  /// 取消外层页面横向拖动。
-  void _cancelOuterDrag() {
-    cancelPrimarySwipe();
-    _outerDragDistance = 0;
   }
 
   /// 构建保留状态但不参与布局、绘制与语义的非活动分支。
@@ -1343,7 +1012,7 @@ class _PrimaryNavigationBranchContainerState
     return Positioned.fill(
       key: ValueKey<String>('primary-navigation-positioned-$index'),
       child: IgnorePointer(
-        ignoring: !current || _gestureActive || _animating || _exitGuardPending,
+        ignoring: !current || _animating || _exitGuardPending,
         child: ExcludeSemantics(
           excluding: !current,
           child: TickerMode(
@@ -1390,10 +1059,10 @@ class _PrimaryNavigationBranchContainerState
     );
   }
 
-  /// 构建 Android 卡片横滑层或其他平台静态分支层。
+  /// Builds retained Android tab transitions without an outer drag recognizer.
   @override
   Widget build(BuildContext context) {
-    // 监听功能开关，使可横滑分支与底栏保持一致。
+    // Keep available click destinations synchronized with feature preferences.
     ref.watch(featurePreferenceProvider);
     // 当前是否启用 Android 紧凑导航动效。
     final bool androidCompact =
@@ -1413,44 +1082,26 @@ class _PrimaryNavigationBranchContainerState
             if (index != _displayedIndex && index != targetIndex)
               _buildInactiveBranch(index),
         ];
-        return PrimaryNavigationSwipeScope(
-          controller: this,
-          child: GestureDetector(
-            key: const ValueKey<String>('primary-navigation-swipe-surface'),
-            behavior: HitTestBehavior.translucent,
-            onHorizontalDragStart: widget.primaryNavigationEnabled
-                ? _startOuterDrag
-                : null,
-            onHorizontalDragUpdate: widget.primaryNavigationEnabled
-                ? _updateOuterDrag
-                : null,
-            onHorizontalDragEnd: widget.primaryNavigationEnabled
-                ? _finishOuterDrag
-                : null,
-            onHorizontalDragCancel: widget.primaryNavigationEnabled
-                ? _cancelOuterDrag
-                : null,
-            child: ColoredBox(
-              color: OmniColors.of(context).canvas,
-              child: ClipRect(
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: <Widget>[
-                    ...inactiveBranches,
-                    if (targetIndex != null)
-                      _buildVisibleBranch(
-                        index: targetIndex,
-                        current: false,
-                        width: constraints.maxWidth,
-                      ),
-                    _buildVisibleBranch(
-                      index: _displayedIndex,
-                      current: true,
-                      width: constraints.maxWidth,
-                    ),
-                  ],
+        return ColoredBox(
+          key: const ValueKey<String>('primary-navigation-surface'),
+          color: OmniColors.of(context).canvas,
+          child: ClipRect(
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                ...inactiveBranches,
+                if (targetIndex != null)
+                  _buildVisibleBranch(
+                    index: targetIndex,
+                    current: false,
+                    width: constraints.maxWidth,
+                  ),
+                _buildVisibleBranch(
+                  index: _displayedIndex,
+                  current: true,
+                  width: constraints.maxWidth,
                 ),
-              ),
+              ],
             ),
           ),
         );

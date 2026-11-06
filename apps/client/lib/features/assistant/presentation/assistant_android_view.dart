@@ -20,6 +20,7 @@ import 'package:omni_butler/features/assistant/presentation/assistant_loading_in
 import 'package:omni_butler/features/assistant/presentation/assistant_recording_overlay.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_voice_input_target.dart';
 import 'package:omni_butler/features/assistant/presentation/assistant_windows_tokens.dart';
+import 'package:omni_butler/shared/layout/android_sidebar_swipe_target.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 
 /// Android presentation keeps the existing chat and voice ownership intact.
@@ -115,6 +116,11 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
   /// Anchor the root overlay to the actual keyboard-safe composer geometry.
   final GlobalKey _composerAnchor = GlobalKey(
     debugLabel: 'assistant-composer-anchor',
+  );
+
+  /// Excludes all composer controls when a full-page connection surface overlays them.
+  final GlobalKey _composerRegion = GlobalKey(
+    debugLabel: 'assistant-composer-gesture-exclusion',
   );
 
   /// The overlay is presentation-only and never creates a second speech session.
@@ -405,6 +411,12 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
 
   /// Opens history after synchronously invalidating speech and hiding the IME.
   void _openSidebar() {
+    // Hidden retained branches and repeated gestures cannot reopen history.
+    final GoRouter? router = GoRouter.maybeOf(context);
+    if (_drawerOpen ||
+        (router != null && router.state.uri.path != '/assistant')) {
+      return;
+    }
     widget.inputFocus.unfocus();
     if (_pointer != null) {
       unawaited(_cancelPress());
@@ -1250,7 +1262,28 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
         },
       );
 
-  /// The outer route performs keyboard avoidance once for the whole workspace.
+  /// Keeps composer, attachment controls and hold-to-talk outside swipe opening.
+  Widget _sidebarSwipeBody(Widget child) => AndroidSidebarSwipeTarget(
+    key: const ValueKey<String>('assistant-sidebar-swipe'),
+    sidebarWidth: math.min(MediaQuery.sizeOf(context).width * .8, 360),
+    enabled: !_drawerOpen && _drawer.value == 0,
+    canStartAt: _outsideComposer,
+    onOpen: _openSidebar,
+    child: child,
+  );
+
+  /// Connection/loading overlays must not claim the composer underneath them.
+  bool _outsideComposer(Offset position) {
+    // The real composer bounds include attachments and keyboard-dependent height.
+    final RenderObject? render = _composerRegion.currentContext
+        ?.findRenderObject();
+    if (render is! RenderBox || !render.hasSize) return true;
+    return !(render.localToGlobal(Offset.zero) & render.size).contains(
+      position,
+    );
+  }
+
+  /// Adds opening gestures to the main body without changing keyboard avoidance.
   Widget _workspace(AsyncValue<Map<String, dynamic>?> settings) =>
       LayoutBuilder(
         builder: (context, constraints) {
@@ -1298,11 +1331,12 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
                   Expanded(
                     child: connectionStatus
                         ? const SizedBox.expand()
-                        : _messages(),
+                        : _sidebarSwipeBody(_messages()),
                   ),
                   if (widget.chat.busy && !connectionStatus)
                     const LinearProgressIndicator(),
                   ConstrainedBox(
+                    key: _composerRegion,
                     constraints: BoxConstraints(
                       maxHeight: constraints.maxHeight * .5,
                     ),
@@ -1314,7 +1348,9 @@ class _AssistantAndroidViewState extends ConsumerState<AssistantAndroidView>
                 ],
               ),
               if (connectionStatus)
-                Positioned.fill(child: _connectionStatus(settings)),
+                Positioned.fill(
+                  child: _sidebarSwipeBody(_connectionStatus(settings)),
+                ),
             ],
           );
         },

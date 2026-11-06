@@ -17,6 +17,8 @@ import 'package:omni_butler/features/todos/presentation/todo_mobile_dashboard.da
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/android_more_navigation_test_helpers.dart';
+
 /// 验证真实待办页面的视口、分页恢复与手势接管。
 void main() {
   _todoTest('胶囊导航仅展开选中项且背景对齐实际点击区域', (WidgetTester tester) async {
@@ -359,9 +361,9 @@ void main() {
     }
   });
 
-  _todoTest('冷启动从首页入口进入待办时全部标签完整可见', (WidgetTester tester) async {
+  _todoTest('冷启动从更多入口进入待办时全部标签完整可见', (WidgetTester tester) async {
     await _startTodos(tester, openTodos: false);
-    await tester.tap(find.byKey(const ValueKey<String>('home-shortcut-todos')));
+    await openAndroidMoreDestination(tester, 'todos');
     await tester.pumpAndSettle();
     expect(_selected(tester), isNull);
     expect(_pager(tester).page, 0);

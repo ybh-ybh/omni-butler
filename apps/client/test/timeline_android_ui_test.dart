@@ -19,6 +19,8 @@ import 'package:omni_butler/shared/ui/omni_page_header.dart';
 import 'package:omni_butler/shared/ui/omni_sliding_segmented_control.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/android_more_navigation_test_helpers.dart';
+
 /// 验证 Android 紧凑时间页的滑块与悬浮拆分按钮。
 void main() {
   testWidgets('Android 时间页使用顶部滑块和原有悬浮拆分按钮', (WidgetTester tester) async {
@@ -662,9 +664,7 @@ Future<_TimelineAndroidTestContext> _pumpAndroidTimeline(
   );
   await tester.pumpAndSettle();
   if (useHomeShortcut) {
-    await tester.tap(
-      find.byKey(const ValueKey<String>('home-shortcut-timeline')),
-    );
+    await openAndroidMoreDestination(tester, 'timeline');
     await tester.pumpAndSettle();
   }
   return _TimelineAndroidTestContext(

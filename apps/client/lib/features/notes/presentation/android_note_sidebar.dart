@@ -72,41 +72,47 @@ String? _androidSidebarFilterLabel(NoteSearchFilter filter) =>
 
 /// 根抽屉与二级页面独立，不让横滑传给一级导航。
 extension _AndroidNotesSidebar on _AndroidNotesViewState {
-  /// 退出后保留抽屉滚动及点选来源。
+  /// Reuses one sidebar route and preserves its scroll and selection identity.
   Future<void> _showSidebar() async {
-    // 数据源固定到本次抽屉，异步结果不作用于另一资料库。
+    if (_sidebarOpen ||
+        _editorOpen ||
+        _opening ||
+        (_router != null && _router!.state.uri.path != '/notes')) {
+      return;
+    }
+    _update(() => _sidebarOpen = true);
+    // Keep async sidebar choices bound to the source that opened this route.
     final AppDatabase source = ref.read(appDatabaseProvider);
-    // 原过滤只用于选中外观。
+    // The current filter only controls the existing selection appearance.
     final _AndroidSidebarSelection? selection =
-        await Navigator.of(
-          context,
-          rootNavigator: true,
-        ).push<_AndroidSidebarSelection>(
-          _AndroidSidebarRoute(
-            builder: (_) => _AndroidNoteSidebar(
-              source: source,
-              filter: _filter,
-              selectedDay: _day,
-              recycle: _recycle,
-              controller: _sidebarScroll,
-              origin: _sidebarOrigin,
-              onOrigin: (value) => _sidebarOrigin = value,
-              onDeleted: (id) {
-                if (!mounted ||
-                    !identical(ref.read(appDatabaseProvider), source)) {
-                  return;
-                }
-                if (_filter.tagIds.contains(id)) {
-                  _update(() {
-                    _filter = const NoteSearchFilter.empty();
-                    _sidebarOrigin = 'all';
-                  });
-                }
-              },
-            ),
-            reduced: OmniMotion.reduce(context),
-          ),
-        );
+        await Navigator.of(context, rootNavigator: true)
+            .push<_AndroidSidebarSelection>(
+              _AndroidSidebarRoute(
+                builder: (_) => _AndroidNoteSidebar(
+                  source: source,
+                  filter: _filter,
+                  selectedDay: _day,
+                  recycle: _recycle,
+                  controller: _sidebarScroll,
+                  origin: _sidebarOrigin,
+                  onOrigin: (value) => _sidebarOrigin = value,
+                  onDeleted: (id) {
+                    if (!mounted ||
+                        !identical(ref.read(appDatabaseProvider), source)) {
+                      return;
+                    }
+                    if (_filter.tagIds.contains(id)) {
+                      _update(() {
+                        _filter = const NoteSearchFilter.empty();
+                        _sidebarOrigin = 'all';
+                      });
+                    }
+                  },
+                ),
+                reduced: OmniMotion.reduce(context),
+              ),
+            )
+            .whenComplete(() => _update(() => _sidebarOpen = false));
     if (!mounted ||
         selection == null ||
         !identical(ref.read(appDatabaseProvider), source)) {
@@ -244,8 +250,9 @@ class _AndroidSidebarRoute extends PopupRoute<_AndroidSidebarSelection> {
   @override
   String get barrierLabel => '关闭笔记侧栏';
 
-  /// 手势在当前位置接管，避免套第二段曲线发生跳变。
+  /// Takes over the current visual position without applying its curve twice.
   void _beginDrag() {
+    if (!isCurrent) return;
     controller!.stop();
     if (!_direct) {
       _direct = true;
@@ -260,34 +267,40 @@ class _AndroidSidebarRoute extends PopupRoute<_AndroidSidebarSelection> {
     curve: Curves.easeOutCubic,
   );
 
-  /// 横向拖动只操作抽屉，不传给一级导航。
+  /// Handles closing drags over both the sidebar and its adjacent scrim.
   @override
   Widget buildPage(
     BuildContext context,
     Animation<double> animation,
     Animation<double> secondaryAnimation,
   ) {
-    // 屏幕旋转后按新宽度重算抽屉和手势比例。
+    // Recompute geometry after rotation while retaining the current route.
     final double width = math.min(MediaQuery.sizeOf(context).width * .82, 360);
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: SizedBox(
-        width: width,
-        height: double.infinity,
-        child: GestureDetector(
-          excludeFromSemantics: true,
-          onHorizontalDragStart: (_) => _beginDrag(),
-          onHorizontalDragUpdate: (details) => controller!.value =
-              (controller!.value + details.delta.dx / width).clamp(0, 1),
-          onHorizontalDragEnd: (details) {
-            if (controller!.value < .72 ||
-                details.velocity.pixelsPerSecond.dx < -500) {
-              Navigator.pop(context);
-            } else {
-              _restore();
-            }
-          },
-          onHorizontalDragCancel: _restore,
+    return GestureDetector(
+      key: const ValueKey('android-notes-sidebar-drag'),
+      behavior: HitTestBehavior.translucent,
+      excludeFromSemantics: true,
+      onHorizontalDragStart: (_) => _beginDrag(),
+      onHorizontalDragUpdate: (details) {
+        if (!isCurrent) return;
+        controller!.value = (controller!.value + details.delta.dx / width)
+            .clamp(0, 1);
+      },
+      onHorizontalDragEnd: (details) {
+        if (!isCurrent) return;
+        if (controller!.value < .72 ||
+            details.velocity.pixelsPerSecond.dx < -500) {
+          Navigator.pop(context);
+        } else {
+          _restore();
+        }
+      },
+      onHorizontalDragCancel: _restore,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: SizedBox(
+          width: width,
+          height: double.infinity,
           child: builder(context),
         ),
       ),

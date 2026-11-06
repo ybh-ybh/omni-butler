@@ -19,6 +19,8 @@ import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/android_more_navigation_test_helpers.dart';
+
 /// Fails one user-requested quote rotation while retaining the real database.
 class _FailingQuoteChangeDatabase extends AppDatabase {
   /// Whether the next rotation should fail before persistence.
@@ -347,9 +349,12 @@ void main() {
     });
   }
 
-  testWidgets('首页快捷入口同排且名言单击轮换长按打开全屏库', (WidgetTester tester) async {
+  testWidgets('更多快捷入口同排且首页名言单击轮换长按打开全屏库', (WidgetTester tester) async {
     // Use the real mobile page to verify touch targets and header placement.
     final _HomeTestApp app = await _pumpHome(tester);
+    expect(_key('home-mobile-shortcuts'), findsNothing);
+    expect(_key('more-shortcut-todos'), findsNothing);
+    await openAndroidMore(tester);
     // Keep the shortcut order independent from optional feature route choices.
     final List<String> ids = <String>[
       'todos',
@@ -357,25 +362,28 @@ void main() {
       'management',
       'settings',
     ];
-    // All ordinary-size shortcuts occupy one row below the quote.
+    // All ordinary-size shortcuts occupy one row directly above navigation.
     final List<Rect> bounds = ids
-        .map((String id) => tester.getRect(_key('home-shortcut-$id')))
+        .map((String id) => tester.getRect(_key('more-shortcut-$id')))
         .toList();
     expect(
-      bounds.first.top,
-      greaterThan(tester.getRect(_key('home-quote-card')).bottom),
+      tester.getRect(_key('android-more-panel')).bottom,
+      closeTo(tester.getRect(_key('compact-navigation')).top, 0.1),
     );
     for (final Rect boundsForEntry in bounds) {
       expect(boundsForEntry.size.shortestSide, greaterThanOrEqualTo(48));
       expect(
         boundsForEntry.top,
-        closeTo(tester.getRect(_key('home-shortcut-todos')).top, 0.1),
+        closeTo(tester.getRect(_key('more-shortcut-todos')).top, 0.1),
       );
     }
     expect(
       bounds.map((Rect rect) => rect.left),
       orderedEquals(bounds.map((Rect rect) => rect.left).toList()..sort()),
     );
+    await tester.tap(_key('navigation-more'));
+    await tester.pumpAndSettle();
+    expect(_key('android-more-panel'), findsNothing);
     expect(find.byTooltip('知序助手'), findsNothing);
     expect(find.byTooltip('名言库'), findsNothing);
     expect(find.byTooltip('设置横幅背景'), findsNothing);
@@ -427,7 +435,7 @@ void main() {
     await _disposeHome(tester, app);
   });
 
-  testWidgets('320宽双倍字号的快捷入口使用两列且不裁剪文字', (WidgetTester tester) async {
+  testWidgets('320宽双倍字号的更多快捷入口使用两列且不裁剪文字', (WidgetTester tester) async {
     // Large system text must reflow without reducing its scale.
     final _HomeTestApp app = await _pumpHome(
       tester,
@@ -435,14 +443,15 @@ void main() {
       textScale: 2,
       cards: const <String>['todos'],
     );
+    await openAndroidMore(tester);
     // Measure the actual laid-out controls rather than a breakpoint flag.
-    final Rect todos = tester.getRect(_key('home-shortcut-todos'));
+    final Rect todos = tester.getRect(_key('more-shortcut-todos'));
     // The second shortcut stays in the first row.
-    final Rect timeline = tester.getRect(_key('home-shortcut-timeline'));
+    final Rect timeline = tester.getRect(_key('more-shortcut-timeline'));
     // The remaining shortcuts wrap onto a second row.
-    final Rect management = tester.getRect(_key('home-shortcut-management'));
+    final Rect management = tester.getRect(_key('more-shortcut-management'));
     // Settings keeps the same second-row baseline.
-    final Rect settings = tester.getRect(_key('home-shortcut-settings'));
+    final Rect settings = tester.getRect(_key('more-shortcut-settings'));
     expect(todos.top, closeTo(timeline.top, 0.1));
     expect(management.top, greaterThanOrEqualTo(todos.bottom));
     expect(management.top, closeTo(settings.top, 0.1));
@@ -453,11 +462,14 @@ void main() {
     await _disposeHome(tester, app);
   });
 
-  testWidgets('隐藏名言仍显示快捷入口且功能开关即时过滤', (WidgetTester tester) async {
+  testWidgets('隐藏名言不留首页占位且更多入口按功能开关即时过滤', (WidgetTester tester) async {
     // Feature shortcuts are independent from the optional home cards.
     final _HomeTestApp app = await _pumpHome(tester, cards: const <String>[]);
     expect(_key('home-quote-card'), findsNothing);
-    expect(_key('home-shortcut-settings'), findsOneWidget);
+    expect(_key('home-mobile-header'), findsNothing);
+    expect(_key('more-shortcut-settings'), findsNothing);
+    await openAndroidMore(tester);
+    expect(_key('more-shortcut-settings'), findsOneWidget);
     // Toggle existing preferences through their production controller.
     final FeaturePreferenceController preference = app.container.read(
       featurePreferenceProvider.notifier,
@@ -467,13 +479,13 @@ void main() {
     await preference.setFeatureEnabled(AppFeature.inventory, false);
     await preference.setFeatureEnabled(AppFeature.memberships, false);
     await tester.pumpAndSettle();
-    expect(_key('home-shortcut-todos'), findsNothing);
-    expect(_key('home-shortcut-timeline'), findsNothing);
-    expect(_key('home-shortcut-management'), findsOneWidget);
+    expect(_key('more-shortcut-todos'), findsNothing);
+    expect(_key('more-shortcut-timeline'), findsNothing);
+    expect(_key('more-shortcut-management'), findsOneWidget);
     await preference.setFeatureEnabled(AppFeature.events, false);
     await tester.pumpAndSettle();
-    expect(_key('home-shortcut-management'), findsNothing);
-    expect(_key('home-shortcut-settings').hitTestable(), findsOneWidget);
+    expect(_key('more-shortcut-management'), findsNothing);
+    expect(_key('more-shortcut-settings').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
     await _disposeHome(tester, app);
   });
@@ -772,7 +784,7 @@ void main() {
       closeTo(tester.getTopLeft(_key('home-mobile-header')).dy + 8, 0.1),
     );
     await _selectModule(tester, 'timeStatus');
-    await tester.tap(_key('home-shortcut-settings'));
+    await openAndroidMoreDestination(tester, 'settings');
     await tester.pumpAndSettle();
     expect(_currentPath(app), '/settings');
     expect(find.text('更多'), findsNothing);
@@ -816,7 +828,7 @@ void main() {
         textScale: 1.5,
         themeMode: themeMode,
       );
-      await tester.tap(_key('home-shortcut-settings'));
+      await openAndroidMoreDestination(tester, 'settings');
       await tester.pumpAndSettle();
       await tester.tap(_key('android-settings-home'));
       await tester.pumpAndSettle();
@@ -989,8 +1001,9 @@ void main() {
     // Capture a nonzero position rather than merely asserting retained widgets.
     final double homeOffsetBeforeFeature = homeScroll.offset;
     expect(homeOffsetBeforeFeature, greaterThan(0));
-    expect(_key('home-shortcut-todos').hitTestable(), findsOneWidget);
-    await tester.tap(_key('home-shortcut-todos'));
+    await openAndroidMore(tester);
+    expect(_key('more-shortcut-todos').hitTestable(), findsOneWidget);
+    await tester.tap(_key('more-shortcut-todos'));
     await tester.pumpAndSettle();
     expect(_currentPath(app), '/todos');
     await tester.binding.handlePopRoute();

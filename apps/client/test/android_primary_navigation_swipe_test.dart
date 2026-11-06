@@ -19,7 +19,7 @@ import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/shared/layout/primary_navigation_swipe.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 验证 Android 紧凑布局的全局卡片式横滑导航。
+/// Verifies click-only primary navigation and independent local swipe surfaces.
 void main() {
   test('分页吸附要求慢拖越过半页且快速滑动方向一致', () {
     expect(
@@ -60,76 +60,92 @@ void main() {
     );
   });
 
-  testWidgets('三个一级页面双向切换且拖动时展示真实卡片动效', (WidgetTester tester) async {
-    // 当前测试使用的应用环境。
+  testWidgets('首页笔记和 AI 的真实左右滑动不切换一级页面', (WidgetTester tester) async {
+    // Every gesture uses the production routing shell and real hit testing.
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
       tester,
     );
-    expect(_currentPath(app.container), '/home');
-
-    // Only the three core destinations occupy the Android navigation bar.
-    for (final String path in <String>['home', 'notes', 'assistant']) {
-      expect(find.byKey(ValueKey<String>('navigation-/$path')), findsOneWidget);
+    // Each branch retains its stable route identity despite horizontal input.
+    for (final String path in <String>['/home', '/notes', '/assistant']) {
+      await tester.tap(find.byKey(ValueKey<String>('navigation-$path')));
+      await tester.pumpAndSettle();
+      expect(_currentPath(app.container), path);
+      await _swipePrimary(tester, -250, velocity: -1200);
+      expect(_currentPath(app.container), path);
+      await _swipePrimary(tester, 250, velocity: 1200);
+      expect(_currentPath(app.container), path);
+      // Newly supported local sidebars close before another bottom-tab choice.
+      if (find
+          .byKey(const ValueKey('android-notes-sidebar'))
+          .evaluate()
+          .isNotEmpty) {
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+      }
+      if (find
+          .byKey(const ValueKey('assistant-sidebar-close'))
+          .evaluate()
+          .isNotEmpty) {
+        await _tapVisible(
+          tester,
+          find.byKey(const ValueKey('assistant-sidebar-close')),
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(_currentPath(app.container), path);
     }
-    for (final String path in <String>[
-      'todos',
-      'timeline',
-      'inventory',
-      'settings',
-    ]) {
-      expect(find.byKey(ValueKey<String>('navigation-/$path')), findsNothing);
-    }
-    // Inspect the shared controller used by real primary gesture surfaces.
-    final PrimaryNavigationSwipeController controller = _primaryController(
-      tester,
+    expect(
+      find.byKey(const ValueKey('primary-navigation-swipe-surface')),
+      findsNothing,
     );
-    controller.beginPrimarySwipe();
-    controller.updatePrimarySwipe(-96);
-    await tester.pump();
-
-    // 当前时间卡片的缩放变换。
-    final Transform currentScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-0')),
-    );
-    // 正在进入的笔记卡片缩放变换。
-    final Transform targetScale = tester.widget<Transform>(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-3')),
-    );
-    // 当前时间卡片的物理外观。
-    final PhysicalModel currentCard = tester.widget<PhysicalModel>(
-      find.byKey(const ValueKey<String>('primary-navigation-card-0')),
-    );
-    expect(currentScale.transform.storage[0], lessThan(1));
-    expect(currentScale.transform.storage[0], greaterThan(0.985));
-    expect(targetScale.transform.storage[0], greaterThan(0.985));
-    expect(currentCard.elevation, greaterThan(0));
-    expect(currentCard.borderRadius, isNot(BorderRadius.zero));
-    expect(_currentPath(app.container), '/home');
-
-    controller.updatePrimarySwipe(-256);
-    controller.endPrimarySwipe(0);
-    await tester.pumpAndSettle();
-    expect(_currentPath(app.container), '/notes');
-    await _swipePrimary(tester, -220);
-    expect(_currentPath(app.container), '/assistant');
-    // The assistant is the final destination and does not wrap to home.
-    await _swipePrimary(tester, -220);
-    expect(_currentPath(app.container), '/assistant');
-
-    // Reverse navigation visits only the two remaining primary destinations.
-    for (final String expectedPath in <String>['/notes', '/home']) {
-      await _swipePrimary(tester, 220);
-      expect(_currentPath(app.container), expectedPath);
-    }
-    // 首页到达首端后不会循环到更多页。
-    await _swipePrimary(tester, 220);
-    expect(_currentPath(app.container), '/home');
-
+    expect(tester.takeException(), isNull);
     await _disposePrimaryNavigationApp(tester, app);
   });
 
-  testWidgets('短拖回弹、底栏同款动画并跳过已关闭入口', (WidgetTester tester) async {
-    // Disabling notes leaves home and the assistant as primary destinations.
+  testWidgets('底栏点击保持双向卡片动效及导航忙碌状态', (WidgetTester tester) async {
+    // The shared coordinator exposes the complete transition ownership interval.
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+    );
+    // The mounted branch container owns both tab animation and exit protection.
+    final PrimaryNavigationCoordinator coordinator = tester
+        .widget<PrimaryNavigationBranchContainer>(
+          find.byType(PrimaryNavigationBranchContainer),
+        )
+        .coordinator;
+    expect(coordinator.isTransitioning, isFalse);
+    await tester.tap(find.byKey(const ValueKey('navigation-/notes')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(coordinator.isTransitioning, isTrue);
+    expect(_currentPath(app.container), '/home');
+    expect(_primaryOffset(tester, 0), inExclusiveRange(-390, 0));
+    // The transition still uses the original scale, corner and elevation treatment.
+    final Transform scale = tester.widget<Transform>(
+      find.byKey(const ValueKey('primary-navigation-scale-0')),
+    );
+    // This physical surface is the actual displayed source branch.
+    final PhysicalModel card = tester.widget<PhysicalModel>(
+      find.byKey(const ValueKey('primary-navigation-card-0')),
+    );
+    expect(scale.transform.storage[0], inExclusiveRange(.985, 1));
+    expect(card.elevation, greaterThan(0));
+    expect(card.borderRadius, isNot(BorderRadius.zero));
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/notes');
+    expect(coordinator.isTransitioning, isFalse);
+    await tester.tap(find.byKey(const ValueKey('navigation-/home')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(_primaryOffset(tester, 3), inExclusiveRange(0, 390));
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/home');
+    expect(coordinator.isTransitioning, isFalse);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
+  testWidgets('关闭可选功能后点击仍正常且快滑不会绕过底栏', (WidgetTester tester) async {
+    // Disabling notes leaves home and AI as the available primary destinations.
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
       tester,
       preferences: <String, Object>{
@@ -139,140 +155,19 @@ void main() {
         'features.notes.enabled': false,
       },
     );
-
-    await _swipePrimary(tester, -20);
-    expect(_currentPath(app.container), '/home');
-    await _swipePrimary(tester, -10, velocity: -600);
-    expect(_currentPath(app.container), '/assistant');
-
-    await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-6')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey<String>('primary-navigation-scale-0')),
-      findsOneWidget,
-    );
-    expect(_currentPath(app.container), '/assistant');
-    await tester.pumpAndSettle();
-    expect(_currentPath(app.container), '/home');
-
-    await _disposePrimaryNavigationApp(tester, app);
-  });
-
-  testWidgets('一级页面吸附逐帧匹配原生分页且连续拖动不跳回', (WidgetTester tester) async {
-    // 当前测试使用的完整 Android 应用。
-    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
-      tester,
-    );
-    // 页面真实手势使用的一级横滑控制器。
-    final PrimaryNavigationSwipeController controller = _primaryController(
-      tester,
-    );
-    // 统计卡片原生分页在同样距离和离手速度下的参考轨迹。
-    final Simulation reference = const PageScrollPhysics()
-        .createBallisticSimulation(
-          FixedScrollMetrics(
-            minScrollExtent: 0,
-            maxScrollExtent: 390,
-            pixels: 120,
-            viewportDimension: 390,
-            axisDirection: AxisDirection.right,
-            devicePixelRatio: 1,
-          ),
-          900,
-        )!;
-    controller.beginPrimarySwipe();
-    controller.updatePrimarySwipe(-120);
-    controller.endPrimarySwipe(-900);
-    await tester.pump();
-
-    // 逐帧累计时间，用于与原生弹簧的秒数对齐。
-    int elapsedMilliseconds = 0;
-    // 松手后早期、中段和接近落位的采样间隔。
-    for (final int deltaMilliseconds in <int>[16, 84, 200]) {
-      elapsedMilliseconds += deltaMilliseconds;
-      await tester.pump(Duration(milliseconds: deltaMilliseconds));
-      expect(
-        _primaryOffset(tester, 0),
-        closeTo(-reference.x(elapsedMilliseconds / 1000), 0.01),
-      );
-    }
-    expect(_currentPath(app.container), '/home');
-
-    // 尚未结束的弹簧位置应成为下一次拖动起点。
-    final double interruptedOffset = _primaryOffset(tester, 0);
-    controller.beginPrimarySwipe();
-    await tester.pump();
-    expect(_primaryOffset(tester, 0), closeTo(interruptedOffset, 0.01));
-    controller.updatePrimarySwipe(12);
-    await tester.pump();
-    expect(_primaryOffset(tester, 0), closeTo(interruptedOffset + 12, 0.01));
-    controller.endPrimarySwipe(900);
-    await tester.pumpAndSettle();
-    expect(_currentPath(app.container), '/home');
-    expect(_primaryOffset(tester, 0), 0);
-
-    // 临近终点高速甩动不能越界露白，也不能留下未完成的路由切换。
-    controller.beginPrimarySwipe();
-    controller.updatePrimarySwipe(-380);
-    controller.endPrimarySwipe(-8000);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 16));
-    expect(_currentPath(app.container), '/notes');
-    expect(_primaryOffset(tester, 3), 0);
-    await tester.pumpAndSettle();
-
-    // 反向拖过半页后向原页甩回，原生落点应取消提交。
-    await _swipePrimary(tester, 220, velocity: -900);
-    expect(_currentPath(app.container), '/notes');
-    await _swipePrimary(tester, 120, velocity: 900);
-    expect(_currentPath(app.container), '/home');
-
-    // 已经完整到位时，即便离手反向也应原地提交，不能先退回再吸附。
-    controller.beginPrimarySwipe();
-    controller.updatePrimarySwipe(-390);
-    controller.endPrimarySwipe(600);
-    await tester.pump();
-    expect(_currentPath(app.container), '/notes');
-    expect(_primaryOffset(tester, 3), 0);
-    await _disposePrimaryNavigationApp(tester, app);
-  });
-
-  testWidgets('辅助服务开启时连续快滑可接手吸附并跨过多个一级页面', (WidgetTester tester) async {
-    // 开启辅助导航但没有要求禁用动画的完整 Android 应用。
-    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
-      tester,
-    );
+    expect(find.byKey(const ValueKey('navigation-/notes')), findsNothing);
     tester.platformDispatcher.accessibilityFeaturesTestValue =
         const FakeAccessibilityFeatures(accessibleNavigation: true);
     addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
     await tester.pump();
-    // Continue primary gestures before the previous spring reaches its end.
-    for (final int targetIndex in <int>[3, 6]) {
-      _primaryController(tester).beginPrimarySwipe();
-      _primaryController(tester).updatePrimarySwipe(-230);
-      _primaryController(tester).endPrimarySwipe(-900);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(tester.hasRunningAnimations, isTrue);
-      expect(_primaryOffset(tester, targetIndex), inExclusiveRange(0, 195));
-    }
+    await _swipePrimary(tester, -250, velocity: -1500);
+    expect(_currentPath(app.container), '/home');
+    await tester.tap(find.byKey(const ValueKey('navigation-/assistant')));
     await tester.pumpAndSettle();
     expect(_currentPath(app.container), '/assistant');
-    expect(_primaryOffset(tester, 6), 0);
-    // 反向也可在旧动画结束前连续接手，且不会被旧回调跳回。
-    for (final int targetIndex in <int>[3, 0]) {
-      _primaryController(tester).beginPrimarySwipe();
-      _primaryController(tester).updatePrimarySwipe(230);
-      _primaryController(tester).endPrimarySwipe(900);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(_primaryOffset(tester, targetIndex), inExclusiveRange(-195, 0));
-    }
+    await _swipePrimary(tester, -250, velocity: -1500);
+    expect(_currentPath(app.container), '/assistant');
+    await tester.tap(find.byKey(const ValueKey('navigation-/home')));
     await tester.pumpAndSettle();
     expect(_currentPath(app.container), '/home');
     expect(tester.takeException(), isNull);
@@ -385,11 +280,14 @@ void main() {
       same(shellState),
     );
     await _swipePrimary(tester, -250);
+    expect(_currentPath(app.container), '/home');
+    await tester.tap(find.byKey(const ValueKey('navigation-/notes')));
+    await tester.pumpAndSettle();
     expect(_currentPath(app.container), '/notes');
     await _disposePrimaryNavigationApp(tester, app);
   });
 
-  testWidgets('笔记保存失败阻止底栏与横滑并可安全打断回弹', (WidgetTester tester) async {
+  testWidgets('笔记保存失败阻止底栏且真实横滑不能绕过保护', (WidgetTester tester) async {
     // A controlled editor retains the production page and router lifecycle.
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
       tester,
@@ -408,18 +306,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(_currentPath(app.container), '/notes');
     expect(_primaryOffset(tester, 3), 0);
-    // Reject a committed drag and grab the failing bounce before its midpoint.
-    final PrimaryNavigationSwipeController controller = _primaryController(
-      tester,
-    );
-    controller.beginPrimarySwipe();
-    controller.updatePrimarySwipe(-300);
-    controller.endPrimarySwipe(-900);
-    await tester.pump();
-    controller.beginPrimarySwipe();
-    controller.updatePrimarySwipe(-20);
-    controller.endPrimarySwipe(-900);
-    await tester.pumpAndSettle();
+    // Real horizontal movement must neither bypass the save nor start a transition.
+    await _swipePrimary(tester, -300, velocity: -900);
+    await _swipePrimary(tester, -20, velocity: -900);
     expect(_currentPath(app.container), '/notes');
     expect(_primaryOffset(tester, 3), 0);
     expect(editor.dirty, isTrue);
@@ -452,15 +341,15 @@ void main() {
     );
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
-    _primaryController(tester).beginPrimarySwipe();
-    _primaryController(tester).updatePrimarySwipe(300);
-    _primaryController(tester).endPrimarySwipe(900);
+    await _swipePrimary(tester, -250, velocity: -900);
     await tester.pump();
     expect(editor.attempts, 1);
+    expect(_primaryCoordinator(tester).isTransitioning, isTrue);
     expect(_currentPath(app.container), '/notes');
     editor.gate!.complete();
     await tester.pumpAndSettle();
     expect(_primaryOffset(tester, 3), 0);
+    expect(_primaryCoordinator(tester).isTransitioning, isFalse);
     // The preflight succeeds but the router's final onExit rejects its save.
     editor.gate = null;
     editor.attempts = 0;
@@ -518,13 +407,12 @@ void main() {
     addTearDown(() => lifecycle.unregister(owner));
     await tester.tap(find.byKey(const ValueKey<String>('navigation-/home')));
     expect(cancellationCalls, 1);
+    expect(_primaryCoordinator(tester).isTransitioning, isTrue);
     expect(_currentPath(app.container), '/assistant');
     expect(_primaryOffset(tester, 6), 0);
     await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(find.byKey(const ValueKey<String>('navigation-/notes')));
-    _primaryController(tester).beginPrimarySwipe();
-    _primaryController(tester).updatePrimarySwipe(300);
-    _primaryController(tester).endPrimarySwipe(900);
+    await _swipePrimary(tester, -250, velocity: -900);
     await tester.pump(const Duration(milliseconds: 100));
     expect(cancellationCalls, 1);
     expect(_currentPath(app.container), '/assistant');
@@ -544,7 +432,7 @@ void main() {
     await _disposePrimaryNavigationApp(tester, app);
   });
 
-  testWidgets('AI 横滑取消等待被外部导航接管后旧等待不能触发回弹', (WidgetTester tester) async {
+  testWidgets('AI 点击取消等待被外部导航接管后旧请求不能覆盖新页面', (WidgetTester tester) async {
     // Exercise actual shell routing while the assistant lifecycle is pending.
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
       tester,
@@ -557,20 +445,15 @@ void main() {
     );
     // This owner is removed independently from the assistant's real callback.
     final Object owner = Object();
-    // The old gesture can finish only after home has started its own transition.
+    // The old click request finishes only after home starts its own transition.
     final Completer<void> cancellation = Completer<void>();
     lifecycle.register(owner, () => cancellation.future);
     addTearDown(() => lifecycle.unregister(owner));
-    // A rightward AI swipe would normally commit the adjacent notes branch.
-    final PrimaryNavigationSwipeController controller = _primaryController(
-      tester,
-    );
-    controller.beginPrimarySwipe();
-    controller.updatePrimarySwipe(300);
-    controller.endPrimarySwipe(900);
+    // A bottom-tab selection waits for the same assistant lifecycle as before.
+    await tester.tap(find.byKey(const ValueKey('navigation-/notes')));
     await tester.pump();
     expect(_currentPath(app.container), '/assistant');
-    expect(_primaryOffset(tester, 6), 300);
+    expect(_primaryOffset(tester, 6), 0);
     app.container.read(appRouterProvider).go('/home');
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
@@ -593,7 +476,7 @@ void main() {
     await _disposePrimaryNavigationApp(tester, app);
   });
 
-  testWidgets('AI 退出保存失败保持当前页且反向接手不能绕过取消', (WidgetTester tester) async {
+  testWidgets('AI 退出保存失败保持当前页且真实横滑不能绕过取消', (WidgetTester tester) async {
     // Use the normal branch stack so visibility and route checks stay real.
     final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
       tester,
@@ -615,22 +498,296 @@ void main() {
     expect(_currentPath(app.container), '/assistant');
     expect(_primaryOffset(tester, 6), 0);
     expect(find.text('草稿未能保存，请检查后重试'), findsOneWidget);
-    // Interrupt a rejected swipe while its card is still beyond half a page.
-    final PrimaryNavigationSwipeController controller = _primaryController(
-      tester,
-    );
-    controller.beginPrimarySwipe();
-    controller.updatePrimarySwipe(300);
-    controller.endPrimarySwipe(900);
-    await tester.pump();
-    controller.beginPrimarySwipe();
-    controller.updatePrimarySwipe(20);
-    controller.endPrimarySwipe(900);
-    await tester.pumpAndSettle();
+    // Repeated physical drags cannot create a second navigation path.
+    await _swipePrimary(tester, -250, velocity: -900);
+    await _swipePrimary(tester, -30, velocity: -900);
     expect(_currentPath(app.container), '/assistant');
     expect(_primaryOffset(tester, 6), 0);
     expect(tester.takeException(), isNull);
     lifecycle.unregister(owner);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
+  // Each origin owns a different retained branch and must survive secondary pushes.
+  for (final ({String path, int index}) origin in <({String path, int index})>[
+    (path: '/home', index: 0),
+    (path: '/notes', index: 3),
+    (path: '/assistant', index: 6),
+  ]) {
+    testWidgets('更多四项从 ${origin.path} 返回原页并保留 Navigator', (
+      WidgetTester tester,
+    ) async {
+      // Real repositories and route guards remain in the isolated test app.
+      final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+        tester,
+      );
+      app.container.read(appRouterProvider).go(origin.path);
+      await tester.pumpAndSettle();
+      // Remember the actual source branch navigator rather than only its location.
+      final State sourceNavigator = tester.state(
+        find
+            .descendant(
+              of: find.byKey(
+                ValueKey('primary-navigation-card-${origin.index}'),
+              ),
+              matching: find.byType(Navigator),
+            )
+            .first,
+      );
+      // Each menu action continues to use its existing public feature route.
+      for (final ({String id, String path}) destination
+          in <({String id, String path})>[
+            (id: 'todos', path: '/todos'),
+            (id: 'timeline', path: '/timeline'),
+            (id: 'management', path: '/inventory'),
+            (id: 'settings', path: '/settings'),
+          ]) {
+        await _openMore(tester);
+        await tester.tap(
+          find.byKey(ValueKey('more-shortcut-${destination.id}')),
+        );
+        await tester.pumpAndSettle();
+        expect(_currentPath(app.container), destination.path);
+        expect(find.byKey(const ValueKey('android-more-panel')), findsNothing);
+        expect(find.byKey(const ValueKey('compact-navigation')), findsNothing);
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(_currentPath(app.container), origin.path);
+        expect(find.byKey(const ValueKey('navigation-more')), findsOneWidget);
+        expect(
+          tester.state(
+            find
+                .descendant(
+                  of: find.byKey(
+                    ValueKey('primary-navigation-card-${origin.index}'),
+                  ),
+                  matching: find.byType(Navigator),
+                )
+                .first,
+          ),
+          same(sourceNavigator),
+        );
+      }
+      expect(tester.takeException(), isNull);
+      await _disposePrimaryNavigationApp(tester, app);
+    });
+
+    testWidgets('更多系统返回优先关闭面板并保留 ${origin.path}', (WidgetTester tester) async {
+      // The real root route must advertise back handling while the menu is open.
+      final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+        tester,
+      );
+      app.container.read(appRouterProvider).go(origin.path);
+      await tester.pumpAndSettle();
+      // This element is above all branch navigators and owns native back registration.
+      final Finder rootScope = find.byKey(
+        const ValueKey('android-root-back-scope'),
+      );
+      if (origin.path == '/home') {
+        expect(
+          ModalRoute.of(tester.element(rootScope))!.popDisposition,
+          RoutePopDisposition.bubble,
+        );
+      }
+      await _openMore(tester);
+      expect(
+        ModalRoute.of(tester.element(rootScope))!.popDisposition,
+        RoutePopDisposition.doNotPop,
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('android-more-panel')), findsNothing);
+      expect(_currentPath(app.container), origin.path);
+      if (origin.path == '/home') {
+        expect(
+          ModalRoute.of(tester.element(rootScope))!.popDisposition,
+          RoutePopDisposition.bubble,
+        );
+      }
+      expect(tester.takeException(), isNull);
+      await _disposePrimaryNavigationApp(tester, app);
+    });
+  }
+
+  // Both retained dirty state and thrown persistence errors must block More exits.
+  for (final bool throws in <bool>[false, true]) {
+    testWidgets('笔记更多保存失败不跳转：throws=$throws', (WidgetTester tester) async {
+      // The controlled editor changes only the persistence result, not the UI flow.
+      final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+        tester,
+        controlledEditor: true,
+      );
+      app.container.read(appRouterProvider).go('/notes');
+      await tester.pumpAndSettle();
+      // Keep the same dirty editor throughout the menu and rejected exit.
+      final _ControlledExitNoteEditor editor =
+          app.container.read(noteEditorProvider) as _ControlledExitNoteEditor;
+      editor.armed = true;
+      editor.dirty = true;
+      editor.throwOnFailure = throws;
+      await _openMore(tester);
+      await tester.tap(find.byKey(const ValueKey('more-shortcut-timeline')));
+      await _pumpForSaveFailure(tester);
+      expect(editor.attempts, 1);
+      expect(editor.dirty, isTrue);
+      expect(_currentPath(app.container), '/notes');
+      expect(find.byKey(const ValueKey('android-more-panel')), findsNothing);
+      expect(find.text('草稿未能保存，请检查后重试'), findsOneWidget);
+      expect(app.container.read(noteEditorProvider), same(editor));
+      expect(tester.takeException(), isNull);
+      await _disposePrimaryNavigationApp(tester, app);
+    });
+  }
+
+  testWidgets('AI 更多等待语音取消及草稿保存后仅打开一次', (WidgetTester tester) async {
+    // A real retained assistant participates in the shared lifecycle operation.
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+    );
+    app.container.read(appRouterProvider).go('/assistant');
+    await tester.pumpAndSettle();
+    // An additional owner lets this test delay the operation without fake UI state.
+    final VoiceInputLifecycle lifecycle = app.container.read(
+      voiceInputLifecycleProvider,
+    );
+    // This owner never replaces the production assistant callback.
+    final Object owner = Object();
+    // Completion stays under test control until all visible assertions are checked.
+    final Completer<void> cancellation = Completer<void>();
+    // Repeated taps must share one cancellation request.
+    int calls = 0;
+    lifecycle.register(owner, () {
+      calls++;
+      return cancellation.future;
+    });
+    addTearDown(() => lifecycle.unregister(owner));
+    await tester.tap(find.byKey(const ValueKey('navigation-more')));
+    await tester.pump();
+    expect(calls, 1);
+    expect(find.byKey(const ValueKey('android-more-panel')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('navigation-more')));
+    await tester.pump();
+    expect(calls, 1);
+    await tester.runAsync(() async {
+      cancellation.complete();
+      await lifecycle.cancelAll();
+    });
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('android-more-panel')), findsOneWidget);
+    expect(_currentPath(app.container), '/assistant');
+    expect(tester.takeException(), isNull);
+    lifecycle.unregister(owner);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
+  testWidgets('AI 更多语音草稿保存失败不打开面板', (WidgetTester tester) async {
+    // The failure comes from the existing cancellation-and-save seam.
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+    );
+    app.container.read(appRouterProvider).go('/assistant');
+    await tester.pumpAndSettle();
+    // Preserve the real assistant lifecycle registration alongside this failure.
+    final VoiceInputLifecycle lifecycle = app.container.read(
+      voiceInputLifecycleProvider,
+    );
+    // A separate owner simulates a persistence failure.
+    final Object owner = Object();
+    lifecycle.register(owner, () async => throw StateError('模拟草稿保存失败'));
+    addTearDown(() => lifecycle.unregister(owner));
+    await tester.tap(find.byKey(const ValueKey('navigation-more')));
+    await _pumpForSaveFailure(tester);
+    expect(_currentPath(app.container), '/assistant');
+    expect(find.byKey(const ValueKey('android-more-panel')), findsNothing);
+    expect(find.text('草稿未能保存，请检查后重试'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    lifecycle.unregister(owner);
+    await _disposePrimaryNavigationApp(tester, app);
+  });
+
+  // Both a new tab request and an external route must supersede a pending menu.
+  for (final bool externalRoute in <bool>[false, true]) {
+    testWidgets('AI 更多等待中换页不能迟到重开：external=$externalRoute', (
+      WidgetTester tester,
+    ) async {
+      // Use the actual shell so close-before-tab ownership is exercised too.
+      final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+        tester,
+      );
+      app.container.read(appRouterProvider).go('/assistant');
+      await tester.pumpAndSettle();
+      // Keep cancellation pending across the competing navigation intent.
+      final VoiceInputLifecycle lifecycle = app.container.read(
+        voiceInputLifecycleProvider,
+      );
+      // This controlled owner is independent of the production assistant owner.
+      final Object owner = Object();
+      // A late completion must never reveal the old menu over the new route.
+      final Completer<void> cancellation = Completer<void>();
+      lifecycle.register(owner, () => cancellation.future);
+      addTearDown(() => lifecycle.unregister(owner));
+      await tester.tap(find.byKey(const ValueKey('navigation-more')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('android-more-panel')), findsNothing);
+      if (externalRoute) {
+        app.container.read(appRouterProvider).go('/home');
+      } else {
+        await tester.tap(find.byKey(const ValueKey('navigation-/home')));
+      }
+      await tester.pump();
+      await tester.runAsync(() async {
+        cancellation.complete();
+        await lifecycle.cancelAll();
+      });
+      await tester.pumpAndSettle();
+      expect(_currentPath(app.container), '/home');
+      expect(find.byKey(const ValueKey('android-more-panel')), findsNothing);
+      expect(tester.takeException(), isNull);
+      lifecycle.unregister(owner);
+      await _disposePrimaryNavigationApp(tester, app);
+    });
+  }
+
+  testWidgets('笔记更多保存等待时点击其他底栏不会被迟到功能跳转覆盖', (WidgetTester tester) async {
+    // Let successful saves finish only after the user chooses a different tab.
+    final _PrimaryNavigationTestApp app = await _pumpPrimaryNavigationApp(
+      tester,
+      controlledEditor: true,
+    );
+    app.container.read(appRouterProvider).go('/notes');
+    await tester.pumpAndSettle();
+    // The same editor receives the old feature exit and the replacement tab exit.
+    final _ControlledExitNoteEditor editor =
+        app.container.read(noteEditorProvider) as _ControlledExitNoteEditor;
+    editor.armed = true;
+    editor.dirty = true;
+    editor.failFromAttempt = 1000;
+    editor.gate = Completer<void>();
+    await _openMore(tester);
+    await tester.tap(find.byKey(const ValueKey('more-shortcut-timeline')));
+    await tester.pumpAndSettle();
+    expect(editor.attempts, 1);
+    expect(_currentPath(app.container), '/notes');
+    expect(find.byKey(const ValueKey('android-more-panel')), findsNothing);
+    // A pending exit freezes the underlying composer without blocking the tabs.
+    final Finder composer = find.byKey(
+      const ValueKey('android-note-input-touch'),
+    );
+    expect(composer.hitTestable(), findsNothing);
+    await tester.tapAt(tester.getCenter(composer));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('android-note-editor')), findsNothing);
+    expect(editor.attempts, 1);
+    await _swipePrimary(tester, 240, velocity: 1200);
+    expect(find.byKey(const ValueKey('android-notes-sidebar')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('navigation-/home')));
+    await tester.pump();
+    expect(editor.attempts, 2);
+    editor.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(_currentPath(app.container), '/home');
+    expect(find.byKey(const ValueKey('android-more-panel')), findsNothing);
+    expect(tester.takeException(), isNull);
     await _disposePrimaryNavigationApp(tester, app);
   });
 
@@ -663,6 +820,59 @@ void main() {
       find.byKey(const ValueKey<String>('primary-navigation-scale-0')),
       findsNothing,
     );
+
+    // Home has no asynchronous voice gate, so one frame isolates menu motion.
+    app.container.read(appRouterProvider).go('/home');
+    await tester.pump();
+
+    /// Reads the explicit selected state exposed by the actual bottom-tab item.
+    bool selected(String key) => tester
+        .widget<Semantics>(
+          find.descendant(
+            of: find.byKey(ValueKey(key)),
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is Semantics && widget.properties.selected != null,
+            ),
+          ),
+        )
+        .properties
+        .selected!;
+
+    await tester.tap(find.byKey(const ValueKey('navigation-more')));
+    await tester.pump();
+    // The entire panel is at its final position without advancing animation time.
+    final Finder panel = find.byKey(const ValueKey('android-more-panel'));
+    expect(panel.hitTestable(), findsOneWidget);
+    expect(
+      tester
+          .widget<SlideTransition>(
+            find
+                .ancestor(of: panel, matching: find.byType(SlideTransition))
+                .first,
+          )
+          .position
+          .value,
+      Offset.zero,
+    );
+    expect(selected('navigation-more'), isTrue);
+    expect(selected('navigation-/home'), isFalse);
+    await tester.tap(find.byKey(const ValueKey('navigation-more')));
+    await tester.pump();
+    expect(panel, findsNothing);
+    expect(selected('navigation-more'), isFalse);
+    expect(selected('navigation-/home'), isTrue);
+
+    // Native back removes the reduced-motion panel on the next frame as well.
+    await tester.tap(find.byKey(const ValueKey('navigation-more')));
+    await tester.pump();
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(panel, findsNothing);
+    expect(selected('navigation-more'), isFalse);
+    expect(selected('navigation-/home'), isTrue);
+    expect(_currentPath(app.container), '/home');
+    expect(tester.takeException(), isNull);
 
     await _disposePrimaryNavigationApp(tester, app);
   });
@@ -835,16 +1045,6 @@ Future<void> _disposePrimaryNavigationApp(
   debugDefaultTargetPlatformOverride = null;
 }
 
-/// 返回当前页面树中的一级横滑协调器。
-PrimaryNavigationSwipeController _primaryController(WidgetTester tester) {
-  // 当前一级横滑作用域。
-  final PrimaryNavigationSwipeScope scope = tester
-      .widget<PrimaryNavigationSwipeScope>(
-        find.byType(PrimaryNavigationSwipeScope),
-      );
-  return scope.controller;
-}
-
 /// 读取指定一级页面真实绘制的横向位移。
 double _primaryOffset(WidgetTester tester, int index) {
   return tester
@@ -855,20 +1055,58 @@ double _primaryOffset(WidgetTester tester, int index) {
       .storage[12];
 }
 
-/// 使用累计距离执行一次一级页面横滑并等待落位。
+/// Reads the same coordinator used by the production bottom navigation bar.
+PrimaryNavigationCoordinator _primaryCoordinator(WidgetTester tester) {
+  return tester
+      .widget<PrimaryNavigationBranchContainer>(
+        find.byType(PrimaryNavigationBranchContainer),
+      )
+      .coordinator;
+}
+
+/// Sends actual horizontal pointer input through the visible page hit-test tree.
 Future<void> _swipePrimary(
   WidgetTester tester,
   double distance, {
   double velocity = 0,
 }) async {
-  // 本次横滑使用的一级导航协调器。
-  final PrimaryNavigationSwipeController controller = _primaryController(
-    tester,
-  );
-  controller.beginPrimarySwipe();
-  controller.updatePrimarySwipe(distance);
-  controller.endPrimarySwipe(velocity);
+  // Mid-content coordinates avoid the bottom tabs and input controls.
+  final Offset start = Offset(distance < 0 ? 330 : 60, 350);
+  if (velocity == 0) {
+    await tester.dragFrom(start, Offset(distance, 0));
+  } else {
+    await tester.flingFrom(start, Offset(distance, 0), velocity.abs());
+  }
   await tester.pumpAndSettle();
+}
+
+/// Opens the real More control and waits for its presentation to settle.
+Future<void> _openMore(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('navigation-more')));
+  await tester.pumpAndSettle();
+  expect(find.byKey(const ValueKey('android-more-panel')), findsOneWidget);
+}
+
+/// Observes transient feedback before its four-second animated countdown expires.
+Future<void> _pumpForSaveFailure(WidgetTester tester) async {
+  // The production error overlay starts only after any menu-close/save work.
+  final Finder message = find.text('草稿未能保存，请检查后重试');
+  // Bound fake time to one second while allowing asynchronous cache I/O to finish.
+  for (int frame = 0; frame < 40 && message.evaluate().isEmpty; frame++) {
+    await tester.pump(const Duration(milliseconds: 25));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 1)),
+    );
+  }
+  expect(message, findsOneWidget);
+}
+
+/// Taps the visible part of a translated dismissal surface rather than its offscreen center.
+Future<void> _tapVisible(WidgetTester tester, Finder target) async {
+  // The fixture's logical viewport bounds clip a translated page's full rectangle.
+  final Rect viewport =
+      Offset.zero & (tester.view.physicalSize / tester.view.devicePixelRatio);
+  await tester.tapAt(tester.getRect(target).intersect(viewport).center);
 }
 
 /// 返回当前路由路径。

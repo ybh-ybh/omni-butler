@@ -16,6 +16,8 @@ import 'package:omni_butler/features/settings/presentation/theme_palette_selecto
 import 'package:omni_butler/shared/ui/omni_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/android_more_navigation_test_helpers.dart';
+
 /// 验证真实设置入口、配色预览、全局主题更新及键盘操作。
 void main() {
   // 桌面、常见手机和窄屏手机的实际设置入口。
@@ -73,9 +75,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       if (platform == TargetPlatform.android) {
-        await tester.tap(
-          find.byKey(const ValueKey<String>('home-shortcut-settings')),
-        );
+        await openAndroidMoreDestination(tester, 'settings');
       } else {
         container.read(appRouterProvider).go('/settings');
       }

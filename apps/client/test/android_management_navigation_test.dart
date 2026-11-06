@@ -21,6 +21,8 @@ import 'package:omni_butler/shared/ui/omni_page_header.dart';
 import 'package:omni_butler/shared/ui/omni_overlay.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/android_more_navigation_test_helpers.dart';
+
 /// 验证 Android 管理聚合页的导航、操作与功能开关联动。
 void main() {
   testWidgets('系统返回优先处理根弹层且不能绕过保存中的返回保护', (WidgetTester tester) async {
@@ -83,15 +85,13 @@ void main() {
     await _disposeManagementApp(tester, app);
   });
 
-  testWidgets('首页管理入口切换两个分区后一次返回首页', (WidgetTester tester) async {
+  testWidgets('更多管理入口切换两个分区后一次返回首页', (WidgetTester tester) async {
     // Enter through the real shortcut so the test covers an imperative push.
     final _ManagementTestApp app = await _pumpManagementApp(
       tester,
       initialLocation: '/home',
     );
-    await tester.tap(
-      find.byKey(const ValueKey<String>('home-shortcut-management')),
-    );
+    await openAndroidMoreDestination(tester, 'management');
     await tester.pumpAndSettle();
     expect(_managementPath(app), '/inventory');
     expect(
@@ -117,9 +117,7 @@ void main() {
       findsOneWidget,
     );
     // Reopening uses the last management section without accumulating a stack.
-    await tester.tap(
-      find.byKey(const ValueKey<String>('home-shortcut-management')),
-    );
+    await openAndroidMoreDestination(tester, 'management');
     await tester.pumpAndSettle();
     expect(_managementPath(app), '/memberships');
     await tester.binding.handlePopRoute();
@@ -129,15 +127,13 @@ void main() {
     await _disposeManagementApp(tester, app);
   });
 
-  testWidgets('首页设置入口系统返回先关闭分类再退出全屏设置', (WidgetTester tester) async {
+  testWidgets('更多设置入口系统返回先关闭分类再退出全屏设置', (WidgetTester tester) async {
     // The settings route must preserve the home page below its local categories.
     final _ManagementTestApp app = await _pumpManagementApp(
       tester,
       initialLocation: '/home',
     );
-    await tester.tap(
-      find.byKey(const ValueKey<String>('home-shortcut-settings')),
-    );
+    await openAndroidMoreDestination(tester, 'settings');
     await tester.pumpAndSettle();
     expect(_managementPath(app), '/settings');
     expect(
@@ -1314,7 +1310,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('Android 三个管理功能全部关闭时隐藏首页入口', (WidgetTester tester) async {
+  testWidgets('Android 三个管理功能全部关闭时隐藏更多内的管理入口', (WidgetTester tester) async {
     await _configureAndroidView(tester);
     SharedPreferences.setMockInitialValues(<String, Object>{
       'appearance.theme_mode': 'light',
@@ -1341,9 +1337,10 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
 
+    await openAndroidMore(tester);
     expect(find.text('管理'), findsNothing);
     expect(
-      find.byKey(const ValueKey<String>('home-shortcut-management')),
+      find.byKey(const ValueKey<String>('more-shortcut-management')),
       findsNothing,
     );
 
@@ -1408,14 +1405,15 @@ void main() {
 
 /// Verifies that the retained primary container cannot accept horizontal drags.
 void _expectPrimarySwipesDisabled(WidgetTester tester) {
-  // Keeping this widget mounted preserves branch state without enabling swipes.
-  final GestureDetector surface = tester.widget<GestureDetector>(
-    find.byKey(const ValueKey<String>('primary-navigation-swipe-surface')),
+  // The retained root surface no longer installs a horizontal recognizer.
+  final Widget surface = tester.widget<Widget>(
+    find.byKey(const ValueKey<String>('primary-navigation-surface')),
   );
-  expect(surface.onHorizontalDragStart, isNull);
-  expect(surface.onHorizontalDragUpdate, isNull);
-  expect(surface.onHorizontalDragEnd, isNull);
-  expect(surface.onHorizontalDragCancel, isNull);
+  expect(surface, isA<ColoredBox>());
+  expect(
+    find.byKey(const ValueKey<String>('primary-navigation-swipe-surface')),
+    findsNothing,
+  );
 }
 
 /// 读取 Android 更多层级卡片相对于视口宽度的水平位移。

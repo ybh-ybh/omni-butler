@@ -23,9 +23,6 @@ class HomeMobileDashboard extends StatefulWidget {
   /// 为悬浮操作预留的正文末尾空间。
   final double bottomPadding;
 
-  /// Optional feature shortcuts that scroll away with the quote.
-  final Widget? shortcuts;
-
   /// Total actionable events and memberships in the context module.
   final int contextAttentionCount;
 
@@ -35,7 +32,6 @@ class HomeMobileDashboard extends StatefulWidget {
     required this.cards,
     required this.onManageCards,
     required this.bottomPadding,
-    this.shortcuts,
     this.contextAttentionCount = 0,
     super.key,
   });
@@ -179,11 +175,6 @@ class _HomeMobileDashboardState extends State<HomeMobileDashboard> {
                   children: <Widget>[
                     if (widget.visibleCards.contains(HomeCardId.quote))
                       widget.cards[HomeCardId.quote]!,
-                    if (widget.shortcuts != null) ...<Widget>[
-                      if (widget.visibleCards.contains(HomeCardId.quote))
-                        const SizedBox(height: OmniSpacing.xs),
-                      widget.shortcuts!,
-                    ],
                   ],
                 ),
               ),
@@ -195,7 +186,10 @@ class _HomeMobileDashboardState extends State<HomeMobileDashboard> {
               scrollBehavior: ScrollConfiguration.of(context)
                   .copyWith(scrollbars: false),
               headerSliverBuilder: (BuildContext context, bool innerScrolled) =>
-                  <Widget>[SliverToBoxAdapter(child: header)],
+                  <Widget>[
+                    if (widget.visibleCards.contains(HomeCardId.quote))
+                      SliverToBoxAdapter(child: header),
+                  ],
               body: LayoutBuilder(
                 builder:
                     (BuildContext context, BoxConstraints bodyConstraints) {

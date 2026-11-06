@@ -17,7 +17,6 @@ import 'package:omni_butler/features/home/presentation/home_card_catalog.dart';
 import 'package:omni_butler/features/home/presentation/home_card_manager.dart';
 import 'package:omni_butler/features/home/presentation/home_context_card.dart';
 import 'package:omni_butler/features/home/presentation/home_mobile_dashboard.dart';
-import 'package:omni_butler/features/home/presentation/home_mobile_shortcuts.dart';
 import 'package:omni_butler/features/home/presentation/home_time_status_card.dart';
 import 'package:omni_butler/features/home/presentation/quote_library_dialog.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
@@ -213,7 +212,6 @@ class HomePage extends ConsumerWidget {
                 ? ref.watch(homeContextAttentionCountProvider)
                 : 0,
             onManageCards: () => showHomeCardManager(context),
-            shortcuts: const HomeMobileShortcuts(),
             bottomPadding: featurePreference.isEnabled(AppFeature.timeline)
                 ? _mobileActionClearance
                 : OmniSpacing.xl,

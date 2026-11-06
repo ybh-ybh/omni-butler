@@ -17,6 +17,8 @@ import 'package:omni_butler/features/assistant/presentation/assistant_android_vi
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/android_more_navigation_test_helpers.dart';
+
 /// Supply an authenticated test identity without reading device credentials.
 class _ShortcutAssistantIdentity extends AuthController {
   /// Keep the chat editable while all storage and requests remain isolated.
@@ -84,7 +86,7 @@ void main() {
     expect(find.text('海盐'), findsNothing);
     expect(find.text('石墨'), findsNothing);
     expect(
-      find.byKey(const ValueKey<String>('primary-navigation-swipe-surface')),
+      find.byKey(const ValueKey<String>('primary-navigation-surface')),
       findsNothing,
     );
 
@@ -216,7 +218,7 @@ void main() {
     });
   }
 
-  testWidgets('紧凑布局只展示首页笔记AI三个底部入口', (WidgetTester tester) async {
+  testWidgets('紧凑布局展示首页笔记AI与更多且保留输入和页面状态', (WidgetTester tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     SharedPreferences.setMockInitialValues(<String, Object>{
       'sync.enabled': false,
@@ -276,15 +278,20 @@ void main() {
         findsOneWidget,
       );
     }
-    expect(find.text('更多'), findsNothing);
-    // Secondary features remain reachable from the home shortcuts.
+    expect(find.text('更多'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('home-mobile-shortcuts')),
+      findsNothing,
+    );
+    await openAndroidMore(tester);
+    // Secondary features remain reachable through the compact More panel.
     for (final String id in <String>[
       'todos',
       'timeline',
       'management',
       'settings',
     ]) {
-      expect(find.byKey(ValueKey<String>('home-shortcut-$id')), findsOneWidget);
+      expect(find.byKey(ValueKey<String>('more-shortcut-$id')), findsOneWidget);
     }
     for (final String path in <String>[
       '/todos',
@@ -296,6 +303,12 @@ void main() {
     }
     expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
     expect(assistantCacheLoads, 0);
+    await tester.tap(find.byKey(const ValueKey<String>('navigation-more')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('android-more-panel')),
+      findsNothing,
+    );
 
     // Use the real shell to verify keyboard chrome and retained AI identity.
     await tester.tap(
@@ -307,10 +320,12 @@ void main() {
     final State<StatefulWidget> assistantState = tester.state(
       find.byType(AssistantAndroidView),
     );
-    // Raw key delivery must not invoke the shell's global create-todo action.
-    await tester.tap(find.byKey(const ValueKey<String>('assistant-input')));
+    // The visible capture surface owns short taps before native field selection.
+    await tester.tap(
+      find.byKey(const ValueKey<String>('assistant-input-voice-target')),
+    );
     await tester.pumpAndSettle();
-    // Inspect production focus rather than relying on synthetic text injection.
+    // Raw key delivery must keep production focus without creating a global todo.
     final AssistantAndroidView assistant = tester.widget<AssistantAndroidView>(
       find.byType(AssistantAndroidView),
     );

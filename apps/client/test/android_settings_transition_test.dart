@@ -11,6 +11,8 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/android_more_navigation_test_helpers.dart';
+
 /// 验证 Android 更多层级卡片的中途反向、重复返回与减少动态效果。
 void main() {
   testWidgets('进入详情途中系统返回不跳位，重复返回不重启动画', (WidgetTester tester) async {
@@ -253,9 +255,7 @@ Future<_SettingsTransitionTestApp> _pumpSettingsApp(
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 600));
   if (enterFromShortcut) {
-    await tester.tap(
-      find.byKey(const ValueKey<String>('home-shortcut-settings')),
-    );
+    await openAndroidMoreDestination(tester, 'settings');
   } else {
     container.read(appRouterProvider).go('/settings');
   }
