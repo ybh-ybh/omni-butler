@@ -28,6 +28,7 @@ import 'package:omni_butler/features/floating/platform/windows_floating_resize_s
 import 'package:omni_butler/features/floating/platform/windows_tray_service.dart';
 import 'package:omni_butler/features/floating/platform/windows_title_bar_service.dart';
 import 'package:omni_butler/features/floating/presentation/floating_window_page.dart';
+import 'package:omni_butler/features/floating/presentation/floating_glass_surface.dart';
 import 'package:omni_butler/features/floating/presentation/windows_title_bar.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
 import 'package:omni_butler/features/settings/data/recycle_bin_cleanup_coordinator.dart';
@@ -201,6 +202,9 @@ class _WindowsWindowCoordinatorState
   /// 当前悬浮窗口原生操作器。
   _WindowsFloatingWindowNative? _floatingNative;
 
+  /// Track Acrylic acceptance for the current window instance only.
+  ValueNotifier<bool>? _floatingBackdropApplied;
+
   /// 系统托盘是否已经创建。
   bool _trayCreated = false;
 
@@ -252,6 +256,7 @@ class _WindowsWindowCoordinatorState
     _windowRegistry = WindowRegistry.of(context);
   }
 
+  /// Release window services and the current backdrop status.
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -265,6 +270,7 @@ class _WindowsWindowCoordinatorState
     unawaited(_disposeTray());
     _floatingNative?.dispose();
     _floatingNative = null;
+    _disposeFloatingBackdropStatus();
     _floatingController?.destroy();
     _floatingController?.dispose();
     super.dispose();
@@ -491,7 +497,7 @@ class _WindowsWindowCoordinatorState
     _updateTrayToggle(floatingPreference.enabled);
   }
 
-  /// 创建并显示悬浮窗。
+  /// Create the desktop card with an opaque first frame until Acrylic succeeds.
   Future<void> _showFloatingWindow(FloatingWindowPreference preference) async {
     if (_isExiting ||
         !ref.read(floatingWindowPreferenceProvider).enabled ||
@@ -528,23 +534,31 @@ class _WindowsWindowCoordinatorState
       controller.destroy();
       return;
     }
-    // 悬浮窗注册条目。
+    // Keep the first frame opaque and isolate the result from later windows.
+    final ValueNotifier<bool> backdropApplied = ValueNotifier<bool>(false);
+    // Register the floating content and its instance-specific backdrop state.
     late final WindowEntry entry;
     entry = WindowEntry(
       controller: controller,
-      builder: (BuildContext context) => _FloatingWindowSurface(
-        onClose: _disableFloatingFromCard,
-        onOpenRoute: _openMainRoute,
-        onDragStart: _handleFloatingDragStart,
-        onDragUpdate: _handleFloatingDragUpdate,
-        onDragEnd: _handleFloatingDragEnd,
-        onResizeStart: _handleFloatingResizeStart,
-        onResizeUpdate: _handleFloatingResizeUpdate,
-        onResizeEnd: _handleFloatingResizeEnd,
+      builder: (BuildContext context) => ValueListenableBuilder<bool>(
+        valueListenable: backdropApplied,
+        builder: (BuildContext context, bool applied, Widget? child) =>
+            _FloatingWindowSurface(
+              backdropApplied: applied,
+              onClose: _disableFloatingFromCard,
+              onOpenRoute: _openMainRoute,
+              onDragStart: _handleFloatingDragStart,
+              onDragUpdate: _handleFloatingDragUpdate,
+              onDragEnd: _handleFloatingDragEnd,
+              onResizeStart: _handleFloatingResizeStart,
+              onResizeUpdate: _handleFloatingResizeUpdate,
+              onResizeEnd: _handleFloatingResizeEnd,
+            ),
       ),
     );
     _floatingController = controller;
     _floatingEntry = entry;
+    _floatingBackdropApplied = backdropApplied;
     registry.register(entry);
 
     // 新窗口原生句柄需要等待首帧挂载完成。
@@ -557,7 +571,15 @@ class _WindowsWindowCoordinatorState
       controller,
     );
     _floatingNative = native;
-    native.configureAsDesktopCard();
+    // Native setup may dispatch messages that close or replace the window.
+    final bool applied = native.configureAsDesktopCard();
+    if (!mounted ||
+        _isExiting ||
+        _floatingController != controller ||
+        _floatingBackdropApplied != backdropApplied) {
+      return;
+    }
+    backdropApplied.value = applied;
     await _restoreFloatingPlacement(preference: preference);
   }
 
@@ -578,7 +600,7 @@ class _WindowsWindowCoordinatorState
     );
   }
 
-  /// 销毁当前悬浮窗口。
+  /// Destroy the current card and retire its backdrop status.
   Future<void> _hideFloatingWindow() async {
     // 待移除的悬浮窗条目。
     final WindowEntry? entry = _floatingEntry;
@@ -588,6 +610,7 @@ class _WindowsWindowCoordinatorState
     _floatingEntry = null;
     _floatingController = null;
     _floatingNative = null;
+    _disposeFloatingBackdropStatus();
     if (controller != null) {
       // 先隐藏真实宿主，避免注册表更新或资源清理期间残留最后一帧。
       _WindowsWindowVisibility.hide(controller);
@@ -598,7 +621,7 @@ class _WindowsWindowCoordinatorState
     }
   }
 
-  /// 响应悬浮窗销毁并清理注册状态。
+  /// Release registration and backdrop state for the destroyed card only.
   void _handleFloatingWindowDestroyed(
     RegularWindowController destroyedController,
   ) {
@@ -617,7 +640,16 @@ class _WindowsWindowCoordinatorState
     _floatingController = null;
     _floatingNative?.dispose();
     _floatingNative = null;
+    _disposeFloatingBackdropStatus();
     controller?.dispose();
+  }
+
+  /// Dispose the retired status once, including reentrant destroy callbacks.
+  void _disposeFloatingBackdropStatus() {
+    // Detach the instance before notifying any reentrant lifecycle cleanup.
+    final ValueNotifier<bool>? backdropApplied = _floatingBackdropApplied;
+    _floatingBackdropApplied = null;
+    backdropApplied?.dispose();
   }
 
   /// 从卡片关闭入口停用悬浮窗并恢复主窗口。
@@ -1039,8 +1071,9 @@ class _WindowsDisplayService {
 
 /// 为悬浮窗提供独立主题与 Material 上下文。
 class _FloatingWindowSurface extends ConsumerWidget {
-  /// 创建悬浮窗口主题表面。
+  /// Create a themed floating surface with the native backdrop result.
   const _FloatingWindowSurface({
+    required this.backdropApplied,
     required this.onClose,
     required this.onOpenRoute,
     required this.onDragStart,
@@ -1050,6 +1083,9 @@ class _FloatingWindowSurface extends ConsumerWidget {
     required this.onResizeUpdate,
     required this.onResizeEnd,
   });
+
+  /// Whether Acrylic setup succeeded for this native window instance.
+  final bool backdropApplied;
 
   /// 关闭悬浮窗回调。
   final Future<void> Function() onClose;
@@ -1075,23 +1111,19 @@ class _FloatingWindowSurface extends ConsumerWidget {
   /// 结束调整窗口尺寸回调。
   final Future<void> Function() onResizeEnd;
 
-  /// 构建与主窗口共享配色和明暗模式的悬浮窗。
+  /// Keep the desktop card dark regardless of the main application mode.
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // 当前设备的完整主题偏好。
-    final ThemePreference preference = ref.watch(themeControllerProvider);
+    // Only palette changes affect this permanently dark window.
+    final AppThemePalette palette = ref.watch(
+      themeControllerProvider.select((preference) => preference.palette),
+    );
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.build(
-        brightness: Brightness.light,
-        palette: preference.palette,
-      ),
-      darkTheme: AppTheme.build(
-        brightness: Brightness.dark,
-        palette: preference.palette,
-      ),
-      themeMode: preference.mode,
+      theme: buildFloatingWindowTheme(palette),
+      themeMode: ThemeMode.dark,
       home: FloatingWindowPage(
+        backdropApplied: backdropApplied,
         onClose: onClose,
         onOpenRoute: onOpenRoute,
         onDragStart: onDragStart,
@@ -1196,9 +1228,10 @@ class _WindowsFloatingWindowNative {
     return currentPhysicalSize / _currentScaleFactor;
   }
 
-  /// 应用无边框、工具窗口、半透明与桌面父级样式。
-  void configureAsDesktopCard() {
-    _enableAcrylicBackdrop();
+  /// Configure the desktop host and report Acrylic acceptance before reparenting.
+  bool configureAsDesktopCard() {
+    // Apply the backdrop while the native host is still a top-level window.
+    final bool backdropApplied = _enableAcrylicBackdrop();
     // 当前窗口基础样式。
     final int currentStyle = win32.GetWindowLongPtr(
       _windowHandle,
@@ -1254,38 +1287,44 @@ class _WindowsFloatingWindowNative {
           win32.SWP_NOACTIVATE |
           win32.SWP_SHOWWINDOW,
     );
+    return backdropApplied;
   }
 
-  /// 为悬浮窗启用 Windows Acrylic 毛玻璃背景。
-  void _enableAcrylicBackdrop() {
-    // Acrylic 背景策略。
+  /// Apply a neutral, low-tint Acrylic backdrop without changing global opacity.
+  bool _enableAcrylicBackdrop() {
+    // Define the native Acrylic policy independently of the Flutter theme.
     final Pointer<win32.ACCENT_POLICY> accentPolicy =
         calloc<win32.ACCENT_POLICY>();
-    // 窗口合成属性参数。
+    // Pass the policy to the native compositor.
     final Pointer<win32.WINDOWCOMPOSITIONATTRIBDATA> compositionData =
         calloc<win32.WINDOWCOMPOSITIONATTRIBDATA>();
     try {
       accentPolicy.ref
         ..AccentState = win32.ACCENT_ENABLE_ACRYLICBLURBEHIND
         ..AccentFlags = 2
-        ..GradientColor = 0xB8F6F3EF
+        ..GradientColor = 0x18808080
         ..AnimationId = 0;
       compositionData.ref
         ..Attrib = win32.WCA_ACCENT_POLICY
         ..pvData = accentPolicy.cast()
         ..cbData = sizeOf<win32.ACCENT_POLICY>();
-      // 当前系统是否成功启用 Acrylic。
+      // Treat only successful Acrylic setup as permission to use glass surfaces.
       final bool acrylicEnabled = win32.SetWindowCompositionAttribute(
         _windowHandle,
         compositionData,
       );
-      if (!acrylicEnabled) {
-        _enableLegacyBlurBackdrop();
+      if (acrylicEnabled) {
+        return true;
       }
+    } catch (error, stackTrace) {
+      debugPrint('Windows 悬浮窗 Acrylic 启用失败：$error\n$stackTrace');
     } finally {
       calloc.free(accentPolicy);
       calloc.free(compositionData);
     }
+    // Legacy DWM may preserve alpha, but does not prove Acrylic blur is available.
+    _enableLegacyBlurBackdrop();
+    return false;
   }
 
   /// Acrylic 不可用时启用传统 DWM Blur Behind。

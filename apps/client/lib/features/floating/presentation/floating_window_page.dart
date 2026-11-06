@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +10,7 @@ import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/core/taxonomy/taxonomy_repository.dart';
 import 'package:omni_butler/features/settings/data/feature_preferences.dart';
+import 'package:omni_butler/features/floating/presentation/floating_glass_surface.dart';
 import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
 import 'package:omni_butler/features/timeline/presentation/timeline_page.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
@@ -123,6 +123,9 @@ int _countFloatingTodoRows(
 
 /// Windows 桌面悬浮框的业务内容。
 class FloatingWindowPage extends ConsumerStatefulWidget {
+  /// Whether this window successfully requested native glass composition.
+  final bool backdropApplied;
+
   /// 关闭悬浮框功能的回调。
   final Future<void> Function() onClose;
 
@@ -157,6 +160,7 @@ class FloatingWindowPage extends ConsumerStatefulWidget {
     required this.onResizeStart,
     required this.onResizeUpdate,
     required this.onResizeEnd,
+    this.backdropApplied = false,
     super.key,
   });
 
@@ -270,8 +274,6 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
   /// 构建半透明卡片、待办分区与时间操作区。
   @override
   Widget build(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
     // 当前设备业务功能偏好。
     final FeaturePreference featurePreference = ref.watch(
       featurePreferenceProvider,
@@ -302,186 +304,134 @@ class _FloatingWindowPageState extends ConsumerState<FloatingWindowPage> {
     final bool timelineEnabled = featurePreference.isEnabled(
       AppFeature.timeline,
     );
-    // 当前是否使用深色主题。
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    // 均匀的半透明玻璃主体色。
-    final Color glassSurface = isDark
-        ? const Color(0xB8182233)
-        : const Color(0xA8EAF0F6);
-    // 玻璃主体高光边框色。
-    final Color glassBorder = isDark
-        ? Colors.white.withValues(alpha: 0.18)
-        : Colors.white.withValues(alpha: 0.72);
+    // Shared floating material keeps the body and its controls consistent.
+    final FloatingGlassStyle glass = FloatingGlassStyle.of(context);
 
     return Material(
       type: MaterialType.transparency,
       child: Stack(
         children: <Widget>[
           Positioned.fill(
-            child: Padding(
-              padding: const EdgeInsets.all(OmniSpacing.xs),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: glassSurface,
-                  border: Border.all(color: glassBorder),
-                  borderRadius: BorderRadius.circular(OmniRadius.dialog),
-                  boxShadow: <BoxShadow>[
-                    BoxShadow(
-                      color: Colors.black.withValues(
-                        alpha: isDark ? 0.30 : 0.18,
-                      ),
-                      blurRadius: 24,
-                      spreadRadius: -4,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(OmniRadius.dialog),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        _FloatingTitleBar(
-                          now: now,
-                          onClose: widget.onClose,
-                          onOpenTodos: () =>
-                              unawaited(widget.onOpenRoute('/todos')),
-                          onDragStart: widget.onDragStart,
-                          onDragUpdate: widget.onDragUpdate,
-                          onDragEnd: widget.onDragEnd,
-                        ),
-                        Divider(
-                          height: 1,
-                          color: colors.line.withValues(alpha: 0.72),
-                        ),
-                        Expanded(
-                          child: LayoutBuilder(
-                            builder:
-                                (
-                                  BuildContext context,
-                                  BoxConstraints constraints,
-                                ) {
-                                  // 滚动区扣除上下内容边距后的实际可用高度。
-                                  final double availableBodyHeight =
-                                      (constraints.maxHeight -
-                                              OmniSpacing.sm -
-                                              OmniSpacing.md)
-                                          .clamp(0, double.infinity)
-                                          .toDouble();
-                                  _scheduleTodoExpansionBudgetUpdate();
-                                  // 当前尺寸帧立即分配增高空间，避免先画旧高度再画新高度。
-                                  final double expansionBudget =
-                                      (availableBodyHeight -
-                                              (_baseContentHeight ??
-                                                  availableBodyHeight))
-                                          .clamp(0, double.infinity)
-                                          .toDouble();
-                                  return SingleChildScrollView(
-                                    key: const ValueKey<String>(
-                                      'floating-window-content-scroll',
-                                    ),
-                                    primary: false,
-                                    padding: const EdgeInsets.fromLTRB(
-                                      OmniSpacing.md,
-                                      OmniSpacing.sm,
-                                      OmniSpacing.md,
-                                      OmniSpacing.md,
-                                    ),
-                                    child: Column(
-                                      key: _contentBodyKey,
-                                      mainAxisSize: MainAxisSize.min,
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: <Widget>[
-                                        if (todoEnabled)
-                                          _FloatingTodos(
-                                            today: today,
-                                            onComplete: _completeTodo,
-                                            expansionBudget: expansionBudget,
-                                            onAppliedExpansionChanged:
-                                                _recordAppliedTodoExpansion,
-                                            onToggleComposer:
-                                                _composerMode ==
-                                                    _FloatingComposerMode.todo
-                                                ? _closeComposer
-                                                : () => _openComposer(
-                                                    _FloatingComposerMode.todo,
-                                                  ),
-                                            composer:
-                                                _composerMode ==
-                                                    _FloatingComposerMode.todo
-                                                ? _FloatingTodoComposer(
-                                                    today: today,
-                                                    onClose: _closeComposer,
-                                                  )
-                                                : null,
-                                          ),
-                                        if (todoEnabled &&
-                                            timelineEnabled) ...<Widget>[
-                                          const SizedBox(
-                                            height: OmniSpacing.sm,
-                                          ),
-                                          Divider(
-                                            height: 1,
-                                            color: colors.line.withValues(
-                                              alpha: 0.64,
+            child: FloatingGlassSurface(
+              backdropApplied: widget.backdropApplied,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  _FloatingTitleBar(
+                    now: now,
+                    onClose: widget.onClose,
+                    onOpenTodos: () => unawaited(widget.onOpenRoute('/todos')),
+                    onDragStart: widget.onDragStart,
+                    onDragUpdate: widget.onDragUpdate,
+                    onDragEnd: widget.onDragEnd,
+                  ),
+                  Divider(height: 1, color: glass.separator),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder:
+                          (BuildContext context, BoxConstraints constraints) {
+                            // 滚动区扣除上下内容边距后的实际可用高度。
+                            final double availableBodyHeight =
+                                (constraints.maxHeight -
+                                        OmniSpacing.sm -
+                                        OmniSpacing.md)
+                                    .clamp(0, double.infinity)
+                                    .toDouble();
+                            _scheduleTodoExpansionBudgetUpdate();
+                            // 当前尺寸帧立即分配增高空间，避免先画旧高度再画新高度。
+                            final double expansionBudget =
+                                (availableBodyHeight -
+                                        (_baseContentHeight ??
+                                            availableBodyHeight))
+                                    .clamp(0, double.infinity)
+                                    .toDouble();
+                            return SingleChildScrollView(
+                              key: const ValueKey<String>(
+                                'floating-window-content-scroll',
+                              ),
+                              primary: false,
+                              padding: const EdgeInsets.fromLTRB(
+                                OmniSpacing.md,
+                                OmniSpacing.sm,
+                                OmniSpacing.md,
+                                OmniSpacing.md,
+                              ),
+                              child: Column(
+                                key: _contentBodyKey,
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: <Widget>[
+                                  if (todoEnabled)
+                                    _FloatingTodos(
+                                      today: today,
+                                      onComplete: _completeTodo,
+                                      expansionBudget: expansionBudget,
+                                      onAppliedExpansionChanged:
+                                          _recordAppliedTodoExpansion,
+                                      onToggleComposer:
+                                          _composerMode ==
+                                              _FloatingComposerMode.todo
+                                          ? _closeComposer
+                                          : () => _openComposer(
+                                              _FloatingComposerMode.todo,
                                             ),
-                                          ),
-                                          const SizedBox(
-                                            height: OmniSpacing.sm,
-                                          ),
-                                        ],
-                                        if (timelineEnabled)
-                                          _FloatingTimeStatus(
-                                            onOpenRoute: widget.onOpenRoute,
-                                            onStart: () => _openComposer(
-                                              _FloatingComposerMode.startTime,
-                                            ),
-                                            onBackfill: () => _openComposer(
-                                              _FloatingComposerMode
-                                                  .backfillTime,
-                                            ),
-                                            composer:
-                                                _composerMode ==
-                                                    _FloatingComposerMode
-                                                        .startTime
-                                                ? _FloatingTimeComposer(
-                                                    key: const ValueKey<String>(
-                                                      'floating-start-composer',
-                                                    ),
-                                                    mode:
-                                                        _FloatingTimeComposerMode
-                                                            .start,
-                                                    day: now,
-                                                    onClose: _closeComposer,
-                                                  )
-                                                : _composerMode ==
-                                                      _FloatingComposerMode
-                                                          .backfillTime
-                                                ? _FloatingTimeComposer(
-                                                    key: const ValueKey<String>(
-                                                      'floating-backfill-composer',
-                                                    ),
-                                                    mode:
-                                                        _FloatingTimeComposerMode
-                                                            .backfill,
-                                                    day: now,
-                                                    onClose: _closeComposer,
-                                                  )
-                                                : null,
-                                          ),
-                                      ],
+                                      composer:
+                                          _composerMode ==
+                                              _FloatingComposerMode.todo
+                                          ? _FloatingTodoComposer(
+                                              today: today,
+                                              onClose: _closeComposer,
+                                            )
+                                          : null,
                                     ),
-                                  );
-                                },
-                          ),
-                        ),
-                      ],
+                                  if (todoEnabled &&
+                                      timelineEnabled) ...<Widget>[
+                                    const SizedBox(height: OmniSpacing.sm),
+                                    Divider(height: 1, color: glass.separator),
+                                    const SizedBox(height: OmniSpacing.sm),
+                                  ],
+                                  if (timelineEnabled)
+                                    _FloatingTimeStatus(
+                                      onOpenRoute: widget.onOpenRoute,
+                                      onStart: () => _openComposer(
+                                        _FloatingComposerMode.startTime,
+                                      ),
+                                      onBackfill: () => _openComposer(
+                                        _FloatingComposerMode.backfillTime,
+                                      ),
+                                      composer:
+                                          _composerMode ==
+                                              _FloatingComposerMode.startTime
+                                          ? _FloatingTimeComposer(
+                                              key: const ValueKey<String>(
+                                                'floating-start-composer',
+                                              ),
+                                              mode: _FloatingTimeComposerMode
+                                                  .start,
+                                              day: now,
+                                              onClose: _closeComposer,
+                                            )
+                                          : _composerMode ==
+                                                _FloatingComposerMode
+                                                    .backfillTime
+                                          ? _FloatingTimeComposer(
+                                              key: const ValueKey<String>(
+                                                'floating-backfill-composer',
+                                              ),
+                                              mode: _FloatingTimeComposerMode
+                                                  .backfill,
+                                              day: now,
+                                              onClose: _closeComposer,
+                                            )
+                                          : null,
+                                    ),
+                                ],
+                              ),
+                            );
+                          },
                     ),
                   ),
-                ),
+                ],
               ),
             ),
           ),
@@ -593,6 +543,8 @@ class _FloatingTitleBar extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
+    // Shared material for the title bar buttons.
+    final FloatingGlassStyle glass = FloatingGlassStyle.of(context);
     // 当前日期标题。
     final String dateLabel = DateFormat('MM月dd日').format(now);
     return SizedBox(
@@ -628,12 +580,14 @@ class _FloatingTitleBar extends StatelessWidget {
           OmniIconButton(
             key: const ValueKey<String>('floating-window-open-todos'),
             tooltip: '打开每日待办',
+            style: glass.iconButtonStyle(),
             onPressed: onOpenTodos,
             icon: const Icon(Icons.checklist_rounded, size: OmniSize.icon),
           ),
           OmniIconButton(
             key: const ValueKey<String>('floating-window-close-button'),
             tooltip: '关闭桌面悬浮框',
+            style: glass.iconButtonStyle(),
             onPressed: () => unawaited(onClose()),
             icon: const Icon(Icons.close_rounded, size: OmniSize.icon),
           ),
@@ -772,8 +726,8 @@ class _FloatingTodosState extends ConsumerState<_FloatingTodos> {
     widget.onAppliedExpansionChanged(appliedExpansionHeight);
     // 新增待办录入区当前是否展开。
     final bool composerOpen = widget.composer != null;
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
+    // Use the same material for section controls and title controls.
+    final FloatingGlassStyle glass = FloatingGlassStyle.of(context);
     // 系统是否要求关闭动画。
     final bool disableAnimations =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
@@ -798,35 +752,7 @@ class _FloatingTodosState extends ConsumerState<_FloatingTodos> {
                   tooltip: allTreesCollapsed ? '展开全部子任务' : '收起全部子任务',
                   padding: EdgeInsets.zero,
                   iconSize: 18,
-                  style: ButtonStyle(
-                    foregroundColor: WidgetStateProperty.resolveWith<Color?>((
-                      Set<WidgetState> states,
-                    ) {
-                      if (states.contains(WidgetState.disabled)) {
-                        return colors.muted.withValues(alpha: 0.45);
-                      }
-                      if (states.contains(WidgetState.hovered) ||
-                          states.contains(WidgetState.focused)) {
-                        return colors.brand;
-                      }
-                      return colors.muted;
-                    }),
-                    backgroundColor: WidgetStateProperty.resolveWith<Color?>((
-                      Set<WidgetState> states,
-                    ) {
-                      if (states.contains(WidgetState.pressed)) {
-                        return colors.brandSoft.withValues(alpha: 0.78);
-                      }
-                      if (states.contains(WidgetState.hovered)) {
-                        return colors.brandSoft.withValues(alpha: 0.52);
-                      }
-                      return Colors.transparent;
-                    }),
-                    shape: WidgetStatePropertyAll<OutlinedBorder>(
-                      RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(OmniRadius.control),
-                      ),
-                    ),
+                  style: glass.iconButtonStyle().copyWith(
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                   onPressed: expandableTreeIds.isEmpty
@@ -851,35 +777,9 @@ class _FloatingTodosState extends ConsumerState<_FloatingTodos> {
                 tooltip: composerOpen ? '取消新增待办' : '新增待办',
                 padding: EdgeInsets.zero,
                 iconSize: 18,
-                style: ButtonStyle(
-                  foregroundColor: WidgetStateProperty.resolveWith<Color?>((
-                    Set<WidgetState> states,
-                  ) {
-                    if (states.contains(WidgetState.hovered) ||
-                        states.contains(WidgetState.focused) ||
-                        composerOpen) {
-                      return colors.brand;
-                    }
-                    return colors.muted;
-                  }),
-                  backgroundColor: WidgetStateProperty.resolveWith<Color?>((
-                    Set<WidgetState> states,
-                  ) {
-                    if (states.contains(WidgetState.pressed)) {
-                      return colors.brandSoft.withValues(alpha: 0.78);
-                    }
-                    if (states.contains(WidgetState.hovered) || composerOpen) {
-                      return colors.brandSoft.withValues(alpha: 0.52);
-                    }
-                    return Colors.transparent;
-                  }),
-                  shape: WidgetStatePropertyAll<OutlinedBorder>(
-                    RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(OmniRadius.control),
-                    ),
-                  ),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
+                style: glass
+                    .iconButtonStyle(selected: composerOpen)
+                    .copyWith(tapTargetSize: MaterialTapTargetSize.shrinkWrap),
                 onPressed: widget.onToggleComposer,
                 icon: AnimatedRotation(
                   turns: composerOpen ? 0.125 : 0,
@@ -947,13 +847,13 @@ class _FloatingComposerFrame extends StatelessWidget {
   /// 构建无阴影、仅以淡色和分隔线区分的内联区域。
   @override
   Widget build(BuildContext context) {
-    // 当前主题语义色。
-    final OmniColors colors = OmniColors.of(context);
+    // Shared material for the expanded composer.
+    final FloatingGlassStyle glass = FloatingGlassStyle.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: colors.brandSoft.withValues(alpha: 0.34),
+        color: glass.composer,
         border: Border.symmetric(
-          horizontal: BorderSide(color: colors.line.withValues(alpha: 0.82)),
+          horizontal: BorderSide(color: glass.separator),
         ),
       ),
       child: Padding(
@@ -1001,12 +901,12 @@ InputDecoration _floatingFieldDecoration(
 }) {
   // 当前主题语义色。
   final OmniColors colors = OmniColors.of(context);
-  // 当前是否使用深色主题。
-  final bool isDark = Theme.of(context).brightness == Brightness.dark;
+  // Inputs retain enough material weight for readable text and caret.
+  final FloatingGlassStyle glass = FloatingGlassStyle.of(context);
   // 默认输入边框。
   final OutlineInputBorder enabledBorder = OutlineInputBorder(
     borderRadius: BorderRadius.circular(OmniRadius.control),
-    borderSide: BorderSide(color: colors.line.withValues(alpha: 0.88)),
+    borderSide: BorderSide(color: glass.controlBorder),
   );
   // 聚焦输入边框。
   final OutlineInputBorder focusedBorder = OutlineInputBorder(
@@ -1021,7 +921,7 @@ InputDecoration _floatingFieldDecoration(
   return InputDecoration(
     hintText: hintText,
     filled: true,
-    fillColor: colors.paper.withValues(alpha: isDark ? 0.16 : 0.62),
+    fillColor: glass.field,
     isDense: true,
     contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
     border: enabledBorder,
@@ -1708,7 +1608,7 @@ class _FloatingTodoQuadrantState extends State<_FloatingTodoQuadrant> {
                   ?.copyWith(color: accent, fontWeight: FontWeight.w600),
             ),
             const SizedBox(width: OmniSpacing.xs),
-            Expanded(child: Divider(color: accent.withValues(alpha: 0.58))),
+            Expanded(child: Divider(color: accent.withValues(alpha: 0.30))),
             const SizedBox(width: OmniSpacing.xs),
             Text(
               '${widget.todoTrees.length}',
@@ -2146,8 +2046,8 @@ class _FloatingCompactButton extends StatelessWidget {
   Widget build(BuildContext context) {
     // 当前主题语义色。
     final OmniColors colors = OmniColors.of(context);
-    // 当前是否使用深色主题。
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    // Shared material for all compact floating actions.
+    final FloatingGlassStyle glass = FloatingGlassStyle.of(context);
     // 紧凑按钮的公共样式。
     final ButtonStyle style = ButtonStyle(
       minimumSize: const WidgetStatePropertyAll<Size>(Size(0, 30)),
@@ -2156,8 +2056,9 @@ class _FloatingCompactButton extends StatelessWidget {
       ),
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       visualDensity: VisualDensity.standard,
-      textStyle: const WidgetStatePropertyAll<TextStyle>(
-        TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+      textStyle: WidgetStatePropertyAll<TextStyle?>(
+        Theme.of(context).textTheme.labelLarge
+            ?.copyWith(fontSize: 12, fontWeight: FontWeight.w500),
       ),
       foregroundColor: WidgetStateProperty.resolveWith<Color?>((
         Set<WidgetState> states,
@@ -2167,29 +2068,10 @@ class _FloatingCompactButton extends StatelessWidget {
         }
         return secondary ? colors.ink : colors.brandStrong;
       }),
-      backgroundColor: WidgetStateProperty.resolveWith<Color?>((
-        Set<WidgetState> states,
-      ) {
-        if (states.contains(WidgetState.disabled)) {
-          return colors.mist.withValues(alpha: isDark ? 0.18 : 0.42);
-        }
-        if (states.contains(WidgetState.pressed)) {
-          return secondary
-              ? colors.mist.withValues(alpha: isDark ? 0.46 : 0.82)
-              : Color.alphaBlend(
-                  colors.brand.withValues(alpha: 0.14),
-                  colors.brandSoft.withValues(alpha: isDark ? 0.46 : 0.84),
-                );
-        }
-        if (states.contains(WidgetState.hovered)) {
-          return secondary
-              ? colors.paper.withValues(alpha: isDark ? 0.20 : 0.62)
-              : colors.brandSoft.withValues(alpha: isDark ? 0.46 : 0.84);
-        }
-        return secondary
-            ? colors.paper.withValues(alpha: isDark ? 0.10 : 0.38)
-            : colors.brandSoft.withValues(alpha: isDark ? 0.34 : 0.70);
-      }),
+      backgroundColor: WidgetStateProperty.resolveWith<Color?>(
+        (Set<WidgetState> states) =>
+            glass.controlFill(states, primary: !secondary),
+      ),
       side: WidgetStateProperty.resolveWith<BorderSide?>((
         Set<WidgetState> states,
       ) {
@@ -2197,11 +2079,11 @@ class _FloatingCompactButton extends StatelessWidget {
           return BorderSide(color: colors.brand, width: 1.5);
         }
         if (states.contains(WidgetState.disabled)) {
-          return BorderSide(color: colors.line.withValues(alpha: 0.42));
+          return BorderSide(color: glass.controlBorder.withValues(alpha: 0.08));
         }
         return BorderSide(
           color: secondary
-              ? colors.line.withValues(alpha: 0.86)
+              ? glass.controlBorder
               : colors.brand.withValues(alpha: 0.28),
         );
       }),
