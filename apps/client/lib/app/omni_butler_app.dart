@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:omni_butler/app/app_display_name.dart';
 import 'package:omni_butler/app/omni_scroll_behavior.dart';
 import 'package:omni_butler/app/router/app_router.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
@@ -137,7 +138,7 @@ class _OmniButlerAppState extends ConsumerState<OmniButlerApp> {
     final router = ref.watch(appRouterProvider);
 
     return MaterialApp.router(
-      title: 'Omni Butler',
+      onGenerateTitle: (_) => appDisplayName,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(
         brightness: Brightness.light,

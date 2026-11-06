@@ -3,12 +3,15 @@
 // Used by Runner.rc
 //
 #define IDI_APP_ICON                    101
+// Display names shared by the runner and the installer shortcuts.
+#define IDS_APP_DISPLAY_NAME_EN          102
+#define IDS_APP_DISPLAY_NAME_ZH          103
 
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        102
+#define _APS_NEXT_RESOURCE_VALUE        104
 #define _APS_NEXT_COMMAND_VALUE         40001
 #define _APS_NEXT_CONTROL_VALUE         1001
 #define _APS_NEXT_SYMED_VALUE           101

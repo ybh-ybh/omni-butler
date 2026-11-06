@@ -11,6 +11,7 @@ import 'package:flutter/src/widgets/_window.dart';
 import 'package:flutter/src/widgets/_window_win32.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:omni_butler/app/app_display_name.dart';
 import 'package:omni_butler/app/omni_butler_app.dart';
 import 'package:omni_butler/features/notes/data/note_providers.dart';
 import 'package:omni_butler/app/router/app_router.dart';
@@ -83,7 +84,7 @@ class _WindowsWindowHostState extends State<WindowsWindowHost> {
     _mainWindowController = RegularWindowController(
       size: const Size(1280, 720),
       constraints: _mainWindowConstraints,
-      title: 'Omni Butler',
+      title: appDisplayName,
       delegate: _mainWindowDelegate,
     );
     // 当前实验性 Windows 引擎未保存创建约束，创建后显式同步原生缩放限制。
@@ -517,7 +518,7 @@ class _WindowsWindowCoordinatorState
         minWidth: _floatingWindowWidth,
         minHeight: _floatingWindowMinHeight,
       ),
-      title: 'Omni Butler · 今日',
+      title: '$appDisplayName · 今日',
       delegate: delegate,
     );
     // 原生创建会轮询消息；若期间用户停用或退出，不再登记迟到的窗口。

@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include "resource.h"
+
 namespace {
 
 // 托盘隐藏窗口类名。
@@ -18,6 +20,22 @@ constexpr UINT kTrayCallbackMessage = WM_APP + 41;
 constexpr UINT kOpenCommand = 41001;
 constexpr UINT kToggleCommand = 41002;
 constexpr UINT kExitCommand = 41003;
+
+// Loads the tray label from the same resource as the installer shortcuts.
+std::wstring LoadAppDisplayName() {
+  // Use the Windows display language instead of the regional locale.
+  const UINT resource_id =
+      PRIMARYLANGID(::GetUserDefaultUILanguage()) == LANG_CHINESE
+          ? IDS_APP_DISPLAY_NAME_ZH
+          : IDS_APP_DISPLAY_NAME_EN;
+  // Both names fit in this buffer, including the null terminator.
+  wchar_t name[32]{};
+  if (::LoadStringW(::GetModuleHandleW(nullptr), resource_id, name,
+                    ARRAYSIZE(name)) == 0) {
+    return L"Omni Butler";
+  }
+  return name;
+}
 
 // 将 UTF-8 路径转换为 Windows UTF-16 路径。
 std::wstring Utf16FromUtf8(const std::string& value) {
@@ -147,7 +165,8 @@ bool WindowsTrayController::AddTrayIcon() {
   notify_icon_data_.uCallbackMessage = kTrayCallbackMessage;
   notify_icon_data_.hIcon = icon_;
   ::StringCchCopyW(notify_icon_data_.szTip,
-                   ARRAYSIZE(notify_icon_data_.szTip), L"Omni Butler");
+                   ARRAYSIZE(notify_icon_data_.szTip),
+                   LoadAppDisplayName().c_str());
   tray_icon_added_ =
       ::Shell_NotifyIconW(NIM_ADD, &notify_icon_data_) == TRUE;
   return tray_icon_added_;
@@ -165,7 +184,9 @@ void WindowsTrayController::ShowContextMenu() {
       MF_STRING | (floating_enabled_ ? MF_CHECKED : MF_UNCHECKED);
   ::AppendMenuW(menu, toggle_flags, kToggleCommand, L"显示桌面悬浮框");
   ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-  ::AppendMenuW(menu, MF_STRING, kExitCommand, L"退出 Omni Butler");
+  // Keep the app name consistent with the tray tooltip.
+  const std::wstring exit_label = L"退出 " + LoadAppDisplayName();
+  ::AppendMenuW(menu, MF_STRING, kExitCommand, exit_label.c_str());
   // 当前鼠标位置。
   POINT cursor_position{};
   ::GetCursorPos(&cursor_position);

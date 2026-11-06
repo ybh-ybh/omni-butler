@@ -9,6 +9,7 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/src/foundation/_features.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:omni_butler/app/app_display_name.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
@@ -68,7 +69,7 @@ Future<void> main() async {
           .setEnabledFromSettings(true);
       // 有界轮询本测试进程卡片完成创建，避免碰到其他实例。
       for (int attempt = 0; attempt < 100 && card == nullptr; attempt += 1) {
-        card = _findOwnWindow(title: 'Omni Butler · 今日', desktop: true);
+        card = _findOwnWindow(title: '$appDisplayName · 今日', desktop: true);
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }
       if (card == nullptr) throw StateError('未找到本测试进程的悬浮卡片');
@@ -186,7 +187,7 @@ win32.HWND _createWrapper(int width, int height) {
           .toNativeUtf16();
   try {
     // 主窗口属于隔离测试进程，不能按可见标题操作生产实例。
-    final win32.HWND window = _findOwnWindow(title: 'Omni Butler');
+    final win32.HWND window = _findOwnWindow(title: appDisplayName);
     if (window == nullptr) throw StateError('未找到测试主窗口');
     win32.SetWindowText(window, win32.PCWSTR(title));
     win32.SetWindowPos(

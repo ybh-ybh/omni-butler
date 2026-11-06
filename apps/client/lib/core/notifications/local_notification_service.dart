@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:omni_butler/app/app_display_name.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/notifications/notification_preferences.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -324,15 +325,15 @@ class LocalNotificationService {
       // Android 初始化配置。
       const AndroidInitializationSettings androidSettings =
           AndroidInitializationSettings('@mipmap/ic_launcher');
-      // Windows 初始化配置。
-      const WindowsInitializationSettings windowsSettings =
+      // Keep the Windows notification sender consistent with the app name.
+      final WindowsInitializationSettings windowsSettings =
           WindowsInitializationSettings(
-            appName: 'Omni Butler',
+            appName: appDisplayName,
             appUserModelId: 'OmniButler.Desktop.App',
             guid: _windowsNotificationGuid,
           );
-      // 当前支持平台的统一初始化配置。
-      const InitializationSettings settings = InitializationSettings(
+      // Combine the platform notification settings.
+      final InitializationSettings settings = InitializationSettings(
         android: androidSettings,
         windows: windowsSettings,
       );
@@ -448,15 +449,15 @@ class LocalNotificationService {
           title: plan.title,
           body: plan.body,
           scheduledDate: tz.TZDateTime.from(plan.scheduledAt, tz.local),
-          notificationDetails: const NotificationDetails(
-            android: AndroidNotificationDetails(
+          notificationDetails: NotificationDetails(
+            android: const AndroidNotificationDetails(
               'omni_butler_reminders',
               '生活提醒',
               channelDescription: '待办、周期事件和会员提醒',
               importance: Importance.high,
               priority: Priority.high,
             ),
-            windows: WindowsNotificationDetails(subtitle: 'Omni Butler'),
+            windows: WindowsNotificationDetails(subtitle: appDisplayName),
           ),
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
           payload: plan.payload,
@@ -485,7 +486,7 @@ class LocalNotificationService {
     try {
       await _plugin.show(
         id: _stableId('test'),
-        title: 'Omni Butler 通知已就绪',
+        title: '$appDisplayName 通知已就绪',
         body: '之后会按你设置的时间提醒待办、事件和会员。',
         notificationDetails: const NotificationDetails(
           android: AndroidNotificationDetails(

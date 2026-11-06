@@ -54,6 +54,14 @@ END
 // remains consistent on all systems.
 IDI_APP_ICON            ICON                    "resources\\app_icon.ico"
 
+// Use separate IDs so the Shell and the runner can resolve either name
+// without depending on the caller's resource fallback order.
+STRINGTABLE LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+BEGIN
+    IDS_APP_DISPLAY_NAME_EN "Omni Butler"
+    IDS_APP_DISPLAY_NAME_ZH L"知序"
+END
+
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -90,12 +98,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.omnibutler" "\0"
-            VALUE "FileDescription", "omni_butler" "\0"
+            VALUE "FileDescription", "Omni Butler" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "omni_butler" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.omnibutler. All rights reserved." "\0"
             VALUE "OriginalFilename", "omni_butler.exe" "\0"
-            VALUE "ProductName", "omni_butler" "\0"
+            VALUE "ProductName", "Omni Butler" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

@@ -9,6 +9,7 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/src/foundation/_features.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:omni_butler/app/app_display_name.dart';
 import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
@@ -288,7 +289,7 @@ Future<win32.HWND> _waitForCard() async {
     // 本进程已经挂到桌面的卡片窗口。
     final win32.HWND card = _findOwnWindow(
       null,
-      title: 'Omni Butler · 今日',
+      title: '$appDisplayName · 今日',
       searchDesktop: true,
     );
     if (card != nullptr) {
