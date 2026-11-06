@@ -1269,7 +1269,7 @@ void main() {
     await tester.tap(historyOpen);
     await tester.pumpAndSettle();
     expect(
-      find.byKey(const ValueKey<String>('todo-mobile-history-date-row')),
+      find.byKey(const ValueKey<String>('android-completion-history')),
       findsOneWidget,
     );
     expect(
@@ -1283,12 +1283,30 @@ void main() {
     for (final double width in <double>[320, 360, 390]) {
       tester.view.physicalSize = Size(width, viewport.height);
       await tester.pumpAndSettle();
-      // 历史日期在各窄屏宽度下都完整位于页面范围内。
-      final Rect dateRowRect = tester.getRect(
-        find.byKey(const ValueKey<String>('todo-mobile-history-date-row')),
+      // The full-screen history and its navigation fit every supported width.
+      final Rect historyRect = tester.getRect(
+        find.byKey(const ValueKey<String>('android-completion-history')),
       );
-      expect(dateRowRect.left, greaterThanOrEqualTo(0));
-      expect(dateRowRect.right, lessThanOrEqualTo(width));
+      expect(historyRect.left, greaterThanOrEqualTo(0));
+      expect(historyRect.right, lessThanOrEqualTo(width));
+      expect(
+        find
+            .byKey(const ValueKey<String>('android-completion-back'))
+            .hitTestable(),
+        findsOneWidget,
+      );
+      expect(
+        find
+            .byKey(const ValueKey<String>('android-completion-sidebar-open'))
+            .hitTestable(),
+        findsOneWidget,
+      );
+      expect(
+        find
+            .byKey(const ValueKey<String>('android-completion-search-open'))
+            .hitTestable(),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
     }
     await tester.tap(

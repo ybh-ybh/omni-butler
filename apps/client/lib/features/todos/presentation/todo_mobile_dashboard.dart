@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:omni_butler/app/theme/app_theme.dart';
 import 'package:omni_butler/app/theme/app_tokens.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
@@ -22,23 +21,11 @@ class TodoMobileDashboard extends StatefulWidget {
   /// 各分类进行中的父任务数量，不包含子任务或完成历史。
   final Map<TodoPriorityQuadrant, int> quadrantCounts;
 
-  /// 是否正在查看完成历史。
-  final bool showingHistory;
-
-  /// 当前完成历史日期。
-  final DateTime selectedDay;
-
-  /// 当前自然日。
-  final DateTime today;
-
   /// 分类切换后更新会话状态。
   final ValueChanged<TodoPriorityQuadrant?> onQuadrantSelected;
 
-  /// 打开或返回完成历史。
-  final ValueChanged<bool> onHistoryChanged;
-
-  /// 更新历史日期。
-  final ValueChanged<DateTime> onDaySelected;
+  /// Opens the independent full-screen completion history.
+  final VoidCallback onHistory;
 
   /// 打开现有新增待办编辑器。
   final VoidCallback onCreate;
@@ -46,22 +33,14 @@ class TodoMobileDashboard extends StatefulWidget {
   /// 按分类构建进行中业务内容，不受历史视图开关影响。
   final Widget Function(BuildContext, TodoPriorityQuadrant?) activePageBuilder;
 
-  /// 当前日期的完成历史业务内容。
-  final Widget history;
-
   /// 创建安卓待办平铺页面。
   const TodoMobileDashboard({
     required this.selectedQuadrant,
     required this.quadrantCounts,
-    required this.showingHistory,
-    required this.selectedDay,
-    required this.today,
     required this.onQuadrantSelected,
-    required this.onHistoryChanged,
-    required this.onDaySelected,
+    required this.onHistory,
     required this.onCreate,
     required this.activePageBuilder,
-    required this.history,
     super.key,
   });
 
@@ -179,116 +158,70 @@ class _TodoMobileDashboardState extends State<TodoMobileDashboard> {
         ) +
         OmniSpacing.md * 2 +
         OmniSpacing.xs;
-    return PopScope<Object?>(
-      canPop: !widget.showingHistory,
-      onPopInvokedWithResult: (bool didPop, Object? result) {
-        if (!didPop && widget.showingHistory) {
-          widget.onHistoryChanged(false);
-        }
-      },
-      child: GestureDetector(
-        key: const ValueKey<String>('todo-mobile-page-gesture-boundary'),
-        behavior: HitTestBehavior.opaque,
-        excludeFromSemantics: true,
-        onHorizontalDragStart: _consumeHorizontalDrag,
-        child: Material(
-          color: colors.paper,
-          child: Stack(
-            children: <Widget>[
-              Positioned.fill(
-                child: IndexedStack(
-                  index: widget.showingHistory ? 1 : 0,
-                  children: <Widget>[
-                    TickerMode(
-                      enabled: !widget.showingHistory,
-                      child: Column(
-                        children: <Widget>[
-                          _TodoMobileTabs(
-                            selected: widget.selectedQuadrant,
-                            quadrantCounts: widget.quadrantCounts,
-                            pageController: _pageController,
-                            onSelected: widget.onQuadrantSelected,
-                            onHistory: () => widget.onHistoryChanged(true),
-                          ),
-                          Expanded(
-                            child: NotificationListener<ScrollNotification>(
-                              onNotification: _handleScrollNotification,
-                              child: PageView.builder(
-                                key: const ValueKey<String>(
-                                  'todo-mobile-pager',
-                                ),
-                                controller: _pageController,
-                                physics: const AlwaysScrollableScrollPhysics(
-                                  parent: ClampingScrollPhysics(),
-                                ),
-                                itemCount: _quadrants.length,
-                                onPageChanged: (int index) {
-                                  if (_pendingPage == null) {
-                                    _reportedPage = index;
-                                    widget.onQuadrantSelected(
-                                      _quadrants[index],
-                                    );
-                                  }
-                                },
-                                itemBuilder:
-                                    (
-                                      BuildContext context,
-                                      int index,
-                                    ) => _TodoMobileViewport(
-                                      key: ValueKey<String>(
-                                        'todo-mobile-page-${_quadrants[index]?.value ?? 'all'}',
-                                      ),
-                                      bottomPadding: actionClearance,
-                                      child: widget.activePageBuilder(
-                                        context,
-                                        _quadrants[index],
-                                      ),
-                                    ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    TickerMode(
-                      enabled: widget.showingHistory,
-                      child: Column(
-                        children: <Widget>[
-                          _TodoMobileHistoryHeader(
-                            selectedDay: widget.selectedDay,
-                            today: widget.today,
-                            onBack: () => widget.onHistoryChanged(false),
-                            onDaySelected: widget.onDaySelected,
-                          ),
-                          Expanded(
-                            child: _TodoMobileViewport(
-                              key: const ValueKey<String>(
-                                'todo-mobile-history-viewport',
-                              ),
-                              bottomPadding: OmniSpacing.xl,
-                              child: widget.history,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (!widget.showingHistory)
-                Positioned(
-                  right: OmniSpacing.md,
-                  bottom: OmniSpacing.md,
-                  child: OmniButton(
-                    key: const ValueKey<String>('todo-mobile-create'),
-                    label: '新增待办',
-                    icon: Icons.add_rounded,
-                    variant: OmniButtonVariant.pagePrimary,
-                    onPressed: widget.onCreate,
+    return GestureDetector(
+      key: const ValueKey<String>('todo-mobile-page-gesture-boundary'),
+      behavior: HitTestBehavior.opaque,
+      excludeFromSemantics: true,
+      onHorizontalDragStart: _consumeHorizontalDrag,
+      child: Material(
+        color: colors.paper,
+        child: Stack(
+          children: <Widget>[
+            Positioned.fill(
+              child: Column(
+                children: <Widget>[
+                  _TodoMobileTabs(
+                    selected: widget.selectedQuadrant,
+                    quadrantCounts: widget.quadrantCounts,
+                    pageController: _pageController,
+                    onSelected: widget.onQuadrantSelected,
+                    onHistory: widget.onHistory,
                   ),
-                ),
-            ],
-          ),
+                  Expanded(
+                    child: NotificationListener<ScrollNotification>(
+                      onNotification: _handleScrollNotification,
+                      child: PageView.builder(
+                        key: const ValueKey<String>('todo-mobile-pager'),
+                        controller: _pageController,
+                        physics: const AlwaysScrollableScrollPhysics(
+                          parent: ClampingScrollPhysics(),
+                        ),
+                        itemCount: _quadrants.length,
+                        onPageChanged: (int index) {
+                          if (_pendingPage == null) {
+                            _reportedPage = index;
+                            widget.onQuadrantSelected(_quadrants[index]);
+                          }
+                        },
+                        itemBuilder: (BuildContext context, int index) =>
+                            _TodoMobileViewport(
+                              key: ValueKey<String>(
+                                'todo-mobile-page-${_quadrants[index]?.value ?? 'all'}',
+                              ),
+                              bottomPadding: actionClearance,
+                              child: widget.activePageBuilder(
+                                context,
+                                _quadrants[index],
+                              ),
+                            ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Positioned(
+              right: OmniSpacing.md,
+              bottom: OmniSpacing.md,
+              child: OmniButton(
+                key: const ValueKey<String>('todo-mobile-create'),
+                label: '新增待办',
+                icon: Icons.add_rounded,
+                variant: OmniButtonVariant.pagePrimary,
+                onPressed: widget.onCreate,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -784,130 +717,6 @@ class _TodoMobileTabsState extends State<_TodoMobileTabs> {
           ],
         ),
       ),
-    );
-  }
-}
-
-/// 完成历史二级页的返回和日期选择。
-class _TodoMobileHistoryHeader extends StatelessWidget {
-  /// 当前历史日期。
-  final DateTime selectedDay;
-
-  /// 当前自然日。
-  final DateTime today;
-
-  /// 返回原分类。
-  final VoidCallback onBack;
-
-  /// 修改历史日期。
-  final ValueChanged<DateTime> onDaySelected;
-
-  /// 创建平铺历史导航。
-  const _TodoMobileHistoryHeader({
-    required this.selectedDay,
-    required this.today,
-    required this.onBack,
-    required this.onDaySelected,
-  });
-
-  /// 优先使用中文日期，窄屏大字号时完整显示短日期或分两行。
-  String _dateLabel(BuildContext context, double width) {
-    // 与日期按钮的实际主题字号一致，保留系统缩放。
-    final TextStyle style =
-        Theme.of(context).outlinedButtonTheme.style?.textStyle
-            ?.resolve(const <WidgetState>{}) ??
-        Theme.of(context).textTheme.labelLarge!;
-    // 日期按钮两侧预留主题内边距。
-    final double available = math.max(0, width - OmniSpacing.md * 2);
-    // 首选自然中文日期。
-    final String full = DateFormat('yyyy 年 M 月 d 日').format(selectedDay);
-    // 空间不足时改用年月日均完整的紧凑格式。
-    final String short = DateFormat('yyyy/M/d').format(selectedDay);
-    // 按实际字体测量，避免只检查控件位置却漏掉省略号。
-    final TextPainter painter = TextPainter(
-      text: TextSpan(text: full, style: style),
-      textDirection: Directionality.of(context),
-      textScaler: MediaQuery.textScalerOf(context),
-    )..layout();
-    if (painter.width <= available) {
-      painter.dispose();
-      return full;
-    }
-    painter.text = TextSpan(text: short, style: style);
-    painter.layout();
-    // 仍无法单行容纳时让日期按钮自然增高，不缩小文字。
-    final bool shortFits = painter.width <= available;
-    painter.dispose();
-    return shortFits
-        ? short
-        : '${DateFormat('yyyy').format(selectedDay)}\n${DateFormat('M/d').format(selectedDay)}';
-  }
-
-  /// 构建二级标题和可放大文字的日期行。
-  @override
-  Widget build(BuildContext context) {
-    // 与正文一致的主题色。
-    final OmniColors colors = OmniColors.of(context);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        Row(
-          children: <Widget>[
-            OmniIconButton(
-              key: const ValueKey<String>('todo-mobile-history-back'),
-              tooltip: '返回进行中待办',
-              onPressed: onBack,
-              icon: const Icon(Icons.arrow_back_rounded),
-            ),
-            Expanded(
-              child: Text(
-                '完成历史',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-            const SizedBox(width: OmniSize.touch),
-          ],
-        ),
-        Row(
-          key: const ValueKey<String>('todo-mobile-history-date-row'),
-          children: <Widget>[
-            OmniIconButton(
-              key: const ValueKey<String>('todo-mobile-history-previous-day'),
-              tooltip: '前一天',
-              onPressed: () =>
-                  onDaySelected(selectedDay.subtract(const Duration(days: 1))),
-              icon: const Icon(Icons.chevron_left_rounded),
-            ),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (BuildContext context, BoxConstraints constraints) =>
-                    OmniDatePickerButton(
-                      key: const ValueKey<String>(
-                        'todo-mobile-history-date-picker',
-                      ),
-                      value: selectedDay,
-                      initialDate: selectedDay,
-                      currentDate: today,
-                      firstDate: DateTime(2000),
-                      lastDate: DateTime(2100),
-                      label: _dateLabel(context, constraints.maxWidth),
-                      icon: null,
-                      onChanged: onDaySelected,
-                    ),
-              ),
-            ),
-            OmniIconButton(
-              key: const ValueKey<String>('todo-mobile-history-next-day'),
-              tooltip: '后一天',
-              onPressed: () =>
-                  onDaySelected(selectedDay.add(const Duration(days: 1))),
-              icon: const Icon(Icons.chevron_right_rounded),
-            ),
-          ],
-        ),
-        Divider(height: 1, color: colors.line),
-      ],
     );
   }
 }

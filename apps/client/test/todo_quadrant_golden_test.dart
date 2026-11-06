@@ -221,13 +221,26 @@ Future<void> _verifyTodoGolden(
     await prepareBrandImageForGolden(tester);
   }
   // Keep the shared secondary header fully inside the captured viewport.
-  if (platform == TargetPlatform.android) {
+  if (platform == TargetPlatform.android && !showHistory) {
     // A settled page must not approve a clipped intermediate header frame.
     final Rect header = tester.getRect(
       find.byKey(const ValueKey<String>('android-secondary-header')),
     );
     expect(header.top, closeTo(0, 0.1));
     expect(header.height, greaterThanOrEqualTo(56));
+  }
+  if (platform == TargetPlatform.android && showHistory) {
+    // History owns one full-screen header rather than nesting the task header.
+    expect(
+      find.byKey(const ValueKey<String>('android-secondary-header')),
+      findsNothing,
+    );
+    expect(
+      find
+          .byKey(const ValueKey<String>('android-completion-back'))
+          .hitTestable(),
+      findsOneWidget,
+    );
   }
   await expectLater(find.byType(OmniButlerApp), matchesGoldenFile(goldenPath));
 

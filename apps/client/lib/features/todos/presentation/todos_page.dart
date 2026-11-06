@@ -10,6 +10,7 @@ import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
+import 'package:omni_butler/features/todos/presentation/android_todo_completion_history.dart';
 import 'package:omni_butler/features/todos/presentation/todo_completion_checkbox.dart';
 import 'package:omni_butler/features/todos/presentation/todo_editor_dialog.dart';
 import 'package:omni_butler/features/todos/presentation/todo_mobile_dashboard.dart';
@@ -103,6 +104,35 @@ class _TodosPageState extends ConsumerState<TodosPage> {
 
   /// 撤销浮动消息。
   OmniMessageHandle? _undoMessage;
+
+  /// Prevents duplicate Android history routes while preserving the dashboard.
+  bool _androidHistoryOpen = false;
+
+  /// Covers the secondary-page chrome with an independent history route.
+  Future<void> _openAndroidHistory() async {
+    if (_androidHistoryOpen) return;
+    _androidHistoryOpen = true;
+    _dismissUndo();
+    try {
+      await Navigator.of(context, rootNavigator: true).push<void>(
+        MaterialPageRoute<void>(
+          builder: (BuildContext routeContext) => Scaffold(
+            backgroundColor: OmniColors.of(routeContext).canvas,
+            body: SafeArea(
+              child: AndroidTodoCompletionHistory(
+                onBack: () => Navigator.of(routeContext).pop(),
+                onReopen: (TodoRecord todo) => _setTodoCompleted(todo, false),
+                onEdit: (TodoRecord todo) =>
+                    TodoEditorDialog.show(routeContext, record: todo),
+              ),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      _androidHistoryOpen = false;
+    }
+  }
 
   /// 初始化日期与首页带入的象限。
   @override
@@ -214,9 +244,10 @@ class _TodosPageState extends ConsumerState<TodosPage> {
     final AsyncValue<List<TodoTreeNode>> activeAsync = ref.watch(
       activeTodoTreesProvider(today),
     );
-    // Windows 使用独立全量完成流，其他平台继续按原日期读取历史。
+    // Android and Windows use the complete history stream in their own views.
     final AsyncValue<List<TodoHistoryEntry>> historyAsync =
-        Theme.of(context).platform == TargetPlatform.windows
+        (Theme.of(context).platform == TargetPlatform.windows ||
+            Theme.of(context).platform == TargetPlatform.android)
         ? const AsyncData<List<TodoHistoryEntry>>(<TodoHistoryEntry>[])
         : ref.watch(completedTodosForDayProvider(_selectedDay));
     // 当前是否运行在桌面平台。
@@ -249,19 +280,8 @@ class _TodosPageState extends ConsumerState<TodosPage> {
       return TodoMobileDashboard(
         selectedQuadrant: _priorityQuadrantFilter,
         quadrantCounts: quadrantCounts,
-        showingHistory: _pageView == _TodoPageView.history,
-        selectedDay: _selectedDay,
-        today: today,
         onQuadrantSelected: _setPriorityQuadrantFilter,
-        onHistoryChanged: (bool showing) {
-          _dismissUndo();
-          setState(() {
-            _pageView = showing ? _TodoPageView.history : _TodoPageView.active;
-          });
-        },
-        onDaySelected: (DateTime value) {
-          setState(() => _selectedDay = DateUtils.dateOnly(value));
-        },
+        onHistory: _openAndroidHistory,
         onCreate: () => TodoEditorDialog.show(context, initialDate: today),
         activePageBuilder:
             (BuildContext context, TodoPriorityQuadrant? quadrant) =>
@@ -275,16 +295,6 @@ class _TodosPageState extends ConsumerState<TodosPage> {
                   view: _TodoPageView.active,
                   priorityQuadrantFilter: quadrant,
                 ),
-        history: _buildPageBody(
-          context,
-          activeAsync: activeAsync,
-          historyAsync: historyAsync,
-          now: now,
-          mobile: true,
-          flat: true,
-          view: _TodoPageView.history,
-          priorityQuadrantFilter: null,
-        ),
       );
     }
     if (mobile) {
@@ -523,6 +533,11 @@ class _TodosPageState extends ConsumerState<TodosPage> {
           quadrantCounts: quadrantCounts,
           quadrantIndicatorIndex: null,
           onViewChanged: (_TodoPageView value) {
+            if (Theme.of(context).platform == TargetPlatform.android &&
+                value == _TodoPageView.history) {
+              _openAndroidHistory();
+              return;
+            }
             _dismissUndo();
             setState(() {
               _pageView = value;

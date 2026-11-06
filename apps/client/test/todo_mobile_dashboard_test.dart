@@ -14,13 +14,38 @@ import 'package:omni_butler/core/sync/sync_providers.dart';
 import 'package:omni_butler/features/todos/data/todo_priority_quadrant.dart';
 import 'package:omni_butler/features/todos/data/todo_repository.dart';
 import 'package:omni_butler/features/todos/presentation/todo_mobile_dashboard.dart';
-import 'package:omni_butler/shared/ui/omni_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/android_more_navigation_test_helpers.dart';
 
 /// 验证真实待办页面的视口、分页恢复与手势接管。
 void main() {
+  _todoTest('真实待办入口进入完成历史后正文右滑打开侧栏', (WidgetTester tester) async {
+    await _startTodos(tester);
+    await tester.tap(
+      find.byKey(const ValueKey<String>('todo-mobile-history-open')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('android-completion-history')),
+      findsOneWidget,
+    );
+    // The gesture begins inside the imperatively pushed route, away from its edge.
+    final Rect body = tester.getRect(
+      find.byKey(const ValueKey<String>('android-completion-list')),
+    );
+    await tester.dragFrom(
+      body.topLeft + const Offset(80, 300),
+      const Offset(220, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('android-completion-sidebar')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   _todoTest('胶囊导航仅展开选中项且背景对齐实际点击区域', (WidgetTester tester) async {
     await _startTodos(tester, seedTasks: false);
     // 全部与四个象限均通过真实点击验证展开和收起。
@@ -381,7 +406,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  _todoTest('短屏双倍字号完整展示历史年月日且日期仍可选择', (WidgetTester tester) async {
+  _todoTest('短屏双倍字号历史侧栏日期可选择且系统返回保留待办', (WidgetTester tester) async {
     await _startTodos(tester, seedTasks: false);
     tester.view.physicalSize = const Size(320, 360);
     tester.platformDispatcher.textScaleFactorTestValue = 2;
@@ -390,32 +415,24 @@ void main() {
       find.byKey(const ValueKey<String>('todo-mobile-history-open')),
     );
     await tester.pumpAndSettle();
-    // 读取实际日期内容与文字布局，不能只检查容器没有越界。
-    final Finder picker = find.byKey(
-      const ValueKey<String>('todo-mobile-history-date-picker'),
+    await tester.tap(
+      find.byKey(const ValueKey<String>('android-completion-sidebar-open')),
     );
-    // 日期的全部信息必须保留在可见文字中。
-    final Text label = tester.widget<Text>(
-      find.descendant(of: picker, matching: find.byType(Text)),
-    );
-    expect(label.data, contains('2026'));
-    expect(label.data, contains('10'));
-    expect(label.data, contains('8'));
-    // 验证绘制时没有因省略号丢失日期。
-    final RenderParagraph paragraph = tester.renderObject<RenderParagraph>(
-      find.descendant(of: picker, matching: find.byType(RichText)),
-    );
-    expect(paragraph.didExceedMaxLines, isFalse);
-    await tester.tap(picker);
     await tester.pumpAndSettle();
-    // 沿用现有锚定日历，真实点按下一天并提交。
-    await tester.tap(find.text('9').hitTestable());
+    // A real archive month remains reachable by scrolling the short drawer.
+    final Finder month = find.byKey(
+      const ValueKey<String>('android-completion-month-2026-10'),
+    );
+    await tester.ensureVisible(month);
     await tester.pumpAndSettle();
+    await tester.tap(month);
+    await tester.pumpAndSettle();
+    expect(find.text('2026年10月 ×'), findsOneWidget);
     expect(
-      tester
-          .widget<TodoMobileDashboard>(find.byType(TodoMobileDashboard))
-          .selectedDay,
-      DateTime(2026, 10, 9),
+      find
+          .byKey(const ValueKey<String>('android-completion-clear-date'))
+          .hitTestable(),
+      findsOneWidget,
     );
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
@@ -505,7 +522,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  _todoTest('分类独立滚动且历史与功能路由往返保留树展开和日期', (WidgetTester tester) async {
+  _todoTest('分类独立滚动且全屏历史与功能路由往返保留树展开', (WidgetTester tester) async {
     // 足量真实任务使全部和单分类都有独立的滚动范围。
     final _TodoFixture fixture = await _startTodos(tester);
     await tester.tap(
@@ -545,16 +562,34 @@ void main() {
       find.byKey(const ValueKey<String>('todo-mobile-create')),
       findsNothing,
     );
-    // 历史继续复用无卡片的父任务分组。
-    final OmniPanel historyGroup = tester.widget<OmniPanel>(
+    // The standalone history owns its header and keeps the dashboard offstage.
+    expect(
+      find.byKey(const ValueKey<String>('android-completion-history')),
+      findsOneWidget,
+    );
+    expect(
       find.byKey(
-        ValueKey<String>('todo-history-group-${fixture.completed.id}'),
+        ValueKey<String>(
+          'android-completion-group-2026-10-08-${fixture.completed.id}',
+        ),
       ),
+      findsOneWidget,
     );
-    expect(historyGroup.flat, isTrue);
+    expect(
+      find.byKey(const ValueKey<String>('android-secondary-header')),
+      findsNothing,
+    );
     await tester.tap(
-      find.byKey(const ValueKey<String>('todo-mobile-history-next-day')),
+      find.byKey(const ValueKey<String>('android-completion-sidebar-open')),
     );
+    await tester.pumpAndSettle();
+    // The archive applies a month without moving the covered task dashboard.
+    final Finder month = find.byKey(
+      const ValueKey<String>('android-completion-month-2026-10'),
+    );
+    await tester.ensureVisible(month);
+    await tester.pumpAndSettle();
+    await tester.tap(month);
     await tester.pumpAndSettle();
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
@@ -571,7 +606,19 @@ void main() {
       find.byKey(const ValueKey<String>('todo-mobile-history-open')),
     );
     await tester.pumpAndSettle();
-    expect(find.text('2026 年 10 月 9 日'), findsOneWidget);
+    // Re-entering history starts a fresh all-time session after its route closed.
+    expect(
+      find.byKey(const ValueKey<String>('android-completion-clear-date')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(
+        ValueKey<String>(
+          'android-completion-group-2026-10-08-${fixture.completed.id}',
+        ),
+      ),
+      findsOneWidget,
+    );
     await tester.tap(
       find.byKey(const ValueKey<String>('todo-mobile-history-back')),
     );
@@ -710,15 +757,10 @@ Widget _startupDashboard({required double width, required bool visible}) =>
               child: TodoMobileDashboard(
                 selectedQuadrant: null,
                 quadrantCounts: const <TodoPriorityQuadrant, int>{},
-                showingHistory: false,
-                selectedDay: DateTime(2026, 10, 8),
-                today: DateTime(2026, 10, 8),
                 onQuadrantSelected: (_) {},
-                onHistoryChanged: (_) {},
-                onDaySelected: (_) {},
+                onHistory: () {},
                 onCreate: () {},
                 activePageBuilder: (_, _) => const SizedBox.shrink(),
-                history: const SizedBox.shrink(),
               ),
             ),
           ),
