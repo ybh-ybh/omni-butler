@@ -1716,6 +1716,7 @@ class TimelineDetailsContent extends ConsumerWidget {
               SizedBox(
                 width: math.min(360, constraints.maxWidth * 0.34),
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
                     _DayDetailSummary(day: day, records: records),
                     const SizedBox(height: OmniSpacing.xs),

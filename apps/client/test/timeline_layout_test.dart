@@ -9,6 +9,7 @@ import 'package:omni_butler/app/theme/theme_controller.dart';
 import 'package:omni_butler/core/database/app_database.dart';
 import 'package:omni_butler/core/providers/core_providers.dart';
 import 'package:omni_butler/features/timeline/data/time_entry_repository.dart';
+import 'package:omni_butler/shared/ui/omni_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/golden_test_support.dart';
@@ -168,6 +169,25 @@ void main() {
     );
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('下一周期'));
+    await tester.pumpAndSettle();
+
+    // The empty list and summary should share the same sidebar edges.
+    final Rect emptyListRect = tester.getRect(
+      find
+          .ancestor(
+            of: find.text('点击时间轴空白位置，补记这段时间'),
+            matching: find.byType(OmniPanel),
+          )
+          .first,
+    );
+    // The summary panel defines the sidebar width.
+    final Rect summaryRect = tester.getRect(
+      find.byKey(const ValueKey<String>('timeline-day-summary')),
+    );
+    expect(emptyListRect.left, closeTo(summaryRect.left, 0.01));
+    expect(emptyListRect.right, closeTo(summaryRect.right, 0.01));
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
