@@ -239,8 +239,12 @@ void main() {
     await tester.ensureVisible(find.byTooltip('删除步骤 1'));
     await tester.tap(find.byTooltip('删除步骤 1'));
     await tester.pumpAndSettle();
-    expect(find.text('删除这些步骤？'), findsOneWidget);
-    await tester.tap(find.widgetWithText(OmniButton, '取消').last);
+    // Android confirmations expose their full consequences without a title bar.
+    expect(find.textContaining('将删除 1 个步骤'), findsOneWidget);
+    expect(find.textContaining('保存任务后生效'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey<String>('omni-action-sheet-cancel')),
+    );
     await tester.pumpAndSettle();
     // 取消后输入总数和仓储中的完成记录都应保留。
     expect(find.text('共 3 步'), findsOneWidget);
@@ -338,11 +342,13 @@ void main() {
     final TodoRecord todo = await _createProgress(database, count: 2);
     await _pumpFeature(tester, database, TodoEditorDialog(record: todo));
     // 修改第一项名称以形成真实结构写入。
-    final Finder firstName = find.byWidgetPredicate(
-      (Widget widget) =>
-          widget is OmniTextFormField &&
-          widget.decoration.hintText == '名称（可选）',
-    ).first;
+    final Finder firstName = find
+        .byWidgetPredicate(
+          (Widget widget) =>
+              widget is OmniTextFormField &&
+              widget.decoration.hintText == '名称（可选）',
+        )
+        .first;
     await tester.ensureVisible(firstName);
     await tester.enterText(firstName, '需要保留的输入');
     // 另一窗口新增步骤后，旧结构基线必须被拒绝。

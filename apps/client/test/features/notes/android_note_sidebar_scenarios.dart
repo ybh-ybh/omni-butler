@@ -861,7 +861,7 @@ void androidSidebarTests() {
     await _settle(tester);
     await tester.tap(find.text('仅移除标签'));
     await _settle(tester);
-    await tester.tap(find.widgetWithText(OmniButton, '取消'));
+    await tester.tap(_androidConfirmationAction('取消'));
     await _settle(tester);
     expect((await _sidebarTag(tester, app, 'work')).deletedAt, isNull);
     await _sidebarTagMenu(tester);
@@ -869,7 +869,7 @@ void androidSidebarTests() {
     await _settle(tester);
     await tester.tap(find.text('仅移除标签'));
     await _settle(tester);
-    await tester.tap(find.widgetWithText(OmniButton, '仅移除标签'));
+    await tester.tap(_androidConfirmationAction('仅移除标签'));
     await _settle(tester);
     expect((await _sidebarTag(tester, app, 'work')).deletedAt, isNotNull);
     expect(
@@ -919,7 +919,7 @@ void androidSidebarTests() {
     await _settle(tester);
     await tester.tap(find.text('删除标签和笔记'));
     await _settle(tester);
-    await tester.tap(find.widgetWithText(OmniButton, '删除标签并移入回收站'));
+    await tester.tap(_androidConfirmationAction('删除标签并移入回收站'));
     await _settle(tester);
     expect(
       (await tester.runAsync(

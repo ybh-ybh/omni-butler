@@ -772,7 +772,7 @@ void androidNoteActionTests() {
     await _settle(tester);
     await tester.tap(find.text('删除'));
     await _settle(tester);
-    await tester.tap(find.widgetWithText(OmniButton, '取消'));
+    await tester.tap(_androidConfirmationAction('取消'));
     await _settle(tester);
     expect(_bodyText(tester), '删除前未发布修改');
     await tester.runAsync(
@@ -784,7 +784,7 @@ void androidNoteActionTests() {
     await _settle(tester);
     await tester.tap(find.text('删除'));
     await _settle(tester);
-    await tester.tap(find.widgetWithText(OmniButton, '移入回收站'));
+    await tester.tap(_androidConfirmationAction('移入回收站'));
     await _settle(tester);
     expect(
       find.byKey(const ValueKey('android-note-history-editor')),
@@ -797,7 +797,7 @@ void androidNoteActionTests() {
     await _settle(tester);
     await tester.tap(find.text('删除'));
     await _settle(tester);
-    await tester.tap(find.widgetWithText(OmniButton, '移入回收站'));
+    await tester.tap(_androidConfirmationAction('移入回收站'));
     await _settle(tester);
     expect(find.byType(NoteRichEditor), findsNothing);
     expect(
@@ -1303,7 +1303,7 @@ void androidNoteActionTests() {
     await _androidCardMenu(tester);
     await tester.tap(find.text('删除'));
     await _settle(tester);
-    await tester.tap(find.widgetWithText(OmniButton, '移入回收站'));
+    await tester.tap(_androidConfirmationAction('移入回收站'));
     await _settle(tester);
     expect(app.recorder.state.isActive, isTrue);
     expect(app.recorder.state.draftId, owner);

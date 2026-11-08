@@ -278,7 +278,7 @@ void androidNoteTests() {
     );
     await tester.tap(find.widgetWithText(OmniButton, '放弃更改'));
     await _settle(tester);
-    await tester.tap(find.widgetWithText(OmniButton, '放弃更改').last);
+    await tester.tap(_androidConfirmationAction('放弃更改'));
     await _settle(tester);
     expect(find.byType(NoteRichEditor), findsNothing);
     expect(

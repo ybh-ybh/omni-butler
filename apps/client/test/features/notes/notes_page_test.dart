@@ -4385,6 +4385,14 @@ Future<void> _settle(
   await tester.pumpAndSettle();
 }
 
+/// Finds a visible Android confirmation action inside its modal surface.
+Finder _androidConfirmationAction(String label) => find
+    .descendant(
+      of: find.byKey(const ValueKey<String>('omni-action-sheet-surface')),
+      matching: find.text(label),
+    )
+    .hitTestable();
+
 /// 通过生产一级导航进入目标分支。
 Future<void> _navigate(WidgetTester tester, _App app, String path) async {
   await tester.tap(find.byKey(ValueKey<String>('navigation-$path')));

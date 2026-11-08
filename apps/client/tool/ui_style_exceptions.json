@@ -1,4 +1,8 @@
 {
+  "lib/shared/layout/responsive_shell.dart :: Color(0xFFF7F7F7)": {
+    "count": 1,
+    "reason": "安卓浅色模式底部导航栏按既定设计固定为浅灰色，深色模式继承主题；仅登记此处背景，不扩大其他控件颜色许可。"
+  },
   "lib/features/notes/presentation/android_note_sidebar.dart :: Color(0xFFC8C0A8)": {
     "count": 1,
     "reason": "安卓笔记侧栏分区标题沿用已确认的米灰色视觉，例外仅覆盖该标题，不扩大其他控件的颜色许可。"
