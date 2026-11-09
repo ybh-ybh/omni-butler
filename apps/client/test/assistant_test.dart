@@ -106,6 +106,17 @@ class _Repository extends AssistantRepository {
       serverRun = <String, dynamic>{...?serverRun, 'status': 'cancelled'};
       return serverRun!;
     }
+    if (method == 'POST' &&
+        path.startsWith('/runs/') &&
+        path.endsWith('/continue')) {
+      serverRun = <String, dynamic>{
+        ...?serverRun,
+        'id': 'continued-run',
+        'answerMessageId': 'continued-answer',
+        'status': 'running',
+      };
+      return serverRun!;
+    }
     if (responses.containsKey(path)) return responses[path]!;
     if (path == '/conversations' && method == 'GET') {
       return <String, dynamic>{
@@ -1458,6 +1469,34 @@ void main() {
     );
     await tester.pump();
     expect(find.byTooltip('开始'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey<String>('assistant-continue-button')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      repository.calls
+          .where((call) => call.path == '/runs/run/continue')
+          .single
+          .data,
+      isNull,
+    );
+    expect(
+      repository.calls.where(
+        (call) => call.method == 'POST' && call.path.endsWith('/messages'),
+      ),
+      isEmpty,
+    );
+    expect(
+      tester
+          .widget<OmniTextField>(
+            find.byKey(const ValueKey<String>('assistant-input')),
+          )
+          .controller!
+          .text,
+      isEmpty,
+    );
+    expect(find.text('继续'), findsNothing);
+    expect(find.byTooltip('停止'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

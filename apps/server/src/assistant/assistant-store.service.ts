@@ -38,6 +38,8 @@ import {
 import type { AttachmentMetadata } from './attachments/attachment.types';
 import { AssistantAttachmentsService } from './attachments/assistant-attachments.service';
 import { AssistantMessageNotes } from './assistant-message-notes.service';
+import { assistantContinuationState } from './assistant-continuation';
+import type { AssistantBatchPlan } from './assistant-batch.service';
 
 /// 会话、确认和记忆的权威存储，图checkpoint不授予写入权限。
 @Injectable()
@@ -1027,6 +1029,179 @@ export class AssistantStore {
         await transaction.assistantRun.findUniqueOrThrow({ where: { id } }),
         actor.sid,
       );
+    });
+  }
+
+  // Start one fresh attempt for a stopped task, retaining its goal and observed results.
+  async continueRun(actor: AuthUser, id: string): Promise<unknown> {
+    return this.authorized(actor, async (transaction) => {
+      // The owner transaction serializes continuation with stop, commit, and other devices.
+      const previous = await this.ownedRun(transaction, actor, id);
+      // Invalidated history must never be restored through a control action.
+      const state = previous.state as unknown as AssistantState;
+      if (state.memoryInvalidated)
+        throw new ConflictException('该任务上下文已失效，请发送新消息');
+      if (state.continuationRunId)
+        return this.runView(
+          transaction,
+          await this.ownedRun(transaction, actor, state.continuationRunId),
+          actor.sid,
+        );
+      // Keep the original task identity, including its real user-message authorization.
+      const task = await transaction.assistantTask.findUniqueOrThrow({
+        where: { id: previous.taskId },
+      });
+      if (
+        previous.status !== 'cancelled' ||
+        task.status !== 'cancelled' ||
+        task.runId !== id
+      )
+        throw new ConflictException('仅当前已停止的任务可以继续');
+      await this.conversation(transaction, actor.sub, previous.conversationId);
+      if (
+        await transaction.assistantTask.count({
+          where: {
+            userId: actor.sub,
+            conversationId: previous.conversationId,
+            id: { not: task.id },
+            OR: [
+              { status: { in: assistantActive } },
+              { createdAt: { gte: previous.createdAt } },
+            ],
+          },
+        })
+      )
+        throw new ConflictException(
+          '会话已有后续任务，请继续当前任务或发送新消息',
+        );
+      // Model access and memory revision are checked again at the user's continuation click.
+      const settings = await transaction.assistantSettings.findUnique({
+        where: { userId: actor.sub },
+      });
+      if (!settings?.enabled || !settings.profileId)
+        throw new BadRequestException('助手未开启');
+      if (state.memoryVersion !== settings.memoryVersion)
+        throw new ConflictException('记忆上下文已改变，请发送新消息');
+      if (
+        !state.userMessageId ||
+        !(await transaction.assistantMessage.findFirst({
+          where: {
+            id: state.userMessageId,
+            userId: actor.sub,
+            taskId: task.id,
+            conversationId: previous.conversationId,
+            role: 'user',
+            excluded: false,
+          },
+        }))
+      )
+        throw new ConflictException('原任务来源已失效，请发送新消息');
+      // Compensation has its own fixed authorization and cannot restart as ordinary work.
+      if (state.undoOf)
+        throw new ConflictException(
+          '撤销任务不能通过继续恢复，请重新核对保存结果',
+        );
+      // A batch can have durable writes even before the overall task is committed.
+      const plan = task.plan as Record<string, unknown> | null;
+      // Batch receipts and their baseline remain authoritative across attempts.
+      const batch =
+        plan?.kind === 'batch' ? (plan.batchPlan as AssistantBatchPlan) : null;
+      if (
+        batch &&
+        !task.committed &&
+        (typeof plan?.expiresAt !== 'string' ||
+          new Date(plan.expiresAt) <= new Date())
+      )
+        throw new ConflictException(
+          '分批方案已过期，请核对已完成范围后发送新消息',
+        );
+      // Recover an action committed before its ID or receipt reached the old run state.
+      const action =
+        !batch && (task.actionId || task.planRequestId)
+          ? await transaction.mcpAction.findFirst({
+              where: {
+                userId: actor.sub,
+                source: 'assistant',
+                sourceId: task.id,
+                ...(task.actionId
+                  ? { id: task.actionId }
+                  : { requestId: task.planRequestId ?? '' }),
+              },
+            })
+          : null;
+      // Only durable action results establish a completed write or conflict.
+      const hasReceipt =
+        !!action?.result && ['succeeded', 'conflict'].includes(action.status);
+      // Clear per-attempt state while preserving completed tool observations and original scope.
+      const resumed = assistantContinuationState(state, id);
+      // The same source run always maps to this single new attempt.
+      const newId = randomUUID();
+      // Never carry a cancelled pending action or its approval into a new execution.
+      const taskUpdate: Prisma.AssistantTaskUpdateInput = {
+        runId: newId,
+        sessionId: actor.sid,
+        status: 'queued',
+        approvedHash: null,
+      };
+      if (batch) {
+        // Reject old confirmation cards, and replace only unexecuted action request IDs.
+        taskUpdate.planVersion = task.planVersion + 1;
+        taskUpdate.plan = assistantJson({
+          ...plan,
+          version: task.planVersion + 1,
+          batchPlan: {
+            ...batch,
+            requestIds: batch.requestIds.map((requestId, index) =>
+              index < batch.completedBatches ? requestId : randomUUID(),
+            ),
+          },
+        });
+      } else if (hasReceipt) {
+        taskUpdate.actionId = action.id;
+        taskUpdate.committed = true;
+        resumed.actionId = action.id;
+      } else if (!task.committed) {
+        taskUpdate.actionId = null;
+        taskUpdate.plan = Prisma.DbNull;
+        taskUpdate.planRequestId =
+          task.planRequestId || task.actionId ? randomUUID() : null;
+        delete resumed.actionId;
+        delete resumed.result;
+        delete resumed.conflict;
+      }
+      // Capture current model configuration without exposing its private snapshot.
+      const profile = await this.ai.captureAssistantProfile(
+        actor.sub,
+        settings.profileId,
+      );
+      await transaction.assistantTask.update({
+        where: { id: task.id },
+        data: taskUpdate,
+      });
+      await transaction.assistantRun.update({
+        where: { id },
+        data: { state: assistantJson({ ...state, continuationRunId: newId }) },
+      });
+      // No assistantMessage row is created for this execution-control operation.
+      const run = await transaction.assistantRun.create({
+        data: {
+          id: newId,
+          userId: actor.sub,
+          conversationId: previous.conversationId,
+          taskId: task.id,
+          sessionId: actor.sid,
+          answerMessageId: resumed.messageId,
+          status: 'queued',
+          state: assistantJson(resumed),
+          profileSnapshot: assistantJson(profile),
+        },
+      });
+      await transaction.assistantConversation.update({
+        where: { id: previous.conversationId },
+        data: { updatedAt: new Date() },
+      });
+      await this.appendRunEvent(transaction, run);
+      return this.runView(transaction, run, actor.sid);
     });
   }
 

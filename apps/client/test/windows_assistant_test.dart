@@ -174,8 +174,8 @@ class _DesktopRepository extends AssistantRepository {
   /// 挂起发送响应以验证消息提交前的即时秒表。
   Completer<Map<String, dynamic>>? delayedSend;
 
-  /// 继续消息接收后进入新的服务端运行，用于验证主按钮再次切回停止。
-  Map<String, dynamic>? nextSentRun;
+  /// Return a new run for the explicit continuation control request.
+  Map<String, dynamic>? nextContinuedRun;
 
   /// 只有计时测试需要持续订阅。
   StreamController<AssistantEvent>? eventStream;
@@ -206,6 +206,12 @@ class _DesktopRepository extends AssistantRepository {
         uri.path.startsWith('/runs/') &&
         uri.path.endsWith('/stop')) {
       activeRun = <String, dynamic>{...?(activeRun), 'status': 'cancelled'};
+      return activeRun!;
+    }
+    if (method == 'POST' &&
+        uri.path.startsWith('/runs/') &&
+        uri.path.endsWith('/continue')) {
+      activeRun = nextContinuedRun;
       return activeRun!;
     }
     if (uri.path == '/settings') {
@@ -256,10 +262,6 @@ class _DesktopRepository extends AssistantRepository {
     }
     if (uri.path.endsWith('/messages')) {
       if (method == 'POST') {
-        if (nextSentRun != null) {
-          activeRun = nextSentRun;
-          return activeRun!;
-        }
         return delayedSend?.future ??
             Future.value({'id': 'run', 'status': 'succeeded'});
       }
@@ -1468,7 +1470,7 @@ void main() {
   });
 
   testWidgets('停止位于输入区，空输入开始继续，有新正文则显示发送', (WidgetTester tester) async {
-    // 服务端运行、停止和下一条继续均通过真实聊天控制器处理。
+    // Exercise stop and continuation through the real chat controller.
     final _DesktopRepository repository = _DesktopRepository()
       ..eventStream = StreamController<AssistantEvent>.broadcast()
       ..activeRun = <String, dynamic>{
@@ -1477,7 +1479,7 @@ void main() {
         'status': 'running',
         'elapsedMs': 0,
       }
-      ..nextSentRun = <String, dynamic>{
+      ..nextContinuedRun = <String, dynamic>{
         'id': 'continued-run',
         'answerMessageId': 'continued-answer',
         'status': 'running',
@@ -1521,13 +1523,23 @@ void main() {
       repository.calls
           .where(
             (call) =>
-                call.method == 'POST' &&
-                call.path == '/conversations/conversation-1/messages',
+                call.method == 'POST' && call.path == '/runs/run/continue',
           )
           .single
           .data,
-      containsPair('content', '继续'),
+      isNull,
     );
+    expect(
+      repository.calls.where(
+        (call) => call.method == 'POST' && call.path.endsWith('/messages'),
+      ),
+      isEmpty,
+    );
+    expect(
+      tester.widget<OmniTextField>(_key('assistant-input')).controller!.text,
+      isEmpty,
+    );
+    expect(find.text('继续'), findsNothing);
     expect(
       repository.calls.any((call) => call.path.endsWith('/retry')),
       isFalse,

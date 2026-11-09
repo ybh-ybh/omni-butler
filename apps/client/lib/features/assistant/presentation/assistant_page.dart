@@ -411,15 +411,13 @@ class _AssistantChatBodyState extends ConsumerState<_AssistantChatBody>
     if (_chat.pending == null && _chat.draft.isEmpty) _input.clear();
   }
 
-  /// 开始沿用同一聊天发送可见的继续消息，结果未知时保留正文与身份。
+  /// Resume execution without inserting text into the composer.
   Future<void> _continueConversation() async {
     if (!_chat.canContinue || _input.text.trim().isNotEmpty) return;
-    // 切换聊天后不让迟到响应修改新输入框。
+    // Restore focus only while the original conversation remains visible.
     final String? target = _chat.conversationId;
-    _input.text = '继续';
     await _chat.continueConversation();
     if (!mounted || _chat.conversationId != target) return;
-    _input.text = _chat.draft;
     if (_assistantRouteCurrent) _focus.requestFocus();
   }
 

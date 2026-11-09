@@ -1137,6 +1137,108 @@ integration('应用内助手 / 真实 PostgreSQL 和 LangGraph checkpoint', () =
     expect(model.complete).not.toHaveBeenCalled();
   });
 
+  it('HTTP 并发继续只建一个新运行，不新增用户消息且保留查询结果并关闭待执行调用', async () => {
+    // Keep the real user request and task ownership across continuation.
+    const { conversation, input, run } = await send('根据已经读取的资料继续总结');
+    // Persist one completed observation and one interrupted tool call.
+    const prior = await prisma.assistantRun.findUniqueOrThrow({ where: { id: run.id } });
+    // The marker must survive the real context builder and model request.
+    const observed = { items: [{ title: `已读取资料-${randomUUID()}` }], hasMore: false };
+    // A pending write must never be replayed merely because Continue was clicked.
+    const pendingContent = `不应执行的旧调用-${randomUUID()}`;
+    // Fixed call identities make pairing assertions independent of generated runs.
+    const completedCall = randomUUID();
+    // This second identity has no result before the stop operation.
+    const pendingCall = randomUUID();
+    await prisma.assistantRun.update({
+      where: { id: run.id },
+      data: {
+        state: assistantJson({
+          ...(prior.state as Record<string, unknown>),
+          input: [
+            { role: 'user', content: input.content },
+            { type: 'function_call', call_id: completedCall, name: 'list_todos', arguments: '{}' },
+            { type: 'function_call_output', call_id: completedCall, output: JSON.stringify(observed) },
+            { type: 'function_call', call_id: pendingCall, name: 'create_quote', arguments: JSON.stringify({ content: pendingContent }) },
+          ],
+          calls: [{ callId: pendingCall, name: 'create_quote', arguments: { content: pendingContent } }],
+          toolCount: 1,
+          modelCount: 2,
+        }),
+      },
+    });
+    await store.stop(actor, run.id);
+    // Both authenticated requests race on the same owner transaction.
+    const bearer = await token(actor);
+    // Real HTTP routing must expose continuation without a message payload.
+    const responses = await Promise.all([0, 1].map(() => fetch(`${baseUrl}/runs/${run.id}/continue`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${bearer}` },
+    })));
+    expect(responses.map((response) => response.status)).toEqual([201, 201]);
+    // Both callers must receive the same durable new attempt.
+    const continued = await Promise.all(responses.map(async (response) => await response.json() as { id: string; taskId: string }));
+    expect(continued[0]!.id).not.toBe(run.id);
+    expect(continued[1]!.id).toBe(continued[0]!.id);
+    expect(continued[0]!.taskId).toBe(run.taskId);
+    expect(await prisma.assistantRun.count({ where: { taskId: run.taskId } })).toBe(2);
+    expect(await prisma.assistantMessage.findMany({ where: { conversationId: conversation.id, role: 'user' } })).toMatchObject([{ content: input.content }]);
+    // The persisted request preserves provenance while pending calls are closed.
+    const next = await prisma.assistantRun.findUniqueOrThrow({ where: { id: continued[0]!.id } });
+    // Read the private test state without exposing it through the HTTP contract.
+    const state = next.state as { request: string; userMessageId: string; calls: unknown[]; input: Array<Record<string, unknown>> };
+    expect(state.request).toBe(input.content);
+    expect(state.userMessageId).toBe((prior.state as { userMessageId: string }).userMessageId);
+    expect(state.calls).toEqual([]);
+    expect(state.input).toContainEqual({ type: 'function_call_output', call_id: completedCall, output: JSON.stringify(observed) });
+    // The unfinished call receives a failure observation rather than execution.
+    const interrupted = state.input.find((item) => item.type === 'function_call_output' && item.call_id === pendingCall);
+    expect(interrupted).toBeDefined();
+    expect(JSON.parse(String(interrupted!.output))).toMatchObject({ isError: true });
+    expect(next.answerMessageId).not.toBe(prior.answerMessageId);
+    await expect(runner.step(run.id, 'dispatch')).rejects.toThrow();
+    model.complete.mockResolvedValue(reply([], '已有资料已总结'));
+    await runner.tick();
+    expect(await store.run(actor, next.id)).toMatchObject({ status: 'succeeded' });
+    expect(JSON.stringify(model.complete.mock.calls[0]![2].input)).toContain(observed.items[0]!.title);
+    expect(await prisma.quote.count({ where: { content: pendingContent } })).toBe(0);
+    expect(await prisma.mcpAction.count({ where: { sourceId: run.taskId } })).toBe(0);
+    expect(await prisma.assistantMessage.count({ where: { conversationId: conversation.id, role: 'user' } })).toBe(1);
+  });
+
+  it('已提交写入后停止再继续只总结真实回执，不重复写入或新增用户消息', async () => {
+    // A unique business value proves that the committed action is not replayed.
+    const content = `保存后继续-${randomUUID()}`;
+    // Stop inside the final model request after the real transaction committed.
+    const { conversation, run } = await send('新增一条名言');
+    model.complete
+      .mockResolvedValueOnce(reply([content]))
+      .mockResolvedValueOnce(reply([], '完整计划'))
+      .mockImplementationOnce(async () => {
+        await store.stop(actor, run.id);
+        throw Object.assign(new Error('stopped after commit'), { code: 'AI_CANCELLED' });
+      });
+    await runner.tick();
+    expect(await store.run(actor, run.id)).toMatchObject({ status: 'cancelled' });
+    expect(await prisma.assistantTask.findUniqueOrThrow({ where: { id: run.taskId } })).toMatchObject({ committed: true });
+    expect(await prisma.quote.count({ where: { userId: actor.sub, content } })).toBe(1);
+    // The next model response is restricted to the already committed result.
+    model.complete.mockImplementationOnce((_user, _profile, request) => {
+      expect(request.toolChoice).toBe('none');
+      expect(JSON.stringify(request.input)).toContain(content);
+      return Promise.resolve(reply([], '已经核对保存结果'));
+    });
+    // Continuation creates another run on the original logical task.
+    const continued = await store.continueRun(actor, run.id) as { id: string; taskId: string };
+    expect(continued.taskId).toBe(run.taskId);
+    await runner.tick();
+    expect(await store.run(actor, continued.id)).toMatchObject({ status: 'succeeded' });
+    expect(model.complete).toHaveBeenCalledTimes(4);
+    expect(await prisma.quote.count({ where: { userId: actor.sub, content } })).toBe(1);
+    expect(await prisma.mcpAction.count({ where: { sourceId: run.taskId, status: 'succeeded' } })).toBe(1);
+    expect(await prisma.assistantMessage.count({ where: { conversationId: conversation.id, role: 'user' } })).toBe(1);
+  });
+
   it('SSE 断线按序号续接、按订阅设备投影接管状态，取消事件不带旧计划', async () => {
     model.complete
       .mockResolvedValueOnce(reply(['SSE-A', 'SSE-B']))
@@ -1715,6 +1817,85 @@ integration('应用内助手 / 真实 PostgreSQL 和 LangGraph checkpoint', () =
       completedBatches: 2,
       totalBatches: 2,
     });
+  });
+
+  it('部分批次停止后继续重新确认旧计划版本失效，已保存八项不再执行', async () => {
+    // Nine independent values force a real eight-plus-one batch plan.
+    const contents = Array.from({ length: 9 }, (_unused, index) => `分批继续${index}-${randomUUID()}`);
+    // Register the whole write intent in one model tool response.
+    const call = {
+      id: randomUUID(),
+      callId: randomUUID(),
+      name: 'stage_changes',
+      arguments: { steps: contents.map((content) => ({ name: 'create_quote', input: { content } })) },
+    };
+    // The provider output must contain the matching function-call envelope.
+    const first = {
+      ...reply(),
+      functionCalls: [call],
+      output: [{ type: 'function_call', id: call.id, call_id: call.callId, name: call.name, arguments: JSON.stringify(call.arguments) }],
+    };
+    model.complete.mockResolvedValueOnce(first).mockResolvedValueOnce(reply([], '完整计划'));
+    // Keep the source run so the real stop guard invalidates its next node.
+    const { conversation, run } = await send('添加九条名言');
+    await runner.tick();
+    // The original approval must not authorize the continued attempt.
+    const waiting = await store.run(actor, run.id) as { plan: { id: string; version: number; previewHash: string } };
+    await store.decision(actor, waiting.plan.id, { version: waiting.plan.version, previewHash: waiting.plan.previewHash, decision: 'confirm' });
+    // Stop only after the first real batch transaction has durably completed.
+    const batches = module.get(AssistantBatchService);
+    // Delegate every business operation to the production batch implementation.
+    const commitNext = batches.commitNext.bind(batches);
+    // The interception changes timing only; no business transaction is mocked.
+    const interrupted = jest.spyOn(batches, 'commitNext').mockImplementationOnce(async (...args) => {
+      // Capture the committed receipt before invalidating the old run.
+      const result = await commitNext(...args);
+      expect(result.done).toBe(false);
+      await store.stop(actor, run.id);
+      return result;
+    });
+    try {
+      await runner.tick();
+    } finally {
+      interrupted.mockRestore();
+    }
+    expect(await store.run(actor, run.id)).toMatchObject({ status: 'cancelled' });
+    expect(await prisma.quote.count({ where: { content: { in: contents } } })).toBe(8);
+    // Read the frozen ledger before continuing to detect accidental resets.
+    const stoppedTask = await prisma.assistantTask.findUniqueOrThrow({ where: { id: run.taskId } });
+    // Completed identities and the execution baseline must survive continuation.
+    const stoppedPlan = stoppedTask.plan as { expiresAt: string; batchPlan: { completedBatches: number; requestIds: string[]; executionBaseline: string; results: unknown[] } };
+    expect(stoppedTask.committed).toBe(false);
+    expect(stoppedPlan.batchPlan.completedBatches).toBe(1);
+    // A new run preserves the task and waits for a new explicit approval.
+    const continued = await store.continueRun(actor, run.id) as { id: string; taskId: string };
+    expect(continued.taskId).toBe(run.taskId);
+    await runner.tick();
+    // The renewed card has a new version without silently refreshing expiry.
+    const resumed = await store.run(actor, continued.id) as { status: string; plan: { id: string; version: number; previewHash: string } };
+    expect(resumed.status).toBe('waitingConfirmation');
+    expect(resumed.plan.version).toBeGreaterThan(waiting.plan.version);
+    // The database remains the authority for approved hashes and batch receipts.
+    const resumedTask = await prisma.assistantTask.findUniqueOrThrow({ where: { id: run.taskId } });
+    // Compare only execution facts whose preservation prevents duplicate writes.
+    const resumedPlan = resumedTask.plan as typeof stoppedPlan;
+    expect(resumedTask.approvedHash).toBeNull();
+    expect(resumedPlan.expiresAt).toBe(stoppedPlan.expiresAt);
+    expect(resumedPlan.batchPlan.completedBatches).toBe(1);
+    expect(resumedPlan.batchPlan.results).toEqual(stoppedPlan.batchPlan.results);
+    expect(resumedPlan.batchPlan.executionBaseline).toBe(stoppedPlan.batchPlan.executionBaseline);
+    expect(resumedPlan.batchPlan.requestIds[0]).toBe(stoppedPlan.batchPlan.requestIds[0]);
+    expect(resumedPlan.batchPlan.requestIds[1]).not.toBe(stoppedPlan.batchPlan.requestIds[1]);
+    await expect(store.decision(actor, waiting.plan.id, { version: waiting.plan.version, previewHash: waiting.plan.previewHash, decision: 'confirm' })).rejects.toThrow();
+    await expect(runner.step(run.id, 'commit')).rejects.toThrow();
+    expect(await prisma.quote.count({ where: { content: { in: contents } } })).toBe(8);
+    model.complete.mockResolvedValueOnce(reply([], '九项均已保存'));
+    await store.decision(actor, resumed.plan.id, { version: resumed.plan.version, previewHash: resumed.plan.previewHash, decision: 'confirm' });
+    await runner.tick();
+    expect(await store.run(actor, continued.id)).toMatchObject({ status: 'succeeded' });
+    expect(await prisma.quote.count({ where: { content: { in: contents } } })).toBe(9);
+    expect(await prisma.mcpAction.count({ where: { sourceId: run.taskId, status: 'succeeded' } })).toBe(2);
+    expect(await prisma.assistantMessage.count({ where: { conversationId: conversation.id, role: 'user' } })).toBe(1);
   });
 
   it('分批之间出现外部写入会停止，已经完成的八项不会回滚', async () => {

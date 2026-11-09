@@ -132,6 +132,13 @@ export class AssistantController {
   ): Promise<unknown> {
     return this.store.stop(actor, id);
   }
+  // Continue the interrupted task without creating a user chat message.
+  @Post('runs/:id/continue') continueRun(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<unknown> {
+    return this.store.continueRun(actor, id);
+  }
   /// 未知付费调用只允许显式重试。
   @Post('runs/:id/retry') retry(
     @CurrentUser() actor: AuthUser,

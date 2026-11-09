@@ -303,7 +303,7 @@ class AssistantChatController extends ChangeNotifier {
       (submitting ||
           !busy && <String>{'queued', 'running'}.contains(run?['status']));
 
-  /// 已确认停止且没有新草稿时，允许明确发出继续消息。
+  /// Allow explicit continuation only after stopping and without a new draft.
   bool get canContinue =>
       !_disposed &&
       connected &&
@@ -1181,11 +1181,41 @@ class AssistantChatController extends ChangeNotifier {
     await _runCommand('stop');
   }
 
-  /// 取消的任务不复活旧写入批准；用可见新消息在同一聊天继续。
+  /// Continue the original task without creating a user message or draft.
   Future<void> continueConversation() async {
     if (!canContinue) return;
-    setDraft('继续');
-    await send();
+    // Bind the response to the view that requested continuation.
+    final int generation = _viewGeneration;
+    // Reuse this stopped run identity when the response must be retried.
+    final String target = run!['id'] as String;
+    await _operate(() async {
+      try {
+        // Upload local edits before resuming work against server-side records.
+        await catchUp();
+        // Sync may outlive this view or the stopped run that was selected.
+        if (!_current(generation) ||
+            run?['id'] != target ||
+            run?['status'] != 'cancelled') {
+          return;
+        }
+        // Adopt the authoritative run even if the following history read fails.
+        final Map<String, dynamic> result = await repository!.request(
+          'POST',
+          '/runs/${Uri.encodeComponent(target)}/continue',
+        );
+        if (!_current(generation)) return;
+        _closeEvents();
+        _acceptRun(result);
+        plan = result['plan'] is Map ? assistantMap(result['plan']) : null;
+        cursor = 0;
+        _settlementRefreshPending = false;
+        if (_needsEvents) _listen(generation);
+        await _persist();
+        if (_current(generation)) await refresh();
+      } catch (_) {
+        if (_current(generation)) rethrow;
+      }
+    });
   }
 
   /// 显式重试保留原任务业务回执。

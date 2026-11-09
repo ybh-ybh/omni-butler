@@ -110,6 +110,12 @@ class _DesktopRepository extends AssistantRepository {
   /// 明确标记消息 POST 已经开始，不用长等待猜测请求顺序。
   Completer<void>? sendStarted;
 
+  /// Hold continuation replies to test duplicate clicks and view changes.
+  Completer<Map<String, dynamic>>? delayedContinue;
+
+  /// Signal that the control request has left the client.
+  Completer<void>? continueStarted;
+
   /// 创建当前连接内存接口。
   _DesktopRepository(super.auth);
 
@@ -125,6 +131,20 @@ class _DesktopRepository extends AssistantRepository {
         path.startsWith('/runs/') &&
         path.endsWith('/stop')) {
       run = <String, dynamic>{...?run, 'status': 'cancelled'};
+      return run!;
+    }
+    if (method == 'POST' &&
+        path.startsWith('/runs/') &&
+        path.endsWith('/continue')) {
+      continueStarted?.complete();
+      run = delayedContinue != null
+          ? await delayedContinue!.future
+          : <String, dynamic>{
+              ...?run,
+              'id': 'continued-run',
+              'status': 'running',
+              'answerMessageId': 'continued-answer',
+            };
       return run!;
     }
     if (path.startsWith('/conversations?')) {
@@ -317,22 +337,216 @@ void main() {
     expect(fixture.controller.canContinue, isTrue);
     fixture.repository.delayedSend = null;
     fixture.repository.sendStarted = null;
-    fixture.repository.run = <String, dynamic>{
-      'id': 'continued-run',
-      'status': 'succeeded',
-    };
     await fixture.controller.continueConversation();
     expect(
       fixture.repository.calls
           .where(
             (call) => call.method == 'POST' && call.path.endsWith('/messages'),
           )
-          .last
+          .single
           .data,
-      containsPair('content', '继续'),
+      containsPair('content', '查询待办'),
     );
+    expect(
+      fixture.repository.calls
+          .where((call) => call.path == '/runs/accepted-run/continue')
+          .single
+          .data,
+      isNull,
+    );
+    expect(fixture.controller.run!['id'], 'continued-run');
+    expect(fixture.controller.processing, isTrue);
+    expect(fixture.controller.pending, isNull);
     expect(fixture.controller.draft, isEmpty);
   });
+
+  test('继续等待本机同步屏障通过后才发出控制请求', () async {
+    // Hold synchronization while continuation remains a local pending action.
+    final _Fixture fixture = _Fixture();
+    fixture.repository.run!['status'] = 'cancelled';
+    await fixture.initialize();
+    fixture.delayedCatchUp = Completer<void>();
+    // Keep the operation alive until the local changes are uploaded.
+    final Future<void> continuing = fixture.controller.continueConversation();
+    await _settle();
+    expect(fixture.controller.busy, isTrue);
+    expect(
+      fixture.repository.calls.where((call) => call.method == 'POST'),
+      isEmpty,
+    );
+    fixture.delayedCatchUp!.complete();
+    await continuing;
+    expect(
+      fixture.repository.calls
+          .where((call) => call.method == 'POST')
+          .map((call) => call.path),
+      <String>['/runs/run/continue'],
+    );
+    expect(fixture.controller.run!['id'], 'continued-run');
+    expect(fixture.controller.draft, isEmpty);
+  });
+
+  test('继续的同步屏障失败时不发控制请求且保留停止状态', () async {
+    // Surface checkpoint failure without creating a run or a chat message.
+    final _Fixture fixture = _Fixture();
+    fixture.repository.run!['status'] = 'cancelled';
+    await fixture.initialize();
+    fixture.delayedCatchUp = Completer<void>();
+    // The continuation must wait for this explicit synchronization result.
+    final Future<void> continuing = fixture.controller.continueConversation();
+    fixture.delayedCatchUp!.completeError(const ApiFailure('本机同步尚未完成'));
+    await continuing;
+    expect(
+      fixture.repository.calls.where((call) => call.method == 'POST'),
+      isEmpty,
+    );
+    expect(fixture.controller.run!['id'], 'run');
+    expect(fixture.controller.run!['status'], 'cancelled');
+    expect(fixture.controller.error, '本机同步尚未完成');
+    expect(fixture.controller.canContinue, isTrue);
+    expect(fixture.controller.pending, isNull);
+    expect(fixture.controller.draft, isEmpty);
+  });
+
+  // Synchronization cannot carry a stale continuation across view or run changes.
+  for (final String change in <String>['conversation', 'run', 'status']) {
+    test('继续等待同步期间$change改变后不再发送控制请求', () async {
+      // Capture the original stopped run before changing its visible context.
+      final _Fixture fixture = _Fixture();
+      fixture.repository.run!['status'] = 'cancelled';
+      await fixture.initialize();
+      fixture.delayedCatchUp = Completer<void>();
+      // This operation still belongs to the original view and run identity.
+      final Future<void> continuing = fixture.controller.continueConversation();
+      if (change == 'conversation') {
+        await fixture.controller.select('other');
+      } else {
+        fixture.repository.run = <String, dynamic>{
+          'id': change == 'run' ? 'replacement-run' : 'run',
+          'status': change == 'status' ? 'succeeded' : 'cancelled',
+        };
+        await fixture.controller.refresh();
+      }
+      fixture.delayedCatchUp!.complete();
+      await continuing;
+      expect(
+        fixture.repository.calls.where((call) => call.method == 'POST'),
+        isEmpty,
+      );
+      expect(fixture.controller.error, isNull);
+      expect(fixture.controller.pending, isNull);
+      if (change == 'conversation') {
+        expect(fixture.controller.conversationId, 'other');
+        expect(fixture.controller.draft, '其他草稿');
+      }
+    });
+  }
+
+  test('继续只发送一次控制请求，刷新失败仍保留新运行并订阅', () async {
+    // Start from a stopped run with visible historical messages.
+    final _Fixture fixture = _Fixture();
+    fixture.repository.run!['status'] = 'cancelled';
+    await fixture.initialize();
+    fixture.repository.delayedContinue = Completer<Map<String, dynamic>>();
+    fixture.repository.continueStarted = Completer<void>();
+    // Keep the request in flight while a second click is attempted.
+    final Future<void> continuing = fixture.controller.continueConversation();
+    await fixture.repository.continueStarted!.future;
+    expect(fixture.controller.canContinue, isFalse);
+    expect(fixture.controller.draft, isEmpty);
+    expect(fixture.controller.pending, isNull);
+    await fixture.controller.continueConversation();
+    fixture.repository.conversationReadsFail = true;
+    fixture.repository.delayedContinue!.complete(<String, dynamic>{
+      'id': 'continued-run',
+      'answerMessageId': 'continued-answer',
+      'status': 'running',
+    });
+    await continuing;
+    expect(
+      fixture.repository.calls.where((call) => call.method == 'POST'),
+      hasLength(1),
+    );
+    expect(fixture.repository.calls.last.path, '/conversations');
+    expect(fixture.controller.run!['id'], 'continued-run');
+    expect(fixture.repository.streams, hasLength(1));
+    expect(fixture.repository.cursors, <int>[0]);
+    expect(fixture.controller.messages, fixture.repository.messages);
+    expect(fixture.controller.error, '列表暂时不可读');
+  });
+
+  test('继续失败保留停止身份和等待期间输入的草稿，不产生用户消息', () async {
+    // A failed control request must not become a failed chat submission.
+    final _Fixture fixture = _Fixture();
+    fixture.repository.run!['status'] = 'cancelled';
+    await fixture.initialize();
+    fixture.repository.delayedContinue = Completer<Map<String, dynamic>>();
+    fixture.repository.continueStarted = Completer<void>();
+    // Type a new request while continuation is awaiting its response.
+    final Future<void> continuing = fixture.controller.continueConversation();
+    await fixture.repository.continueStarted!.future;
+    fixture.controller.setDraft('先回答新的问题');
+    fixture.repository.delayedContinue!.completeError(
+      const ApiFailure('继续结果暂时未知'),
+    );
+    await continuing;
+    expect(fixture.controller.run!['id'], 'run');
+    expect(fixture.controller.run!['status'], 'cancelled');
+    expect(fixture.controller.draft, '先回答新的问题');
+    expect(fixture.controller.pending, isNull);
+    expect(fixture.controller.messages, fixture.repository.messages);
+    expect(fixture.controller.error, '继续结果暂时未知');
+    fixture.controller.setDraft('');
+    expect(fixture.controller.canContinue, isTrue);
+    fixture.repository.delayedContinue = null;
+    fixture.repository.continueStarted = null;
+    await fixture.controller.continueConversation();
+    expect(
+      fixture.repository.calls
+          .where((call) => call.method == 'POST')
+          .map((call) => call.path),
+      <String>['/runs/run/continue', '/runs/run/continue'],
+    );
+  });
+
+  // Both successful and failed late responses belong to the previous view.
+  for (final bool fails in <bool>[false, true]) {
+    test('切换会话后忽略继续的迟到${fails ? '失败' : '成功'}响应', () async {
+      // Keep the source run stopped until the delayed request completes.
+      final _Fixture fixture = _Fixture();
+      fixture.repository.run!['status'] = 'cancelled';
+      await fixture.initialize();
+      fixture.repository.delayedContinue = Completer<Map<String, dynamic>>();
+      fixture.repository.continueStarted = Completer<void>();
+      // The original view generation must not apply to the selected chat.
+      final Future<void> continuing = fixture.controller.continueConversation();
+      await fixture.repository.continueStarted!.future;
+      fixture.repository.run = <String, dynamic>{
+        'id': 'other-run',
+        'status': 'succeeded',
+      };
+      await fixture.controller.select('other');
+      // Track the new view's requests before resolving the old control action.
+      final int requests = fixture.repository.calls.length;
+      if (fails) {
+        fixture.repository.delayedContinue!.completeError(
+          const ApiFailure('原聊天继续失败'),
+        );
+      } else {
+        fixture.repository.delayedContinue!.complete(<String, dynamic>{
+          'id': 'continued-run',
+          'status': 'running',
+        });
+      }
+      await continuing;
+      expect(fixture.controller.conversationId, 'other');
+      expect(fixture.controller.run!['id'], 'other-run');
+      expect(fixture.controller.draft, '其他草稿');
+      expect(fixture.controller.error, isNull);
+      expect(fixture.repository.calls, hasLength(requests));
+      expect(fixture.repository.streams, isEmpty);
+    });
+  }
 
   test('停止意图跨未知消息响应保留，显式恢复仍用原身份并立即停止', () async {
     // 付费任务可能已被接收，不能因用户点击停止而替换消息身份。

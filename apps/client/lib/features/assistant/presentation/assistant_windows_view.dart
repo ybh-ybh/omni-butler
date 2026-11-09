@@ -1085,15 +1085,13 @@ class _AssistantWindowsViewState extends ConsumerState<AssistantWindowsView> {
     );
   }
 
-  /// 在同一聊天明确继续，输入框始终保留实际发送的可见正文。
+  /// Resume execution without inserting text into the composer.
   Future<void> _continueConversation() async {
     if (!widget.chat.canContinue || widget.input.text.trim().isNotEmpty) return;
-    // 可见正文与控制器草稿同步，失败时也保留实际发送内容。
+    // Restore focus only while the original conversation remains visible.
     final String? target = widget.chat.conversationId;
-    widget.input.text = '继续';
     await widget.chat.continueConversation();
     if (!mounted || widget.chat.conversationId != target) return;
-    widget.input.text = widget.chat.draft;
     widget.inputFocus.requestFocus();
   }
 

@@ -69,6 +69,10 @@ export const assistantMemoryInput = z.strictObject({
 });
 /// 图循环的供应商输入，不在公开事件中返回。
 export interface AssistantState {
+  // Link a fresh execution attempt to the interrupted run without a user message.
+  continuedFromRunId?: string;
+  // Replay repeated continuation requests to the single attempt already created.
+  continuationRunId?: string;
   /// 固定公开摘要，不包含模型输入、工具参数或内部推理。
   executionSteps?: AssistantExecutionStep[];
   /// 当前工作进程执行段开始时间，等待用户时清除。

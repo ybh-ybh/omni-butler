@@ -40,7 +40,7 @@ import { buildAssistantGraph } from './assistant-graph';
 import { AssistantPresentation } from './assistant-presentation.service';
 import { AssistantContextService } from './assistant-context.service';
 import { assistantWriteAllowed } from './assistant-authorization';
-import { AssistantBatchService } from './assistant-batch.service';
+import { AssistantBatchService, type AssistantBatchPlan } from './assistant-batch.service';
 import { AssistantAttachmentsService } from './attachments/assistant-attachments.service';
 import { AssistantModelExecutor } from './assistant-model-executor';
 import { assistantCompatibility, normalizeAssistantFailure } from '../ai/assistant-model-policy';
@@ -338,6 +338,19 @@ export class AssistantRunner implements OnModuleInit, OnModuleDestroy {
               receipt.status === 'succeeded' ? 'succeeded' : 'failed',
             );
         }
+        // Continuation reconstructs completed batches from receipts, never by replaying writes.
+        if (state.continuedFromRunId && (task.committed || state.conflict)) {
+          // The frozen batch plan owns the complete saved range across prior attempts.
+          const saved = (task.plan as Record<string, unknown>).batchPlan as AssistantBatchPlan;
+          state.result = await this.presentation.result(context, state.intents, {
+            values: saved.results.flatMap((batch) => ((batch.result as Record<string, unknown>).values as unknown[]) ?? []),
+            completedBatches: saved.completedBatches, totalBatches: saved.requestIds.length,
+            atomic: false, partial: saved.completedBatches < saved.requestIds.length, batchResults: saved.results,
+          });
+          state.answerOnly = true;
+          await this.persist(run, state);
+          return state.conflict ? 'finish' : 'model';
+        }
         return task.committed ? 'finish' : 'gate';
       }
       if (task.actionId) {
@@ -367,8 +380,10 @@ export class AssistantRunner implements OnModuleInit, OnModuleDestroy {
             (state as unknown as Record<string, unknown>).conflict = true;
             state.text = '正文存在冲突，已保留候选，正式正文未被覆盖。';
           } else state.text = '操作已保存，实际结果见下方卡片。';
+          // A continued committed turn generates a fresh answer with business tools closed.
+          if (state.continuedFromRunId) state.answerOnly = true;
           await this.persist(run, state);
-          return 'finish';
+          return state.continuedFromRunId && action.status === 'succeeded' ? 'model' : 'finish';
         }
         return 'gate';
       }

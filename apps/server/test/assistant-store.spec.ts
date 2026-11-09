@@ -149,6 +149,8 @@ class StoreDatabase {
           !((row[key] as number) > (expression.gt as number))
         )
           return false;
+        if ('gte' in expression && !((row[key] as number) >= (expression.gte as number)))
+          return false;
         if (
           'lt' in expression &&
           !((row[key] as number) < (expression.lt as number))
@@ -537,6 +539,183 @@ describe('应用内助手持久任务与上下文授权', () => {
         reference: { ...reference, id: randomUUID() },
       }),
     ).rejects.toThrow('同一消息身份');
+  });
+
+  it('继续保留原目标与真实来源，创建独立回答并幂等重放同一运行', async () => {
+    // Begin from the actual user-message path rather than synthetic authorization.
+    const first = await initial('查询本周待办');
+    // Keep the original state for comparison after stopping the run.
+    const original = structuredClone(
+      database.tables.assistantRun![0]!.state as Row,
+    );
+    await store.stop(database.actor, first.id);
+    // A control action starts a new attempt without adding a chat message.
+    const continued = (await store.continueRun(
+      database.actor,
+      first.id,
+    )) as Row;
+    // Locate the new private state without relying on table insertion order.
+    const state = database.tables.assistantRun!.find(
+      (run) => run.id === continued.id,
+    )!.state as Row;
+    expect(continued).toMatchObject({ taskId: first.taskId, status: 'queued' });
+    expect(continued.id).not.toBe(first.id);
+    expect(state).toMatchObject({
+      request: original.request,
+      originalRequest: original.originalRequest,
+      userMessageId: original.userMessageId,
+      continuedFromRunId: first.id,
+    });
+    expect(state.messageId).not.toBe(original.messageId);
+    expect(database.tables.assistantMessage).toHaveLength(1);
+    expect(database.tables.assistantRun![0]).toMatchObject({
+      status: 'cancelled',
+      state: { continuationRunId: continued.id },
+    });
+    expect(await store.continueRun(database.actor, first.id)).toMatchObject({
+      id: continued.id,
+    });
+    expect(database.tables.assistantRun).toHaveLength(2);
+    expect(
+      database.tables.assistantEvent!.filter(
+        (event) => event.runId === continued.id,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('继续重新预演已取消动作，旧批准与旧确认卡均不能恢复', async () => {
+    // Arrange a fixed but uncommitted write plan with an approval from the old attempt.
+    const first = await initial();
+    // Keep a stable identity for the cancelled action.
+    const actionId = randomUUID();
+    // Keep the original plan request to ensure continuation cannot replay it.
+    const requestId = randomUUID();
+    Object.assign(database.tables.assistantTask![0]!, {
+      actionId,
+      planRequestId: requestId,
+      planVersion: 2,
+      plan: {
+        id: first.taskId,
+        version: 2,
+        previewHash: 'a'.repeat(64),
+        targetCount: 2,
+      },
+      approvedHash: 'a'.repeat(64),
+    });
+    database.tables.mcpAction!.push({
+      id: actionId,
+      userId: database.actor.sub,
+      source: 'assistant',
+      sourceId: first.taskId,
+      requestId,
+      status: 'pending',
+    });
+    (database.tables.assistantRun![0]!.state as Row).intents = [
+      { name: 'create_quote', input: { content: '保留的计划' } },
+    ];
+    await store.stop(database.actor, first.id);
+    await store.continueRun(database.actor, first.id);
+    expect(database.tables.mcpAction![0]!.status).toBe('cancelled');
+    expect(database.tables.assistantTask![0]).toMatchObject({
+      actionId: null,
+      plan: null,
+      approvedHash: null,
+      committed: false,
+    });
+    expect(database.tables.assistantTask![0]!.planRequestId).not.toBe(
+      requestId,
+    );
+    expect(database.tables.assistantRun![1]!.state).toMatchObject({
+      intents: [{ name: 'create_quote', input: { content: '保留的计划' } }],
+    });
+    await expect(
+      store.decision(database.actor, first.taskId, {
+        version: 2,
+        previewHash: 'a'.repeat(64),
+        decision: 'confirm',
+      }),
+    ).rejects.toThrow();
+  });
+
+  it.each(['running', 'succeeded', 'failed', 'waitingConfirmation'])(
+    '状态%s不能通过继续创建新执行',
+    async (status) => {
+      // Only a user-stopped execution can enter the continuation control path.
+      const first = await initial();
+      Object.assign(database.tables.assistantTask![0]!, { status });
+      Object.assign(database.tables.assistantRun![0]!, { status });
+      await expect(store.continueRun(database.actor, first.id)).rejects.toThrow(
+        '已停止',
+      );
+      expect(database.tables.assistantRun).toHaveLength(1);
+    },
+  );
+
+  it.each(['invalidated', 'memoryVersion', 'disabled', 'source'])(
+    '继续拒绝失效边界%s且不修改原任务',
+    async (boundary) => {
+      // Each invalidation happens after a normal stop, before continuation.
+      const first = await initial();
+      await store.stop(database.actor, first.id);
+      if (boundary === 'invalidated')
+        (database.tables.assistantRun![0]!.state as Row).memoryInvalidated =
+          true;
+      if (boundary === 'memoryVersion')
+        database.tables.assistantSettings![0]!.memoryVersion = 1;
+      if (boundary === 'disabled')
+        database.tables.assistantSettings![0]!.enabled = false;
+      if (boundary === 'source')
+        database.tables.assistantMessage![0]!.excluded = true;
+      await expect(
+        store.continueRun(database.actor, first.id),
+      ).rejects.toThrow();
+      expect(database.tables.assistantRun).toHaveLength(1);
+      expect(database.tables.assistantTask![0]).toMatchObject({
+        runId: first.id,
+        status: 'cancelled',
+      });
+    },
+  );
+
+  it('后续任务已经开始或完成时，旧任务不能通过继续抢占会话', async () => {
+    // Stop the first task and create a distinct later user request.
+    const first = await initial();
+    await store.stop(database.actor, first.id);
+    // The newer task remains a scope boundary even after its work completes.
+    const newer = await initial('另一项要求');
+    Object.assign(database.tables.assistantTask![1]!, {
+      status: 'succeeded',
+      createdAt: new Date(Date.now() + 1),
+    });
+    Object.assign(database.tables.assistantRun![1]!, { status: 'succeeded' });
+    await expect(store.continueRun(database.actor, first.id)).rejects.toThrow(
+      '后续任务',
+    );
+    expect(database.tables.assistantRun).toHaveLength(2);
+    expect(database.tables.assistantTask![1]!.runId).toBe(newer.id);
+  });
+
+  it('继续捕获模型配置失败时原子回滚，下一次可安全重试', async () => {
+    // Model configuration can fail independently of the user's control request.
+    const first = await initial();
+    await store.stop(database.actor, first.id);
+    ai.captureAssistantProfile.mockRejectedValueOnce(
+      new Error('模型配置不可用'),
+    );
+    await expect(store.continueRun(database.actor, first.id)).rejects.toThrow(
+      '模型配置不可用',
+    );
+    expect(database.tables.assistantTask![0]).toMatchObject({
+      runId: first.id,
+      status: 'cancelled',
+    });
+    expect(database.tables.assistantRun).toHaveLength(1);
+    expect(
+      (database.tables.assistantRun![0]!.state as Row).continuationRunId,
+    ).toBeUndefined();
+    await expect(
+      store.continueRun(database.actor, first.id),
+    ).resolves.toMatchObject({ taskId: first.taskId, status: 'queued' });
   });
 
   it('准备身份独立持久化，重启重试不把 requestId 当成 actionId', async () => {
