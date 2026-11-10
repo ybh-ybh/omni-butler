@@ -3782,7 +3782,7 @@ class _AbsoluteTimeEntryDialogState
             ),
             label: _editingStart ? '开始' : '结束',
             enabled: !_saving,
-            minuteInterval: _usesPreviousEntryBanner ? 5 : 1,
+            minuteInterval: _usesFullscreenRangeEditor ? 5 : 1,
             onChanged: (TimeOfDay time) =>
                 _updateEndpointTime(_editingStart, time),
           ),

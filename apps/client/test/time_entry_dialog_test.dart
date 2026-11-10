@@ -618,8 +618,29 @@ void main() {
                 .label,
             '结束',
           );
+          expect(
+            tester
+                .widget<TimeEntryWheelPicker>(find.byType(TimeEntryWheelPicker))
+                .minuteInterval,
+            5,
+          );
           await _capture(tester, 'android-finish-light');
-          await _wheelTo(tester, hour: 0, minute: 27);
+          // Advance the actual minute wheel by one five-minute step.
+          final Semantics minuteSemantics = tester.widget<Semantics>(
+            find.byWidgetPredicate(
+              (Widget widget) =>
+                  widget is Semantics && widget.properties.label == '结束分钟',
+            ),
+          );
+          expect(minuteSemantics.properties.value, '20');
+          expect(minuteSemantics.properties.increasedValue, '25');
+          expect(minuteSemantics.properties.decreasedValue, '15');
+          minuteSemantics.properties.onIncrease!();
+          await tester.pumpAndSettle();
+          expect(
+            _dateButton(tester, 'end').value,
+            DateTime(2026, 10, 7, 0, 25),
+          );
           await _enterActivity(tester, '结束后的活动');
           await tester.ensureVisible(
             find.byKey(const ValueKey<String>('time-entry-notes')),
@@ -637,7 +658,7 @@ void main() {
               .getSingle();
           expect(saved.id, original.id);
           expect(saved.startedAt, startedAt);
-          expect(saved.endedAt, DateTime(2026, 10, 7, 0, 27));
+          expect(saved.endedAt, DateTime(2026, 10, 7, 0, 25));
           expect(saved.activity, '结束后的活动');
           expect(saved.category, '学习');
           expect(saved.notes, '补充结果');
