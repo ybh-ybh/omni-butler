@@ -72,6 +72,124 @@ class _DelayedQuoteRepository extends QuoteRepository {
 
 /// 验证名言库 JSON 操作菜单与导入预览交互。
 void main() {
+  // Exercise both surfaces while the system sends intermediate IME heights.
+  for (final Brightness brightness in Brightness.values) {
+    testWidgets('安卓名言编辑器隔离底层页面并逐帧跟随键盘 $brightness', (
+      WidgetTester tester,
+    ) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetViewInsets);
+      // Keep persistence real so saving after IME dismissal remains covered.
+      final AppDatabase database = AppDatabase.forTesting(
+        NativeDatabase.memory(),
+      );
+      await _pumpDialog(
+        tester,
+        database: database,
+        gateway: _FakeQuoteJsonFileGateway(),
+        platform: TargetPlatform.android,
+        brightness: brightness,
+        openFromHome: true,
+      );
+      await tester.tap(find.byKey(const ValueKey<String>('quote-add-action')));
+      await tester.pumpAndSettle();
+      // An opaque page removes the retained library from painting and hit testing.
+      final Finder editor = find.byKey(
+        const ValueKey<String>('quote-editor-fullscreen'),
+      );
+      expect(ModalRoute.of(tester.element(editor))!.opaque, isTrue);
+      expect(
+        find.byKey(const ValueKey<String>('quote-library-fullscreen')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(
+          const ValueKey<String>('quote-library-fullscreen'),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+      await tester.enterText(find.byType(OmniTextField).first, '键盘开合后保存的名言');
+      // The outer surface must continue painting the whole route below the IME.
+      final Finder page = find
+          .ancestor(of: editor, matching: find.byType(Scaffold))
+          .first;
+      // Only the scrollable form shrinks; the header keeps its resting position.
+      final Rect header = tester.getRect(
+        find.byKey(const ValueKey<String>('quote-editor-save')),
+      );
+      // Inspect every opening and closing step without settling an extra tween.
+      for (final double inset in <double>[80, 180, 320, 240, 100, 0]) {
+        tester.view.viewInsets = FakeViewPadding(bottom: inset);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(tester.getRect(page), const Rect.fromLTWH(0, 0, 390, 844));
+        expect(
+          tester.widget<Scaffold>(page).backgroundColor,
+          OmniColors.of(tester.element(editor)).canvas,
+        );
+        expect(
+          tester
+              .getRect(
+                find.descendant(
+                  of: editor,
+                  matching: find.byType(SingleChildScrollView),
+                ),
+              )
+              .bottom,
+          closeTo(844 - inset, 0.1),
+        );
+        expect(
+          tester.getRect(
+            find.byKey(const ValueKey<String>('quote-editor-save')),
+          ),
+          header,
+        );
+        expect(find.text('键盘开合后保存的名言'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      }
+      await tester.tap(find.byKey(const ValueKey<String>('quote-editor-save')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('quote-library-fullscreen')),
+        findsOneWidget,
+      );
+      expect(
+        (await database.select(database.quotes).getSingle()).content,
+        '键盘开合后保存的名言',
+      );
+      // Reopening and cancelling restores the same library rather than its parent.
+      await tester.tap(find.byKey(const ValueKey<String>('quote-add-action')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(OmniButton, '取消'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('quote-library-fullscreen')),
+        findsOneWidget,
+      );
+      // Editing an existing row shares the same opaque route and back stack.
+      await tester.tap(find.text('键盘开合后保存的名言'));
+      await tester.pumpAndSettle();
+      expect(find.text('编辑名言'), findsOneWidget);
+      expect(ModalRoute.of(tester.element(editor))!.opaque, isTrue);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('quote-library-fullscreen')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey<String>('quote-library-back')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('打开名言库'), findsOneWidget);
+      await _disposeDialog(tester, database);
+    });
+  }
+
   // Android preserves the original action while Windows keeps its existing text.
   for (final TargetPlatform platform in <TargetPlatform>[
     TargetPlatform.android,
@@ -530,6 +648,8 @@ Future<void> _pumpDialog(
   QuoteRepository? repository,
   TargetPlatform platform = TargetPlatform.windows,
   Brightness brightness = Brightness.light,
+  // Exercise the production dialog route instead of mounting the library inline.
+  bool openFromHome = false,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -541,11 +661,24 @@ Future<void> _pumpDialog(
       child: MaterialApp(
         theme: AppTheme.build(brightness: brightness)
             .copyWith(platform: platform),
-        home: Scaffold(body: QuoteLibraryDialog(fileGateway: gateway)),
+        home: openFromHome
+            ? Builder(
+                builder: (BuildContext context) => Scaffold(
+                  body: OmniButton(
+                    label: '打开名言库',
+                    onPressed: () => QuoteLibraryDialog.show(context),
+                  ),
+                ),
+              )
+            : Scaffold(body: QuoteLibraryDialog(fileGateway: gateway)),
       ),
     ),
   );
   await tester.pumpAndSettle();
+  if (openFromHome) {
+    await tester.tap(find.text('打开名言库'));
+    await tester.pumpAndSettle();
+  }
 }
 
 /// 先卸载数据流监听，再关闭测试数据库。

@@ -121,13 +121,45 @@ class _QuoteLibraryDialogState extends ConsumerState<QuoteLibraryDialog> {
   /// 当前是否正在读写 JSON 文件或数据库。
   bool _transferring = false;
 
-  /// 打开名言编辑器。
+  /// Open the quote editor with a platform-appropriate navigation surface.
   Future<void> _edit([QuoteRecord? quote]) async {
-    // 用户提交的名言草稿。
-    final bool? saved = await showOmniSideSheet<bool>(
-      context,
-      builder: (BuildContext context) => _QuoteEditorDialog(quote: quote),
-    );
+    // Only Android phones need an opaque page above the retained library.
+    final bool mobile =
+        Theme.of(context).platform == TargetPlatform.android &&
+        OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
+    // Refresh today's quote only after a successful editor submission.
+    final bool? saved;
+    if (mobile) {
+      // Keep the established modal motion and the system reduced-motion setting.
+      final AnimationStyle motion = OmniMotion.androidModalStyle(context);
+      // Use the root stack so the editor covers the library and app navigation.
+      final NavigatorState navigator = Navigator.of(
+        context,
+        rootNavigator: true,
+      );
+      // Preserve locally inherited themes when moving onto the root stack.
+      final CapturedThemes themes = InheritedTheme.capture(
+        from: context,
+        to: navigator.context,
+      );
+      saved = await navigator.push<bool>(
+        PageRouteBuilder<bool>(
+          fullscreenDialog: true,
+          transitionDuration: motion.duration!,
+          reverseTransitionDuration: motion.reverseDuration!,
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              themes.wrap(_QuoteEditorDialog(quote: quote)),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+              OmniModalSlideTransition(animation: animation, child: child),
+        ),
+      );
+    } else {
+      saved = await showOmniSideSheet<bool>(
+        context,
+        builder: (BuildContext context) => _QuoteEditorDialog(quote: quote),
+      );
+    }
+    if (!mounted) return;
     if (saved == true) _invalidateToday();
   }
 
@@ -955,16 +987,21 @@ class _QuoteEditorDialogState extends ConsumerState<_QuoteEditorDialog> {
         Theme.of(context).platform == TargetPlatform.android &&
         OmniBreakpoint.isCompact(MediaQuery.sizeOf(context).width);
     if (mobile) {
-      return OmniFullscreenFormScaffold(
-        key: const ValueKey<String>('quote-editor-fullscreen'),
-        title: title,
-        primaryKey: const ValueKey<String>('quote-editor-save'),
-        primaryLabel: '保存',
-        onPrimary: _saving ? null : _submit,
-        onCancel: _saving ? null : () => Navigator.of(context).maybePop(),
-        loading: _saving,
-        showLoadingIndicator: false,
-        child: form,
+      // Scaffold paints the entire route and consumes IME insets once, without
+      // a second Dialog padding animation lagging behind the system keyboard.
+      return Scaffold(
+        backgroundColor: OmniColors.of(context).canvas,
+        body: OmniFullscreenFormScaffold(
+          key: const ValueKey<String>('quote-editor-fullscreen'),
+          title: title,
+          primaryKey: const ValueKey<String>('quote-editor-save'),
+          primaryLabel: '保存',
+          onPrimary: _saving ? null : _submit,
+          onCancel: _saving ? null : () => Navigator.of(context).maybePop(),
+          loading: _saving,
+          showLoadingIndicator: false,
+          child: form,
+        ),
       );
     }
     return OmniSideSheetScaffold(
